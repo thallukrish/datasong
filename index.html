@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DataSong</title>
-  <meta name="description" content="DataSong discovers enterprise data across existing systems, builds a semantic graph automatically and creates governed cross-system data views on demand." />
+  <meta name="description" content="DataSong discovers enterprise data across existing systems, builds a semantic graph automatically and lets analysts and ML engineers construct governed cross-system views in English over the semantic layer." />
   <style>
     :root { --bg:#fff; --text:#111; --muted:#6f6f6f; --light:#f5f5f5; --line:#e5e5e5; --max:900px; }
     * { box-sizing:border-box; }
@@ -41,13 +41,14 @@
 <main>
 <h1>Ask for the data you need.</h1>
 <div class="hero-subtitle">DataSong finds it, connects it and builds the view.</div>
-<p class="intro">Enterprise data is often spread across databases, warehouses, data lakes, object stores and thousands of tables. DataSong connects to those existing systems, discovers what data is there and automatically builds a semantic graph of schemas, metadata, relationships and business meaning. Users can then describe the data they want in English and DataSong creates the required cross-system view on demand.</p>
+<p class="intro">Enterprise data is often spread across databases, warehouses, data lakes, object stores and thousands of tables. DataSong connects to those existing systems, discovers what data is there and automatically builds a semantic graph of schemas, metadata, relationships and business meaning. Data analysts and ML engineers can then work directly in English over that semantic layer — combining data across systems and constructing the views they need without first hand-coding the joins and pipelines.</p>
 <p class="hero-note"><strong>Without manually cataloguing the data estate or building another pipeline first.</strong></p>
 </main>
 <section><h2>Why this is hard today</h2><p class="statement">Getting one useful view of enterprise data often turns into a data-engineering and cataloguing project.</p><p>Teams first need to inventory which systems contain the data, register or document the relevant assets, find the right tables, understand their meaning, work out relationships and joins, write transformations, build ETL pipelines, provision compute and maintain intermediate copies.</p><p>The resulting catalog definitions, pipelines and copies become additional infrastructure to maintain, even when the original need was simply to understand what data exists and use a combined view of it.</p></section>
 <section>
 <h2>What changes with DataSong</h2>
-<p>DataSong discovers the organization's existing data estate and builds the semantic layer automatically. It inspects schemas and metadata, infers relationships and business meaning across systems, and builds a semantic graph that users can browse and chat with. DataSong then uses that same graph to locate the relevant sources and construct the requested view dynamically.</p>
+<p>DataSong discovers the organization's existing data estate and builds the semantic layer automatically. It inspects schemas and metadata, infers relationships and business meaning across systems, and builds a semantic graph that users can browse and chat with.</p>
+<p>Data analysts and ML engineers can use English directly over this semantic layer to combine data from different systems, express joins, filters, transformations and derived fields, and construct the views they need for analysis or model development. DataSong resolves those requests against the semantic graph and builds the requested view dynamically.</p>
 <div class="example"><p><strong>Request:</strong> Give me customers in India who purchased in the last 12 months, their latest support interaction and lifetime revenue.</p><p class="response"><strong>DataSong:</strong> Customer data is in PostgreSQL, transactions are in the warehouse and support events are in S3. DataSong discovers how those sources relate, joins the relevant data, applies the requested filters and transformations, and exposes the result as a governed data view.</p></div>
 <div class="example"><p><strong>Request:</strong> Show me the hourly temperature, vibration and power-consumption history for production machines that had a maintenance event in the last 30 days, together with machine model and factory location.</p><p class="response"><strong>DataSong:</strong> Sensor time-series data is stored as Delta tables in S3, maintenance events are in the operations database, and machine metadata is in the asset system. DataSong discovers the relationships across those systems, aligns the time series, joins the relevant events and machines, adds the asset metadata and exposes the result as a time-series view ready for analysis or ML.</p></div>
 </section>
@@ -56,9 +57,9 @@
 <li><strong>Connect</strong> to the organization's existing SQL, NoSQL, warehouse, lake, lakehouse, application and object-store systems.</li>
 <li><strong>Discover</strong> the available schemas, tables, fields, metadata and other data assets.</li>
 <li><strong>Understand</strong> infer relationships and business meaning across those systems and build the semantic graph automatically.</li>
-<li><strong>Explore</strong> browse or chat with the graph to understand what data exists and how it connects.</li>
-<li><strong>Ask</strong> for the data needed in plain English.</li>
-<li><strong>Build</strong> find the relevant data, join and transform it, and create the requested governed view.</li>
+<li><strong>Explore</strong> browse or chat with the semantic layer to understand what data exists and how it connects.</li>
+<li><strong>Ask</strong> describe the required data view in plain English over the semantic layer.</li>
+<li><strong>Build</strong> combine, join, filter, derive and reshape the relevant data into the requested governed view.</li>
 <li><strong>Materialize</strong> only when performance, reuse or cost makes a maintained copy worthwhile.</li>
 </ul></section>
 <section><h2>Data stays governed</h2><p>DataSong controls who can discover and access data, who can create views and pipelines, and which underlying sources each person or application is permitted to use.</p><p>The same access controls continue to apply whether the result is queried dynamically or materialized for repeated use.</p></section>
