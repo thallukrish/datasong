@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DataSong</title>
-  <meta name="description" content="DataSong is an AI-native data fabric for discovering, combining and governing data across enterprise systems." />
+  <meta name="description" content="DataSong lets enterprise users ask for the data they need in English and creates governed cross-system data views on demand." />
   <style>
     :root {
       --bg: #ffffff;
@@ -57,7 +57,7 @@
     }
 
     h1 {
-      max-width: 820px;
+      max-width: 840px;
       margin: 0 0 28px;
       font-size: clamp(2.8rem, 7vw, 5.2rem);
       line-height: 1.01;
@@ -66,11 +66,18 @@
     }
 
     .intro {
-      max-width: 760px;
+      max-width: 790px;
       margin: 0;
       color: var(--muted);
       font-size: 1.24rem;
       line-height: 1.65;
+    }
+
+    .hero-note {
+      margin-top: 26px;
+      max-width: 760px;
+      color: var(--text);
+      font-size: 1.12rem;
     }
 
     section {
@@ -170,47 +177,56 @@
     </header>
 
     <main>
-      <h1>Make scattered enterprise data behave like one system.</h1>
+      <h1>Ask for the data you need. DataSong finds it, connects it and builds the view.</h1>
       <p class="intro">
-        DataSong connects to the databases, warehouses, data lakes and object stores an organization already has, understands what data is available across them, and lets people discover and combine that data by asking for what they need in plain English.
+        Enterprise data is often spread across databases, warehouses, data lakes, object stores and thousands of tables. DataSong lets decision makers, analysts and ML engineers describe the data they want in English. It discovers where that data lives, ties the relevant pieces together, applies the required transformations and creates a usable cross-system data view on demand.
       </p>
+      <p class="hero-note"><strong>Without building another pipeline first.</strong></p>
     </main>
 
     <section>
-      <h2>The problem</h2>
-      <p class="statement">Large organizations often have thousands of tables and data views spread across many different systems.</p>
+      <h2>Why this is hard today</h2>
+      <p class="statement">Getting one useful view of enterprise data often turns into a data-engineering project.</p>
       <p>
-        Finding the right data, understanding how datasets relate, moving data between systems and maintaining ETL pipelines becomes a significant engineering problem in itself.
+        Teams first need to discover which systems contain the data, find the right tables, understand their meaning, work out the joins, write transformations, build ETL pipelines, provision compute and maintain intermediate copies.
       </p>
       <p>
-        DataSong is intended to reduce that work without requiring the organization to first move everything into a new central data store.
+        The resulting pipelines and copies then become additional infrastructure to operate and pay for, even when the original need was simply to see or use a combined view of the data.
       </p>
     </section>
 
     <section>
-      <h2>What DataSong does</h2>
+      <h2>What changes with DataSong</h2>
       <p>
-        DataSong connects to existing SQL and NoSQL databases, warehouses, Delta lakes, S3 and other enterprise sources. It uses AI to build a semantic understanding of the available data and exposes that knowledge conversationally.
-      </p>
-      <p>
-        A user can describe a new dataset or data view in English. DataSong identifies the relevant sources, determines how they can be joined, creates a governed logical view and executes the query across those systems using distributed SQL.
+        A user starts with the data they need rather than with the systems that happen to contain it. DataSong uses its semantic understanding of the organization's data estate to locate the relevant sources and construct the view dynamically.
       </p>
 
       <div class="example">
         <p><strong>Request:</strong> Give me customers in India who purchased in the last 12 months, their latest support interaction and lifetime revenue.</p>
-        <p class="response"><strong>DataSong:</strong> Customer data is in PostgreSQL, transactions are in the warehouse and support events are in S3. DataSong creates a federated view across the three sources and exposes the result as a usable dataset.</p>
+        <p class="response"><strong>DataSong:</strong> Customer data is in PostgreSQL, transactions are in the warehouse and support events are in S3. DataSong joins the relevant data, applies the requested filters and transformations, and exposes the result as a governed data view.</p>
       </div>
+    </section>
+
+    <section>
+      <h2>Views first. Pipelines when needed.</h2>
+      <p>
+        DataSong federates data directly from existing systems wherever practical, so a new view does not automatically require another maintained copy of the data.
+      </p>
+      <p>
+        If a view becomes heavily reused, needs predictable performance or is cheaper to materialize, DataSong can turn it into a managed snapshot or repeatable data pipeline and refresh it in a target store such as S3.
+      </p>
     </section>
 
     <section>
       <h2>How it works</h2>
       <ul class="sequence">
-        <li><strong>Connect</strong> to the organization's existing data systems.</li>
-        <li><strong>Understand</strong> schemas, metadata, relationships and meaning.</li>
+        <li><strong>Connect</strong> to the organization's existing SQL, NoSQL, warehouse, lake and object-store systems.</li>
+        <li><strong>Understand</strong> schemas, metadata, relationships and business meaning across those systems.</li>
         <li><strong>Ask</strong> for the data needed in plain English.</li>
-        <li><strong>Plan</strong> a governed federated query across the relevant sources.</li>
-        <li><strong>Execute</strong> the plan using a horizontally scalable distributed SQL engine.</li>
-        <li><strong>Materialize</strong> snapshots only when performance, cost or repeated use makes copying worthwhile.</li>
+        <li><strong>Find</strong> the relevant data and determine how the pieces relate.</li>
+        <li><strong>Transform</strong> filter, join, derive and reshape the data into the requested view.</li>
+        <li><strong>Execute</strong> the federated query using a horizontally scalable distributed SQL engine.</li>
+        <li><strong>Materialize</strong> only when performance, reuse or cost makes a maintained copy worthwhile.</li>
       </ul>
     </section>
 
@@ -220,24 +236,24 @@
         DataSong controls who can discover and access data, who can create views and pipelines, and which underlying sources each person or application is permitted to use.
       </p>
       <p>
-        The goal is to make enterprise data easier to use without weakening the controls around it.
+        The same access controls continue to apply whether the result is queried dynamically or materialized for repeated use.
       </p>
     </section>
 
     <section>
       <h2>Built with real organizations</h2>
       <p>
-        DataSong is being developed in pilot mode with a small number of businesses that already have this problem. The first deployments will be built around their actual data systems and real analytics or machine-learning use cases.
+        DataSong is being developed in pilot mode with a small number of businesses that already struggle to stitch together data across multiple systems for analytics, decision making and machine learning.
       </p>
       <p>
-        Early collaborators get the resulting DataSong deployment, direct support and an extended free licence. In return, their real environment helps shape the product.
+        The first deployments will be built around real data estates and real use cases. Early collaborators get the resulting DataSong deployment, direct support and an extended free licence. Their environment and feedback help shape the product.
       </p>
     </section>
 
     <div class="contact">
-      <h2>Interested in trying it on a real data problem?</h2>
+      <h2>Have a data view that is unnecessarily hard to produce?</h2>
       <p>
-        If your organization has data scattered across multiple systems and producing a useful cross-system dataset is harder than it should be, I'd be interested in understanding the problem.
+        If getting the data you need means finding it across several systems and building another pipeline to tie it together, I'd be interested in understanding the problem.
       </p>
       <div class="email"><a href="mailto:hello@datasong.app?subject=DataSong%20pilot">hello@datasong.app</a></div>
     </div>
