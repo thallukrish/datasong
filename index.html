@@ -205,6 +205,11 @@
         <p><strong>Request:</strong> Give me customers in India who purchased in the last 12 months, their latest support interaction and lifetime revenue.</p>
         <p class="response"><strong>DataSong:</strong> Customer data is in PostgreSQL, transactions are in the warehouse and support events are in S3. DataSong joins the relevant data, applies the requested filters and transformations, and exposes the result as a governed data view.</p>
       </div>
+
+      <div class="example">
+        <p><strong>Request:</strong> Show me the hourly temperature, vibration and power-consumption history for production machines that had a maintenance event in the last 30 days, together with machine model and factory location.</p>
+        <p class="response"><strong>DataSong:</strong> Sensor time-series data is stored as Delta tables in S3, maintenance events are in the operations database, and machine metadata is in the asset system. DataSong aligns the time series, joins the relevant events and machines, adds the asset metadata and exposes the result as a time-series view ready for analysis or ML.</p>
+      </div>
     </section>
 
     <section>
