@@ -4,67 +4,138 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DataSong</title>
-  <meta name="description" content="DataSong discovers enterprise data across existing systems, builds a semantic graph automatically and lets analysts and ML engineers construct governed cross-system views in English over the semantic layer." />
+  <meta name="description" content="DataSong discovers enterprise data across existing systems, builds a semantic layer automatically, and lets analysts and ML engineers construct governed cross-system views in English." />
   <style>
-    :root { --bg:#fff; --text:#111; --muted:#6f6f6f; --light:#f5f5f5; --line:#e5e5e5; --max:900px; }
-    * { box-sizing:border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.6; }
-    .page { max-width:var(--max); margin:0 auto; padding:0 28px; }
-    header { display:flex; align-items:center; justify-content:space-between; min-height:74px; border-bottom:1px solid var(--line); }
-    .brand { font-size:1.22rem; font-weight:750; letter-spacing:-.03em; }
-    header a,.contact a { color:var(--text); text-decoration:none; border-bottom:1px solid #bdbdbd; }
-    main { padding:82px 0 100px; }
-    h1 { max-width:840px; margin:0 0 14px; font-size:clamp(2.8rem,7vw,5.2rem); line-height:1.01; letter-spacing:-.055em; font-weight:720; }
-    .hero-subtitle { max-width:820px; margin:0 0 32px; color:var(--text); font-size:clamp(1.7rem,4vw,2.65rem); line-height:1.15; letter-spacing:-.035em; font-weight:600; }
-    .intro { max-width:790px; margin:0; color:var(--muted); font-size:1.24rem; line-height:1.65; }
-    .hero-note { margin-top:26px; max-width:760px; color:var(--text); font-size:1.12rem; }
-    section { padding:58px 0; border-top:1px solid var(--line); }
-    h2 { margin:0 0 20px; font-size:1.55rem; letter-spacing:-.025em; }
-    p { max-width:760px; margin:0 0 18px; color:var(--muted); font-size:1.04rem; }
-    .statement { color:var(--text); font-size:1.18rem; }
-    .example { margin-top:28px; padding:24px 26px; background:var(--light); border-left:3px solid #222; }
-    .example p { margin:0; color:var(--text); }
-    .example .response { margin-top:16px; color:var(--muted); }
-    .sequence { margin-top:28px; padding:0; list-style:none; max-width:760px; }
-    .sequence li { padding:13px 0; border-bottom:1px solid var(--line); color:var(--muted); }
-    .sequence strong { display:inline-block; min-width:120px; color:var(--text); font-weight:650; }
-    .contact { padding:62px 0 90px; border-top:1px solid var(--line); }
-    .contact p { max-width:700px; }
-    .contact .email { margin-top:24px; color:var(--text); font-size:1.08rem; }
-    footer { padding:24px 0 34px; border-top:1px solid var(--line); color:#929292; font-size:.83rem; }
-    @media (max-width:620px) { main{padding-top:58px} h1{font-size:3.1rem} .hero-subtitle{font-size:1.75rem} .sequence strong{display:block;margin-bottom:3px} }
+    :root{
+      --ink:#17152b;--muted:#625f77;--purple:#6c4cff;--blue:#3f8cff;--mint:#dff8ea;--lav:#eee8ff;--peach:#fff0df;--sky:#e9f5ff;--paper:#fffdf9;--line:#ded9f2;--max:1080px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--paper);color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;line-height:1.6}
+    .page{max-width:var(--max);margin:0 auto;padding:0 28px}
+    header{display:flex;align-items:center;justify-content:space-between;min-height:76px;border-bottom:2px solid var(--line)}
+    .brand{font-size:1.42rem;font-weight:900;letter-spacing:-.04em;color:var(--purple);transform:rotate(-1deg)}
+    header a,.contact a{color:var(--ink);text-decoration:none;border-bottom:2px solid var(--purple)}
+    .hero{padding:76px 0 66px;display:grid;grid-template-columns:1.18fr .82fr;gap:46px;align-items:center}
+    .eyebrow{display:inline-block;background:var(--mint);padding:7px 13px;border:2px solid var(--ink);border-radius:999px;font-weight:800;font-size:.9rem;transform:rotate(-1deg);box-shadow:3px 3px 0 var(--ink)}
+    h1,h2,.big-line{font-family:"Comic Sans MS","Trebuchet MS","Segoe UI",sans-serif}
+    h1{margin:20px 0 12px;font-size:clamp(3.1rem,7vw,6rem);line-height:.98;letter-spacing:-.055em;font-weight:900}
+    .hero-subtitle{font-size:clamp(1.45rem,3vw,2.35rem);line-height:1.2;font-weight:800;color:var(--purple);margin:0 0 24px}
+    .intro{font-size:1.17rem;color:var(--muted);max-width:760px}
+    .hero-note{display:inline-block;margin-top:20px;padding:12px 16px;background:var(--peach);border:2px solid var(--ink);border-radius:14px;font-weight:900;box-shadow:4px 4px 0 var(--ink);transform:rotate(.5deg)}
+    .doodle{position:relative;min-height:360px;background:var(--lav);border:2px solid var(--ink);border-radius:30px;box-shadow:8px 8px 0 var(--ink);padding:26px;overflow:hidden}
+    .bubble{position:absolute;border:2px solid var(--ink);border-radius:18px;padding:10px 13px;background:white;font-weight:800;box-shadow:3px 3px 0 var(--ink)}
+    .b1{top:28px;left:24px}.b2{top:110px;right:24px}.b3{bottom:26px;left:36px}.arrow{position:absolute;font-size:2.3rem;font-weight:900}.a1{top:73px;left:48%}.a2{top:173px;left:45%}
+    .ds{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-2deg);width:142px;height:142px;border:3px solid var(--ink);border-radius:50%;background:linear-gradient(135deg,var(--purple),var(--blue));color:white;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:900;font-size:1.3rem;box-shadow:6px 6px 0 var(--ink)}
+    section{padding:64px 0;border-top:2px solid var(--line)}
+    h2{margin:0 0 18px;font-size:clamp(2rem,4vw,3rem);line-height:1.1;letter-spacing:-.04em}
+    .section-kicker{color:var(--purple);font-weight:900;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;font-size:.78rem}
+    p{max-width:820px;margin:0 0 18px;color:var(--muted);font-size:1.05rem}
+    .big-line{font-size:clamp(1.55rem,3.5vw,2.45rem);line-height:1.18;font-weight:900;color:var(--ink);max-width:900px}
+    .compare{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:30px}
+    .card{border:2px solid var(--ink);border-radius:22px;padding:24px;box-shadow:5px 5px 0 var(--ink)}
+    .today{background:var(--peach);transform:rotate(-.4deg)}.datasong{background:var(--mint);transform:rotate(.4deg)}
+    .card h3{margin:0 0 14px;font-size:1.25rem}.steps{font-weight:800;line-height:2;color:var(--ink)}
+    .examples{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:30px}
+    .example{padding:24px;background:var(--sky);border:2px solid var(--ink);border-radius:22px;box-shadow:5px 5px 0 var(--ink)}
+    .example:nth-child(2){background:var(--lav)}
+    .example p{margin:0;color:var(--ink)}.example .response{margin-top:14px;color:var(--muted)}
+    .sequence{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;list-style:none;padding:0;margin:28px 0 0}
+    .sequence li{border:2px solid var(--ink);border-radius:18px;padding:18px;background:white;min-height:124px}
+    .sequence li:nth-child(3n+1){background:var(--sky)}.sequence li:nth-child(3n+2){background:var(--mint)}.sequence li:nth-child(3n){background:var(--lav)}
+    .sequence strong{display:block;color:var(--purple);font-size:1.1rem;margin-bottom:6px}
+    .contact{margin:64px 0 86px;padding:34px;background:var(--ink);border-radius:28px;color:white;box-shadow:8px 8px 0 var(--purple)}
+    .contact h2,.contact p{color:white}.contact a{color:white;border-bottom-color:#b8a8ff}.contact .email{font-size:1.16rem;margin-top:20px}
+    footer{padding:24px 0 34px;border-top:2px solid var(--line);color:#918ba7;font-size:.85rem}
+    @media(max-width:820px){.hero{grid-template-columns:1fr}.doodle{min-height:310px}.compare,.examples{grid-template-columns:1fr}.sequence{grid-template-columns:1fr 1fr}}
+    @media(max-width:560px){.page{padding:0 19px}header{min-height:68px}.hero{padding-top:54px}.sequence{grid-template-columns:1fr}.doodle{min-height:300px}.bubble{font-size:.86rem}.ds{width:122px;height:122px;font-size:1.08rem}}
   </style>
 </head>
 <body>
 <div class="page">
-<header><div class="brand">DataSong</div><a href="mailto:hello@datasong.app?subject=DataSong">hello@datasong.app</a></header>
-<main>
-<h1>Ask for the data you need.</h1>
-<div class="hero-subtitle">DataSong finds it, connects it and builds the view.</div>
-<p class="intro">Enterprise data is often spread across databases, warehouses, data lakes, object stores and thousands of tables. DataSong connects to those existing systems, discovers what data is there and automatically builds a semantic graph of schemas, metadata, relationships and business meaning. Data analysts and ML engineers can then work directly in English over that semantic layer — combining data across systems and constructing the views they need without first hand-coding the joins and pipelines.</p>
-<p class="hero-note"><strong>Focus on the data you need, not the technology and pipelines required to assemble it.</strong></p>
+<header><div class="brand">DataSong ♪</div><a href="mailto:hello@datasong.app?subject=DataSong">hello@datasong.app</a></header>
+
+<main class="hero">
+  <div>
+    <span class="eyebrow">Your data already knows the answer.</span>
+    <h1>Ask for the data you need.</h1>
+    <div class="hero-subtitle">DataSong finds it, connects it and builds the view.</div>
+    <p class="intro">DataSong connects to the systems you already have, discovers what data is there and builds a semantic layer across them. Data analysts and ML engineers can then work in English over that layer — combining data across systems and constructing the views they need.</p>
+    <div class="hero-note">Focus on the data. Not the plumbing.</div>
+  </div>
+  <div class="doodle" aria-label="DataSong connects scattered enterprise data into one usable view">
+    <div class="bubble b1">Postgres<br>customers</div>
+    <div class="bubble b2">S3 / Delta<br>events</div>
+    <div class="bubble b3">Warehouse<br>revenue</div>
+    <div class="arrow a1">↘</div><div class="arrow a2">↗</div>
+    <div class="ds">DataSong<br>semantic<br>layer</div>
+  </div>
 </main>
-<section><h2>Why this is hard today</h2><p class="statement">Getting one useful view of enterprise data often turns into a data-engineering and cataloguing project.</p><p>Teams first need to inventory which systems contain the data, register or document the relevant assets, find the right tables, understand their meaning, work out relationships and joins, write transformations, build ETL pipelines, provision compute and maintain intermediate copies.</p><p>The resulting catalog definitions, pipelines and copies become additional infrastructure to maintain, even when the original need was simply to understand what data exists and use a combined view of it.</p></section>
+
 <section>
-<h2>What changes with DataSong</h2>
-<p>DataSong discovers the organization's existing data estate and builds the semantic layer automatically. It inspects schemas and metadata, infers relationships and business meaning across systems, and builds a semantic graph that users can browse and chat with.</p>
-<p>The semantic layer keeps the focus on the data itself — what it means, how it relates and what view is needed — instead of the underlying databases, query engines, storage systems and pipelines. Data analysts and ML engineers can use English directly over this layer to combine data from different systems, express joins, filters, transformations and derived fields, and construct the views they need for analysis or model development.</p>
-<div class="example"><p><strong>Request:</strong> Give me customers in India who purchased in the last 12 months, their latest support interaction and lifetime revenue.</p><p class="response"><strong>DataSong:</strong> Customer data is in PostgreSQL, transactions are in the warehouse and support events are in S3. DataSong discovers how those sources relate, joins the relevant data, applies the requested filters and transformations, and exposes the result as a governed data view.</p></div>
-<div class="example"><p><strong>Request:</strong> Show me the hourly temperature, vibration and power-consumption history for production machines that had a maintenance event in the last 30 days, together with machine model and factory location.</p><p class="response"><strong>DataSong:</strong> Sensor time-series data is stored as Delta tables in S3, maintenance events are in the operations database, and machine metadata is in the asset system. DataSong discovers the relationships across those systems, aligns the time series, joins the relevant events and machines, adds the asset metadata and exposes the result as a time-series view ready for analysis or ML.</p></div>
+  <div class="section-kicker">Why this feels harder than it should</div>
+  <h2>The data question becomes an engineering project.</h2>
+  <div class="compare">
+    <div class="card today"><h3>Today 😵‍💫</h3><div class="steps">Find systems → find tables → decode schemas → work out joins → write transforms → build pipeline → wait.</div></div>
+    <div class="card datasong"><h3>With DataSong ✨</h3><div class="steps">Ask for the view in English → inspect or refine it → use it.</div></div>
+  </div>
 </section>
-<section><h2>Your systems remain your systems.</h2><p>DataSong is designed to sit across the data platforms an organization already uses — databases, warehouses, lakehouses, applications and object stores — rather than requiring the enterprise data estate to be rebuilt around another central platform.</p><p>It federates data directly from those systems wherever practical. If a view becomes heavily reused, needs predictable performance or is cheaper to materialize, DataSong can turn it into a managed snapshot or repeatable data pipeline and refresh it in a target store such as S3.</p></section>
-<section><h2>How it works</h2><ul class="sequence">
-<li><strong>Connect</strong> to the organization's existing SQL, NoSQL, warehouse, lake, lakehouse, application and object-store systems.</li>
-<li><strong>Discover</strong> the available schemas, tables, fields, metadata and other data assets.</li>
-<li><strong>Understand</strong> infer relationships and business meaning across those systems and build the semantic graph automatically.</li>
-<li><strong>Explore</strong> browse or chat with the semantic layer to understand what data exists and how it connects.</li>
-<li><strong>Ask</strong> describe the required data view in plain English over the semantic layer.</li>
-<li><strong>Build</strong> combine, join, filter, derive and reshape the relevant data into the requested governed view.</li>
-<li><strong>Materialize</strong> only when performance, reuse or cost makes a maintained copy worthwhile.</li>
-</ul></section>
-<section><h2>Data stays governed</h2><p>DataSong controls who can discover and access data, who can create views and pipelines, and which underlying sources each person or application is permitted to use.</p><p>The same access controls continue to apply whether the result is queried dynamically or materialized for repeated use.</p></section>
-<section><h2>Built with real organizations</h2><p>DataSong is being developed in pilot mode with a small number of businesses that already struggle to understand and stitch together data across multiple systems for analytics, decision making and machine learning.</p><p>The first deployments will be built around real data estates and real use cases. Early collaborators get the resulting DataSong deployment, direct support and an extended free licence. Their environment and feedback help shape the product.</p></section>
-<div class="contact"><h2>Have a data view that is unnecessarily hard to produce?</h2><p>If getting the data you need means first cataloguing it across several systems and building another pipeline to tie it together, I'd be interested in understanding the problem.</p><div class="email"><a href="mailto:hello@datasong.app?subject=DataSong%20pilot">hello@datasong.app</a></div></div>
+
+<section>
+  <div class="section-kicker">The semantic layer</div>
+  <h2>Think about the data, not where it lives.</h2>
+  <p class="big-line">What does the data mean? How does it relate? What view do you need?</p>
+  <p>DataSong discovers schemas and metadata, infers relationships and business meaning across systems, and builds a semantic graph that users can browse and chat with. Databases, query engines, storage systems and pipelines stay underneath as implementation details.</p>
+  <p>Analysts and ML engineers can use English directly over this layer to combine data from different systems, express filters, joins, transformations and derived fields, and construct the views they need for analysis or model development.</p>
+</section>
+
+<section>
+  <div class="section-kicker">Just ask</div>
+  <h2>One request. Data from wherever it lives.</h2>
+  <div class="examples">
+    <div class="example"><p><strong>“Give me customers in India who purchased in the last 12 months, their latest support interaction and lifetime revenue.”</strong></p><p class="response">Customer data may be in PostgreSQL, transactions in the warehouse and support events in S3. DataSong works out how the pieces relate and builds the governed view.</p></div>
+    <div class="example"><p><strong>“Show me the hourly temperature, vibration and power history for machines that had a maintenance event in the last 30 days.”</strong></p><p class="response">Time-series data may be in Delta tables on S3, maintenance in an operations DB, and asset metadata elsewhere. DataSong aligns and combines them into a usable view.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="section-kicker">No rip-and-replace</div>
+  <h2>Your systems remain your systems.</h2>
+  <p>DataSong sits across the databases, warehouses, lakehouses, applications and object stores an organization already uses. It federates data directly wherever practical instead of requiring the data estate to be rebuilt around another central platform.</p>
+  <p>If a view becomes heavily reused, needs predictable performance or is cheaper to materialize, DataSong can turn it into a managed snapshot or repeatable pipeline.</p>
+</section>
+
+<section>
+  <div class="section-kicker">How it works</div>
+  <h2>From scattered systems to a usable view.</h2>
+  <ul class="sequence">
+    <li><strong>1. Connect</strong>Existing SQL, NoSQL, warehouse, lakehouse, application and object-store systems.</li>
+    <li><strong>2. Discover</strong>Schemas, tables, fields, metadata and available data assets.</li>
+    <li><strong>3. Understand</strong>Infer relationships and business meaning and build the semantic graph.</li>
+    <li><strong>4. Explore</strong>Browse or chat with the semantic layer to understand what exists.</li>
+    <li><strong>5. Ask</strong>Describe the required data view in plain English.</li>
+    <li><strong>6. Build</strong>Combine, filter, join, derive and reshape the relevant data.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="section-kicker">Governed by design</div>
+  <h2>Easy to ask doesn't mean open to everything.</h2>
+  <p>DataSong controls who can discover and access data, who can create views and pipelines, and which underlying sources each person or application is permitted to use. The same access controls apply whether a result is queried dynamically or materialized for repeated use.</p>
+</section>
+
+<section>
+  <div class="section-kicker">Early pilots</div>
+  <h2>Built with real data estates.</h2>
+  <p>DataSong is being developed with a small number of businesses that already struggle to understand and stitch together data across multiple systems for analytics, decision making and machine learning.</p>
+  <p>Early collaborators get the resulting DataSong deployment, direct support and an extended free licence. Their environment and feedback help shape the product.</p>
+</section>
+
+<div class="contact">
+  <h2>Have a data view that is unnecessarily hard to produce?</h2>
+  <p>If getting the data you need still means hunting across systems and building another pipeline to tie it together, I'd be interested in understanding the problem.</p>
+  <div class="email"><a href="mailto:hello@datasong.app?subject=DataSong%20pilot">hello@datasong.app</a></div>
+</div>
+
 <footer>© 2026 DataSong</footer>
 </div>
 </body>
