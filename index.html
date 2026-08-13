@@ -6,264 +6,63 @@
   <title>DataSong</title>
   <meta name="description" content="DataSong lets enterprise users ask for the data they need in English and creates governed cross-system data views on demand." />
   <style>
-    :root {
-      --bg: #ffffff;
-      --text: #111111;
-      --muted: #6f6f6f;
-      --light: #f5f5f5;
-      --line: #e5e5e5;
-      --max: 900px;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.6;
-    }
-
-    .page {
-      max-width: var(--max);
-      margin: 0 auto;
-      padding: 0 28px;
-    }
-
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      min-height: 74px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .brand {
-      font-size: 1.22rem;
-      font-weight: 750;
-      letter-spacing: -0.03em;
-    }
-
-    header a,
-    .contact a {
-      color: var(--text);
-      text-decoration: none;
-      border-bottom: 1px solid #bdbdbd;
-    }
-
-    main {
-      padding: 82px 0 100px;
-    }
-
-    h1 {
-      max-width: 840px;
-      margin: 0 0 28px;
-      font-size: clamp(2.8rem, 7vw, 5.2rem);
-      line-height: 1.01;
-      letter-spacing: -0.055em;
-      font-weight: 720;
-    }
-
-    .intro {
-      max-width: 790px;
-      margin: 0;
-      color: var(--muted);
-      font-size: 1.24rem;
-      line-height: 1.65;
-    }
-
-    .hero-note {
-      margin-top: 26px;
-      max-width: 760px;
-      color: var(--text);
-      font-size: 1.12rem;
-    }
-
-    section {
-      padding: 58px 0;
-      border-top: 1px solid var(--line);
-    }
-
-    h2 {
-      margin: 0 0 20px;
-      font-size: 1.55rem;
-      letter-spacing: -0.025em;
-    }
-
-    p {
-      max-width: 760px;
-      margin: 0 0 18px;
-      color: var(--muted);
-      font-size: 1.04rem;
-    }
-
-    .statement {
-      color: var(--text);
-      font-size: 1.18rem;
-    }
-
-    .example {
-      margin-top: 28px;
-      padding: 24px 26px;
-      background: var(--light);
-      border-left: 3px solid #222;
-    }
-
-    .example p {
-      margin: 0;
-      color: var(--text);
-    }
-
-    .example .response {
-      margin-top: 16px;
-      color: var(--muted);
-    }
-
-    .sequence {
-      margin-top: 28px;
-      padding: 0;
-      list-style: none;
-      max-width: 760px;
-    }
-
-    .sequence li {
-      padding: 13px 0;
-      border-bottom: 1px solid var(--line);
-      color: var(--muted);
-    }
-
-    .sequence strong {
-      display: inline-block;
-      min-width: 120px;
-      color: var(--text);
-      font-weight: 650;
-    }
-
-    .contact {
-      padding: 62px 0 90px;
-      border-top: 1px solid var(--line);
-    }
-
-    .contact p {
-      max-width: 700px;
-    }
-
-    .contact .email {
-      margin-top: 24px;
-      color: var(--text);
-      font-size: 1.08rem;
-    }
-
-    footer {
-      padding: 24px 0 34px;
-      border-top: 1px solid var(--line);
-      color: #929292;
-      font-size: 0.83rem;
-    }
-
-    @media (max-width: 620px) {
-      main { padding-top: 58px; }
-      h1 { font-size: 3.1rem; }
-      .sequence strong { display: block; margin-bottom: 3px; }
-    }
+    :root { --bg:#fff; --text:#111; --muted:#6f6f6f; --light:#f5f5f5; --line:#e5e5e5; --max:900px; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.6; }
+    .page { max-width:var(--max); margin:0 auto; padding:0 28px; }
+    header { display:flex; align-items:center; justify-content:space-between; min-height:74px; border-bottom:1px solid var(--line); }
+    .brand { font-size:1.22rem; font-weight:750; letter-spacing:-.03em; }
+    header a,.contact a { color:var(--text); text-decoration:none; border-bottom:1px solid #bdbdbd; }
+    main { padding:82px 0 100px; }
+    h1 { max-width:840px; margin:0 0 28px; font-size:clamp(2.8rem,7vw,5.2rem); line-height:1.01; letter-spacing:-.055em; font-weight:720; }
+    .intro { max-width:790px; margin:0; color:var(--muted); font-size:1.24rem; line-height:1.65; }
+    .hero-note { margin-top:26px; max-width:760px; color:var(--text); font-size:1.12rem; }
+    section { padding:58px 0; border-top:1px solid var(--line); }
+    h2 { margin:0 0 20px; font-size:1.55rem; letter-spacing:-.025em; }
+    p { max-width:760px; margin:0 0 18px; color:var(--muted); font-size:1.04rem; }
+    .statement { color:var(--text); font-size:1.18rem; }
+    .example { margin-top:28px; padding:24px 26px; background:var(--light); border-left:3px solid #222; }
+    .example p { margin:0; color:var(--text); }
+    .example .response { margin-top:16px; color:var(--muted); }
+    .sequence { margin-top:28px; padding:0; list-style:none; max-width:760px; }
+    .sequence li { padding:13px 0; border-bottom:1px solid var(--line); color:var(--muted); }
+    .sequence strong { display:inline-block; min-width:120px; color:var(--text); font-weight:650; }
+    .contact { padding:62px 0 90px; border-top:1px solid var(--line); }
+    .contact p { max-width:700px; }
+    .contact .email { margin-top:24px; color:var(--text); font-size:1.08rem; }
+    footer { padding:24px 0 34px; border-top:1px solid var(--line); color:#929292; font-size:.83rem; }
+    @media (max-width:620px) { main{padding-top:58px} h1{font-size:3.1rem} .sequence strong{display:block;margin-bottom:3px} }
   </style>
 </head>
 <body>
-  <div class="page">
-    <header>
-      <div class="brand">DataSong</div>
-      <a href="mailto:hello@datasong.app?subject=DataSong">hello@datasong.app</a>
-    </header>
-
-    <main>
-      <h1>Ask for the data you need. DataSong finds it, connects it and builds the view.</h1>
-      <p class="intro">
-        Enterprise data is often spread across databases, warehouses, data lakes, object stores and thousands of tables. DataSong lets decision makers, analysts and ML engineers describe the data they want in English. It discovers where that data lives, ties the relevant pieces together, applies the required transformations and creates a usable cross-system data view on demand.
-      </p>
-      <p class="hero-note"><strong>Without building another pipeline first.</strong></p>
-    </main>
-
-    <section>
-      <h2>Why this is hard today</h2>
-      <p class="statement">Getting one useful view of enterprise data often turns into a data-engineering project.</p>
-      <p>
-        Teams first need to discover which systems contain the data, find the right tables, understand their meaning, work out the joins, write transformations, build ETL pipelines, provision compute and maintain intermediate copies.
-      </p>
-      <p>
-        The resulting pipelines and copies then become additional infrastructure to operate and pay for, even when the original need was simply to see or use a combined view of the data.
-      </p>
-    </section>
-
-    <section>
-      <h2>What changes with DataSong</h2>
-      <p>
-        A user starts with the data they need rather than with the systems that happen to contain it. DataSong uses its semantic understanding of the organization's data estate to locate the relevant sources and construct the view dynamically.
-      </p>
-
-      <div class="example">
-        <p><strong>Request:</strong> Give me customers in India who purchased in the last 12 months, their latest support interaction and lifetime revenue.</p>
-        <p class="response"><strong>DataSong:</strong> Customer data is in PostgreSQL, transactions are in the warehouse and support events are in S3. DataSong joins the relevant data, applies the requested filters and transformations, and exposes the result as a governed data view.</p>
-      </div>
-
-      <div class="example">
-        <p><strong>Request:</strong> Show me the hourly temperature, vibration and power-consumption history for production machines that had a maintenance event in the last 30 days, together with machine model and factory location.</p>
-        <p class="response"><strong>DataSong:</strong> Sensor time-series data is stored as Delta tables in S3, maintenance events are in the operations database, and machine metadata is in the asset system. DataSong aligns the time series, joins the relevant events and machines, adds the asset metadata and exposes the result as a time-series view ready for analysis or ML.</p>
-      </div>
-    </section>
-
-    <section>
-      <h2>Views first. Pipelines when needed.</h2>
-      <p>
-        DataSong federates data directly from existing systems wherever practical, so a new view does not automatically require another maintained copy of the data.
-      </p>
-      <p>
-        If a view becomes heavily reused, needs predictable performance or is cheaper to materialize, DataSong can turn it into a managed snapshot or repeatable data pipeline and refresh it in a target store such as S3.
-      </p>
-    </section>
-
-    <section>
-      <h2>How it works</h2>
-      <ul class="sequence">
-        <li><strong>Connect</strong> to the organization's existing SQL, NoSQL, warehouse, lake and object-store systems.</li>
-        <li><strong>Understand</strong> schemas, metadata, relationships and business meaning across those systems.</li>
-        <li><strong>Ask</strong> for the data needed in plain English.</li>
-        <li><strong>Find</strong> the relevant data and determine how the pieces relate.</li>
-        <li><strong>Transform</strong> filter, join, derive and reshape the data into the requested view.</li>
-        <li><strong>Execute</strong> the federated query using a horizontally scalable distributed SQL engine.</li>
-        <li><strong>Materialize</strong> only when performance, reuse or cost makes a maintained copy worthwhile.</li>
-      </ul>
-    </section>
-
-    <section>
-      <h2>Data stays governed</h2>
-      <p>
-        DataSong controls who can discover and access data, who can create views and pipelines, and which underlying sources each person or application is permitted to use.
-      </p>
-      <p>
-        The same access controls continue to apply whether the result is queried dynamically or materialized for repeated use.
-      </p>
-    </section>
-
-    <section>
-      <h2>Built with real organizations</h2>
-      <p>
-        DataSong is being developed in pilot mode with a small number of businesses that already struggle to stitch together data across multiple systems for analytics, decision making and machine learning.
-      </p>
-      <p>
-        The first deployments will be built around real data estates and real use cases. Early collaborators get the resulting DataSong deployment, direct support and an extended free licence. Their environment and feedback help shape the product.
-      </p>
-    </section>
-
-    <div class="contact">
-      <h2>Have a data view that is unnecessarily hard to produce?</h2>
-      <p>
-        If getting the data you need means finding it across several systems and building another pipeline to tie it together, I'd be interested in understanding the problem.
-      </p>
-      <div class="email"><a href="mailto:hello@datasong.app?subject=DataSong%20pilot">hello@datasong.app</a></div>
-    </div>
-
-    <footer>© 2026 DataSong</footer>
-  </div>
+<div class="page">
+<header><div class="brand">DataSong</div><a href="mailto:hello@datasong.app?subject=DataSong">hello@datasong.app</a></header>
+<main>
+<h1>Ask for the data you need. DataSong finds it, connects it and builds the view.</h1>
+<p class="intro">Enterprise data is often spread across databases, warehouses, data lakes, object stores and thousands of tables. DataSong lets decision makers, analysts and ML engineers describe the data they want in English. It discovers where that data lives, ties the relevant pieces together, applies the required transformations and creates a usable cross-system data view on demand.</p>
+<p class="hero-note"><strong>Without building another pipeline first.</strong></p>
+</main>
+<section><h2>Why this is hard today</h2><p class="statement">Getting one useful view of enterprise data often turns into a data-engineering project.</p><p>Teams first need to discover which systems contain the data, find the right tables, understand their meaning, work out the joins, write transformations, build ETL pipelines, provision compute and maintain intermediate copies.</p><p>The resulting pipelines and copies then become additional infrastructure to operate and pay for, even when the original need was simply to see or use a combined view of the data.</p></section>
+<section>
+<h2>What changes with DataSong</h2>
+<p>DataSong builds a semantic graph of the organization's data estate — schemas, metadata, relationships and business meaning — that users can browse and chat with to understand what data exists and how it connects. DataSong then uses that same graph to locate the relevant sources and construct the requested view dynamically.</p>
+<div class="example"><p><strong>Request:</strong> Give me customers in India who purchased in the last 12 months, their latest support interaction and lifetime revenue.</p><p class="response"><strong>DataSong:</strong> Customer data is in PostgreSQL, transactions are in the warehouse and support events are in S3. DataSong joins the relevant data, applies the requested filters and transformations, and exposes the result as a governed data view.</p></div>
+<div class="example"><p><strong>Request:</strong> Show me the hourly temperature, vibration and power-consumption history for production machines that had a maintenance event in the last 30 days, together with machine model and factory location.</p><p class="response"><strong>DataSong:</strong> Sensor time-series data is stored as Delta tables in S3, maintenance events are in the operations database, and machine metadata is in the asset system. DataSong aligns the time series, joins the relevant events and machines, adds the asset metadata and exposes the result as a time-series view ready for analysis or ML.</p></div>
+</section>
+<section><h2>Views first. Pipelines when needed.</h2><p>DataSong federates data directly from existing systems wherever practical, so a new view does not automatically require another maintained copy of the data.</p><p>If a view becomes heavily reused, needs predictable performance or is cheaper to materialize, DataSong can turn it into a managed snapshot or repeatable data pipeline and refresh it in a target store such as S3.</p></section>
+<section><h2>How it works</h2><ul class="sequence">
+<li><strong>Connect</strong> to the organization's existing SQL, NoSQL, warehouse, lake and object-store systems.</li>
+<li><strong>Understand</strong> build a semantic graph of schemas, metadata, relationships and business meaning that users can browse and chat with.</li>
+<li><strong>Ask</strong> for the data needed in plain English.</li>
+<li><strong>Find</strong> the relevant data and determine how the pieces relate.</li>
+<li><strong>Transform</strong> filter, join, derive and reshape the data into the requested view.</li>
+<li><strong>Execute</strong> the federated query using a horizontally scalable distributed SQL engine.</li>
+<li><strong>Materialize</strong> only when performance, reuse or cost makes a maintained copy worthwhile.</li>
+</ul></section>
+<section><h2>Data stays governed</h2><p>DataSong controls who can discover and access data, who can create views and pipelines, and which underlying sources each person or application is permitted to use.</p><p>The same access controls continue to apply whether the result is queried dynamically or materialized for repeated use.</p></section>
+<section><h2>Built with real organizations</h2><p>DataSong is being developed in pilot mode with a small number of businesses that already struggle to stitch together data across multiple systems for analytics, decision making and machine learning.</p><p>The first deployments will be built around real data estates and real use cases. Early collaborators get the resulting DataSong deployment, direct support and an extended free licence. Their environment and feedback help shape the product.</p></section>
+<div class="contact"><h2>Have a data view that is unnecessarily hard to produce?</h2><p>If getting the data you need means finding it across several systems and building another pipeline to tie it together, I'd be interested in understanding the problem.</p><div class="email"><a href="mailto:hello@datasong.app?subject=DataSong%20pilot">hello@datasong.app</a></div></div>
+<footer>© 2026 DataSong</footer>
+</div>
 </body>
 </html>
