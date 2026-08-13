@@ -14,7 +14,8 @@
     .brand { font-size:1.22rem; font-weight:750; letter-spacing:-.03em; }
     header a,.contact a { color:var(--text); text-decoration:none; border-bottom:1px solid #bdbdbd; }
     main { padding:82px 0 100px; }
-    h1 { max-width:840px; margin:0 0 28px; font-size:clamp(2.8rem,7vw,5.2rem); line-height:1.01; letter-spacing:-.055em; font-weight:720; }
+    h1 { max-width:840px; margin:0 0 14px; font-size:clamp(2.8rem,7vw,5.2rem); line-height:1.01; letter-spacing:-.055em; font-weight:720; }
+    .hero-subtitle { max-width:820px; margin:0 0 32px; color:var(--text); font-size:clamp(1.7rem,4vw,2.65rem); line-height:1.15; letter-spacing:-.035em; font-weight:600; }
     .intro { max-width:790px; margin:0; color:var(--muted); font-size:1.24rem; line-height:1.65; }
     .hero-note { margin-top:26px; max-width:760px; color:var(--text); font-size:1.12rem; }
     section { padding:58px 0; border-top:1px solid var(--line); }
@@ -31,14 +32,15 @@
     .contact p { max-width:700px; }
     .contact .email { margin-top:24px; color:var(--text); font-size:1.08rem; }
     footer { padding:24px 0 34px; border-top:1px solid var(--line); color:#929292; font-size:.83rem; }
-    @media (max-width:620px) { main{padding-top:58px} h1{font-size:3.1rem} .sequence strong{display:block;margin-bottom:3px} }
+    @media (max-width:620px) { main{padding-top:58px} h1{font-size:3.1rem} .hero-subtitle{font-size:1.75rem} .sequence strong{display:block;margin-bottom:3px} }
   </style>
 </head>
 <body>
 <div class="page">
 <header><div class="brand">DataSong</div><a href="mailto:hello@datasong.app?subject=DataSong">hello@datasong.app</a></header>
 <main>
-<h1>Ask for the data you need. DataSong finds it, connects it and builds the view.</h1>
+<h1>Ask for the data you need.</h1>
+<div class="hero-subtitle">DataSong finds it, connects it and builds the view.</div>
 <p class="intro">Enterprise data is often spread across databases, warehouses, data lakes, object stores and thousands of tables. DataSong lets decision makers, analysts and ML engineers describe the data they want in English. It discovers where that data lives, ties the relevant pieces together, applies the required transformations and creates a usable cross-system data view on demand.</p>
 <p class="hero-note"><strong>Without building another pipeline first.</strong></p>
 </main>
