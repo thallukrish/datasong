@@ -1,0 +1,56 @@
+{
+  "entities": [
+    "Customer",
+    "Order",
+    "Product",
+    "Inventory",
+    "Shipment",
+    "Machine",
+    "Telemetry",
+    "MaintenanceEvent"
+  ],
+  "relationships": [
+    {
+      "from": "Customer",
+      "relation": "PLACES",
+      "to": "Order",
+      "physical": ["customer_master.cust_no", "sales_order.buyer_ref"]
+    },
+    {
+      "from": "Order",
+      "relation": "CONTAINS",
+      "to": "Product",
+      "physical": ["sales_order_line.material_code", "material_master.part_number"]
+    },
+    {
+      "from": "Order",
+      "relation": "FULFILLED_THROUGH",
+      "to": "Shipment",
+      "physical": ["sales_order.order_no", "shipment.sales_ref"]
+    },
+    {
+      "from": "Product",
+      "relation": "STOCKED_IN",
+      "to": "Inventory",
+      "physical": ["material_master.part_number", "warehouse_stock.sku"]
+    },
+    {
+      "from": "Product",
+      "relation": "USED_BY",
+      "to": "Machine",
+      "physical": ["material_master.part_number", "machine_asset.material_ref"]
+    },
+    {
+      "from": "Machine",
+      "relation": "EMITS",
+      "to": "Telemetry",
+      "physical": ["machine_asset.asset_tag", "telemetry.device_ref"]
+    },
+    {
+      "from": "Machine",
+      "relation": "HAS",
+      "to": "MaintenanceEvent",
+      "physical": ["machine_asset.asset_tag", "maintenance_event.equipment_ref"]
+    }
+  ]
+}
