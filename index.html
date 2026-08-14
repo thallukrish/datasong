@@ -31,6 +31,8 @@
     .section-kicker{color:var(--purple);font-weight:900;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;font-size:.78rem}
     p{max-width:840px;margin:0 0 18px;color:var(--muted);font-size:1.05rem}
     .big-line{font-size:clamp(1.5rem,3.3vw,2.35rem);line-height:1.2;font-weight:900;color:var(--ink);max-width:900px}
+    .tech-line{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px;max-width:900px}
+    .tech-line span{background:white;border:2px solid var(--ink);border-radius:999px;padding:7px 12px;font-weight:800;font-size:.9rem;box-shadow:2px 2px 0 var(--ink)}
     .evidence{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:30px}
     .card{border:2px solid var(--ink);border-radius:22px;padding:22px;box-shadow:5px 5px 0 var(--ink);background:white}
     .card:nth-child(1){background:var(--sky);transform:rotate(-.35deg)}.card:nth-child(2){background:var(--mint)}.card:nth-child(3){background:var(--lav);transform:rotate(.35deg)}
@@ -61,9 +63,9 @@
     <div class="hero-note">We are looking for a friendly enterprise pilot.</div>
   </div>
   <div class="doodle" aria-label="DataSong connects enterprise evidence into a semantic picture">
-    <div class="bubble b1">CRM<br>customers</div>
-    <div class="bubble b2">ERP<br>orders</div>
-    <div class="bubble b3">Warehouse<br>inventory</div>
+    <div class="bubble b1">SQL / NoSQL<br>business data</div>
+    <div class="bubble b2">Delta / lake<br>time series</div>
+    <div class="bubble b3">Warehouse<br>analytics</div>
     <div class="arrow a1">↘</div><div class="arrow a2">↗</div>
     <div class="ds">DataSong<br>semantic<br>picture</div>
   </div>
@@ -73,8 +75,11 @@
   <div class="section-kicker">The problem</div>
   <h2>Enterprises have the data. Meaning is scattered.</h2>
   <p class="big-line">The knowledge needed to use enterprise data is spread across systems, teams and years of implementation history.</p>
-  <p>Customer, order, product, inventory, support and operational data may live in different databases and applications, use different identifiers, and have relationships that are obvious only to people who have worked with those systems for years.</p>
-  <p>Building a useful semantic layer usually means rediscovering and documenting much of that knowledge manually.</p>
+  <p>Customer, order, product, inventory, support and operational data may live in different systems, use different identifiers, and have relationships that are obvious only to people who have worked with those systems for years.</p>
+  <p>The same estate may span transactional data, documents, events and high-volume time-series data across very different storage and processing technologies.</p>
+  <div class="tech-line" aria-label="Example enterprise data technologies">
+    <span>SQL</span><span>NoSQL</span><span>Data warehouses</span><span>Delta Lake</span><span>Object storage</span><span>Time-series data</span>
+  </div>
 </section>
 
 <section>
@@ -99,15 +104,15 @@
 <section>
   <div class="section-kicker">The pilot</div>
   <h2>We want to test this against a real, bounded enterprise problem.</h2>
-  <p>We are looking for one or two organisations willing to explore a small business domain with us — for example customer, orders and inventory — and see how much of its semantic model can be reconstructed from the systems already in place.</p>
+  <p>We are looking for one or two organisations willing to explore a small business domain with us. A pilot might connect customer, orders and inventory data with operational or machine time-series data — potentially spread across SQL or NoSQL systems, a warehouse, and Delta Lake or object storage — and test how much of the underlying semantic model can be reconstructed from the systems already in place.</p>
   <div class="pilot">
     <div class="pilot-box">
       <h3>Small and practical</h3>
       <ul>
-        <li>One bounded business domain</li>
+        <li>One bounded business or operational domain</li>
         <li>A manageable set of datasets and systems</li>
-        <li>Read-only discovery</li>
-        <li>Review with people who know the domain</li>
+        <li>Structured and time-series data where relevant</li>
+        <li>Read-only discovery and expert review</li>
       </ul>
     </div>
     <div class="pilot-box">
