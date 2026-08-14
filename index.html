@@ -42,6 +42,8 @@
     .pilot-box:nth-child(2){background:var(--peach)}
     .pilot-box h3{margin:0 0 12px}.pilot-box ul{margin:0;padding-left:20px;color:var(--ink)}
     .pilot-box li{margin:8px 0}
+    .trust-note{margin-top:24px;padding:22px 24px;border:2px solid var(--ink);border-radius:22px;background:var(--mint);box-shadow:5px 5px 0 var(--ink)}
+    .trust-note p{margin:0;color:var(--ink);font-weight:800}
     .contact{margin:64px 0 86px;padding:36px;background:var(--ink);border-radius:28px;color:white;box-shadow:8px 8px 0 var(--purple)}
     .contact h2,.contact p{color:white}.contact a{color:white;border-bottom-color:#b8a8ff}.contact .email{font-size:1.16rem;margin-top:20px}
     footer{padding:24px 0 34px;border-top:2px solid var(--line);color:#918ba7;font-size:.85rem}
@@ -98,33 +100,34 @@
   <div class="section-kicker">Why we are doing this</div>
   <h2>This comes from years spent inside large enterprise data estates.</h2>
   <p>Our experience spans large enterprise datasets, data platforms, pipelines, workflows, analytics and machine-learning systems. We have repeatedly seen how much effort goes into finding the right data, understanding its context and reconnecting knowledge that already exists somewhere in the organisation.</p>
-  <p>DataSong started from a simple question: with the capabilities now available, can much more of that discovery happen automatically?</p>
+  <p>That experience is why we think the problem is worth testing. The pilot itself is how we intend to earn trust: on a small domain, against your own experts, with results you can inspect.</p>
 </section>
 
 <section>
   <div class="section-kicker">The pilot</div>
-  <h2>We want to test this against a real, bounded enterprise problem.</h2>
-  <p>We are looking for one or two organisations willing to explore a small business domain with us. A pilot might connect customer, orders and inventory data with operational or machine time-series data — potentially spread across SQL or NoSQL systems, a warehouse, and Delta Lake or object storage — and test how much of the underlying semantic model can be reconstructed from the systems already in place.</p>
+  <h2>A small experiment with a clear exchange.</h2>
+  <p>We are looking for one or two organisations willing to explore a bounded business or operational domain with us. A pilot might connect customer, orders and inventory data with operational or machine time-series data — potentially spread across SQL or NoSQL systems, a warehouse, and Delta Lake or object storage.</p>
   <div class="pilot">
     <div class="pilot-box">
-      <h3>Small and practical</h3>
+      <h3>You provide</h3>
       <ul>
         <li>One bounded business or operational domain</li>
-        <li>A manageable set of datasets and systems</li>
-        <li>Structured and time-series data where relevant</li>
-        <li>Read-only discovery and expert review</li>
+        <li>Read-only access to a manageable set of datasets and systems</li>
+        <li>Relevant metadata, configuration or source context where available</li>
+        <li>A little time from someone who understands the domain to review the result</li>
       </ul>
     </div>
     <div class="pilot-box">
-      <h3>Designed to be low-risk</h3>
+      <h3>You get</h3>
       <ul>
-        <li>Run within the organisation's environment where required</li>
-        <li>Work under NDA</li>
-        <li>No production workflow changes</li>
-        <li>The goal is simply to measure what can be discovered</li>
+        <li>A reconstructed semantic map of that domain</li>
+        <li>The entities, relationships and supporting data sources we discover</li>
+        <li>Evidence and confidence behind the proposed relationships</li>
+        <li>A clear view of what was discovered automatically, what was ambiguous and what still needs human knowledge</li>
       </ul>
     </div>
   </div>
+  <div class="trust-note"><p>The first pilots are free. We can work under NDA, run within your environment where required, keep access read-only, and make no production changes. You keep the findings and semantic model. The point is not to ask you to believe the claim — it is to test it together.</p></div>
 </section>
 
 <section>
@@ -135,8 +138,8 @@
 </section>
 
 <div class="contact">
-  <h2>Have a messy corner of your enterprise data estate?</h2>
-  <p>If you know the data is there but understanding how it fits together still depends on a few experienced people, we'd like to talk. We are looking for a friendly pilot where we can test the idea on a small, real domain.</p>
+  <h2>Have a corner of your data estate that only a few people really understand?</h2>
+  <p>If you are willing to let us test the idea on one small domain, we will do the discovery work, show you exactly what we found and why, and leave you with the resulting semantic model. No charge for the first pilots.</p>
   <div class="email"><a href="mailto:hello@datasong.app?subject=DataSong%20pilot">hello@datasong.app</a></div>
 </div>
 
