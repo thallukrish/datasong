@@ -20,6 +20,12 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/state', (_req, res) => res.json(semanticStore.snapshot()));
 
+app.post('/api/reset', (_req, res) => {
+  semanticStore.reset();
+  broadcast();
+  res.json({ ok: true });
+});
+
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -35,18 +41,19 @@ app.post('/api/explore', async (req, res) => {
   if (!businessDescription || !repoUrl) return res.status(400).json({ error: 'businessDescription and repoUrl are required' });
   if (!deepseek) return res.status(400).json({ error: 'DEEPSEEK_API_KEY is not configured' });
 
+  const priorKnowledge = semanticStore.knowledgeSummary();
   semanticStore.begin({ businessDescription, repoUrl });
   broadcast();
   res.status(202).json({ ok: true });
 
-  explore({ businessDescription, repoUrl }).catch((error) => {
+  explore({ businessDescription, repoUrl, priorKnowledge }).catch((error) => {
     semanticStore.state.status = 'error';
     semanticStore.emit({ type: 'error', message: error.message });
     broadcast();
   });
 });
 
-async function explore({ businessDescription, repoUrl }) {
+async function explore({ businessDescription, repoUrl, priorKnowledge }) {
   const instructions = `
 You are DataSong examining how a business works by reading its application repository.
 
@@ -80,6 +87,8 @@ Rules:
 17. Prefer targeted search and bounded file reads. Do not dump the whole repository.
 18. Before semantic_complete, review the glossary for duplicate concepts/synonyms and consolidate them by reusing/updating canonical ids wherever the evidence says they are the same business thing.
 19. Finish with a short plain-English summary of what happens when a customer places an order.
+20. DataSong may already know workflows, concepts, rules and persistent mappings from earlier exploration. REUSE those existing ids and labels whenever they describe the same thing; enrich them instead of recreating them.
+21. If a known workflow already exists, focus the new exploration on missing evidence, missing branches, missing persistent mappings, or the next connected flow rather than rediscovering the same facts from scratch.
 `;
 
   const tools = toChatCompletionTools(modelTools);
@@ -87,7 +96,7 @@ Rules:
     { role: 'system', content: instructions },
     {
       role: 'user',
-      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExamine the repository and tell the connected business story: what happens when a customer places an order? Begin by preparing the repo.`
+      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExisting DataSong knowledge to REUSE and enrich:\n${JSON.stringify(priorKnowledge, null, 2)}\n\nExamine the repository and tell the connected business story: what happens when a customer places an order? Begin by preparing the repo. Reuse the existing ids above whenever the same workflow, concept, rule or stored data is already known.`
     }
   ];
 
@@ -133,7 +142,7 @@ function toolProgressText(name, args) {
   if (name === 'repo_list') return `Looking through ${args.path || 'the application structure'}…`;
   if (name === 'repo_search') return `Searching for how the business handles ${humanizeQuery(args.query)}…`;
   if (name === 'repo_read_file') return `Reading the part of the application that explains ${shortPath(args.path)}…`;
-  if (name === 'semantic_record_workflow') return `Writing the business story: ${args.name || 'order flow'}…`;
+  if (name === 'semantic_record_workflow') return `Updating the business story: ${args.name || 'order flow'}…`;
   if (name === 'semantic_record_node') return `Understanding ${args.label || 'another part of the order journey'}…`;
   if (name === 'semantic_record_relation') return 'Connecting two parts of the business story…';
   if (name === 'semantic_record_persistent_data') return `Finding where ${args.businessLabel || 'business data'} is stored…`;
@@ -143,8 +152,8 @@ function toolProgressText(name, args) {
 }
 
 function modelProgressText(round) {
-  if (round === 0) return 'Deciding where to start in the application…';
-  return 'Connecting what was found into the business story…';
+  if (round === 0) return 'Reviewing what DataSong already knows and deciding where to continue…';
+  return 'Connecting new evidence into the existing business guide…';
 }
 
 function humanizeQuery(query = '') {
