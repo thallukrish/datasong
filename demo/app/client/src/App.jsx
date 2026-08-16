@@ -36,7 +36,6 @@ export default function App() {
   const progress = discoveryProgress(state);
 
   async function explore() {
-    setSelectedId(null);
     setVisited(new Set());
     const response = await fetch('/api/explore', {
       method: 'POST',
@@ -47,6 +46,13 @@ export default function App() {
       const body = await response.json();
       alert(body.error || 'Unable to start exploration');
     }
+  }
+
+  async function resetKnowledge() {
+    const response = await fetch('/api/reset', { method: 'POST' });
+    if (!response.ok) return alert('Unable to reset demo knowledge');
+    setSelectedId(null);
+    setVisited(new Set());
   }
 
   function navigate(id) {
@@ -70,9 +76,12 @@ export default function App() {
           <span>GitHub repository</span>
           <input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
         </label>
-        <button onClick={explore} disabled={state.status === 'exploring'}>
-          {state.status === 'exploring' ? 'Exploring…' : 'Explore'}
-        </button>
+        <div className="setup-actions">
+          <button className="explore-button" onClick={explore} disabled={state.status === 'exploring'}>
+            {state.status === 'exploring' ? 'Exploring…' : state.nodes.length ? 'Continue exploring' : 'Explore'}
+          </button>
+          {state.nodes.length > 0 && <button className="reset-button" onClick={resetKnowledge} disabled={state.status === 'exploring'}>Reset demo knowledge</button>}
+        </div>
       </section>
 
       <section className="discovery-strip">
@@ -253,7 +262,12 @@ function discoveryProgress(state) {
 
 function progressWhileExploring(state) {
   const startedTools = state.events.filter((event) => event.type === 'tool_started');
-  const semanticEvents = state.events.filter((event) => ['workflow_found', 'node_upserted', 'edge_upserted', 'persistent_data_found', 'condition_found'].includes(event.type));
+  const semanticTypes = new Set([
+    'workflow_found', 'workflow_enriched', 'node_upserted', 'node_enriched',
+    'edge_upserted', 'edge_enriched', 'persistent_data_found', 'persistent_data_enriched',
+    'condition_found', 'condition_enriched'
+  ]);
+  const semanticEvents = state.events.filter((event) => semanticTypes.has(event.type));
 
   let base = 8;
   if (startedTools.some((event) => event.tool === 'repo_prepare')) base = 14;
@@ -270,11 +284,11 @@ function progressText(event, status) {
   if (status === 'error') return event?.message || 'Exploration needs attention.';
   if (!event) return 'Reading the application structure…';
   if (event.type === 'tool_started' || event.type === 'model_working') return event.message || 'Following the business flow…';
-  if (event.type === 'workflow_found') return `Found a business flow: ${event.workflow?.name || 'following it now'}…`;
-  if (event.type === 'persistent_data_found') return `Found where ${event.item?.businessLabel || 'business data'} is stored…`;
-  if (event.type === 'condition_found') return `Found a business rule: ${event.condition?.label || 'checking its effect'}…`;
-  if (event.type === 'edge_upserted') return `Connecting ${event.edge?.source || 'one part'} to ${event.edge?.target || 'another'}…`;
-  if (event.type === 'node_upserted') return `Understanding ${event.node?.label || 'another part of the business'}…`;
+  if (['workflow_found', 'workflow_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Found'} business flow: ${event.workflow?.name || 'following it now'}…`;
+  if (['persistent_data_found', 'persistent_data_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Found'} where ${event.item?.businessLabel || 'business data'} is stored…`;
+  if (['condition_found', 'condition_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Found'} business rule: ${event.condition?.label || 'checking its effect'}…`;
+  if (['edge_upserted', 'edge_enriched'].includes(event.type)) return 'Connecting new evidence into the business guide…';
+  if (['node_upserted', 'node_enriched'].includes(event.type)) return `${event.reused ? 'Enriching' : 'Understanding'} ${event.node?.label || 'another part of the business'}…`;
   return event.message || 'Following the business flow through the application…';
 }
 
