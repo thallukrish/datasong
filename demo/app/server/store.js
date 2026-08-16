@@ -8,6 +8,7 @@ const knowledgeFile = path.join(dataDir, 'semantic-knowledge.json');
 export class SemanticStore {
   constructor() {
     this.aliasIds = new Map();
+    this.currentScan = null;
     this.state = this.load();
   }
 
@@ -15,6 +16,11 @@ export class SemanticStore {
     return {
       businessDescription: '',
       repoUrl: '',
+      repository: {
+        url: '',
+        lastScannedCommit: null,
+        lastScanAt: null
+      },
       status: 'idle',
       events: [],
       nodes: [],
@@ -29,7 +35,13 @@ export class SemanticStore {
     try {
       if (!fs.existsSync(knowledgeFile)) return this.emptyState();
       const saved = JSON.parse(fs.readFileSync(knowledgeFile, 'utf8'));
-      return { ...this.emptyState(), ...saved, status: 'idle', events: [] };
+      return {
+        ...this.emptyState(),
+        ...saved,
+        repository: { ...this.emptyState().repository, ...(saved.repository || {}) },
+        status: 'idle',
+        events: []
+      };
     } catch (error) {
       console.warn(`Unable to load saved semantic knowledge: ${error.message}`);
       return this.emptyState();
@@ -44,14 +56,17 @@ export class SemanticStore {
 
   reset() {
     this.aliasIds.clear();
+    this.currentScan = null;
     this.state = this.emptyState();
     try { fs.rmSync(knowledgeFile, { force: true }); } catch {}
     return this.emit({ type: 'knowledge_reset', message: 'Saved demo knowledge cleared' });
   }
 
   begin({ businessDescription, repoUrl }) {
+    this.currentScan = null;
     this.state.businessDescription = businessDescription;
     this.state.repoUrl = repoUrl;
+    this.state.repository = { ...this.state.repository, url: repoUrl };
     this.state.status = 'exploring';
     this.state.events = [];
     this.emit({
@@ -68,6 +83,92 @@ export class SemanticStore {
     return enriched;
   }
 
+  previousCommitFor(repoUrl) {
+    if (!sameRepo(this.state.repository?.url || this.state.repoUrl, repoUrl)) return null;
+    return this.state.repository?.lastScannedCommit || null;
+  }
+
+  setScanContext(scan) {
+    this.currentScan = {
+      repoUrl: scan.repoUrl,
+      currentCommit: scan.currentCommit,
+      previousCommit: scan.previousCommit,
+      commitChanged: scan.commitChanged,
+      comparisonAvailable: scan.comparisonAvailable,
+      changedFiles: scan.changedFiles
+    };
+    this.state.repository = {
+      ...this.state.repository,
+      url: scan.repoUrl,
+      currentCommit: scan.currentCommit,
+      previousCommit: scan.previousCommit,
+      comparisonAvailable: scan.comparisonAvailable,
+      changedFiles: scan.changedFiles
+    };
+    return this.reusePlan();
+  }
+
+  reusePlan() {
+    if (!this.currentScan) return { reusable: [], needsReview: [], reason: 'repository has not been prepared yet' };
+
+    const items = this.semanticItems();
+    const { previousCommit, currentCommit, commitChanged, comparisonAvailable, changedFiles } = this.currentScan;
+
+    if (!previousCommit) {
+      return {
+        reusable: [],
+        needsReview: items.map((item) => ({ ...item, reason: 'existing knowledge predates commit-aware validation' })),
+        reason: 'first commit-aware scan'
+      };
+    }
+
+    if (!commitChanged) {
+      return {
+        reusable: items.map((item) => ({ ...item, reason: `repository is still at ${shortSha(currentCommit)}` })),
+        needsReview: [],
+        reason: 'repository commit unchanged'
+      };
+    }
+
+    if (!comparisonAvailable || !Array.isArray(changedFiles)) {
+      return {
+        reusable: [],
+        needsReview: items.map((item) => ({ ...item, reason: 'repository changed but Git diff could not be proven' })),
+        reason: 'conservative full semantic re-check'
+      };
+    }
+
+    const changed = new Set(changedFiles.map(normalizePath));
+    const reusable = [];
+    const needsReview = [];
+
+    for (const item of items) {
+      if (!item.evidenceFiles.length) {
+        needsReview.push({ ...item, reason: 'no evidence-file provenance recorded yet' });
+        continue;
+      }
+      const touched = item.evidenceFiles.filter((file) => changed.has(normalizePath(file)));
+      if (touched.length) needsReview.push({ ...item, reason: 'evidence changed', changedEvidenceFiles: touched });
+      else reusable.push({ ...item, reason: 'none of its evidence files changed' });
+    }
+
+    return {
+      reusable,
+      needsReview,
+      reason: `${changedFiles.length} repository files changed between ${shortSha(previousCommit)} and ${shortSha(currentCommit)}`,
+      changedFiles
+    };
+  }
+
+  semanticItems() {
+    const output = [];
+    for (const item of this.state.workflows) output.push(summaryItem('workflow', item.id, item.name, item));
+    for (const item of this.state.conditions) output.push(summaryItem('rule', item.id, item.label, item));
+    for (const item of this.state.nodes.filter((node) => node.kind === 'business_concept')) output.push(summaryItem('concept', item.id, item.label, item));
+    for (const item of this.state.persistentData) output.push(summaryItem('persistent_data', item.id, item.businessLabel, item));
+    return output;
+  }
+
   resolveId(id) {
     let current = id;
     const seen = new Set();
@@ -78,6 +179,18 @@ export class SemanticStore {
     return current;
   }
 
+  withProvenance(value, existing = null) {
+    const evidence = unique([...(existing?.evidence || []), ...(value.evidence || [])]);
+    const evidenceFiles = unique([...(existing?.evidenceFiles || []), ...extractEvidenceFiles(evidence)]);
+    return {
+      ...value,
+      evidence,
+      evidenceFiles,
+      sourceCommit: this.currentScan?.currentCommit || existing?.sourceCommit || null,
+      lastValidatedCommit: this.currentScan?.currentCommit || existing?.lastValidatedCommit || existing?.sourceCommit || null
+    };
+  }
+
   upsertNode(node) {
     const incomingId = node.id;
     const technicalNames = unique(node.technicalNames || []);
@@ -85,15 +198,14 @@ export class SemanticStore {
     const canonicalId = existing?.id || this.resolveId(incomingId);
     if (canonicalId !== incomingId) this.aliasIds.set(incomingId, canonicalId);
 
-    const value = {
+    const value = this.withProvenance({
       ...node,
       id: canonicalId,
       label: existing?.label || node.label,
       description: betterDescription(existing?.description, node.description),
       technicalNames: unique([...(existing?.technicalNames || []), ...technicalNames]),
-      aliases: unique([...(existing?.aliases || []), ...(existing && normalize(existing.label) !== normalize(node.label) ? [node.label] : [])]),
-      evidence: unique([...(existing?.evidence || []), ...(node.evidence || [])])
-    };
+      aliases: unique([...(existing?.aliases || []), ...(existing && normalize(existing.label) !== normalize(node.label) ? [node.label] : [])])
+    }, existing);
 
     const idx = this.state.nodes.findIndex((n) => n.id === canonicalId);
     if (idx >= 0) this.state.nodes[idx] = { ...this.state.nodes[idx], ...value };
@@ -124,13 +236,8 @@ export class SemanticStore {
     const source = this.resolveId(edge.source);
     const target = this.resolveId(edge.target);
     const id = edge.id || `${source}:${edge.relation}:${target}`;
-    const value = {
-      ...edge,
-      id,
-      source,
-      target,
-      evidence: unique([...(this.state.edges.find((e) => e.id === id)?.evidence || []), ...(edge.evidence || [])])
-    };
+    const existing = this.state.edges.find((e) => e.id === id);
+    const value = this.withProvenance({ ...edge, id, source, target }, existing);
     const idx = this.state.edges.findIndex((e) => e.id === id);
     if (idx >= 0) this.state.edges[idx] = { ...this.state.edges[idx], ...value };
     else this.state.edges.push(value);
@@ -143,14 +250,13 @@ export class SemanticStore {
     const existing = this.state.workflows.find((w) => w.id === resolvedId || normalize(w.name) === normalize(workflow.name));
     const id = existing?.id || resolvedId;
     if (id !== workflow.id) this.aliasIds.set(workflow.id, id);
-    const value = {
+    const value = this.withProvenance({
       ...workflow,
       id,
       name: existing?.name || workflow.name,
       description: betterDescription(existing?.description, workflow.description),
-      technicalNames: unique([...(existing?.technicalNames || []), ...(workflow.technicalNames || [])]),
-      evidence: unique([...(existing?.evidence || []), ...(workflow.evidence || [])])
-    };
+      technicalNames: unique([...(existing?.technicalNames || []), ...(workflow.technicalNames || [])])
+    }, existing);
     const idx = this.state.workflows.findIndex((w) => w.id === id);
     if (idx >= 0) this.state.workflows[idx] = value;
     else this.state.workflows.push(value);
@@ -166,14 +272,13 @@ export class SemanticStore {
     );
     const id = existing?.id || resolvedId;
     if (id !== condition.id) this.aliasIds.set(condition.id, id);
-    const value = {
+    const value = this.withProvenance({
       ...existing,
       ...condition,
       id,
       label: existing?.label || condition.label,
-      technicalNames: unique([...(existing?.technicalNames || []), ...(condition.technicalNames || [])]),
-      evidence: unique([...(existing?.evidence || []), ...(condition.evidence || [])])
-    };
+      technicalNames: unique([...(existing?.technicalNames || []), ...(condition.technicalNames || [])])
+    }, existing);
     const idx = this.state.conditions.findIndex((c) => c.id === id);
     if (idx >= 0) this.state.conditions[idx] = value;
     else this.state.conditions.push(value);
@@ -188,15 +293,14 @@ export class SemanticStore {
     );
     const id = existing?.id || resolvedId;
     if (id !== item.id) this.aliasIds.set(item.id, id);
-    const value = {
+    const value = this.withProvenance({
       ...existing,
       ...item,
       id,
       businessLabel: existing?.businessLabel || item.businessLabel,
       description: betterDescription(existing?.description, item.description),
-      fields: unique([...(existing?.fields || []), ...(item.fields || [])]),
-      evidence: unique([...(existing?.evidence || []), ...(item.evidence || [])])
-    };
+      fields: unique([...(existing?.fields || []), ...(item.fields || [])])
+    }, existing);
     const idx = this.state.persistentData.findIndex((d) => d.id === id);
     if (idx >= 0) this.state.persistentData[idx] = value;
     else this.state.persistentData.push(value);
@@ -206,18 +310,27 @@ export class SemanticStore {
 
   complete(summary) {
     this.state.status = 'complete';
+    if (this.currentScan?.currentCommit) {
+      this.state.repository = {
+        ...this.state.repository,
+        url: this.currentScan.repoUrl,
+        lastScannedCommit: this.currentScan.currentCommit,
+        lastScanAt: new Date().toISOString()
+      };
+    }
     this.persist();
     return this.emit({ type: 'exploration_complete', message: summary });
   }
 
   knowledgeSummary() {
     return {
-      workflows: this.state.workflows.map(({ id, name, technicalNames }) => ({ id, name, technicalNames })),
+      repository: this.state.repository,
+      workflows: this.state.workflows.map(({ id, name, technicalNames, sourceCommit, lastValidatedCommit, evidenceFiles }) => ({ id, name, technicalNames, sourceCommit, lastValidatedCommit, evidenceFiles })),
       concepts: this.state.nodes
         .filter((node) => node.kind === 'business_concept')
-        .map(({ id, label, aliases, technicalNames }) => ({ id, label, aliases, technicalNames })),
-      rules: this.state.conditions.map(({ id, label, expression }) => ({ id, label, expression })),
-      persistentData: this.state.persistentData.map(({ id, businessLabel, technicalName }) => ({ id, businessLabel, technicalName }))
+        .map(({ id, label, aliases, technicalNames, sourceCommit, lastValidatedCommit, evidenceFiles }) => ({ id, label, aliases, technicalNames, sourceCommit, lastValidatedCommit, evidenceFiles })),
+      rules: this.state.conditions.map(({ id, label, expression, sourceCommit, lastValidatedCommit, evidenceFiles }) => ({ id, label, expression, sourceCommit, lastValidatedCommit, evidenceFiles })),
+      persistentData: this.state.persistentData.map(({ id, businessLabel, technicalName, sourceCommit, lastValidatedCommit, evidenceFiles }) => ({ id, businessLabel, technicalName, sourceCommit, lastValidatedCommit, evidenceFiles }))
     };
   }
 
@@ -226,8 +339,33 @@ export class SemanticStore {
   }
 }
 
+function summaryItem(type, id, label, item) {
+  return {
+    type,
+    id,
+    label,
+    sourceCommit: item.sourceCommit || null,
+    lastValidatedCommit: item.lastValidatedCommit || item.sourceCommit || null,
+    evidenceFiles: unique(item.evidenceFiles || extractEvidenceFiles(item.evidence || []))
+  };
+}
+
+function extractEvidenceFiles(evidence = []) {
+  const files = [];
+  for (const entry of evidence) {
+    const text = String(entry || '').replaceAll('\\', '/');
+    const matches = text.match(/[A-Za-z0-9_.@+\-]+(?:\/[A-Za-z0-9_.@+\-]+)+\.[A-Za-z0-9]+/g) || [];
+    files.push(...matches.map((value) => value.replace(/^\.\//, '')));
+  }
+  return unique(files);
+}
+
 function normalize(value = '') {
   return String(value).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function normalizePath(value = '') {
+  return String(value).replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase();
 }
 
 function unique(values) {
@@ -238,6 +376,18 @@ function betterDescription(existing = '', incoming = '') {
   if (!existing) return incoming;
   if (!incoming) return existing;
   return incoming.length > existing.length ? incoming : existing;
+}
+
+function sameRepo(a = '', b = '') {
+  return normalizeRepoUrl(a) === normalizeRepoUrl(b);
+}
+
+function normalizeRepoUrl(value = '') {
+  return String(value).trim().replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
+}
+
+function shortSha(value = '') {
+  return value ? String(value).slice(0, 8) : 'unknown';
 }
 
 export const semanticStore = new SemanticStore();
