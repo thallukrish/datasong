@@ -36,10 +36,13 @@ Node demo orchestrator
    +-- semantic_complete
    |
    v
-OpenAI Responses API tool loop
+DeepSeek V4 Flash tool-calling loop
+(OpenAI-compatible Chat Completions API)
 ```
 
-The tool surface is intentionally MCP-shaped: repository evidence tools are separated from semantic recording tools, and all tool inputs/outputs are structured. The current demo calls them as OpenAI function tools directly from Node; the same handlers can later be exposed through an MCP server without changing the semantic explorer's conceptual boundary.
+The tool surface is intentionally MCP-shaped: repository evidence tools are separated from semantic recording tools, and all tool inputs/outputs are structured. The current demo calls them as function tools directly from Node; the same handlers can later be exposed through an MCP server without changing the semantic explorer's conceptual boundary.
+
+The Node server uses the OpenAI JavaScript SDK only as an OpenAI-compatible HTTP client. Model requests are sent to DeepSeek at `https://api.deepseek.com` using `deepseek-v4-flash` by default.
 
 ## Important semantic distinction
 
@@ -75,14 +78,22 @@ From `demo/app`:
 
 ```bash
 npm install
-export OPENAI_API_KEY=...
+export DEEPSEEK_API_KEY=...
 npm run dev
 ```
 
-Optional:
+PowerShell:
+
+```powershell
+npm install
+$env:DEEPSEEK_API_KEY="your-deepseek-api-key"
+npm run dev
+```
+
+Optional model override:
 
 ```bash
-export OPENAI_MODEL=gpt-5.6
+export DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
 Then open `http://localhost:5173`.
@@ -102,7 +113,7 @@ demo/app/
       App.jsx
       styles.css
   server/
-    index.js       OpenAI orchestration + SSE
+    index.js       DeepSeek orchestration + SSE
     repoTools.js   clone/list/search/read repository
     modelTools.js  structured tool definitions + dispatch
     store.js       incremental semantic-map state
