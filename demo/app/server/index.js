@@ -9,8 +9,9 @@ const port = Number(process.env.PORT || 3101);
 const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const MODEL_TIMEOUT_MS = 45_000;
 const MAX_MODEL_TOKENS = 3000;
+const RETRY_MODEL_TOKENS = 6000;
 const MAX_WORKFLOW_ROUNDS = 24;
-const MAX_COMPACT_FINDINGS = 32;
+const MAX_COMPACT_FINDINGS = 24;
 const deepseek = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com', timeout: MODEL_TIMEOUT_MS })
   : null;
@@ -108,19 +109,21 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
     content: compactRepoList(root),
     instruction: 'Use this repository orientation to choose the first targeted search/read for the workflow.'
   };
+  let retryNote = '';
+  let nextTokenLimit = MAX_MODEL_TOKENS;
 
   for (let round = 1; round <= MAX_WORKFLOW_ROUNDS; round += 1) {
-    console.log(`[DataSong] ${task.id}: story round ${round}`);
+    console.log(`[DataSong] ${task.id}: story round ${round}${retryNote ? ' (retrying same evidence)' : ''}`);
 
     const response = await withTimeout(
       deepseek.chat.completions.create({
         model,
         messages: [
           { role: 'system', content: workflowAssessmentInstructions(task) },
-          { role: 'user', content: buildWorkflowTurnPrompt({ task, businessDescription, repoUrl, repoPreparation, working, latestEvidence }) }
+          { role: 'user', content: buildWorkflowTurnPrompt({ task, businessDescription, repoUrl, repoPreparation, working, latestEvidence, retryNote }) }
         ],
         response_format: { type: 'json_object' },
-        max_tokens: MAX_MODEL_TOKENS,
+        max_tokens: nextTokenLimit,
         temperature: 0
       }),
       MODEL_TIMEOUT_MS,
@@ -133,7 +136,8 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
     const choice = response.choices?.[0];
     const content = choice?.message?.content;
     if (!content?.trim()) {
-      latestEvidence = { kind: 'model_retry', content: 'The prior JSON response was empty. Reassess the workflow and return the required JSON object.' };
+      retryNote = 'Your previous response was empty. Reprocess the SAME latest evidence. Return a very concise complete JSON object; do not add prose.';
+      nextTokenLimit = RETRY_MODEL_TOKENS;
       continue;
     }
 
@@ -141,14 +145,26 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
     try {
       turn = JSON.parse(content);
     } catch (error) {
-      console.warn(`[DataSong] ${task.id}: invalid assessment JSON on round ${round}: ${error.message}`);
-      latestEvidence = { kind: 'model_retry', content: 'The prior response was not valid JSON. Return one concise complete JSON object matching the required schema.' };
+      console.warn(`[DataSong] ${task.id}: invalid assessment JSON on round ${round}: ${error.message}; finish=${choice?.finish_reason || 'unknown'}`);
+      retryNote = choice?.finish_reason === 'length'
+        ? 'Your previous response hit the output limit and was truncated. Reprocess the SAME latest evidence. Be terse: storySummary <= 500 chars, every checklist summary <= 120 chars, evidenceFinding <= 250 chars, progressMessage <= 180 chars. Return complete JSON before elaborating.'
+        : 'Your previous response was invalid JSON. Reprocess the SAME latest evidence and return one terse complete JSON object only.';
+      nextTokenLimit = RETRY_MODEL_TOKENS;
+      semanticStore.emit({
+        type: 'learning_update',
+        workflowTaskId: task.id,
+        message: `Keeping the latest source evidence and retrying its interpretation for ${task.name}.`
+      });
+      broadcast();
       continue;
     }
 
-    working.storySummary = cleanText(turn.storySummary, 1800) || working.storySummary;
+    retryNote = '';
+    nextTokenLimit = MAX_MODEL_TOKENS;
+    working.storySummary = cleanText(turn.storySummary, 700) || working.storySummary;
     working.checklist = normalizeChecklist(turn.checklist, working.checklist);
-    addCompactFinding(working, turn.evidenceFinding, latestEvidence);
+    const newFinding = addCompactFinding(working, turn.evidenceFinding, latestEvidence);
+    const action = normalizeNextAction(turn.nextAction);
 
     const percent = checklistPercent(working.checklist);
     const gaps = remainingGaps(working.checklist);
@@ -159,11 +175,11 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
       checklist: working.checklist,
       storySummary: working.storySummary,
       remainingGaps: gaps,
-      message: assessmentProgressMessage(task, percent, gaps, working.storySummary)
+      latestFinding: newFinding,
+      message: findingProgressMessage(task, turn.progressMessage, newFinding, working.findings, action)
     });
     broadcast();
 
-    const action = normalizeNextAction(turn.nextAction);
     if (action.type === 'finish') {
       const gate = completionGate(working.checklist, turn.synthesis);
       if (!gate.ok) {
@@ -179,7 +195,7 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
         workflowId: task.id,
         summary: cleanText(turn.completionReason, 800) || `Workflow story complete with ${percent}% structural coverage.`
       });
-      semanticStore.emit({ type: 'workflow_assessment', workflowTaskId: task.id, percent: 100, checklist: working.checklist, storySummary: working.storySummary, remainingGaps: [], message: `Workflow story complete: ${task.name}.` });
+      semanticStore.emit({ type: 'workflow_assessment', workflowTaskId: task.id, percent: 100, checklist: working.checklist, storySummary: working.storySummary, remainingGaps: [], message: finalFindingMessage(task, working.findings) });
       broadcast();
       return;
     }
@@ -236,7 +252,7 @@ function blockedEvidence(task, working, label, priorFindings) {
   semanticStore.emit({
     type: 'learning_update',
     workflowTaskId: task.id,
-    message: `Skipped already investigated evidence (${label}); using the compact finding instead.`
+    message: `Already traced ${label}; following another part of the ${task.name.toLowerCase()} story instead.`
   });
   broadcast();
   return {
@@ -246,37 +262,37 @@ function blockedEvidence(task, working, label, priorFindings) {
   };
 }
 
-function buildWorkflowTurnPrompt({ task, businessDescription, repoUrl, repoPreparation, working, latestEvidence }) {
-  return `Return JSON only. Reassess the ENTIRE workflow story on every turn.\n\nBUSINESS\n${businessDescription}\n\nREPOSITORY\n${repoUrl}\nCommit: ${repoPreparation.currentCommit}\nRoot tree: ${repoPreparation.rootTree}\nChanged areas relevant to review: ${JSON.stringify((repoPreparation.topLevelChangedAreas || []).slice(0, 10))}\nChanged evidence files for this task: ${JSON.stringify(task.changedEvidenceFiles || [])}\n\nWORKFLOW GOAL\n${task.name} (id: ${task.id})\nMode: ${task.mode}\n\nCURRENT COMPACT STORY\n${working.storySummary || '(none yet)'}\n\nCURRENT CHECKLIST\n${JSON.stringify(working.checklist)}\n\nCOMPACT EVIDENCE LEDGER\n${JSON.stringify(working.findings.slice(-MAX_COMPACT_FINDINGS))}\n\nVISITED LEDGER\n${JSON.stringify(compactVisited(working.visited))}\n\nLATEST EVIDENCE — EPHEMERAL, ANALYZE IT NOW\n${JSON.stringify(latestEvidence)}\n\nYour response must be one JSON object with this shape:\n${WORKFLOW_TURN_EXAMPLE}\n\nRules: update the whole-story checklist from all compact evidence plus the latest evidence; convert useful latest raw evidence into ONE compact evidenceFinding; identify remaining gaps; choose exactly ONE unvisited nextAction. Use finish only when the story is structurally complete and include synthesis.`;
+function buildWorkflowTurnPrompt({ task, businessDescription, repoUrl, repoPreparation, working, latestEvidence, retryNote = '' }) {
+  return `Return JSON only. Reassess the ENTIRE workflow story on every turn. Keep the response compact.\n${retryNote ? `\nRETRY REQUIREMENT\n${retryNote}\n` : ''}\nBUSINESS\n${businessDescription}\n\nREPOSITORY\n${repoUrl}\nCommit: ${repoPreparation.currentCommit}\nChanged areas relevant to review: ${JSON.stringify((repoPreparation.topLevelChangedAreas || []).slice(0, 8))}\nChanged evidence files for this task: ${JSON.stringify(task.changedEvidenceFiles || [])}\n\nWORKFLOW GOAL\n${task.name} (id: ${task.id})\nMode: ${task.mode}\n\nCURRENT COMPACT STORY\n${working.storySummary || '(none yet)'}\n\nCURRENT CHECKLIST\n${JSON.stringify(working.checklist)}\n\nCOMPACT EVIDENCE LEDGER\n${JSON.stringify(working.findings.slice(-MAX_COMPACT_FINDINGS))}\n\nVISITED LEDGER\n${JSON.stringify(compactVisited(working.visited))}\n\nLATEST EVIDENCE — EPHEMERAL, ANALYZE IT NOW\n${JSON.stringify(latestEvidence)}\n\nYour response must be one JSON object with this shape:\n${WORKFLOW_TURN_EXAMPLE}\n\nRules: reassess the whole story; update the checklist; compress useful latest evidence into ONE short evidenceFinding; write progressMessage as a plain-language BUSINESS FINDING/CONNECTION for the UI, never as checklist status or missing categories; choose exactly ONE unvisited nextAction. Use finish only when structurally complete and include synthesis.`;
 }
 
 const WORKFLOW_TURN_EXAMPLE = JSON.stringify({
-  storySummary: 'Compact end-to-end story known so far.',
+  storySummary: 'Brief coherent story so far, maximum about 500 characters.',
   checklist: {
-    trigger: { status: 'supported', summary: 'What starts the workflow.' },
-    actors: { status: 'partial', summary: 'Known actors.' },
-    concepts: { status: 'supported', summary: 'Core business objects.' },
-    steps: { status: 'partial', summary: 'Major steps known so far.' },
-    rules: { status: 'missing', summary: 'Important branches still unknown.' },
-    persistentReads: { status: 'partial', summary: 'Durable reads known.' },
-    persistentWrites: { status: 'partial', summary: 'Durable writes known.' },
-    outcome: { status: 'supported', summary: 'Recognizable outcome.' },
-    nextWorkflow: { status: 'missing', summary: 'Direct handoff not yet proven.' },
-    evidenceCoverage: { status: 'partial', summary: 'Evidence coverage assessment.' }
+    trigger: { status: 'supported', summary: 'brief evidence-based note' },
+    actors: { status: 'partial', summary: 'brief evidence-based note' },
+    concepts: { status: 'supported', summary: 'brief evidence-based note' },
+    steps: { status: 'partial', summary: 'brief evidence-based note' },
+    rules: { status: 'missing', summary: 'brief evidence-based note' },
+    persistentReads: { status: 'partial', summary: 'brief evidence-based note' },
+    persistentWrites: { status: 'partial', summary: 'brief evidence-based note' },
+    outcome: { status: 'supported', summary: 'brief evidence-based note' },
+    nextWorkflow: { status: 'missing', summary: 'brief evidence-based note' },
+    evidenceCoverage: { status: 'partial', summary: 'brief evidence-based note' }
   },
   evidenceFinding: {
     source: { path: 'relative/file.xml', symbol: 'symbol', startLine: 10, endLine: 40 },
-    finding: 'Short business meaning extracted from the latest evidence.',
+    finding: 'One short business meaning extracted from the latest evidence.',
     supports: ['steps', 'persistentWrites']
   },
-  remainingGaps: ['One material story gap.'],
-  nextAction: { type: 'search', query: 'targeted business or code term', maxResults: 20 },
+  progressMessage: 'Found the Place Order action calling the order service; following that service into the persisted order data.',
+  nextAction: { type: 'search', query: 'one targeted code or business term', maxResults: 20 },
   completionReason: '',
   synthesis: null
-}, null, 2);
+});
 
 function workflowAssessmentInstructions(task) {
-  return `You are DataSong's workflow story analyst. Work ONLY on '${task.name}' (${task.id}).\nA workflow is one end-to-end enterprise story slice from a business trigger to a recognizable customer/business outcome. Functions, services, helpers and branches are evidence inside a workflow, not workflows by themselves.\n\nEvery response MUST be valid JSON. Every turn, reassess the FULL story using the compact story, checklist, compact evidence ledger and latest ephemeral evidence.\nStatuses are exactly: missing, partial, supported, not_applicable. Use not_applicable only when evidence shows that story element genuinely does not apply.\nDo not invent evidence. Keep repository paths/symbols/line ranges in evidence findings.\nDo not ask to revisit a search, file range or symbol shown in the visited ledger.\nChoose exactly ONE next action: search, read, list, or finish.\nPrefer targeted search/read over broad listing.\nWhen latest raw source is useful, compress it into a short evidenceFinding; the raw source will NOT be retained in later turns.\nThe story is complete only when trigger, actors, concepts, major steps, material rules, persistence behavior, outcome, direct handoff if applicable, and evidence coverage are accounted for.\nOn finish, synthesis must contain canonical concepts, rules, persistent data, relations and the complete workflow. Never finish merely because many files were read.`;
+  return `You are DataSong's workflow story analyst. Work ONLY on '${task.name}' (${task.id}).\nA workflow is one end-to-end enterprise story slice from a business trigger to a recognizable customer/business outcome. Functions, services, helpers and branches are evidence inside a workflow, not workflows by themselves.\n\nEvery response MUST be valid JSON and concise. Every turn, reassess the FULL story using the compact story, checklist, compact evidence ledger and latest ephemeral evidence.\nStatuses are exactly: missing, partial, supported, not_applicable. Use not_applicable only when evidence proves the element does not apply.\nKeep storySummary <= 500 characters. Keep each checklist summary <= 120 characters. Keep evidenceFinding.finding <= 250 characters. Keep progressMessage <= 180 characters.\nDo not invent evidence. Keep repository paths/symbols/line ranges in evidence findings.\nDo not revisit a search, file range or symbol shown in the visited ledger.\nChoose exactly ONE next action: search, read, list, or finish. Prefer targeted search/read over broad listing.\nprogressMessage is shown to a human. It MUST describe what was just found or connected in business language and, optionally, what thread is being followed next. Never mention checklist categories, percentages, coverage, missing actors/concepts/rules/triggers, or internal assessment mechanics.\nWhen latest raw source is useful, compress it into a short evidenceFinding; the raw source will NOT be retained after a successful turn.\nThe story is complete only when the end-to-end path, material decisions, persistence behavior, outcome and direct handoff are accounted for.\nOn finish, synthesis must contain canonical concepts, rules, persistent data, relations and the complete workflow. Never finish merely because many files were read.`;
 }
 
 function recordSynthesis(task, synthesis = {}) {
@@ -384,7 +400,7 @@ function normalizeChecklist(input, previous) {
   for (const key of Object.keys(STORY_WEIGHTS)) {
     const candidate = input?.[key] || previous?.[key] || {};
     const status = ['missing', 'partial', 'supported', 'not_applicable'].includes(candidate.status) ? candidate.status : (previous?.[key]?.status || 'missing');
-    output[key] = { status, summary: cleanText(candidate.summary, 500) || previous?.[key]?.summary || '' };
+    output[key] = { status, summary: cleanText(candidate.summary, 160) || previous?.[key]?.summary || '' };
   }
   return output;
 }
@@ -405,14 +421,34 @@ function remainingGaps(checklist) {
     .map(([key, value]) => `${humanizeKey(key)}: ${value.summary || value.status}`);
 }
 
-function assessmentProgressMessage(task, percent, gaps, storySummary) {
-  if (!gaps.length) return `${task.name}: the end-to-end story is structurally complete; validating final synthesis.`;
-  const focus = gaps.slice(0, 2).join(' · ');
-  return `${task.name}: ${percent}% story coverage. ${focus}${storySummary ? '' : ' Building the first coherent story.'}`;
+function findingProgressMessage(task, modelMessage, newFinding, findings, action) {
+  const explicit = cleanText(modelMessage, 220);
+  if (explicit && !looksLikeAssessmentRubric(explicit)) return explicit;
+  const finding = newFinding?.finding || findings.at(-1)?.finding;
+  if (finding) return `${sentence(finding)}${nextThreadText(action)}`;
+  if (action.type === 'search' && action.query) return `Following the ${task.name.toLowerCase()} path through ${humanizeQuery(action.query)}…`;
+  if (action.type === 'read' && action.path) return `Following the ${task.name.toLowerCase()} path into ${shortPath(action.path)}…`;
+  return `Connecting the next part of ${task.name.toLowerCase()}…`;
+}
+
+function finalFindingMessage(task, findings) {
+  const last = findings.at(-1)?.finding;
+  return last ? `${sentence(last)} The ${task.name.toLowerCase()} story is now connected end to end.` : `${task.name} is now connected end to end.`;
+}
+
+function looksLikeAssessmentRubric(text) {
+  return /\b(story coverage|checklist|missing actors?|missing concepts?|missing rules?|missing trigger|evidence coverage|percent|percentage)\b/i.test(text);
+}
+
+function nextThreadText(action = {}) {
+  if (action.type === 'search' && action.query) return ` Following ${humanizeQuery(action.query)} next.`;
+  if (action.type === 'read' && action.path) return ` Following that into ${shortPath(action.path)} next.`;
+  if (action.type === 'list' && action.path) return ` Opening ${shortPath(action.path)} next.`;
+  return '';
 }
 
 function addCompactFinding(working, finding, latestEvidence) {
-  if (!finding?.finding) return;
+  if (!finding?.finding) return null;
   const source = finding.source || latestEvidence?.source || {};
   const item = {
     source: {
@@ -422,13 +458,14 @@ function addCompactFinding(working, finding, latestEvidence) {
       endLine: source.endLine || null,
       query: source.query || null
     },
-    finding: cleanText(finding.finding, 700),
+    finding: cleanText(finding.finding, 350),
     supports: Array.isArray(finding.supports) ? finding.supports.filter((key) => key in STORY_WEIGHTS) : []
   };
   const key = JSON.stringify(item);
   if (!working.findings.some((existing) => JSON.stringify(existing) === key)) working.findings.push(item);
   if (working.findings.length > MAX_COMPACT_FINDINGS) working.findings.splice(0, working.findings.length - MAX_COMPACT_FINDINGS);
   if (item.source.path && item.source.symbol) working.visited.symbols.add(`${normalizePath(item.source.path)}#${normalizeKey(item.source.symbol)}`);
+  return item;
 }
 
 function normalizeNextAction(action = {}) {
@@ -529,6 +566,9 @@ function printTokenSummary(usage) {
 function normalizePath(value = '') { return String(value || '.').replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '') || '.'; }
 function normalizeKey(value = '') { return String(value).trim().toLowerCase().replace(/\s+/g, ' '); }
 function humanizeKey(value = '') { return String(value).replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' ').toLowerCase(); }
+function humanizeQuery(value = '') { return String(value).replace(/[#_]/g, ' ').replace(/\s+/g, ' ').trim() || 'the next order step'; }
+function shortPath(value = '') { const parts = String(value).split('/').filter(Boolean); return parts.at(-1) || 'the next source area'; }
+function sentence(value = '') { const text = cleanText(value, 260); return /[.!?]$/.test(text) ? text : `${text}.`; }
 function cleanText(value, max) { const text = typeof value === 'string' ? value.trim() : ''; return text.length > max ? `${text.slice(0, max)}…` : text; }
 function shortSha(value = '') { return value ? String(value).slice(0, 8) : 'unknown'; }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, Number(value) || min)); }
