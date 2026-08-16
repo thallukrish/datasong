@@ -10,7 +10,8 @@ const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const deepseek = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
-      baseURL: 'https://api.deepseek.com'
+      baseURL: 'https://api.deepseek.com',
+      timeout: 90_000
     })
   : null;
 const clients = new Set();
@@ -54,6 +55,26 @@ app.post('/api/explore', async (req, res) => {
 });
 
 async function explore({ businessDescription, repoUrl, priorKnowledge }) {
+  // Repository preparation is deterministic and should happen before asking the model
+  // anything. This removes the initial 8% dead zone and gives the model an explicit
+  // commit-aware reuse plan as its starting context.
+  semanticStore.emit({
+    type: 'tool_started',
+    tool: 'repo_prepare',
+    args: { repoUrl },
+    message: 'Checking the repository version and what DataSong can safely reuse…'
+  });
+  broadcast();
+
+  const repoPreparation = await executeTool('repo_prepare', { repoUrl });
+  semanticStore.emit({
+    type: 'tool_completed',
+    tool: 'repo_prepare',
+    args: { repoUrl },
+    resultPreview: preview(repoPreparation)
+  });
+  broadcast();
+
   const instructions = `
 You are DataSong examining how a business works by reading its application repository.
 
@@ -64,42 +85,41 @@ Initial story boundary:
 Customer -> Sales Order -> Order Items -> Product -> inventory decision/check -> order placement/approval.
 Once an already-known slice is trustworthy, prefer extending the knowledge base into the next connected business flow rather than rediscovering it.
 
-Your job is to discover the story from repository evidence and progressively record it in plain business language, while preserving technical evidence underneath.
+The repository has ALREADY been prepared before this model call. You are given the authoritative preparation result containing currentCommit, previousCommit, changedFiles and knowledgeReuse. Do NOT call repo_prepare again.
 
 Rules:
-1. ALWAYS call repo_prepare first. Its result contains currentCommit, previousCommit, changedFiles and knowledgeReuse.
-2. Treat repo_prepare.knowledgeReuse as authoritative incremental-discovery guidance:
+1. Treat the supplied repoPreparation.knowledgeReuse as authoritative incremental-discovery guidance:
    - reusable: existing semantic items whose supporting evidence is unchanged. Reuse them as-is. DO NOT re-read their evidence or re-record them merely to confirm them.
    - needsReview: existing semantic items whose evidence changed, whose provenance is missing, or whose Git comparison could not be proven. Re-read only the evidence needed to validate/update these.
-3. If currentCommit equals previousCommit, do not rediscover already-known items. Move directly to missing knowledge or the next connected workflow.
-4. If the commit changed, focus repository inspection on changed files that affect needsReview items, plus new code needed for a new connected workflow. Do not crawl unaffected evidence files.
-5. Think like a business/process analyst examining an unfamiliar company, not like a graph-database tool.
-6. Visible labels MUST be stable plain-English business names: Customer, Sales Order, Order Item, Product, Inventory required?, Stock available?, Order approval. Never use a raw class/service/entity/variable name as the visible label when a business phrase is possible.
-7. MAINTAIN A CANONICAL BUSINESS GLOSSARY. Before recording a new business concept, ask whether it is actually the same durable business thing as something already recorded.
-8. If multiple code terms, variables, statuses or runtime representations refer to the same durable business object, DO NOT create separate wiki concepts. Reuse the existing concept id and canonical label, and add implementation terms to technicalNames/evidence instead.
+2. If currentCommit equals previousCommit, do not rediscover already-known items. Move directly to missing knowledge or the next connected workflow.
+3. If the commit changed, focus repository inspection on changed files that affect needsReview items, plus new code needed for a new connected workflow. Do not crawl unaffected evidence files.
+4. Think like a business/process analyst examining an unfamiliar company, not like a graph-database tool.
+5. Visible labels MUST be stable plain-English business names: Customer, Sales Order, Order Item, Product, Inventory required?, Stock available?, Order approval. Never use a raw class/service/entity/variable name as the visible label when a business phrase is possible.
+6. MAINTAIN A CANONICAL BUSINESS GLOSSARY. Before recording a new business concept, ask whether it is actually the same durable business thing as something already recorded.
+7. If multiple code terms, variables, statuses or runtime representations refer to the same durable business object, DO NOT create separate wiki concepts. Reuse the existing concept id and canonical label, and add implementation terms to technicalNames/evidence instead.
    Example: cartOrderId, session cart order, open order and an OrderOpen record may all be code/runtime descriptions of the same Sales Order while it is being built. If evidence confirms that identity, expose one page named "Sales Order" and keep those names as technical aliases underneath.
-9. A state or role difference should become a separate concept only when it has genuinely different business identity, persistence, lifecycle or relationships. Otherwise describe it as a state/condition on the canonical concept.
-10. Persistence identity is strong evidence for canonicalization: if two runtime/code names resolve to the same persistent entity and business record identity, normally use one canonical business concept. Exact table/entity names remain separately recorded as persistent-data provenance.
-11. Keep exact implementation names in technicalNames, technicalName, fields and evidence. Runtime variables, service parameters and local object names belong there, not in the visible glossary.
-12. Every newly recorded story object must connect to the business story. Do not create isolated concepts, services, datasets or conditions.
-13. Record a relation immediately whenever you add a new story object and evidence supports the connection.
-14. Do not add services/functions as primary visible nodes unless they represent a meaningful business step that cannot be expressed otherwise. Prefer keeping services in technicalNames/evidence.
-15. Distinguish runtime/transient values from durable data. Only use semantic_record_persistent_data when repository evidence shows a persistent entity/table/database read or write.
-16. When persistent data is found, explain what it represents in this business story, keep the exact entity/table name, and connect it to the canonical business concept/workflow it supports.
-17. Record important business decisions/branches when code/config/data controls whether the path continues, changes or stops. Use business wording for the rule; preserve code expressions underneath.
-18. Static/symbolic reasoning is sufficient for config/data branches. Runtime simulation is not required.
-19. Never invent evidence. Evidence should include repository-relative path plus symbol/service/line context where possible. Repository-relative file paths are important because DataSong stores them as semantic provenance.
-20. Prefer targeted search and bounded file reads. Do not dump the whole repository.
-21. Before semantic_complete, review the glossary for duplicate concepts/synonyms and consolidate them by reusing/updating canonical ids wherever the evidence says they are the same business thing.
-22. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
+8. A state or role difference should become a separate concept only when it has genuinely different business identity, persistence, lifecycle or relationships. Otherwise describe it as a state/condition on the canonical concept.
+9. Persistence identity is strong evidence for canonicalization: if two runtime/code names resolve to the same persistent entity and business record identity, normally use one canonical business concept. Exact table/entity names remain separately recorded as persistent-data provenance.
+10. Keep exact implementation names in technicalNames, technicalName, fields and evidence. Runtime variables, service parameters and local object names belong there, not in the visible glossary.
+11. Every newly recorded story object must connect to the business story. Do not create isolated concepts, services, datasets or conditions.
+12. Record a relation immediately whenever you add a new story object and evidence supports the connection.
+13. Do not add services/functions as primary visible nodes unless they represent a meaningful business step that cannot be expressed otherwise. Prefer keeping services in technicalNames/evidence.
+14. Distinguish runtime/transient values from durable data. Only use semantic_record_persistent_data when repository evidence shows a persistent entity/table/database read or write.
+15. When persistent data is found, explain what it represents in this business story, keep the exact entity/table name, and connect it to the canonical business concept/workflow it supports.
+16. Record important business decisions/branches when code/config/data controls whether the path continues, changes or stops. Use business wording for the rule; preserve code expressions underneath.
+17. Static/symbolic reasoning is sufficient for config/data branches. Runtime simulation is not required.
+18. Never invent evidence. Evidence should include repository-relative path plus symbol/service/line context where possible. Repository-relative file paths are important because DataSong stores them as semantic provenance.
+19. Prefer targeted search and bounded file reads. Do not dump the whole repository.
+20. Before semantic_complete, review the glossary for duplicate concepts/synonyms and consolidate them by reusing/updating canonical ids wherever the evidence says they are the same business thing.
+21. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
 `;
 
-  const tools = toChatCompletionTools(modelTools);
+  const tools = toChatCompletionTools(modelTools.filter((tool) => tool.name !== 'repo_prepare'));
   const messages = [
     { role: 'system', content: instructions },
     {
       role: 'user',
-      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExisting DataSong knowledge:\n${JSON.stringify(priorKnowledge, null, 2)}\n\nStart with repo_prepare. After it returns, obey its knowledgeReuse plan. Reuse unchanged semantic items without rediscovering them; re-check only affected items; then extend the business guide with missing or next connected workflows where useful.`
+      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExisting DataSong knowledge:\n${JSON.stringify(priorKnowledge, null, 2)}\n\nRepository preparation result:\n${JSON.stringify(repoPreparation, null, 2)}\n\nObey the knowledgeReuse plan above. Reuse unchanged semantic items without rediscovering them; re-check only affected items; then extend the business guide with missing or next connected workflows where useful.`
     }
   ];
 
@@ -141,7 +161,6 @@ Rules:
 }
 
 function toolProgressText(name, args) {
-  if (name === 'repo_prepare') return 'Checking the repository version and what DataSong can safely reuse…';
   if (name === 'repo_list') return `Looking through ${args.path || 'the application structure'}…`;
   if (name === 'repo_search') return `Searching for how the business handles ${humanizeQuery(args.query)}…`;
   if (name === 'repo_read_file') return `Reading the part of the application that explains ${shortPath(args.path)}…`;
@@ -155,7 +174,7 @@ function toolProgressText(name, args) {
 }
 
 function modelProgressText(round) {
-  if (round === 0) return 'Reviewing saved knowledge and checking the source version…';
+  if (round === 0) return 'Repository checked. Deciding what needs to be learned next…';
   return 'Reusing unchanged knowledge and connecting new evidence…';
 }
 
