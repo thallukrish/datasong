@@ -7,11 +7,13 @@ import { semanticStore } from './store.js';
 const app = express();
 const port = Number(process.env.PORT || 3101);
 const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const MODEL_TIMEOUT_MS = 45_000;
+const MAX_MODEL_TOKENS = 1200;
 const deepseek = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: 'https://api.deepseek.com',
-      timeout: 90_000
+      timeout: MODEL_TIMEOUT_MS
     })
   : null;
 const clients = new Set();
@@ -55,9 +57,6 @@ app.post('/api/explore', async (req, res) => {
 });
 
 async function explore({ businessDescription, repoUrl, priorKnowledge }) {
-  // Repository preparation is deterministic and should happen before asking the model
-  // anything. This removes the initial 8% dead zone and gives the model an explicit
-  // commit-aware reuse plan as its starting context.
   semanticStore.emit({
     type: 'tool_started',
     tool: 'repo_prepare',
@@ -97,7 +96,6 @@ Rules:
 5. Visible labels MUST be stable plain-English business names: Customer, Sales Order, Order Item, Product, Inventory required?, Stock available?, Order approval. Never use a raw class/service/entity/variable name as the visible label when a business phrase is possible.
 6. MAINTAIN A CANONICAL BUSINESS GLOSSARY. Before recording a new business concept, ask whether it is actually the same durable business thing as something already recorded.
 7. If multiple code terms, variables, statuses or runtime representations refer to the same durable business object, DO NOT create separate wiki concepts. Reuse the existing concept id and canonical label, and add implementation terms to technicalNames/evidence instead.
-   Example: cartOrderId, session cart order, open order and an OrderOpen record may all be code/runtime descriptions of the same Sales Order while it is being built. If evidence confirms that identity, expose one page named "Sales Order" and keep those names as technical aliases underneath.
 8. A state or role difference should become a separate concept only when it has genuinely different business identity, persistence, lifecycle or relationships. Otherwise describe it as a state/condition on the canonical concept.
 9. Persistence identity is strong evidence for canonicalization: if two runtime/code names resolve to the same persistent entity and business record identity, normally use one canonical business concept. Exact table/entity names remain separately recorded as persistent-data provenance.
 10. Keep exact implementation names in technicalNames, technicalName, fields and evidence. Runtime variables, service parameters and local object names belong there, not in the visible glossary.
@@ -112,6 +110,7 @@ Rules:
 19. Prefer targeted search and bounded file reads. Do not dump the whole repository.
 20. Before semantic_complete, review the glossary for duplicate concepts/synonyms and consolidate them by reusing/updating canonical ids wherever the evidence says they are the same business thing.
 21. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
+22. Make progress in small tool-driven steps. Do not spend a long turn composing prose while more repository evidence is needed.
 `;
 
   const tools = toChatCompletionTools(modelTools.filter((tool) => tool.name !== 'repo_prepare'));
@@ -123,26 +122,74 @@ Rules:
     }
   ];
 
-  for (let round = 0; round < 80; round += 1) {
-    semanticStore.emit({ type: 'model_working', round, message: modelProgressText(round) });
-    broadcast();
+  let previousCallSignature = '';
+  let repeatedCallCount = 0;
 
-    const response = await deepseek.chat.completions.create({ model, messages, tools, tool_choice: 'auto' });
-    const message = response.choices?.[0]?.message;
-    if (!message) throw new Error('DeepSeek returned no assistant message');
+  for (let round = 0; round < 40; round += 1) {
+    const roundNo = round + 1;
+    semanticStore.emit({
+      type: 'model_request_started',
+      round: roundNo,
+      message: `Asking DeepSeek what to do next (round ${roundNo})…`
+    });
+    broadcast();
+    console.log(`[DataSong] DeepSeek round ${roundNo} started`);
+
+    const response = await withTimeout(
+      deepseek.chat.completions.create({
+        model,
+        messages,
+        tools,
+        tool_choice: 'auto',
+        max_tokens: MAX_MODEL_TOKENS,
+        temperature: 0
+      }),
+      MODEL_TIMEOUT_MS,
+      `DeepSeek did not respond within ${Math.round(MODEL_TIMEOUT_MS / 1000)} seconds on round ${roundNo}`
+    );
+
+    const choice = response.choices?.[0];
+    const message = choice?.message;
+    if (!message) throw new Error(`DeepSeek returned no assistant message on round ${roundNo}`);
+
+    const calls = message.tool_calls || [];
+    semanticStore.emit({
+      type: 'model_response_received',
+      round: roundNo,
+      toolCallCount: calls.length,
+      message: calls.length
+        ? `DeepSeek chose ${calls.length} next step${calls.length === 1 ? '' : 's'} (round ${roundNo}).`
+        : `DeepSeek finished its reasoning (round ${roundNo}).`
+    });
+    broadcast();
+    console.log(`[DataSong] DeepSeek round ${roundNo} returned ${calls.length} tool call(s), finish=${choice?.finish_reason || 'unknown'}`);
 
     messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls });
-    const calls = message.tool_calls || [];
 
     if (!calls.length) {
+      if (!message.content?.trim()) throw new Error(`DeepSeek returned neither tool calls nor an answer on round ${roundNo}`);
       if (semanticStore.state.status !== 'complete') semanticStore.complete(message.content || 'Business knowledge updated');
       broadcast();
       return;
     }
 
+    const signature = calls.map((call) => `${call.function?.name}:${call.function?.arguments || '{}'}`).join('|');
+    if (signature === previousCallSignature) repeatedCallCount += 1;
+    else repeatedCallCount = 0;
+    previousCallSignature = signature;
+
+    if (repeatedCallCount >= 2) {
+      throw new Error(`DeepSeek repeated the same tool request three times on round ${roundNo}; stopping instead of looping`);
+    }
+
     for (const call of calls) {
       const name = call.function?.name;
-      const args = JSON.parse(call.function?.arguments || '{}');
+      let args;
+      try {
+        args = JSON.parse(call.function?.arguments || '{}');
+      } catch {
+        throw new Error(`DeepSeek returned invalid JSON arguments for ${name || 'a tool'} on round ${roundNo}`);
+      }
 
       semanticStore.emit({ type: 'tool_started', tool: name, args, message: toolProgressText(name, args) });
       broadcast();
@@ -156,8 +203,7 @@ Rules:
     if (semanticStore.state.status === 'complete') return;
   }
 
-  semanticStore.complete('Stopped after exploration safety limit');
-  broadcast();
+  throw new Error('Exploration reached the 40-round safety limit before completing');
 }
 
 function toolProgressText(name, args) {
@@ -171,11 +217,6 @@ function toolProgressText(name, args) {
   if (name === 'semantic_record_condition') return `Understanding the rule: ${args.label || 'what changes the path'}…`;
   if (name === 'semantic_complete') return 'Saving the updated business guide against this repository version…';
   return 'Following the business flow…';
-}
-
-function modelProgressText(round) {
-  if (round === 0) return 'Repository checked. Deciding what needs to be learned next…';
-  return 'Reusing unchanged knowledge and connecting new evidence…';
 }
 
 function humanizeQuery(query = '') {
@@ -192,6 +233,14 @@ function toChatCompletionTools(tools) {
     type: 'function',
     function: { name: tool.name, description: tool.description, parameters: tool.parameters }
   }));
+}
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function preview(value) {
