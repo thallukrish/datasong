@@ -4,7 +4,7 @@ import { semanticStore } from './store.js';
 export const modelTools = [
   {
     type: 'function', name: 'repo_prepare',
-    description: 'Clone and prepare the submitted Git repository for exploration.',
+    description: 'Clone and prepare the submitted Git repository for exploration. Returns current commit, changed files since the last completed scan, and which saved semantic items can be reused versus rechecked.',
     parameters: { type: 'object', properties: { repoUrl: { type: 'string' } }, required: ['repoUrl'], additionalProperties: false }
   },
   {
@@ -28,7 +28,7 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_workflow',
-    description: 'Record the current business workflow using a plain-English name and story. Keep implementation names in technicalNames/evidence.',
+    description: 'Record or enrich the current business workflow using a plain-English name and story. Reuse a known canonical id when the workflow already exists. Keep implementation names in technicalNames/evidence.',
     parameters: {
       type: 'object',
       properties: {
@@ -43,12 +43,12 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_node',
-    description: 'Record a business-story object. The visible label must be plain English; implementation names belong in technicalNames.',
+    description: 'Record or enrich a business-story object. The visible label must be canonical plain English; implementation names belong in technicalNames.',
     parameters: {
       type: 'object',
       properties: {
         id: { type: 'string' },
-        label: { type: 'string', description: 'Human-readable business label such as Customer, Sales order, Order items, Product.' },
+        label: { type: 'string', description: 'Human-readable business label such as Customer, Sales Order, Order Item, Product.' },
         kind: { type: 'string', enum: ['business_concept', 'workflow', 'persistent_data', 'service', 'condition'] },
         description: { type: 'string', description: 'What this means in the business, not a code description.' },
         technicalNames: { type: 'array', items: { type: 'string' } },
@@ -71,7 +71,7 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_persistent_data',
-    description: 'Record durable business data encountered through a database/entity read or write. Give it a human businessLabel and preserve the exact entity/table in technicalName.',
+    description: 'Record or enrich durable business data encountered through a database/entity read or write. Give it a human businessLabel and preserve the exact entity/table in technicalName.',
     parameters: {
       type: 'object',
       properties: {
@@ -89,7 +89,7 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_condition',
-    description: 'Record a business rule or decision point that changes the current workflow path. The visible label must be understandable without seeing code.',
+    description: 'Record or enrich a business rule or decision point that changes the current workflow path. The visible label must be understandable without seeing code.',
     parameters: {
       type: 'object',
       properties: {
@@ -113,7 +113,12 @@ export const modelTools = [
 
 export async function executeTool(name, args) {
   switch (name) {
-    case 'repo_prepare': return prepareRepo(args.repoUrl);
+    case 'repo_prepare': {
+      const previousCommit = semanticStore.previousCommitFor(args.repoUrl);
+      const repo = await prepareRepo(args.repoUrl, previousCommit);
+      const knowledgeReuse = semanticStore.setScanContext(repo);
+      return { ...repo, knowledgeReuse };
+    }
     case 'repo_list': return listRepo(args.path);
     case 'repo_search': return searchRepo(args.query, args.maxResults);
     case 'repo_read_file': return readRepoFile(args.path, args.startLine, args.endLine);
