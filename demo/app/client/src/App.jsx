@@ -231,9 +231,21 @@ function WikiLink({ node, visited, navigate, block = false }) {
 function discoveryProgress(state) {
   if (state.status === 'idle') return 0;
   if (state.status === 'complete') return 100;
-  if (state.status === 'error') return Math.min(95, 12 + state.events.filter((event) => event.type !== 'tool_completed').length * 7);
-  const meaningful = state.events.filter((event) => ['workflow_found', 'node_upserted', 'edge_upserted', 'persistent_data_found', 'condition_found'].includes(event.type)).length;
-  return Math.min(92, 8 + meaningful * 5);
+  if (state.status === 'error') return Math.min(95, progressWhileExploring(state));
+  return progressWhileExploring(state);
+}
+
+function progressWhileExploring(state) {
+  const startedTools = state.events.filter((event) => event.type === 'tool_started');
+  const semanticEvents = state.events.filter((event) => ['workflow_found', 'node_upserted', 'edge_upserted', 'persistent_data_found', 'condition_found'].includes(event.type));
+
+  let base = 8;
+  if (startedTools.some((event) => event.tool === 'repo_prepare')) base = 14;
+  if (startedTools.some((event) => ['repo_list', 'repo_search'].includes(event.tool))) base = 22;
+  if (startedTools.some((event) => event.tool === 'repo_read_file')) base = 30;
+  if (startedTools.some((event) => event.tool?.startsWith('semantic_record_'))) base = 40;
+
+  return Math.min(96, base + semanticEvents.length * 4 + Math.min(12, startedTools.length));
 }
 
 function progressText(event, status) {
@@ -241,6 +253,7 @@ function progressText(event, status) {
   if (status === 'complete') return 'Business guide ready to browse.';
   if (status === 'error') return event?.message || 'Exploration needs attention.';
   if (!event) return 'Reading the application structure…';
+  if (event.type === 'tool_started' || event.type === 'model_working') return event.message || 'Following the business flow…';
   if (event.type === 'workflow_found') return `Found a business flow: ${event.workflow?.name || 'following it now'}…`;
   if (event.type === 'persistent_data_found') return `Found where ${event.item?.businessLabel || 'business data'} is stored…`;
   if (event.type === 'condition_found') return `Found a business rule: ${event.condition?.label || 'checking its effect'}…`;
