@@ -8,6 +8,9 @@ const TEXT_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.java', '.groovy', '.xml', '.json', '.yaml', '.yml',
   '.sql', '.py', '.rb', '.go', '.cs', '.kt', '.properties', '.conf', '.md', '.txt'
 ]);
+const MAX_SEARCH_RESULTS_FOR_MODEL = 8;
+const MAX_SEARCH_SNIPPET_CHARS = 220;
+const MAX_DEPENDENCY_PROBES_PER_SEARCH = 3;
 
 const dataDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data');
 const repoCacheDir = path.join(dataDir, 'repo-cache');
@@ -15,28 +18,21 @@ const repoCacheDir = path.join(dataDir, 'repo-cache');
 let workspace = null;
 let searchableFiles = [];
 let repositoryName = '';
+let primaryRepoUrl = '';
+let sourceRoots = new Map();
+let dependencyCandidates = [];
 
 export async function prepareRepo(repoUrl, previousCommit = null) {
   searchableFiles = [];
+  sourceRoots = new Map();
+  dependencyCandidates = [];
+  primaryRepoUrl = repoUrl;
   repositoryName = repoNameFromUrl(repoUrl);
   await fs.mkdir(repoCacheDir, { recursive: true });
   workspace = path.join(repoCacheDir, repoCacheKey(repoUrl));
 
-  let git;
-  if (await isGitWorkspace(workspace)) {
-    console.log(`[DataSong] repo_prepare: reusing cached checkout ${workspace}`);
-    git = simpleGit(workspace);
-    console.log('[DataSong] repo_prepare: fetching repository tip…');
-    await git.fetch(['origin', 'HEAD', '--depth', '1']);
-    console.log('[DataSong] repo_prepare: resetting cached checkout to fetched tip…');
-    await git.reset(['--hard', 'FETCH_HEAD']);
-  } else {
-    console.log(`[DataSong] repo_prepare: cloning ${repoUrl} into persistent cache…`);
-    await fs.rm(workspace, { recursive: true, force: true });
-    await simpleGit().clone(repoUrl, workspace, ['--depth', '1']);
-    git = simpleGit(workspace);
-    console.log('[DataSong] repo_prepare: initial clone complete.');
-  }
+  const git = await prepareCachedCheckout(repoUrl, workspace, 'repo_prepare');
+  sourceRoots.set(repositoryName, workspace);
 
   console.log('[DataSong] repo_prepare: reading commit and root tree…');
   const currentCommit = (await git.revparse(['HEAD'])).trim();
@@ -73,14 +69,13 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
   }
 
   console.log('[DataSong] repo_prepare: indexing tracked text files…');
-  const tracked = await git.raw(['ls-files']);
-  searchableFiles = tracked
-    .split(/\r?\n/)
-    .map((relative) => relative.trim())
-    .filter(Boolean)
-    .filter((relative) => TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase()))
-    .map((relative) => path.join(workspace, relative));
-  console.log(`[DataSong] repo_prepare: ready (${searchableFiles.length} searchable files).`);
+  await indexTrackedFiles(git, workspace, repositoryName, true);
+
+  dependencyCandidates = await discoverDependencyCandidates(workspace, repoUrl);
+  if (dependencyCandidates.length) {
+    console.log(`[DataSong] repo_prepare: discovered source dependencies: ${dependencyCandidates.map((item) => item.name).join(', ')}`);
+  }
+  console.log(`[DataSong] repo_prepare: ready (${searchableFiles.length} searchable files in primary repo).`);
 
   return {
     workspace,
@@ -97,62 +92,64 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
     changedTrees,
     topLevelChangedAreas: summarizeTopLevelChanges(changedFiles, changedTrees),
     searchableFiles: searchableFiles.length,
+    dependencyCandidates: dependencyCandidates.map(({ name, url, status }) => ({ name, url, status })),
     cacheReused: true
   };
 }
 
 export async function listRepo(relativePath = '.') {
   ensureWorkspace();
-  const normalizedPath = normalizeRepoPath(relativePath);
-  const root = safeResolve(normalizedPath);
+  const resolved = resolveSourcePath(relativePath);
   try {
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    return entries.slice(0, 200).map((entry) => ({
+    const entries = await fs.readdir(resolved.absolute, { withFileTypes: true });
+    return entries.slice(0, 120).map((entry) => ({
       name: entry.name,
-      path: path.relative(workspace, path.join(root, entry.name)).replaceAll('\\', '/'),
+      path: displayPath(resolved.sourceName, path.relative(resolved.root, path.join(resolved.absolute, entry.name))),
       type: entry.isDirectory() ? 'directory' : 'file'
     }));
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
-    const rootEntries = await fs.readdir(workspace, { withFileTypes: true });
+    const rootEntries = await fs.readdir(resolved.root, { withFileTypes: true });
     return {
-      error: `Path '${relativePath}' does not exist in the cloned repository. Repository root is already '${repositoryName || 'the submitted repository'}'.`,
-      normalizedPath,
-      suggestion: 'Use paths relative to the repository root.',
-      rootEntries: rootEntries.slice(0, 80).map((entry) => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : 'file' }))
+      error: `Path '${relativePath}' does not exist in source '${resolved.sourceName}'.`,
+      normalizedPath: resolved.relative,
+      suggestion: 'Use a path returned by repository search/list. Dependency paths are prefixed with @component-name/.',
+      rootEntries: rootEntries.slice(0, 60).map((entry) => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : 'file' }))
     };
   }
 }
 
-export async function searchRepo(query, maxResults = 30) {
+export async function searchRepo(query, maxResults = MAX_SEARCH_RESULTS_FOR_MODEL) {
   ensureWorkspace();
+  const limit = Math.max(1, Math.min(MAX_SEARCH_RESULTS_FOR_MODEL, Number(maxResults) || MAX_SEARCH_RESULTS_FOR_MODEL));
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const results = [];
+  if (!tokens.length) return [];
 
-  for (const file of searchableFiles) {
-    let text;
-    try { text = await fs.readFile(file, 'utf8'); } catch { continue; }
-    const lines = text.split('\n');
-    for (let idx = 0; idx < lines.length; idx += 1) {
-      const line = lines[idx];
-      const haystack = `${path.relative(workspace, file)} ${line}`.toLowerCase();
-      if (tokens.every((token) => haystack.includes(token))) {
-        results.push({
-          path: path.relative(workspace, file).replaceAll('\\', '/'),
-          line: idx + 1,
-          snippet: line.trim().slice(0, 500)
-        });
-        if (results.length >= maxResults) return results;
-      }
+  let results = await searchIndexedFiles(tokens, limit);
+  if (results.length) return results;
+
+  // A qualified call can legitimately point outside the submitted repository. Probe only
+  // explicitly referenced sibling components, lazily, instead of broadening model searches.
+  let probes = 0;
+  for (const candidate of dependencyCandidates) {
+    if (candidate.status === 'unavailable') continue;
+    if (candidate.status !== 'attached') {
+      if (probes >= MAX_DEPENDENCY_PROBES_PER_SEARCH) break;
+      probes += 1;
+      await attachDependency(candidate);
     }
+    if (candidate.status !== 'attached') continue;
+    results = await searchIndexedFiles(tokens, limit, candidate.name);
+    if (results.length) return results;
   }
-  return results;
+
+  return [];
 }
 
 export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
   ensureWorkspace();
-  const normalizedPath = normalizeRepoPath(relativePath);
-  const file = safeResolve(normalizedPath);
+  const resolved = resolveSourcePath(relativePath);
+  const file = resolved.absolute;
 
   let stat;
   try {
@@ -162,9 +159,9 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
     return {
       ok: false,
       error: 'path_not_found',
-      path: normalizedPath,
+      path: relativePath,
       requestedPath: relativePath,
-      suggestion: 'Search for the symbol or list the nearest known parent directory before reading a file.'
+      suggestion: 'Search for the symbol first. Use dependency-qualified paths such as @mantle-usl/service/... exactly as returned by search.'
     };
   }
 
@@ -173,12 +170,12 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
     return {
       ok: false,
       error: 'path_is_directory',
-      path: normalizedPath,
+      path: relativePath,
       requestedPath: relativePath,
-      suggestion: `Do not read '${normalizedPath}' as a file. Choose one file below it or request a directory listing.`,
-      entries: entries.slice(0, 120).map((entry) => ({
+      suggestion: `Do not read '${relativePath}' as a file. Choose one file below it or request a directory listing.`,
+      entries: entries.slice(0, 80).map((entry) => ({
         name: entry.name,
-        path: path.relative(workspace, path.join(file, entry.name)).replaceAll('\\', '/'),
+        path: displayPath(resolved.sourceName, path.relative(resolved.root, path.join(file, entry.name))),
         type: entry.isDirectory() ? 'directory' : 'file'
       }))
     };
@@ -188,7 +185,7 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
     return {
       ok: false,
       error: 'path_not_regular_file',
-      path: normalizedPath,
+      path: relativePath,
       requestedPath: relativePath,
       suggestion: 'Choose a regular text file returned by repository search or listing.'
     };
@@ -197,16 +194,135 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
   const text = await fs.readFile(file, 'utf8');
   const lines = text.split('\n');
   const from = Math.max(1, startLine);
-  const to = Math.min(lines.length, Math.max(from, endLine));
+  const requestedTo = Math.max(from, endLine);
+  const to = Math.min(lines.length, Math.min(requestedTo, from + 180));
   return {
     ok: true,
-    path: normalizedPath,
+    path: displayPath(resolved.sourceName, resolved.relative),
     requestedPath: relativePath,
+    source: resolved.sourceName,
     startLine: from,
     endLine: to,
     totalLines: lines.length,
     content: lines.slice(from - 1, to).map((line, i) => `${from + i}: ${line}`).join('\n')
   };
+}
+
+async function prepareCachedCheckout(repoUrl, target, logPrefix) {
+  let git;
+  if (await isGitWorkspace(target)) {
+    console.log(`[DataSong] ${logPrefix}: reusing cached checkout ${target}`);
+    git = simpleGit(target);
+    console.log(`[DataSong] ${logPrefix}: fetching repository tip…`);
+    await git.fetch(['origin', 'HEAD', '--depth', '1']);
+    await git.reset(['--hard', 'FETCH_HEAD']);
+    return git;
+  }
+
+  console.log(`[DataSong] ${logPrefix}: cloning ${repoUrl} into persistent cache…`);
+  await fs.rm(target, { recursive: true, force: true });
+  await simpleGit().clone(repoUrl, target, ['--depth', '1']);
+  console.log(`[DataSong] ${logPrefix}: clone complete.`);
+  return simpleGit(target);
+}
+
+async function indexTrackedFiles(git, root, sourceName, primary = false) {
+  const tracked = await git.raw(['ls-files']);
+  const indexed = tracked
+    .split(/\r?\n/)
+    .map((relative) => relative.trim())
+    .filter(Boolean)
+    .filter((relative) => TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase()))
+    .map((relative) => ({ sourceName, root, relative, absolute: path.join(root, relative), primary }));
+  searchableFiles.push(...indexed);
+  return indexed.length;
+}
+
+async function searchIndexedFiles(tokens, limit, sourceName = null) {
+  const results = [];
+  const seen = new Set();
+  for (const item of searchableFiles) {
+    if (sourceName && item.sourceName !== sourceName) continue;
+    let text;
+    try { text = await fs.readFile(item.absolute, 'utf8'); } catch { continue; }
+    const lines = text.split('\n');
+    for (let idx = 0; idx < lines.length; idx += 1) {
+      const line = lines[idx];
+      const haystack = `${item.relative} ${line}`.toLowerCase();
+      if (!tokens.every((token) => haystack.includes(token))) continue;
+      const key = `${item.sourceName}:${item.relative}:${idx + 1}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({
+        path: displayPath(item.sourceName, item.relative),
+        line: idx + 1,
+        snippet: line.trim().replace(/\s+/g, ' ').slice(0, MAX_SEARCH_SNIPPET_CHARS)
+      });
+      if (results.length >= limit) return results;
+    }
+  }
+  return results;
+}
+
+async function discoverDependencyCandidates(root, repoUrl) {
+  const ordered = [];
+  const add = (name, reason) => {
+    if (!name || normalizeName(name) === normalizeName(repositoryName)) return;
+    if (ordered.some((item) => normalizeName(item.name) === normalizeName(name))) return;
+    const url = siblingRepoUrl(repoUrl, name);
+    if (!url) return;
+    ordered.push({ name, url, reason, status: 'pending' });
+  };
+
+  // Runtime component references are stronger evidence for code traversal than packaging deps,
+  // so collect them first. PopCommerce, for example, explicitly references mantle-usl here.
+  const buildText = await readTextIfExists(path.join(root, 'build.gradle'));
+  for (const match of buildText.matchAll(/runtime:component:([A-Za-z0-9_.-]+)/g)) add(match[1], 'build runtime component reference');
+
+  const componentText = await readTextIfExists(path.join(root, 'component.xml'));
+  for (const match of componentText.matchAll(/<depends-on\s+name=["']([^"']+)["']/g)) add(match[1], 'component dependency');
+
+  return ordered.slice(0, 8);
+}
+
+async function attachDependency(candidate) {
+  const target = path.join(repoCacheDir, repoCacheKey(candidate.url));
+  try {
+    console.log(`[DataSong] repo_search: following explicit dependency ${candidate.name}…`);
+    const git = await prepareCachedCheckout(candidate.url, target, `dependency ${candidate.name}`);
+    sourceRoots.set(candidate.name, target);
+    const count = await indexTrackedFiles(git, target, candidate.name, false);
+    candidate.status = 'attached';
+    console.log(`[DataSong] repo_search: dependency ${candidate.name} ready (${count} searchable files).`);
+  } catch (error) {
+    candidate.status = 'unavailable';
+    candidate.error = error.message;
+    console.warn(`[DataSong] repo_search: unable to attach ${candidate.name}: ${error.message}`);
+  }
+}
+
+function resolveSourcePath(value = '.') {
+  const raw = String(value || '.').replaceAll('\\', '/').replace(/^\.\//, '');
+  if (raw.startsWith('@')) {
+    const slash = raw.indexOf('/');
+    const sourceName = slash > 1 ? raw.slice(1, slash) : raw.slice(1);
+    const relative = slash > 1 ? raw.slice(slash + 1) || '.' : '.';
+    const root = sourceRoots.get(sourceName);
+    if (!root) throw new Error(`Source dependency '${sourceName}' is not attached. Search for the symbol first so DataSong can attach its declared dependency.`);
+    return { sourceName, root, relative, absolute: safeResolveIn(root, relative) };
+  }
+
+  let relative = normalizeRepoPath(raw);
+  return { sourceName: repositoryName, root: workspace, relative, absolute: safeResolveIn(workspace, relative) };
+}
+
+function displayPath(sourceName, relativePath) {
+  const clean = String(relativePath || '.').replaceAll('\\', '/');
+  return sourceName === repositoryName ? clean : `@${sourceName}/${clean}`;
+}
+
+async function readTextIfExists(file) {
+  try { return await fs.readFile(file, 'utf8'); } catch { return ''; }
 }
 
 async function isGitWorkspace(dir) {
@@ -296,8 +412,8 @@ function normalizeRepoPath(relativePath = '.') {
   return value || '.';
 }
 
-function safeResolve(relativePath) {
-  const root = path.resolve(workspace);
+function safeResolveIn(rootValue, relativePath) {
+  const root = path.resolve(rootValue);
   const resolved = path.resolve(root, relativePath);
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) throw new Error('Path escapes repository workspace');
   return resolved;
@@ -309,6 +425,20 @@ function normalizePath(value = '') {
 
 function normalizeRepoUrl(value = '') {
   return String(value).trim().replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
+}
+
+function normalizeName(value = '') { return String(value).trim().toLowerCase(); }
+
+function siblingRepoUrl(repoUrl, siblingName) {
+  try {
+    const parsed = new URL(repoUrl);
+    if (parsed.hostname !== 'github.com') return null;
+    const parts = parsed.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '').split('/');
+    if (parts.length < 2) return null;
+    return `https://github.com/${parts[0]}/${siblingName}`;
+  } catch {
+    return null;
+  }
 }
 
 function repoNameFromUrl(repoUrl = '') {
