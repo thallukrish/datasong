@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { simpleGit } from 'simple-git';
 
 const TEXT_EXTENSIONS = new Set([
@@ -8,20 +9,36 @@ const TEXT_EXTENSIONS = new Set([
   '.sql', '.py', '.rb', '.go', '.cs', '.kt', '.properties', '.conf', '.md', '.txt'
 ]);
 
+const dataDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data');
+const repoCacheDir = path.join(dataDir, 'repo-cache');
+
 let workspace = null;
 let searchableFiles = [];
 let repositoryName = '';
 
 export async function prepareRepo(repoUrl, previousCommit = null) {
-  if (workspace) await fs.rm(workspace, { recursive: true, force: true });
-  workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'datasong-demo-'));
   searchableFiles = [];
   repositoryName = repoNameFromUrl(repoUrl);
+  await fs.mkdir(repoCacheDir, { recursive: true });
+  workspace = path.join(repoCacheDir, repoCacheKey(repoUrl));
 
-  // Only fetch the current tip initially. If an older commit is needed for comparison,
-  // fetch that exact commit afterwards instead of cloning a deep history up front.
-  await simpleGit().clone(repoUrl, workspace, ['--depth', '1']);
-  const git = simpleGit(workspace);
+  let git;
+  if (await isGitWorkspace(workspace)) {
+    console.log(`[DataSong] repo_prepare: reusing cached checkout ${workspace}`);
+    git = simpleGit(workspace);
+    console.log('[DataSong] repo_prepare: fetching repository tip…');
+    await git.fetch(['origin', 'HEAD', '--depth', '1']);
+    console.log('[DataSong] repo_prepare: resetting cached checkout to fetched tip…');
+    await git.reset(['--hard', 'FETCH_HEAD']);
+  } else {
+    console.log(`[DataSong] repo_prepare: cloning ${repoUrl} into persistent cache…`);
+    await fs.rm(workspace, { recursive: true, force: true });
+    await simpleGit().clone(repoUrl, workspace, ['--depth', '1']);
+    git = simpleGit(workspace);
+    console.log('[DataSong] repo_prepare: initial clone complete.');
+  }
+
+  console.log('[DataSong] repo_prepare: reading commit and root tree…');
   const currentCommit = (await git.revparse(['HEAD'])).trim();
   const rootTree = (await git.revparse([`${currentCommit}^{tree}`])).trim();
 
@@ -33,29 +50,29 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
 
   if (previousCommit && previousCommit !== currentCommit) {
     try {
+      console.log(`[DataSong] repo_prepare: comparing previous commit ${previousCommit.slice(0, 8)} with ${currentCommit.slice(0, 8)}…`);
       await ensureCommit(git, previousCommit);
       previousRootTree = (await git.revparse([`${previousCommit}^{tree}`])).trim();
       const diff = await git.diff(['--name-only', previousCommit, currentCommit]);
       changedFiles = diff.split(/\r?\n/).map(normalizePath).filter(Boolean);
 
-      // Only inspect tree SHAs for directories that are ancestors of changed files.
-      // This gives us hierarchical change information without recursively enumerating
-      // every tree in the repository.
       const affectedDirs = affectedDirectories(changedFiles);
       changedTrees = await resolveChangedTrees(git, previousCommit, currentCommit, affectedDirs);
       comparisonReason = `${changedFiles.length} files changed across ${changedTrees.length} affected directory trees since the last completed scan`;
+      console.log(`[DataSong] repo_prepare: diff complete (${changedFiles.length} changed files).`);
     } catch (error) {
       comparisonAvailable = false;
       changedFiles = null;
       changedTrees = null;
       comparisonReason = `unable to compare with prior commit ${previousCommit}: ${error.message}`;
+      console.warn(`[DataSong] repo_prepare: prior-commit comparison unavailable: ${error.message}`);
     }
   } else if (previousCommit === currentCommit) {
     previousRootTree = rootTree;
+    console.log('[DataSong] repo_prepare: repository commit is unchanged.');
   }
 
-  // Git already knows the tracked file list. This is much faster than recursively
-  // walking the checkout on Windows, and is enough for repository text search.
+  console.log('[DataSong] repo_prepare: indexing tracked text files…');
   const tracked = await git.raw(['ls-files']);
   searchableFiles = tracked
     .split(/\r?\n/)
@@ -63,6 +80,7 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
     .filter(Boolean)
     .filter((relative) => TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase()))
     .map((relative) => path.join(workspace, relative));
+  console.log(`[DataSong] repo_prepare: ready (${searchableFiles.length} searchable files).`);
 
   return {
     workspace,
@@ -78,7 +96,8 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
     changedFiles,
     changedTrees,
     topLevelChangedAreas: summarizeTopLevelChanges(changedFiles, changedTrees),
-    searchableFiles: searchableFiles.length
+    searchableFiles: searchableFiles.length,
+    cacheReused: true
   };
 }
 
@@ -190,6 +209,21 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
   };
 }
 
+async function isGitWorkspace(dir) {
+  try {
+    const stat = await fs.stat(path.join(dir, '.git'));
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function repoCacheKey(repoUrl) {
+  const hash = createHash('sha1').update(normalizeRepoUrl(repoUrl)).digest('hex').slice(0, 12);
+  const name = repoNameFromUrl(repoUrl).replace(/[^A-Za-z0-9._-]+/g, '-') || 'repo';
+  return `${name}-${hash}`;
+}
+
 async function ensureCommit(git, commit) {
   try {
     await git.raw(['cat-file', '-e', `${commit}^{commit}`]);
@@ -271,6 +305,10 @@ function safeResolve(relativePath) {
 
 function normalizePath(value = '') {
   return String(value).trim().replaceAll('\\', '/').replace(/^\.\//, '');
+}
+
+function normalizeRepoUrl(value = '') {
+  return String(value).trim().replace(/\.git$/i, '').replace(/\/+$/, '').toLowerCase();
 }
 
 function repoNameFromUrl(repoUrl = '') {
