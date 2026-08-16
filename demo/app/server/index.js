@@ -8,7 +8,7 @@ const app = express();
 const port = Number(process.env.PORT || 3101);
 const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const MODEL_TIMEOUT_MS = 45_000;
-const MAX_MODEL_TOKENS = 1200;
+const MAX_MODEL_TOKENS = 3000;
 const MAX_WORKFLOW_ROUNDS = 18;
 const EVIDENCE_SYNTHESIS_ROUNDS = 6;
 const deepseek = process.env.DEEPSEEK_API_KEY
@@ -47,6 +47,8 @@ app.post('/api/explore', async (req, res) => {
 });
 
 async function explore({ businessDescription, repoUrl, priorKnowledge }) {
+  const tokenUsage = emptyTokenUsage();
+
   semanticStore.emit({ type: 'tool_started', tool: 'repo_prepare', args: { repoUrl }, message: 'Assessing repository changes from the Git tree…' });
   broadcast();
   const repoPreparation = await executeTool('repo_prepare', { repoUrl });
@@ -58,6 +60,7 @@ async function explore({ businessDescription, repoUrl, priorKnowledge }) {
   const pending = plan.tasks.filter((task) => task.status === 'pending');
   if (!pending.length) {
     semanticStore.complete(`Repository synchronized. ${plan.reusedWorkflows} known workflow${plan.reusedWorkflows === 1 ? '' : 's'} reused because their supporting source did not change.`);
+    printTokenSummary(tokenUsage);
     broadcast();
     return;
   }
@@ -66,15 +69,16 @@ async function explore({ businessDescription, repoUrl, priorKnowledge }) {
     semanticStore.startWorkflowTask(task.id);
     semanticStore.emit({ type: 'learning_update', message: `${task.mode === 'review' ? 'Rechecking' : 'Learning'} end-to-end workflow: ${task.name}.` });
     broadcast();
-    await exploreWorkflow({ task, businessDescription, repoUrl, repoPreparation, priorKnowledge });
+    await exploreWorkflow({ task, businessDescription, repoUrl, repoPreparation, priorKnowledge, tokenUsage });
   }
 
   const finished = semanticStore.workflowPlan();
   semanticStore.complete(`Repository synchronized at ${shortSha(repoPreparation.currentCommit)}. Completed ${finished.completedWorkflows} workflow task${finished.completedWorkflows === 1 ? '' : 's'} and reused ${finished.reusedWorkflows} unchanged workflow${finished.reusedWorkflows === 1 ? '' : 's'}.`);
+  printTokenSummary(tokenUsage);
   broadcast();
 }
 
-async function exploreWorkflow({ task, businessDescription, repoUrl, repoPreparation, priorKnowledge }) {
+async function exploreWorkflow({ task, businessDescription, repoUrl, repoPreparation, priorKnowledge, tokenUsage }) {
   const existingWorkflow = priorKnowledge.workflows?.find((workflow) => workflow.id === task.id) || null;
   const tools = toChatCompletionTools(modelTools.filter((tool) => !['repo_prepare', 'semantic_complete'].includes(tool.name)));
   const messages = [
@@ -95,9 +99,15 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
       MODEL_TIMEOUT_MS,
       `DeepSeek did not respond within ${Math.round(MODEL_TIMEOUT_MS / 1000)} seconds while working on '${task.name}'`
     );
-    const message = response.choices?.[0]?.message;
+
+    addTokenUsage(tokenUsage, response.usage);
+    printRoundUsage(task.id, round, response.usage, tokenUsage);
+
+    const choice = response.choices?.[0];
+    const message = choice?.message;
     if (!message) throw new Error(`DeepSeek returned no assistant message while working on '${task.name}'`);
     const calls = message.tool_calls || [];
+    console.log(`[DataSong] ${task.id}: round ${round} returned ${calls.length} tool call(s), finish=${choice?.finish_reason || 'unknown'}`);
     messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls });
 
     if (!calls.length) {
@@ -107,11 +117,37 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
 
     let semanticWrites = 0;
     let novelEvidenceOps = 0;
+    let malformedCalls = 0;
+
     for (const call of calls) {
       const name = call.function?.name;
       let args;
-      try { args = JSON.parse(call.function?.arguments || '{}'); }
-      catch { throw new Error(`DeepSeek returned invalid JSON arguments for ${name || 'a tool'} while working on '${task.name}'`); }
+      try {
+        args = JSON.parse(call.function?.arguments || '{}');
+      } catch (error) {
+        malformedCalls += 1;
+        const rawArgs = call.function?.arguments || '';
+        console.warn(`[DataSong] ${task.id}: malformed JSON for ${name || 'unknown tool'} on round ${round}: ${error.message}`);
+        console.warn(`[DataSong] ${task.id}: malformed args preview: ${rawArgs.slice(0, 500)}`);
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify({
+            ok: false,
+            error: 'invalid_json_arguments',
+            message: `The arguments for ${name || 'this tool'} were not valid JSON. Retry this tool call with a complete JSON object matching its schema. Do not repeat already successful tool calls from this round.`,
+            finishReason: choice?.finish_reason || null
+          })
+        });
+        semanticStore.emit({
+          type: 'learning_update',
+          workflowTaskId: task.id,
+          message: `A model tool call was truncated or malformed while learning ${task.name}; retrying it safely.`
+        });
+        broadcast();
+        continue;
+      }
+
       if (name === 'semantic_record_workflow') args.id = task.id;
       if (name === 'semantic_finish_workflow') args.workflowId = task.id;
 
@@ -132,6 +168,16 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
 
     const plan = semanticStore.workflowPlan();
     if (plan.tasks.find((item) => item.id === task.id)?.status === 'complete') return;
+
+    if (malformedCalls > 0) {
+      messages.push({
+        role: 'user',
+        content: `One or more tool calls in the previous turn had malformed/truncated JSON${choice?.finish_reason === 'length' ? ' because the response hit its output-length limit' : ''}. Retry ONLY the failed tool call(s) with concise valid JSON. Do not redo successful reads or semantic writes.`
+      });
+      evidenceOnlyRounds = Math.max(0, evidenceOnlyRounds - 1);
+      continue;
+    }
+
     if (semanticWrites > 0) evidenceOnlyRounds = 0;
     else if (novelEvidenceOps > 0) evidenceOnlyRounds += 1;
     else evidenceOnlyRounds += 2;
@@ -157,8 +203,9 @@ A workflow is one end-to-end enterprise story slice accomplishing ONE concrete c
 6. Record semantic_record_workflow with EXACT id '${task.id}', trigger, outcome, conceptIds, ruleIds and nextWorkflowIds.
 7. Next workflows must be direct handoffs/triggers.
 8. Never invent evidence; use repository-relative source locations.
-9. When complete, call semantic_finish_workflow. Do not explore another workflow.
-${task.mode === 'review' ? '10. This is a review caused by source changes. Prefer changed evidence and preserve unchanged facts.' : ''}`;
+9. Keep every tool call JSON concise and complete. Never emit a partial JSON object.
+10. When complete, call semantic_finish_workflow. Do not explore another workflow.
+${task.mode === 'review' ? '11. This is a review caused by source changes. Prefer changed evidence and preserve unchanged facts.' : ''}`;
 }
 
 function assessmentMessage(repo) {
@@ -194,6 +241,35 @@ function learningMessage(name, args, result) {
   return null;
 }
 
+function emptyTokenUsage() {
+  return { prompt: 0, completion: 0, total: 0, cacheHit: 0, cacheMiss: 0, reasoning: 0, requests: 0 };
+}
+
+function addTokenUsage(total, usage = {}) {
+  total.prompt += Number(usage?.prompt_tokens || 0);
+  total.completion += Number(usage?.completion_tokens || 0);
+  total.total += Number(usage?.total_tokens || 0);
+  total.cacheHit += Number(usage?.prompt_cache_hit_tokens || 0);
+  total.cacheMiss += Number(usage?.prompt_cache_miss_tokens || 0);
+  total.reasoning += Number(usage?.completion_tokens_details?.reasoning_tokens || 0);
+  total.requests += 1;
+}
+
+function printRoundUsage(workflowId, round, usage = {}, cumulative) {
+  const prompt = Number(usage?.prompt_tokens || 0);
+  const completion = Number(usage?.completion_tokens || 0);
+  const total = Number(usage?.total_tokens || prompt + completion);
+  const hit = Number(usage?.prompt_cache_hit_tokens || 0);
+  const miss = Number(usage?.prompt_cache_miss_tokens || 0);
+  const reasoning = Number(usage?.completion_tokens_details?.reasoning_tokens || 0);
+  console.log(`[DataSong] tokens ${workflowId} round ${round}: prompt=${prompt} completion=${completion} total=${total} cacheHit=${hit} cacheMiss=${miss}${reasoning ? ` reasoning=${reasoning}` : ''}`);
+  console.log(`[DataSong] tokens cumulative: requests=${cumulative.requests} prompt=${cumulative.prompt} completion=${cumulative.completion} total=${cumulative.total} cacheHit=${cumulative.cacheHit} cacheMiss=${cumulative.cacheMiss}${cumulative.reasoning ? ` reasoning=${cumulative.reasoning}` : ''}`);
+}
+
+function printTokenSummary(usage) {
+  console.log(`[DataSong] TOKEN SUMMARY: requests=${usage.requests} prompt=${usage.prompt} completion=${usage.completion} total=${usage.total} cacheHit=${usage.cacheHit} cacheMiss=${usage.cacheMiss}${usage.reasoning ? ` reasoning=${usage.reasoning}` : ''}`);
+}
+
 function isSemanticWrite(name = '') { return name.startsWith('semantic_record_') || name === 'semantic_finish_workflow'; }
 function humanizeQuery(query = '') { return String(query).replace(/[#_]/g, ' ').trim() || 'the next business step'; }
 function shortPath(file = '') { const parts = String(file).split('/'); return parts[parts.length - 1] || 'this source file'; }
@@ -206,4 +282,5 @@ function broadcast() { const payload = `data: ${JSON.stringify({ type: 'snapshot
 app.listen(port, () => {
   console.log(`DataSong demo server listening on http://localhost:${port}`);
   console.log(`Model: ${model} via DeepSeek API`);
+  console.log(`DeepSeek max output tokens per workflow round: ${MAX_MODEL_TOKENS}`);
 });
