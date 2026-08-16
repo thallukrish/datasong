@@ -145,7 +145,7 @@ function WikiLink({ node, visited, navigate, block = false }) {
 }
 
 function latestBusinessEvent(events = []) {
-  const types = new Set(['learning_update', 'workflow_plan_ready', 'workflow_task_started', 'workflow_task_completed', 'workflow_found', 'workflow_enriched', 'node_upserted', 'node_enriched', 'edge_upserted', 'edge_enriched', 'persistent_data_found', 'persistent_data_enriched', 'condition_found', 'condition_enriched', 'exploration_started', 'exploration_complete', 'error']);
+  const types = new Set(['workflow_assessment', 'learning_update', 'workflow_plan_ready', 'workflow_task_started', 'workflow_task_completed', 'workflow_found', 'workflow_enriched', 'node_upserted', 'node_enriched', 'edge_upserted', 'edge_enriched', 'persistent_data_found', 'persistent_data_enriched', 'condition_found', 'condition_enriched', 'exploration_started', 'exploration_complete', 'error']);
   return [...events].reverse().find((event) => types.has(event.type)) || null;
 }
 
@@ -161,22 +161,16 @@ function discoveryProgress(state) {
   const currentFraction = currentWorkflowFraction(state, plan.currentWorkflowId);
   const workflowFraction = Math.min(plan.totalWorkflows, completed + currentFraction) / plan.totalWorkflows;
   const value = Math.round(10 + workflowFraction * 85);
-  return state.status === 'error' ? Math.min(95, value) : Math.min(95, value);
+  return Math.min(95, value);
 }
 
 function currentWorkflowFraction(state, workflowId) {
   if (!workflowId) return 0;
   const events = state.events.filter((event) => event.workflowTaskId === workflowId || event.task?.id === workflowId);
   if (events.some((event) => event.type === 'workflow_task_completed')) return 1;
-  let value = 0.05;
-  const completedTools = events.filter((event) => event.type === 'tool_completed');
-  if (completedTools.some((event) => ['repo_search', 'repo_list'].includes(event.tool))) value = Math.max(value, 0.18);
-  if (completedTools.some((event) => event.tool === 'repo_read_file')) value = Math.max(value, 0.32);
-  if (events.some((event) => ['node_upserted', 'node_enriched'].includes(event.type))) value = Math.max(value, 0.48);
-  if (events.some((event) => ['condition_found', 'condition_enriched', 'persistent_data_found', 'persistent_data_enriched'].includes(event.type))) value = Math.max(value, 0.62);
-  if (events.some((event) => ['edge_upserted', 'edge_enriched'].includes(event.type))) value = Math.max(value, 0.72);
-  if (events.some((event) => ['workflow_found', 'workflow_enriched'].includes(event.type))) value = Math.max(value, 0.88);
-  return value;
+  const assessment = [...events].reverse().find((event) => event.type === 'workflow_assessment');
+  if (assessment) return Math.max(0.05, Math.min(0.98, Number(assessment.percent || 0) / 100));
+  return 0.05;
 }
 
 function progressText(event, status, plan) {
@@ -187,6 +181,7 @@ function progressText(event, status, plan) {
   if (event.type === 'workflow_plan_ready') return event.message;
   if (event.type === 'workflow_task_started') return `${event.task?.mode === 'review' ? 'Reviewing' : 'Discovering'} workflow ${workflowOrdinal(plan, event.task?.id)}: ${event.task?.name || 'business workflow'}…`;
   if (event.type === 'workflow_task_completed') return `Completed workflow ${workflowOrdinal(plan, event.task?.id)}: ${event.workflow?.name || event.task?.name}.`;
+  if (event.type === 'workflow_assessment') return event.message || `Current workflow story is ${event.percent || 0}% understood.`;
   if (event.type === 'learning_update') return event.message;
   if (['workflow_found', 'workflow_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Learned'} business flow: ${event.workflow?.name || 'current workflow'}…`;
   if (['persistent_data_found', 'persistent_data_enriched'].includes(event.type)) return `Learned where ${event.item?.businessLabel || 'business data'} is stored…`;
