@@ -24,6 +24,9 @@ export default function App() {
     return state.workflows.map((flow) => byId.get(flow.id) || { id: flow.id, label: flow.name, description: flow.description, kind: 'workflow', evidence: flow.evidence, technicalNames: flow.technicalNames });
   }, [state.nodes, state.workflows]);
 
+  const rules = useMemo(() => state.nodes.filter((node) => node.kind === 'condition'), [state.nodes]);
+  const concepts = useMemo(() => state.nodes.filter((node) => node.kind === 'business_concept'), [state.nodes]);
+
   useEffect(() => {
     if (!selectedId && workflows.length) setSelectedId(workflows[0].id);
   }, [selectedId, workflows]);
@@ -82,18 +85,11 @@ export default function App() {
 
       <main className="wiki-shell">
         <aside className="workflow-nav">
-          <div className="nav-title">Business flows</div>
-          {!workflows.length && <div className="nav-empty">Workflows will appear here as DataSong understands the business.</div>}
-          {workflows.map((flow) => (
-            <a
-              key={flow.id}
-              href={`#${flow.id}`}
-              className={`${selectedId === flow.id ? 'active' : ''} ${visited.has(flow.id) ? 'visited' : ''}`}
-              onClick={(e) => { e.preventDefault(); navigate(flow.id); }}
-            >
-              {flow.label || flow.name}
-            </a>
-          ))}
+          <div className="nav-title">Browse the business</div>
+          {!workflows.length && !rules.length && !concepts.length && <div className="nav-empty">The business guide will appear here as DataSong understands the application.</div>}
+          <NavSection title="Business flows" items={workflows} selectedId={selectedId} visited={visited} navigate={navigate} />
+          <NavSection title="Business rules" items={rules} selectedId={selectedId} visited={visited} navigate={navigate} />
+          <NavSection title="Business concepts" items={concepts} selectedId={selectedId} visited={visited} navigate={navigate} />
         </aside>
 
         <article className="wiki-page">
@@ -110,11 +106,30 @@ export default function App() {
   );
 }
 
+function NavSection({ title, items, selectedId, visited, navigate }) {
+  if (!items.length) return null;
+  return <details className="nav-section" open>
+    <summary>{title}<span>{items.length}</span></summary>
+    <div className="nav-section-links">
+      {items.map((item) => (
+        <a
+          key={item.id}
+          href={`#${item.id}`}
+          className={`${selectedId === item.id ? 'active' : ''} ${visited.has(item.id) ? 'visited' : ''}`}
+          onClick={(e) => { e.preventDefault(); navigate(item.id); }}
+        >
+          {item.label || item.name}
+        </a>
+      ))}
+    </div>
+  </details>;
+}
+
 function EmptyPage({ status }) {
   return <div className="empty-page">
     <div className="eyebrow">Business guide</div>
     <h1>{status === 'exploring' ? 'DataSong is learning how this business works.' : 'Explore the business, then browse what DataSong learns.'}</h1>
-    <p>Workflows become the entry points. From there you can follow customers, products, orders, inventory and the business data underneath them like a wiki.</p>
+    <p>Browse workflows, rules and canonical business concepts. Technical variable names and implementation aliases stay underneath the business language rather than becoming duplicate concepts.</p>
   </div>;
 }
 
@@ -162,7 +177,8 @@ function WikiPage({ node, state, visited, navigate }) {
     </section>}
 
     {node.technicalNames?.length > 0 && !persistent && <section className="story-section technical-section">
-      <h2>Behind the scenes</h2>
+      <h2>Technical names and aliases</h2>
+      <p className="technical-note">These are implementation names DataSong traced to this same business concept. They are kept for provenance but do not create separate glossary entries.</p>
       {node.technicalNames.map((name) => <code className="code-line" key={name}>{name}</code>)}
     </section>}
 
