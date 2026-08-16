@@ -87,6 +87,9 @@ Rules:
   ];
 
   for (let round = 0; round < 80; round += 1) {
+    semanticStore.emit({ type: 'model_working', round, message: modelProgressText(round) });
+    broadcast();
+
     const response = await deepseek.chat.completions.create({ model, messages, tools, tool_choice: 'auto' });
     const message = response.choices?.[0]?.message;
     if (!message) throw new Error('DeepSeek returned no assistant message');
@@ -103,6 +106,10 @@ Rules:
     for (const call of calls) {
       const name = call.function?.name;
       const args = JSON.parse(call.function?.arguments || '{}');
+
+      semanticStore.emit({ type: 'tool_started', tool: name, args, message: toolProgressText(name, args) });
+      broadcast();
+
       const result = await executeTool(name, args);
       semanticStore.emit({ type: 'tool_completed', tool: name, args, resultPreview: preview(result) });
       broadcast();
@@ -114,6 +121,34 @@ Rules:
 
   semanticStore.complete('Stopped after exploration safety limit');
   broadcast();
+}
+
+function toolProgressText(name, args) {
+  if (name === 'repo_prepare') return 'Opening the business application and indexing its source…';
+  if (name === 'repo_list') return `Looking through ${args.path || 'the application structure'}…`;
+  if (name === 'repo_search') return `Searching for how the business handles ${humanizeQuery(args.query)}…`;
+  if (name === 'repo_read_file') return `Reading the part of the application that explains ${shortPath(args.path)}…`;
+  if (name === 'semantic_record_workflow') return `Writing the business story: ${args.name || 'order flow'}…`;
+  if (name === 'semantic_record_node') return `Understanding ${args.label || 'another part of the order journey'}…`;
+  if (name === 'semantic_record_relation') return 'Connecting two parts of the business story…';
+  if (name === 'semantic_record_persistent_data') return `Finding where ${args.businessLabel || 'business data'} is stored…`;
+  if (name === 'semantic_record_condition') return `Understanding the rule: ${args.label || 'what changes the path'}…`;
+  if (name === 'semantic_complete') return 'Finishing the business guide…';
+  return 'Following the business flow…';
+}
+
+function modelProgressText(round) {
+  if (round === 0) return 'Deciding where to start in the application…';
+  return 'Connecting what was found into the business story…';
+}
+
+function humanizeQuery(query = '') {
+  return query.replace(/[#_]/g, ' ').trim() || 'the next step';
+}
+
+function shortPath(file = '') {
+  const parts = file.split('/');
+  return parts[parts.length - 1] || 'this step';
 }
 
 function toChatCompletionTools(tools) {
