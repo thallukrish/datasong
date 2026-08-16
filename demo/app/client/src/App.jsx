@@ -3,21 +3,12 @@ import { useEffect, useMemo, useState } from 'react';
 const DEFAULT_BUSINESS = 'Retail and wholesale commerce covering ordering, inventory, fulfillment, invoicing and payments.';
 const DEFAULT_REPO = 'https://github.com/moqui/PopCommerce';
 
-const kindLabel = {
-  business_concept: 'Business thing',
-  workflow: 'Business flow',
-  persistent_data: 'Stored data',
-  service: 'Behind the scenes',
-  condition: 'Business decision'
-};
-
 export default function App() {
   const [businessDescription, setBusinessDescription] = useState(DEFAULT_BUSINESS);
   const [repoUrl, setRepoUrl] = useState(DEFAULT_REPO);
   const [state, setState] = useState({ status: 'idle', events: [], nodes: [], edges: [], workflows: [], persistentData: [], conditions: [] });
   const [selectedId, setSelectedId] = useState(null);
-  const [question, setQuestion] = useState('Why did sales fall last quarter?');
-  const [questionMode, setQuestionMode] = useState(false);
+  const [visited, setVisited] = useState(new Set());
 
   useEffect(() => {
     const events = new EventSource('/api/events');
@@ -28,12 +19,22 @@ export default function App() {
     return () => events.close();
   }, []);
 
-  const selected = useMemo(() => state.nodes.find((node) => node.id === selectedId), [state.nodes, selectedId]);
-  const recentEvents = state.events.filter((event) => event.type !== 'tool_completed').slice(-14).reverse();
+  const workflows = useMemo(() => {
+    const byId = new Map(state.nodes.map((node) => [node.id, node]));
+    return state.workflows.map((flow) => byId.get(flow.id) || { id: flow.id, label: flow.name, description: flow.description, kind: 'workflow', evidence: flow.evidence, technicalNames: flow.technicalNames });
+  }, [state.nodes, state.workflows]);
+
+  useEffect(() => {
+    if (!selectedId && workflows.length) setSelectedId(workflows[0].id);
+  }, [selectedId, workflows]);
+
+  const selected = state.nodes.find((node) => node.id === selectedId) || workflows.find((flow) => flow.id === selectedId) || null;
+  const latestDiscovery = [...state.events].reverse().find((event) => event.type !== 'tool_completed');
+  const progress = discoveryProgress(state);
 
   async function explore() {
-    setQuestionMode(false);
     setSelectedId(null);
+    setVisited(new Set());
     const response = await fetch('/api/explore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -45,193 +46,217 @@ export default function App() {
     }
   }
 
+  function navigate(id) {
+    setVisited((current) => new Set([...current, id]));
+    setSelectedId(id);
+    window.scrollTo({ top: document.querySelector('.wiki-shell')?.offsetTop - 20 || 0, behavior: 'smooth' });
+  }
+
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <div className="brand">datasong<span>.app</span></div>
-          <div className="tagline">See how a business works from the systems that run it</div>
-        </div>
-        <div className={`status status-${state.status}`}>{statusText(state.status)}</div>
+      <header className="brandbar">
+        <div className="brand">DataSong<span>.app</span></div>
       </header>
 
-      <section className="hero-panel">
-        <div className="intro">
-          <div className="eyebrow">DataSong is examining this business</div>
-          <h1>What happens when a customer places an order?</h1>
-          <p>DataSong follows the business flow through the application, connects each step to the data it reads or writes, and keeps the code evidence underneath.</p>
-        </div>
-        <div className="inputs">
-          <label>
-            What does this business do?
-            <textarea value={businessDescription} onChange={(e) => setBusinessDescription(e.target.value)} rows={3} />
-          </label>
-          <label>
-            Where does the business logic live?
-            <input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
-          </label>
-          <button onClick={explore} disabled={state.status === 'exploring'}>
-            {state.status === 'exploring' ? 'Understanding the order flow…' : 'Explore this business flow'}
-          </button>
+      <section className="setup">
+        <label>
+          <span>What does this business do?</span>
+          <textarea value={businessDescription} onChange={(e) => setBusinessDescription(e.target.value)} rows={3} />
+        </label>
+        <label>
+          <span>GitHub repository</span>
+          <input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
+        </label>
+        <button onClick={explore} disabled={state.status === 'exploring'}>
+          {state.status === 'exploring' ? 'Exploring…' : 'Explore'}
+        </button>
+      </section>
+
+      <section className="discovery-strip">
+        <div className="progress-track"><div className="progress-fill" style={{ width: `${progress}%` }} /></div>
+        <div className="progress-copy">
+          <strong>{progress}%</strong>
+          <span>{progressText(latestDiscovery, state.status)}</span>
         </div>
       </section>
 
-      <main className="workspace">
-        <aside className="activity-panel">
-          <div className="panel-heading">What DataSong understands so far</div>
-          <div className="activity-list">
-            {recentEvents.length === 0 && <div className="empty">The business story will appear here as DataSong follows the order flow.</div>}
-            {recentEvents.map((event) => <Activity key={event.id} event={event} />)}
-          </div>
+      <main className="wiki-shell">
+        <aside className="workflow-nav">
+          <div className="nav-title">Business flows</div>
+          {!workflows.length && <div className="nav-empty">Workflows will appear here as DataSong understands the business.</div>}
+          {workflows.map((flow) => (
+            <a
+              key={flow.id}
+              href={`#${flow.id}`}
+              className={`${selectedId === flow.id ? 'active' : ''} ${visited.has(flow.id) ? 'visited' : ''}`}
+              onClick={(e) => { e.preventDefault(); navigate(flow.id); }}
+            >
+              {flow.label || flow.name}
+            </a>
+          ))}
         </aside>
 
-        <section className="map-panel">
-          <div className="map-header">
-            <div>
-              <div className="panel-heading">How this part of the business works</div>
-              <div className="legend">
-                <span>● business thing</span><span>◆ business flow</span><span>▣ stored data</span><span>◇ decision</span>
-              </div>
-            </div>
-            <div className="counts">{state.nodes.length} things understood · {state.edges.length} connections</div>
-          </div>
+        <article className="wiki-page">
+          {!selected && <EmptyPage status={state.status} />}
+          {selected && <WikiPage node={selected} state={state} visited={visited} navigate={navigate} />}
+        </article>
 
-          <SemanticMap state={state} selectedId={selectedId} onSelect={setSelectedId} questionMode={questionMode} />
-
-          {state.status === 'complete' && (
-            <div className="question-bar">
-              <input value={question} onChange={(e) => setQuestion(e.target.value)} />
-              <button onClick={() => setQuestionMode(true)}>See what matters</button>
-            </div>
-          )}
-
-          {questionMode && (
-            <div className="question-result">
-              <strong>To investigate this, DataSong follows the parts of the business that can create, change or block a sale:</strong>
-              <span>{question}</span>
-              <div className="view-chip-row">
-                {['Product', 'Sales Order', 'Inventory', 'Order approval'].map((x) => <span key={x}>{x}</span>)}
-              </div>
-              <small>The stored-data mappings underneath this story can later be used to build the analysis view across the enterprise data estate.</small>
-            </div>
-          )}
-        </section>
-
-        <aside className="detail-panel">
-          <div className="panel-heading">What this means</div>
-          {!selected && <div className="empty">Click anything in the story to see what it means and where DataSong found it.</div>}
-          {selected && <NodeDetails node={selected} state={state} />}
+        <aside className="related-panel">
+          {!selected && <div className="related-empty">Related workflows and business things will appear here.</div>}
+          {selected && <RelatedPanel node={selected} state={state} visited={visited} navigate={navigate} />}
         </aside>
       </main>
     </div>
   );
 }
 
-function Activity({ event }) {
-  const title = event.workflow?.name || event.node?.label || event.item?.businessLabel || event.condition?.label || event.message;
-  const labels = {
-    workflow_found: 'Found the business flow',
-    persistent_data_found: 'Found where business data is stored',
-    condition_found: 'Found a business decision',
-    node_upserted: 'Understood',
-    edge_upserted: 'Connected',
-    exploration_started: 'Started following the order journey',
-    exploration_complete: 'Order journey understood',
-    error: 'Could not continue'
-  };
-  return <div className="activity"><span className="activity-dot" /><div><strong>{labels[event.type] || 'Learned something new'}</strong><p>{title || relationText(event)}</p></div></div>;
-}
-
-function relationText(event) {
-  if (!event.edge) return '';
-  return `${event.edge.source} ${event.edge.relation} ${event.edge.target}`;
-}
-
-function SemanticMap({ state, selectedId, onSelect, questionMode }) {
-  const nodes = state.nodes.filter((node) => node.kind !== 'service');
-  if (!nodes.length) return <div className="map-empty">DataSong is following the order journey. The business story will grow here as each step is understood.</div>;
-
-  const columns = { business_concept: 0, workflow: 1, condition: 2, persistent_data: 3 };
-  const groups = Object.groupBy ? Object.groupBy(nodes, (node) => node.kind) : nodes.reduce((acc, node) => ((acc[node.kind] ||= []).push(node), acc), {});
-  const positioned = new Map();
-  Object.entries(groups).forEach(([kind, items]) => items.forEach((node, index) => positioned.set(node.id, { node, x: 55 + (columns[kind] ?? 3) * 250, y: 55 + index * 118 })));
-  const width = 1030;
-  const height = Math.max(520, ...Array.from(positioned.values()).map((p) => p.y + 105));
-
-  const highlightTerms = ['product', 'order', 'inventory', 'approval', 'sale'];
-  const highlighted = new Set(questionMode ? nodes.filter((n) => highlightTerms.some((t) => `${n.id} ${n.label} ${n.description}`.toLowerCase().includes(t))).map((n) => n.id) : []);
-
-  return (
-    <div className="map-scroll">
-      <svg width={width} height={height} className="map-svg">
-        {state.edges.map((edge) => {
-          const a = positioned.get(edge.source); const b = positioned.get(edge.target);
-          if (!a || !b) return null;
-          const active = questionMode && (highlighted.has(edge.source) || highlighted.has(edge.target));
-          return <g key={edge.id} className={active ? 'edge active-edge' : 'edge'}>
-            <line x1={a.x + 88} y1={a.y + 35} x2={b.x + 88} y2={b.y + 35} />
-            <text x={(a.x + b.x) / 2 + 88} y={(a.y + b.y) / 2 + 26}>{edge.relation}</text>
-          </g>;
-        })}
-        {Array.from(positioned.values()).map(({ node, x, y }) => {
-          const active = selectedId === node.id || highlighted.has(node.id);
-          return <g key={node.id} transform={`translate(${x},${y})`} onClick={() => onSelect(node.id)} className={`node node-${node.kind} ${active ? 'selected' : ''}`}>
-            <rect width="176" height="70" rx="18" />
-            <text x="88" y="30" textAnchor="middle" className="node-label">{trim(node.label, 25)}</text>
-            <text x="88" y="51" textAnchor="middle" className="node-kind">{kindLabel[node.kind] || ''}</text>
-          </g>;
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function NodeDetails({ node, state }) {
-  const related = state.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
-  const persistent = state.persistentData.find((item) => item.id === node.id);
-  const condition = state.conditions.find((item) => item.id === node.id);
-  const labelsById = new Map(state.nodes.map((item) => [item.id, item.label]));
-  return <div className="node-details">
-    <div className={`detail-kind detail-${node.kind}`}>{kindLabel[node.kind]}</div>
-    <h2>{node.label}</h2>
-    <p>{node.description}</p>
-
-    {related.length > 0 && <>
-      <h3>How it fits into the story</h3>
-      {related.map((edge) => <div className="relation" key={edge.id}>
-        {labelsById.get(edge.source) || edge.source} <b>{edge.relation}</b> {labelsById.get(edge.target) || edge.target}
-      </div>)}
-    </>}
-
-    {persistent && <>
-      <h3>Where this lives</h3>
-      <div className="kv"><span>Stored as</span><strong>{persistent.technicalName}</strong></div>
-      <div className="kv"><span>Used here as</span><strong>{operationText(persistent.operation)}</strong></div>
-      {persistent.fields?.length > 0 && <div className="field-list">{persistent.fields.map((f) => <span key={f}>{f}</span>)}</div>}
-    </>}
-
-    {condition && <>
-      <h3>What changes the path</h3>
-      <div className="branch"><span>Yes → {condition.truePath}</span><span>No → {condition.falsePath}</span></div>
-      <details className="technical-details"><summary>Technical rule</summary><code>{condition.expression}</code></details>
-    </>}
-
-    {node.technicalNames?.length > 0 && <>
-      <h3>Behind the scenes</h3>
-      <div className="technical-list">{node.technicalNames.map((name) => <code key={name}>{name}</code>)}</div>
-    </>}
-
-    <h3>How DataSong knows</h3>
-    {(node.evidence || []).map((e, i) => <div className="evidence" key={i}>{e}</div>)}
+function EmptyPage({ status }) {
+  return <div className="empty-page">
+    <div className="eyebrow">Business guide</div>
+    <h1>{status === 'exploring' ? 'DataSong is learning how this business works.' : 'Explore the business, then browse what DataSong learns.'}</h1>
+    <p>Workflows become the entry points. From there you can follow customers, products, orders, inventory and the business data underneath them like a wiki.</p>
   </div>;
 }
 
+function WikiPage({ node, state, visited, navigate }) {
+  const relatedEdges = state.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
+  const relatedNodes = relatedEdges
+    .map((edge) => state.nodes.find((candidate) => candidate.id === (edge.source === node.id ? edge.target : edge.source)))
+    .filter(Boolean);
+  const persistent = state.persistentData.find((item) => item.id === node.id);
+  const condition = state.conditions.find((item) => item.id === node.id);
+
+  return <>
+    <div className="page-kicker">{pageType(node.kind)}</div>
+    <h1>{node.label || node.name}</h1>
+    <LinkedParagraph text={node.description || 'DataSong found this as part of the current business flow.'} state={state} currentId={node.id} visited={visited} navigate={navigate} />
+
+    {relatedEdges.length > 0 && <section className="story-section">
+      <h2>How it connects</h2>
+      <div className="story-list">
+        {relatedEdges.map((edge) => {
+          const outgoing = edge.source === node.id;
+          const otherId = outgoing ? edge.target : edge.source;
+          const other = state.nodes.find((candidate) => candidate.id === otherId);
+          if (!other) return null;
+          return <p key={edge.id}>
+            {outgoing ? <>This <strong>{edge.relation}</strong> <WikiLink node={other} visited={visited} navigate={navigate} />.</> : <><WikiLink node={other} visited={visited} navigate={navigate} /> <strong>{edge.relation}</strong> this.</>}
+          </p>;
+        })}
+      </div>
+    </section>}
+
+    {condition && <section className="story-section">
+      <h2>Business rule</h2>
+      <p><strong>{condition.label}</strong></p>
+      <div className="rule-grid"><span>Yes</span><p>{condition.truePath}</p><span>No</span><p>{condition.falsePath}</p></div>
+    </section>}
+
+    {persistent && <section className="story-section technical-section">
+      <h2>Data behind this</h2>
+      <p>DataSong found this business information persisted as <code>{persistent.technicalName}</code>.</p>
+      <dl>
+        <div><dt>How it is used here</dt><dd>{operationText(persistent.operation)}</dd></div>
+        {persistent.fields?.length > 0 && <div><dt>Fields seen in the flow</dt><dd>{persistent.fields.join(', ')}</dd></div>}
+      </dl>
+    </section>}
+
+    {node.technicalNames?.length > 0 && !persistent && <section className="story-section technical-section">
+      <h2>Behind the scenes</h2>
+      {node.technicalNames.map((name) => <code className="code-line" key={name}>{name}</code>)}
+    </section>}
+
+    {(node.evidence || []).length > 0 && <details className="evidence-section">
+      <summary>How DataSong knows this</summary>
+      {(node.evidence || []).map((item, index) => <div className="evidence" key={index}>{item}</div>)}
+    </details>}
+
+    {relatedNodes.length === 0 && state.status === 'exploring' && <p className="learning-note">DataSong is still connecting this to the rest of the business story.</p>}
+  </>;
+}
+
+function RelatedPanel({ node, state, visited, navigate }) {
+  const adjacentIds = new Set();
+  state.edges.forEach((edge) => {
+    if (edge.source === node.id) adjacentIds.add(edge.target);
+    if (edge.target === node.id) adjacentIds.add(edge.source);
+  });
+  const adjacent = state.nodes.filter((candidate) => adjacentIds.has(candidate.id));
+  const relatedFlows = adjacent.filter((item) => item.kind === 'workflow');
+  const relatedThings = adjacent.filter((item) => ['business_concept', 'condition'].includes(item.kind));
+  const relatedData = adjacent.filter((item) => item.kind === 'persistent_data');
+
+  return <>
+    <RelatedGroup title="Related workflows" items={relatedFlows} visited={visited} navigate={navigate} />
+    <RelatedGroup title="Things involved" items={relatedThings} visited={visited} navigate={navigate} />
+    <RelatedGroup title="Business data" items={relatedData} visited={visited} navigate={navigate} />
+    {!adjacent.length && <div className="related-empty">DataSong is still finding what connects to this page.</div>}
+  </>;
+}
+
+function RelatedGroup({ title, items, visited, navigate }) {
+  if (!items.length) return null;
+  return <section className="related-group">
+    <h3>{title}</h3>
+    {items.map((item) => <WikiLink key={item.id} node={item} visited={visited} navigate={navigate} block />)}
+  </section>;
+}
+
+function LinkedParagraph({ text, state, currentId, visited, navigate }) {
+  const candidates = state.nodes
+    .filter((node) => node.id !== currentId && node.label && node.label.length > 2)
+    .sort((a, b) => b.label.length - a.label.length);
+
+  const pattern = candidates.length
+    ? new RegExp(`(${candidates.map((node) => escapeRegExp(node.label)).join('|')})`, 'gi')
+    : null;
+
+  if (!pattern) return <p className="lead">{text}</p>;
+  const byLabel = new Map(candidates.map((node) => [node.label.toLowerCase(), node]));
+  const parts = text.split(pattern);
+  return <p className="lead">{parts.map((part, index) => {
+    const match = byLabel.get(part.toLowerCase());
+    return match ? <WikiLink key={`${match.id}-${index}`} node={match} visited={visited} navigate={navigate} /> : <span key={index}>{part}</span>;
+  })}</p>;
+}
+
+function WikiLink({ node, visited, navigate, block = false }) {
+  return <a
+    href={`#${node.id}`}
+    className={`wiki-link ${visited.has(node.id) ? 'visited' : ''} ${block ? 'block-link' : ''}`}
+    onClick={(e) => { e.preventDefault(); navigate(node.id); }}
+  >{node.label || node.name}</a>;
+}
+
+function discoveryProgress(state) {
+  if (state.status === 'idle') return 0;
+  if (state.status === 'complete') return 100;
+  if (state.status === 'error') return Math.min(95, 12 + state.events.filter((event) => event.type !== 'tool_completed').length * 7);
+  const meaningful = state.events.filter((event) => ['workflow_found', 'node_upserted', 'edge_upserted', 'persistent_data_found', 'condition_found'].includes(event.type)).length;
+  return Math.min(92, 8 + meaningful * 5);
+}
+
+function progressText(event, status) {
+  if (status === 'idle') return 'Ready to explore the business.';
+  if (status === 'complete') return 'Business guide ready to browse.';
+  if (status === 'error') return event?.message || 'Exploration needs attention.';
+  if (!event) return 'Reading the application structure…';
+  if (event.type === 'workflow_found') return `Found a business flow: ${event.workflow?.name || 'following it now'}…`;
+  if (event.type === 'persistent_data_found') return `Found where ${event.item?.businessLabel || 'business data'} is stored…`;
+  if (event.type === 'condition_found') return `Found a business rule: ${event.condition?.label || 'checking its effect'}…`;
+  if (event.type === 'edge_upserted') return `Connecting ${event.edge?.source || 'one part'} to ${event.edge?.target || 'another'}…`;
+  if (event.type === 'node_upserted') return `Understanding ${event.node?.label || 'another part of the business'}…`;
+  return event.message || 'Following the business flow through the application…';
+}
+
+function pageType(kind) {
+  return ({ workflow: 'Business workflow', business_concept: 'Business concept', persistent_data: 'Business data', condition: 'Business rule', service: 'Application behavior' })[kind] || 'Business knowledge';
+}
+
 function operationText(operation) {
-  return ({ READ: 'read', CREATE: 'created', UPDATE: 'updated', DELETE: 'deleted', READ_WRITE: 'read and updated' })[operation] || operation;
+  return ({ READ: 'read from this data', CREATE: 'created here', UPDATE: 'updated here', DELETE: 'removed here', READ_WRITE: 'read and updated here' })[operation] || operation;
 }
 
-function statusText(status) {
-  return ({ idle: 'ready', exploring: 'examining business', complete: 'story ready', error: 'needs attention' })[status] || status;
+function escapeRegExp(value = '') {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
-function trim(text = '', n) { return text.length > n ? `${text.slice(0, n - 1)}…` : text; }
