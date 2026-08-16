@@ -93,24 +93,42 @@ async function explore({ businessDescription, repoUrl, priorKnowledge }) {
 }
 
 async function exploreWorkflow({ task, businessDescription, repoUrl, repoPreparation, tokenUsage }) {
-  const working = {
-    storySummary: '',
-    checklist: emptyChecklist(),
-    findings: [],
-    visited: { searches: new Set(), lists: new Set(), ranges: new Map(), symbols: new Set() },
-    blockedRevisits: 0
-  };
+  const checkpoint = semanticStore.loadWorkflowCheckpoint(task.id, repoPreparation.currentCommit);
+  const working = checkpoint?.working ? hydrateWorking(checkpoint.working) : freshWorkingState();
+  let latestEvidence = checkpoint?.latestEvidence || null;
+  let pendingAction = checkpoint?.pendingAction || null;
+  let retryNote = checkpoint?.retryNote || '';
+  let nextTokenLimit = retryNote ? RETRY_MODEL_TOKENS : MAX_MODEL_TOKENS;
 
-  const root = await executeTool('repo_list', { path: '.' });
-  working.visited.lists.add('.');
-  let latestEvidence = {
-    kind: 'repo_orientation',
-    source: { path: '.' },
-    content: compactRepoList(root),
-    instruction: 'Use this repository orientation to choose the first targeted search/read for the workflow.'
-  };
-  let retryNote = '';
-  let nextTokenLimit = MAX_MODEL_TOKENS;
+  if (checkpoint) {
+    const percent = checklistPercent(working.checklist);
+    semanticStore.emit({
+      type: 'learning_update',
+      workflowTaskId: task.id,
+      message: `Resuming ${task.name.toLowerCase()} from the saved ${percent}% checkpoint.`
+    });
+    broadcast();
+  } else {
+    const root = await executeTool('repo_list', { path: '.' });
+    working.visited.lists.add('.');
+    latestEvidence = {
+      kind: 'repo_orientation',
+      source: { path: '.' },
+      content: compactRepoList(root),
+      instruction: 'Use this repository orientation to choose the first targeted search/read for the workflow.'
+    };
+    saveCheckpoint(task, repoPreparation, working, latestEvidence, null, '');
+  }
+
+  if (pendingAction) {
+    latestEvidence = await executeEvidenceAction(task, pendingAction, working);
+    pendingAction = null;
+    saveCheckpoint(task, repoPreparation, working, latestEvidence, null, retryNote);
+  }
+
+  if (!latestEvidence) {
+    latestEvidence = { kind: 'resume_context', content: 'Continue from the saved compact workflow state and choose the next unvisited evidence action.' };
+  }
 
   for (let round = 1; round <= MAX_WORKFLOW_ROUNDS; round += 1) {
     console.log(`[DataSong] ${task.id}: story round ${round}${retryNote ? ' (retrying same evidence)' : ''}`);
@@ -138,6 +156,7 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
     if (!content?.trim()) {
       retryNote = 'Your previous response was empty. Reprocess the SAME latest evidence. Return a very concise complete JSON object; do not add prose.';
       nextTokenLimit = RETRY_MODEL_TOKENS;
+      saveCheckpoint(task, repoPreparation, working, latestEvidence, null, retryNote);
       continue;
     }
 
@@ -150,6 +169,7 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
         ? 'Your previous response hit the output limit and was truncated. Reprocess the SAME latest evidence. Be terse: storySummary <= 500 chars, every checklist summary <= 120 chars, evidenceFinding <= 250 chars, progressMessage <= 180 chars. Return complete JSON before elaborating.'
         : 'Your previous response was invalid JSON. Reprocess the SAME latest evidence and return one terse complete JSON object only.';
       nextTokenLimit = RETRY_MODEL_TOKENS;
+      saveCheckpoint(task, repoPreparation, working, latestEvidence, null, retryNote);
       semanticStore.emit({
         type: 'learning_update',
         workflowTaskId: task.id,
@@ -187,6 +207,7 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
           kind: 'completion_rejected',
           content: `DataSong cannot finish yet: ${gate.reasons.join('; ')}. Resolve these gaps using new evidence, not previously visited source.`
         };
+        saveCheckpoint(task, repoPreparation, working, latestEvidence, null, '');
         continue;
       }
 
@@ -200,10 +221,60 @@ async function exploreWorkflow({ task, businessDescription, repoUrl, repoPrepara
       return;
     }
 
+    // Persist the interpreted story immediately, including the next action. If the
+    // process dies before that repo operation runs, restart will execute it first.
+    saveCheckpoint(task, repoPreparation, working, null, action, '');
     latestEvidence = await executeEvidenceAction(task, action, working);
+    saveCheckpoint(task, repoPreparation, working, latestEvidence, null, '');
   }
 
   throw new Error(`Workflow '${task.name}' did not reach structural completion within ${MAX_WORKFLOW_ROUNDS} story-assessment rounds`);
+}
+
+function freshWorkingState() {
+  return {
+    storySummary: '',
+    checklist: emptyChecklist(),
+    findings: [],
+    visited: { searches: new Set(), lists: new Set(), ranges: new Map(), symbols: new Set() },
+    blockedRevisits: 0
+  };
+}
+
+function saveCheckpoint(task, repoPreparation, working, latestEvidence, pendingAction, retryNote) {
+  semanticStore.saveWorkflowCheckpoint(task.id, repoPreparation.currentCommit, {
+    working: serializeWorking(working),
+    latestEvidence: latestEvidence ? structuredClone(latestEvidence) : null,
+    pendingAction: pendingAction ? structuredClone(pendingAction) : null,
+    retryNote: retryNote || '',
+    percent: checklistPercent(working.checklist)
+  });
+}
+
+function serializeWorking(working) {
+  return {
+    storySummary: working.storySummary || '',
+    checklist: structuredClone(working.checklist || emptyChecklist()),
+    findings: structuredClone(working.findings || []),
+    visited: compactVisited(working.visited),
+    blockedRevisits: Number(working.blockedRevisits || 0)
+  };
+}
+
+function hydrateWorking(saved = {}) {
+  const visited = saved.visited || {};
+  return {
+    storySummary: saved.storySummary || '',
+    checklist: normalizeChecklist(saved.checklist, emptyChecklist()),
+    findings: Array.isArray(saved.findings) ? structuredClone(saved.findings) : [],
+    visited: {
+      searches: new Set(visited.searches || []),
+      lists: new Set(visited.lists || []),
+      ranges: new Map((visited.ranges || []).map((item) => [item.path, item.ranges || []])),
+      symbols: new Set(visited.symbols || [])
+    },
+    blockedRevisits: Number(saved.blockedRevisits || 0)
+  };
 }
 
 async function executeEvidenceAction(task, action, working) {
