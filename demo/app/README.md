@@ -5,18 +5,20 @@ This app is deliberately tuned to demonstrate DataSong's core idea with a real o
 ## Demo story
 
 1. The page is prefilled with a short business description and a Git repository URL (initially Moqui POP Commerce).
-2. The user clicks **Explore business**.
+2. The user clicks **Explore**.
 3. A model explores the repository using bounded tools rather than receiving the whole repo at once.
-4. As evidence is found, the model records business workflows, persistent data, relationships, services and important branch/config conditions.
-5. The React client receives semantic-map snapshots over server-sent events and grows one persistent visual map during exploration.
-6. When exploration completes, the user can ask a demo question such as **Why did sales fall last quarter?** and see the relevant semantic path highlighted.
+4. As evidence is found, the model records business workflows, business concepts, persistent data, relationships and important branch/config conditions.
+5. The React client receives semantic state over server-sent events and turns it into a living business wiki rather than exposing the raw semantic graph.
+6. Workflows are the primary entry points. A workflow page tells the business story in plain language and links to concepts such as Customer, Product, Sales Order and Inventory.
+7. Clicking a linked concept opens its own page, while the right-hand panel shows related workflows, business things and persistent data.
+8. Exact entity/table names, service names and repository evidence remain available underneath the human-readable story as provenance.
 
-The final analytical answer is intentionally not implemented yet. The demo shows that the semantic map can identify the business flows and persistent datasets required to construct an analysis/ML view. A later layer can federate those datasets (for example through Trino) and optionally run analysis.
+The semantic graph still exists internally. The key UI principle is that people browse it as a coherent knowledge base instead of looking at a large visual graph that becomes difficult to understand as enterprise complexity grows.
 
 ## Architecture
 
 ```text
-React client
+React business wiki
    |
    | POST /api/explore
    | SSE /api/events
@@ -43,6 +45,42 @@ DeepSeek V4 Flash tool-calling loop
 The tool surface is intentionally MCP-shaped: repository evidence tools are separated from semantic recording tools, and all tool inputs/outputs are structured. The current demo calls them as function tools directly from Node; the same handlers can later be exposed through an MCP server without changing the semantic explorer's conceptual boundary.
 
 The Node server uses the OpenAI JavaScript SDK only as an OpenAI-compatible HTTP client. Model requests are sent to DeepSeek at `https://api.deepseek.com` using `deepseek-v4-flash` by default.
+
+## Business wiki presentation
+
+The application deliberately separates the machine representation from the human presentation.
+
+Internally DataSong may maintain relationships such as:
+
+```text
+Customer --places--> Sales Order
+Sales Order --contains--> Order Item
+Order Item --refers to--> Product
+Sales Order --checks--> Inventory
+```
+
+The user sees these relationships as linked prose and browsable pages.
+
+The main layout is:
+
+```text
+                    DataSong.app
+
+             business description
+             GitHub repository
+                  Explore
+
+        progress + current discovery
+
+Business flows   Business wiki page       Related
+--------------   ------------------       -------
+Order placement  readable narrative       workflows
+Approval         linked business terms    concepts
+Fulfillment      business rules            data
+...              technical provenance
+```
+
+Visible language should describe the business. Terms such as semantic node, persistent-data node and graph edge are implementation details and should not be the normal browsing vocabulary.
 
 ## Important semantic distinction
 
@@ -116,7 +154,7 @@ demo/app/
     index.js       DeepSeek orchestration + SSE
     repoTools.js   clone/list/search/read repository
     modelTools.js  structured tool definitions + dispatch
-    store.js       incremental semantic-map state
+    store.js       incremental semantic state
 ```
 
 ## Demo constraints
