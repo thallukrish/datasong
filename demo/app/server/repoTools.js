@@ -18,14 +18,14 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
   searchableFiles = [];
   repositoryName = repoNameFromUrl(repoUrl);
 
-  await simpleGit().clone(repoUrl, workspace, ['--depth', '100']);
+  // Only fetch the current tip initially. If an older commit is needed for comparison,
+  // fetch that exact commit afterwards instead of cloning a deep history up front.
+  await simpleGit().clone(repoUrl, workspace, ['--depth', '1']);
   const git = simpleGit(workspace);
   const currentCommit = (await git.revparse(['HEAD'])).trim();
   const rootTree = (await git.revparse([`${currentCommit}^{tree}`])).trim();
-  const currentTrees = await readTreeMap(git, currentCommit);
 
   let previousRootTree = null;
-  let previousTrees = new Map();
   let changedFiles = [];
   let changedTrees = [];
   let comparisonAvailable = true;
@@ -35,11 +35,15 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
     try {
       await ensureCommit(git, previousCommit);
       previousRootTree = (await git.revparse([`${previousCommit}^{tree}`])).trim();
-      previousTrees = await readTreeMap(git, previousCommit);
       const diff = await git.diff(['--name-only', previousCommit, currentCommit]);
       changedFiles = diff.split(/\r?\n/).map(normalizePath).filter(Boolean);
-      changedTrees = compareTrees(previousTrees, currentTrees);
-      comparisonReason = `${changedFiles.length} files changed across ${changedTrees.length} directory trees since the last completed scan`;
+
+      // Only inspect tree SHAs for directories that are ancestors of changed files.
+      // This gives us hierarchical change information without recursively enumerating
+      // every tree in the repository.
+      const affectedDirs = affectedDirectories(changedFiles);
+      changedTrees = await resolveChangedTrees(git, previousCommit, currentCommit, affectedDirs);
+      comparisonReason = `${changedFiles.length} files changed across ${changedTrees.length} affected directory trees since the last completed scan`;
     } catch (error) {
       comparisonAvailable = false;
       changedFiles = null;
@@ -50,7 +54,15 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
     previousRootTree = rootTree;
   }
 
-  searchableFiles = (await walk(workspace)).filter((file) => TEXT_EXTENSIONS.has(path.extname(file).toLowerCase()));
+  // Git already knows the tracked file list. This is much faster than recursively
+  // walking the checkout on Windows, and is enough for repository text search.
+  const tracked = await git.raw(['ls-files']);
+  searchableFiles = tracked
+    .split(/\r?\n/)
+    .map((relative) => relative.trim())
+    .filter(Boolean)
+    .filter((relative) => TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase()))
+    .map((relative) => path.join(workspace, relative));
 
   return {
     workspace,
@@ -145,23 +157,36 @@ async function ensureCommit(git, commit) {
   await git.raw(['cat-file', '-e', `${commit}^{commit}`]);
 }
 
-async function readTreeMap(git, commit) {
-  const text = await git.raw(['ls-tree', '-r', '-t', commit]);
-  const trees = new Map();
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith('040000 tree ')) continue;
-    const match = line.match(/^040000 tree ([0-9a-f]+)\t(.+)$/i);
-    if (match) trees.set(normalizePath(match[2]), match[1]);
+function affectedDirectories(changedFiles) {
+  const dirs = new Set();
+  for (const file of changedFiles) {
+    const parts = normalizePath(file).split('/');
+    parts.pop();
+    let current = '';
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      dirs.add(current);
+    }
   }
-  return trees;
+  return [...dirs].sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
 }
 
-function compareTrees(previousTrees, currentTrees) {
-  const paths = new Set([...previousTrees.keys(), ...currentTrees.keys()]);
-  return [...paths]
-    .filter((treePath) => previousTrees.get(treePath) !== currentTrees.get(treePath))
-    .map((treePath) => ({ path: treePath, previousSha: previousTrees.get(treePath) || null, currentSha: currentTrees.get(treePath) || null }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+async function resolveChangedTrees(git, previousCommit, currentCommit, dirs) {
+  const out = [];
+  for (const dir of dirs) {
+    const previousSha = await treeShaAt(git, previousCommit, dir);
+    const currentSha = await treeShaAt(git, currentCommit, dir);
+    if (previousSha !== currentSha) out.push({ path: dir, previousSha, currentSha });
+  }
+  return out;
+}
+
+async function treeShaAt(git, commit, dir) {
+  try {
+    return (await git.revparse([`${commit}:${dir}`])).trim();
+  } catch {
+    return null;
+  }
 }
 
 function summarizeTopLevelChanges(changedFiles, changedTrees) {
@@ -200,23 +225,6 @@ function safeResolve(relativePath) {
   const resolved = path.resolve(root, relativePath);
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) throw new Error('Path escapes repository workspace');
   return resolved;
-}
-
-async function walk(root) {
-  const out = [];
-  const stack = [root];
-  while (stack.length) {
-    const dir = stack.pop();
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === 'build' || entry.name === 'dist') continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) stack.push(full);
-      else out.push(full);
-      if (out.length > 12000) return out;
-    }
-  }
-  return out;
 }
 
 function normalizePath(value = '') {
