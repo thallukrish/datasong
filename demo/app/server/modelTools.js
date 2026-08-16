@@ -28,32 +28,38 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_workflow',
-    description: 'Record an evidence-backed end-to-end business workflow discovered in the repository.',
+    description: 'Record the current business workflow using a plain-English name and story. Keep implementation names in technicalNames/evidence.',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' },
+        id: { type: 'string' },
+        name: { type: 'string', description: 'Plain-English business name, e.g. Customer places an order.' },
+        description: { type: 'string', description: 'Short human-readable explanation of what happens in the business.' },
+        technicalNames: { type: 'array', items: { type: 'string' } },
         evidence: { type: 'array', items: { type: 'string' } }
       },
-      required: ['id', 'name', 'description', 'evidence'], additionalProperties: false
+      required: ['id', 'name', 'description', 'technicalNames', 'evidence'], additionalProperties: false
     }
   },
   {
     type: 'function', name: 'semantic_record_node',
-    description: 'Record or enrich a semantic-map node. Use business_concept, workflow, persistent_data, service, or condition as kind.',
+    description: 'Record a business-story object. The visible label must be plain English; implementation names belong in technicalNames.',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string' }, label: { type: 'string' },
+        id: { type: 'string' },
+        label: { type: 'string', description: 'Human-readable business label such as Customer, Sales order, Order items, Product.' },
         kind: { type: 'string', enum: ['business_concept', 'workflow', 'persistent_data', 'service', 'condition'] },
-        description: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } }
+        description: { type: 'string', description: 'What this means in the business, not a code description.' },
+        technicalNames: { type: 'array', items: { type: 'string' } },
+        evidence: { type: 'array', items: { type: 'string' } }
       },
-      required: ['id', 'label', 'kind', 'description', 'evidence'], additionalProperties: false
+      required: ['id', 'label', 'kind', 'description', 'technicalNames', 'evidence'], additionalProperties: false
     }
   },
   {
     type: 'function', name: 'semantic_record_relation',
-    description: 'Record an evidence-backed relation between two semantic-map nodes.',
+    description: 'Connect two already recorded story objects. Use a short business verb/phrase such as places, contains, refers to, checks, writes, or may block.',
     parameters: {
       type: 'object',
       properties: {
@@ -65,34 +71,42 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_persistent_data',
-    description: 'Record a persistent entity/table encountered through a database/entity read or write. Do not use this for transient variables or in-memory objects.',
+    description: 'Record durable business data encountered through a database/entity read or write. Give it a human businessLabel and preserve the exact entity/table in technicalName.',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string' }, label: { type: 'string' }, store: { type: 'string' },
+        id: { type: 'string' },
+        businessLabel: { type: 'string', description: 'Human label, e.g. Sales order record.' },
+        technicalName: { type: 'string', description: 'Exact persistent entity/table name, e.g. mantle.order.OrderHeader.' },
+        store: { type: 'string' },
         operation: { type: 'string', enum: ['READ', 'CREATE', 'UPDATE', 'DELETE', 'READ_WRITE'] },
         fields: { type: 'array', items: { type: 'string' } }, workflowId: { type: 'string' },
+        description: { type: 'string', description: 'Plain-English explanation of why this data matters in the current story.' },
         evidence: { type: 'array', items: { type: 'string' } }
       },
-      required: ['id', 'label', 'store', 'operation', 'fields', 'workflowId', 'evidence'], additionalProperties: false
+      required: ['id', 'businessLabel', 'technicalName', 'store', 'operation', 'fields', 'workflowId', 'description', 'evidence'], additionalProperties: false
     }
   },
   {
     type: 'function', name: 'semantic_record_condition',
-    description: 'Record a branch or configuration/data condition that changes a business workflow path.',
+    description: 'Record a business rule or decision point that changes the current workflow path. The visible label must be understandable without seeing code.',
     parameters: {
       type: 'object',
       properties: {
-        id: { type: 'string' }, label: { type: 'string' }, expression: { type: 'string' },
+        id: { type: 'string' },
+        label: { type: 'string', description: 'Plain-English question such as Inventory required?' },
+        expression: { type: 'string', description: 'Technical expression/config behind the decision.' },
         driver: { type: 'string', enum: ['config', 'data', 'runtime', 'unknown'] },
-        truePath: { type: 'string' }, falsePath: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } }
+        truePath: { type: 'string' }, falsePath: { type: 'string' },
+        technicalNames: { type: 'array', items: { type: 'string' } },
+        evidence: { type: 'array', items: { type: 'string' } }
       },
-      required: ['id', 'label', 'expression', 'driver', 'truePath', 'falsePath', 'evidence'], additionalProperties: false
+      required: ['id', 'label', 'expression', 'driver', 'truePath', 'falsePath', 'technicalNames', 'evidence'], additionalProperties: false
     }
   },
   {
     type: 'function', name: 'semantic_complete',
-    description: 'Finish discovery after multiple major workflows, persistent datasets, and important conditions are represented.',
+    description: 'Finish only after the current business story is connected end-to-end and its important persistent data and branch conditions are attached to that story.',
     parameters: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false }
   }
 ];
@@ -103,15 +117,39 @@ export async function executeTool(name, args) {
     case 'repo_list': return listRepo(args.path);
     case 'repo_search': return searchRepo(args.query, args.maxResults);
     case 'repo_read_file': return readRepoFile(args.path, args.startLine, args.endLine);
-    case 'semantic_record_workflow': return semanticStore.addWorkflow(args);
+    case 'semantic_record_workflow': {
+      semanticStore.upsertNode({
+        id: args.id,
+        label: args.name,
+        kind: 'workflow',
+        description: args.description,
+        technicalNames: args.technicalNames,
+        evidence: args.evidence
+      });
+      return semanticStore.addWorkflow(args);
+    }
     case 'semantic_record_node': return semanticStore.upsertNode(args);
     case 'semantic_record_relation': return semanticStore.upsertEdge(args);
     case 'semantic_record_persistent_data': {
-      semanticStore.upsertNode({ id: args.id, label: args.label, kind: 'persistent_data', description: `${args.operation} in ${args.workflowId}`, evidence: args.evidence });
+      semanticStore.upsertNode({
+        id: args.id,
+        label: args.businessLabel,
+        kind: 'persistent_data',
+        description: args.description,
+        technicalNames: [args.technicalName],
+        evidence: args.evidence
+      });
       return semanticStore.addPersistentData(args);
     }
     case 'semantic_record_condition': {
-      semanticStore.upsertNode({ id: args.id, label: args.label, kind: 'condition', description: args.expression, evidence: args.evidence });
+      semanticStore.upsertNode({
+        id: args.id,
+        label: args.label,
+        kind: 'condition',
+        description: `${args.label} ${args.truePath} / ${args.falsePath}`,
+        technicalNames: args.technicalNames,
+        evidence: args.evidence
+      });
       return semanticStore.addCondition(args);
     }
     case 'semantic_complete': return semanticStore.complete(args.summary);
