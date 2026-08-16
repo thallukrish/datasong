@@ -9,12 +9,15 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 let workspace = null;
+let searchableFiles = [];
 
 export async function prepareRepo(repoUrl) {
   if (workspace) await fs.rm(workspace, { recursive: true, force: true });
   workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'datasong-demo-'));
+  searchableFiles = [];
   await simpleGit().clone(repoUrl, workspace, ['--depth', '1']);
-  return { workspace, repoUrl };
+  searchableFiles = (await walk(workspace)).filter((file) => TEXT_EXTENSIONS.has(path.extname(file).toLowerCase()));
+  return { workspace, repoUrl, searchableFiles: searchableFiles.length };
 }
 
 export async function listRepo(relativePath = '.') {
@@ -31,15 +34,14 @@ export async function listRepo(relativePath = '.') {
 export async function searchRepo(query, maxResults = 30) {
   ensureWorkspace();
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const files = await walk(workspace);
   const results = [];
 
-  for (const file of files) {
-    if (!TEXT_EXTENSIONS.has(path.extname(file).toLowerCase())) continue;
+  for (const file of searchableFiles) {
     let text;
     try { text = await fs.readFile(file, 'utf8'); } catch { continue; }
     const lines = text.split('\n');
-    lines.forEach((line, idx) => {
+    for (let idx = 0; idx < lines.length; idx += 1) {
+      const line = lines[idx];
       const haystack = `${path.relative(workspace, file)} ${line}`.toLowerCase();
       if (tokens.every((token) => haystack.includes(token))) {
         results.push({
@@ -47,12 +49,12 @@ export async function searchRepo(query, maxResults = 30) {
           line: idx + 1,
           snippet: line.trim().slice(0, 500)
         });
+        if (results.length >= maxResults) return results;
       }
-    });
-    if (results.length >= maxResults) break;
+    }
   }
 
-  return results.slice(0, maxResults);
+  return results;
 }
 
 export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
