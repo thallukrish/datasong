@@ -9,8 +9,10 @@ const port = Number(process.env.PORT || 3101);
 const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const MODEL_TIMEOUT_MS = 45_000;
 const MAX_MODEL_TOKENS = 1200;
-const STAGNATION_RECOVERY_ROUNDS = 3;
-const STAGNATION_STOP_ROUNDS = 5;
+const EVIDENCE_SYNTHESIS_ROUNDS = 6;
+const EVIDENCE_STOP_ROUNDS = 10;
+const TRUE_STAGNATION_RECOVERY_ROUNDS = 2;
+const TRUE_STAGNATION_STOP_ROUNDS = 4;
 const deepseek = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
@@ -123,7 +125,7 @@ Rules:
 17. Before semantic_complete, verify every newly recorded workflow has a trigger, outcome and visible first-level connections in the semantic map.
 18. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
 19. Make progress in small tool-driven steps. Do not spend a long turn composing prose while more repository evidence is needed.
-20. Repository reading is a means, not progress by itself. After enough evidence is available for a business fact, RECORD that semantic fact before doing more broad searches.
+20. Repository reading is evidence gathering. New, targeted evidence is useful progress. But once enough evidence supports a business fact, record that fact before continuing to widen the search.
 `;
 
   const tools = toChatCompletionTools(modelTools.filter((tool) => tool.name !== 'repo_prepare'));
@@ -137,7 +139,10 @@ Rules:
 
   let previousCallSignature = '';
   let repeatedCallCount = 0;
-  let stagnantRounds = 0;
+  let evidenceOnlyRounds = 0;
+  let trulyStagnantRounds = 0;
+  let synthesisPromptSent = false;
+  const seenEvidenceActions = new Set();
 
   for (let round = 0; round < 40; round += 1) {
     const roundNo = round + 1;
@@ -182,6 +187,7 @@ Rules:
     }
 
     let semanticWritesThisRound = 0;
+    let newEvidenceActionsThisRound = 0;
 
     for (const call of calls) {
       const name = call.function?.name;
@@ -200,27 +206,64 @@ Rules:
       const learned = learningMessage(name, args, result);
       if (learned) semanticStore.emit({ type: 'learning_update', message: learned });
       if (isSemanticWrite(name)) semanticWritesThisRound += 1;
+
+      const evidenceAction = evidenceActionSignature(name, args, result);
+      if (evidenceAction && !seenEvidenceActions.has(evidenceAction)) {
+        seenEvidenceActions.add(evidenceAction);
+        newEvidenceActionsThisRound += 1;
+      }
+
       broadcast();
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
     }
 
     if (semanticWritesThisRound > 0) {
-      stagnantRounds = 0;
+      evidenceOnlyRounds = 0;
+      trulyStagnantRounds = 0;
+      synthesisPromptSent = false;
+      console.log(`[DataSong] Round ${roundNo} recorded ${semanticWritesThisRound} semantic write(s)`);
+    } else if (newEvidenceActionsThisRound > 0) {
+      evidenceOnlyRounds += 1;
+      trulyStagnantRounds = 0;
+      console.log(`[DataSong] Round ${roundNo} gathered ${newEvidenceActionsThisRound} new evidence action(s); evidenceOnlyRounds=${evidenceOnlyRounds}`);
+
+      if (evidenceOnlyRounds >= EVIDENCE_SYNTHESIS_ROUNDS && !synthesisPromptSent) {
+        messages.push({
+          role: 'user',
+          content: `Synthesis checkpoint: you have gathered new repository evidence for ${evidenceOnlyRounds} consecutive rounds without recording semantic knowledge. Do not broaden the search further. Review the evidence already in this conversation and record the concrete business concepts, relationships, rules, persistence mappings, and complete workflow that are now supported. If one specific missing fact prevents synthesis, perform at most ONE narrowly targeted read/search and then synthesize.`
+        });
+        synthesisPromptSent = true;
+        semanticStore.emit({
+          type: 'discovery_checkpoint',
+          message: 'DataSong has gathered enough source evidence and is now turning it into business knowledge.'
+        });
+        broadcast();
+        console.log('[DataSong] Injected evidence synthesis checkpoint');
+      }
+
+      if (evidenceOnlyRounds >= EVIDENCE_STOP_ROUNDS) {
+        throw new Error(`DataSong gathered new source evidence for ${evidenceOnlyRounds} consecutive rounds but DeepSeek did not synthesize it into semantic knowledge`);
+      }
     } else {
-      stagnantRounds += 1;
-      console.log(`[DataSong] No semantic writes in round ${roundNo}; stagnantRounds=${stagnantRounds}`);
-    }
+      trulyStagnantRounds += 1;
+      console.log(`[DataSong] Round ${roundNo} produced no new evidence and no semantic writes; trulyStagnantRounds=${trulyStagnantRounds}`);
 
-    if (stagnantRounds === STAGNATION_RECOVERY_ROUNDS) {
-      messages.push({
-        role: 'user',
-        content: `Recovery instruction: you have spent ${stagnantRounds} consecutive rounds reading/searching without recording any business knowledge. Stop broad exploration. Using the evidence already gathered, your NEXT turn must either (a) record at least one concrete workflow/concept/rule/persistent-data/relation that is supported by that evidence, or (b) call semantic_complete if there is genuinely nothing new to add. Only perform another repository read if one narrowly identified missing fact blocks a semantic write.`
-      });
-      console.log('[DataSong] Injected stagnation recovery instruction');
-    }
+      if (trulyStagnantRounds === TRUE_STAGNATION_RECOVERY_ROUNDS) {
+        messages.push({
+          role: 'user',
+          content: `Recovery instruction: the last ${trulyStagnantRounds} rounds produced neither new repository evidence nor semantic knowledge. Stop repeating searches/reads. On the NEXT turn, either record a concrete supported semantic fact from the evidence already gathered, make one genuinely new narrowly targeted evidence request, or call semantic_complete if the current business slice is complete.`
+        });
+        semanticStore.emit({
+          type: 'discovery_checkpoint',
+          message: 'DataSong noticed repeated source exploration and is switching back to synthesis.'
+        });
+        broadcast();
+        console.log('[DataSong] Injected true-stagnation recovery instruction');
+      }
 
-    if (stagnantRounds >= STAGNATION_STOP_ROUNDS) {
-      throw new Error(`Exploration made no semantic progress for ${stagnantRounds} consecutive model rounds; stopping instead of looping on repository reads`);
+      if (trulyStagnantRounds >= TRUE_STAGNATION_STOP_ROUNDS) {
+        throw new Error(`Exploration produced no new evidence or semantic knowledge for ${trulyStagnantRounds} consecutive model rounds; stopping a genuine loop`);
+      }
     }
 
     if (semanticStore.state.status === 'complete') return;
@@ -264,6 +307,25 @@ function learningMessage(name, args, result) {
 
 function isSemanticWrite(name = '') {
   return name.startsWith('semantic_record_') || name === 'semantic_complete';
+}
+
+function evidenceActionSignature(name = '', args = {}, result) {
+  if (name === 'repo_search') {
+    const count = Array.isArray(result) ? result.length : 0;
+    return count > 0 ? `search:${normalizeSignature(args.query)}` : null;
+  }
+  if (name === 'repo_read_file') {
+    return `read:${normalizeSignature(args.path)}:${args.startLine || 1}:${args.endLine || 240}`;
+  }
+  if (name === 'repo_list') {
+    const count = Array.isArray(result) ? result.length : 0;
+    return count > 0 ? `list:${normalizeSignature(args.path || '.')}` : null;
+  }
+  return null;
+}
+
+function normalizeSignature(value = '') {
+  return String(value).trim().toLowerCase().replaceAll('\\', '/');
 }
 
 function humanizeQuery(query = '') {
