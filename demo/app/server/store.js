@@ -18,6 +18,7 @@ export class SemanticStore {
       repoUrl: '',
       repository: { url: '', lastScannedCommit: null, lastScannedRootTree: null, lastScanAt: null },
       explorationPlan: { phase: 'idle', tasks: [], totalWorkflows: 0, completedWorkflows: 0, reusedWorkflows: 0, currentWorkflowId: null },
+      workflowCheckpoints: {},
       status: 'idle',
       events: [],
       nodes: [],
@@ -35,6 +36,7 @@ export class SemanticStore {
       return {
         ...this.emptyState(), ...saved,
         repository: { ...this.emptyState().repository, ...(saved.repository || {}) },
+        workflowCheckpoints: saved.workflowCheckpoints || {},
         explorationPlan: this.emptyState().explorationPlan,
         status: 'idle', events: []
       };
@@ -167,6 +169,31 @@ export class SemanticStore {
     return this.emit({ type: 'workflow_task_started', task: structuredClone(task), message: `${task.mode === 'review' ? 'Reviewing' : 'Discovering'} workflow: ${task.name}` });
   }
 
+  saveWorkflowCheckpoint(workflowId, sourceCommit, checkpoint) {
+    this.state.workflowCheckpoints ||= {};
+    this.state.workflowCheckpoints[workflowId] = {
+      workflowId,
+      sourceCommit,
+      savedAt: new Date().toISOString(),
+      ...structuredClone(checkpoint)
+    };
+    this.persist();
+    return structuredClone(this.state.workflowCheckpoints[workflowId]);
+  }
+
+  loadWorkflowCheckpoint(workflowId, sourceCommit) {
+    const checkpoint = this.state.workflowCheckpoints?.[workflowId];
+    if (!checkpoint) return null;
+    if (checkpoint.sourceCommit !== sourceCommit) return null;
+    return structuredClone(checkpoint);
+  }
+
+  clearWorkflowCheckpoint(workflowId) {
+    if (!this.state.workflowCheckpoints?.[workflowId]) return;
+    delete this.state.workflowCheckpoints[workflowId];
+    this.persist();
+  }
+
   finishWorkflowTask(workflowId, summary = '') {
     const resolved = this.resolveId(workflowId);
     const task = this.state.explorationPlan.tasks.find((item) => this.resolveId(item.id) === resolved || item.id === workflowId);
@@ -177,6 +204,7 @@ export class SemanticStore {
     task.summary = summary;
     this.state.explorationPlan.completedWorkflows = this.state.explorationPlan.tasks.filter((item) => item.status === 'complete').length;
     this.state.explorationPlan.currentWorkflowId = null;
+    this.clearWorkflowCheckpoint(workflowId);
     return this.emit({ type: 'workflow_task_completed', task: structuredClone(task), workflow, message: `Completed workflow: ${workflow.name}` });
   }
 
@@ -300,6 +328,7 @@ export class SemanticStore {
     this.state.status = 'complete';
     this.state.explorationPlan.phase = 'complete';
     this.state.explorationPlan.currentWorkflowId = null;
+    this.state.workflowCheckpoints = {};
     if (this.currentScan?.currentCommit) {
       this.state.repository = { ...this.state.repository, url: this.currentScan.repoUrl, lastScannedCommit: this.currentScan.currentCommit, lastScannedRootTree: this.currentScan.rootTree || null, lastScanAt: new Date().toISOString() };
     }
