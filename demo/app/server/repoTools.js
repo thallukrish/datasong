@@ -21,37 +21,33 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
   await simpleGit().clone(repoUrl, workspace, ['--depth', '100']);
   const git = simpleGit(workspace);
   const currentCommit = (await git.revparse(['HEAD'])).trim();
+  const rootTree = (await git.revparse([`${currentCommit}^{tree}`])).trim();
+  const currentTrees = await readTreeMap(git, currentCommit);
 
+  let previousRootTree = null;
+  let previousTrees = new Map();
   let changedFiles = [];
+  let changedTrees = [];
   let comparisonAvailable = true;
   let comparisonReason = previousCommit ? 'repository unchanged' : 'first scan';
 
   if (previousCommit && previousCommit !== currentCommit) {
     try {
-      let hasPrevious = true;
-      try {
-        await git.raw(['cat-file', '-e', `${previousCommit}^{commit}`]);
-      } catch {
-        hasPrevious = false;
-      }
-
-      if (!hasPrevious) {
-        try {
-          await git.fetch(['origin', previousCommit, '--depth', '1']);
-        } catch {
-          // If this commit cannot be fetched directly, the caller will conservatively re-check existing knowledge.
-        }
-      }
-
-      await git.raw(['cat-file', '-e', `${previousCommit}^{commit}`]);
+      await ensureCommit(git, previousCommit);
+      previousRootTree = (await git.revparse([`${previousCommit}^{tree}`])).trim();
+      previousTrees = await readTreeMap(git, previousCommit);
       const diff = await git.diff(['--name-only', previousCommit, currentCommit]);
-      changedFiles = diff.split(/\r?\n/).map((item) => item.trim().replaceAll('\\', '/')).filter(Boolean);
-      comparisonReason = `${changedFiles.length} files changed since the last completed scan`;
+      changedFiles = diff.split(/\r?\n/).map(normalizePath).filter(Boolean);
+      changedTrees = compareTrees(previousTrees, currentTrees);
+      comparisonReason = `${changedFiles.length} files changed across ${changedTrees.length} directory trees since the last completed scan`;
     } catch (error) {
       comparisonAvailable = false;
       changedFiles = null;
+      changedTrees = null;
       comparisonReason = `unable to compare with prior commit ${previousCommit}: ${error.message}`;
     }
+  } else if (previousCommit === currentCommit) {
+    previousRootTree = rootTree;
   }
 
   searchableFiles = (await walk(workspace)).filter((file) => TEXT_EXTENSIONS.has(path.extname(file).toLowerCase()));
@@ -62,10 +58,14 @@ export async function prepareRepo(repoUrl, previousCommit = null) {
     repositoryName,
     currentCommit,
     previousCommit,
+    rootTree,
+    previousRootTree,
     commitChanged: Boolean(previousCommit && previousCommit !== currentCommit),
     comparisonAvailable,
     comparisonReason,
     changedFiles,
+    changedTrees,
+    topLevelChangedAreas: summarizeTopLevelChanges(changedFiles, changedTrees),
     searchableFiles: searchableFiles.length
   };
 }
@@ -115,7 +115,6 @@ export async function searchRepo(query, maxResults = 30) {
       }
     }
   }
-
   return results;
 }
 
@@ -135,6 +134,50 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
     totalLines: lines.length,
     content: lines.slice(from - 1, to).map((line, i) => `${from + i}: ${line}`).join('\n')
   };
+}
+
+async function ensureCommit(git, commit) {
+  try {
+    await git.raw(['cat-file', '-e', `${commit}^{commit}`]);
+    return;
+  } catch {}
+  try { await git.fetch(['origin', commit, '--depth', '1']); } catch {}
+  await git.raw(['cat-file', '-e', `${commit}^{commit}`]);
+}
+
+async function readTreeMap(git, commit) {
+  const text = await git.raw(['ls-tree', '-r', '-t', commit]);
+  const trees = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith('040000 tree ')) continue;
+    const match = line.match(/^040000 tree ([0-9a-f]+)\t(.+)$/i);
+    if (match) trees.set(normalizePath(match[2]), match[1]);
+  }
+  return trees;
+}
+
+function compareTrees(previousTrees, currentTrees) {
+  const paths = new Set([...previousTrees.keys(), ...currentTrees.keys()]);
+  return [...paths]
+    .filter((treePath) => previousTrees.get(treePath) !== currentTrees.get(treePath))
+    .map((treePath) => ({ path: treePath, previousSha: previousTrees.get(treePath) || null, currentSha: currentTrees.get(treePath) || null }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function summarizeTopLevelChanges(changedFiles, changedTrees) {
+  if (!Array.isArray(changedFiles) || !Array.isArray(changedTrees)) return null;
+  const areas = new Map();
+  for (const file of changedFiles) {
+    const top = file.split('/')[0] || '.';
+    if (!areas.has(top)) areas.set(top, { path: top, filesChanged: 0, treesChanged: 0 });
+    areas.get(top).filesChanged += 1;
+  }
+  for (const tree of changedTrees) {
+    const top = tree.path.split('/')[0] || '.';
+    if (!areas.has(top)) areas.set(top, { path: top, filesChanged: 0, treesChanged: 0 });
+    areas.get(top).treesChanged += 1;
+  }
+  return [...areas.values()].sort((a, b) => b.filesChanged - a.filesChanged || a.path.localeCompare(b.path));
 }
 
 function ensureWorkspace() {
@@ -174,6 +217,10 @@ async function walk(root) {
     }
   }
   return out;
+}
+
+function normalizePath(value = '') {
+  return String(value).trim().replaceAll('\\', '/').replace(/^\.\//, '');
 }
 
 function repoNameFromUrl(repoUrl = '') {
