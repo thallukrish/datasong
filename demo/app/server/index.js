@@ -9,29 +9,17 @@ const port = Number(process.env.PORT || 3101);
 const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const MODEL_TIMEOUT_MS = 45_000;
 const MAX_MODEL_TOKENS = 1200;
+const MAX_WORKFLOW_ROUNDS = 18;
 const EVIDENCE_SYNTHESIS_ROUNDS = 6;
-const EVIDENCE_STOP_ROUNDS = 10;
-const TRUE_STAGNATION_RECOVERY_ROUNDS = 2;
-const TRUE_STAGNATION_STOP_ROUNDS = 4;
 const deepseek = process.env.DEEPSEEK_API_KEY
-  ? new OpenAI({
-      apiKey: process.env.DEEPSEEK_API_KEY,
-      baseURL: 'https://api.deepseek.com',
-      timeout: MODEL_TIMEOUT_MS
-    })
+  ? new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com', timeout: MODEL_TIMEOUT_MS })
   : null;
 const clients = new Set();
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
-
 app.get('/api/state', (_req, res) => res.json(semanticStore.snapshot()));
-
-app.post('/api/reset', (_req, res) => {
-  semanticStore.reset();
-  broadcast();
-  res.json({ ok: true });
-});
+app.post('/api/reset', (_req, res) => { semanticStore.reset(); broadcast(); res.json({ ok: true }); });
 
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -47,12 +35,10 @@ app.post('/api/explore', async (req, res) => {
   const { businessDescription, repoUrl } = req.body || {};
   if (!businessDescription || !repoUrl) return res.status(400).json({ error: 'businessDescription and repoUrl are required' });
   if (!deepseek) return res.status(400).json({ error: 'DEEPSEEK_API_KEY is not configured' });
-
   const priorKnowledge = semanticStore.knowledgeSummary();
   semanticStore.begin({ businessDescription, repoUrl });
   broadcast();
   res.status(202).json({ ok: true });
-
   explore({ businessDescription, repoUrl, priorKnowledge }).catch((error) => {
     semanticStore.state.status = 'error';
     semanticStore.emit({ type: 'error', message: error.message });
@@ -61,306 +47,161 @@ app.post('/api/explore', async (req, res) => {
 });
 
 async function explore({ businessDescription, repoUrl, priorKnowledge }) {
-  semanticStore.emit({
-    type: 'tool_started',
-    tool: 'repo_prepare',
-    args: { repoUrl },
-    message: 'Checking the repository version and what DataSong can safely reuse…'
-  });
+  semanticStore.emit({ type: 'tool_started', tool: 'repo_prepare', args: { repoUrl }, message: 'Assessing repository changes from the Git tree…' });
   broadcast();
-
   const repoPreparation = await executeTool('repo_prepare', { repoUrl });
-  semanticStore.emit({
-    type: 'tool_completed',
-    tool: 'repo_prepare',
-    args: { repoUrl },
-    resultPreview: preview(repoPreparation)
-  });
-  semanticStore.emit({
-    type: 'learning_update',
-    message: repoPreparation.currentCommit === repoPreparation.previousCommit
-      ? 'The source has not changed. Reusing the business knowledge already validated against this commit.'
-      : repoPreparation.previousCommit
-        ? `The source changed in ${repoPreparation.changedFiles?.length || 0} file(s). Rechecking only the affected business knowledge.`
-        : 'No prior source version was available. Building the first validated business guide for this repository.'
-  });
+  semanticStore.emit({ type: 'tool_completed', tool: 'repo_prepare', args: { repoUrl }, resultPreview: preview(repoPreparation) });
+  semanticStore.emit({ type: 'learning_update', message: assessmentMessage(repoPreparation) });
   broadcast();
 
-  const instructions = `
-You are DataSong examining how a business works by reading its application repository.
+  const plan = repoPreparation.workflowPlan;
+  const pending = plan.tasks.filter((task) => task.status === 'pending');
+  if (!pending.length) {
+    semanticStore.complete(`Repository synchronized. ${plan.reusedWorkflows} known workflow${plan.reusedWorkflows === 1 ? '' : 's'} reused because their supporting source did not change.`);
+    broadcast();
+    return;
+  }
 
-DataSong builds a browsable enterprise story. The fundamental unit called a WORKFLOW has a strict business meaning:
-- A workflow is one end-to-end conversation/story slice in the enterprise that accomplishes ONE concrete customer or business use case.
-- It starts with a business trigger or intent and ends with a recognizable business/customer outcome.
-- It is NOT a function, service call, branch, helper, entity operation, or arbitrary code path.
-- A workflow must connect directly to the immediate canonical business concepts it acts on, the business rules that govern it, the durable data it uses, and any next workflow it directly triggers or hands off to.
-- Smaller implementation steps stay inside the workflow narrative/evidence. They do not become workflows merely because they are separate functions.
+  for (const task of pending) {
+    semanticStore.startWorkflowTask(task.id);
+    semanticStore.emit({ type: 'learning_update', message: `${task.mode === 'review' ? 'Rechecking' : 'Learning'} end-to-end workflow: ${task.name}.` });
+    broadcast();
+    await exploreWorkflow({ task, businessDescription, repoUrl, repoPreparation, priorKnowledge });
+  }
 
-Example workflow: "Customer places an order".
-Trigger: a customer starts or resumes a cart and chooses to buy products.
-Outcome: a Sales Order is placed/approved and ready for the next business process.
-Immediate concepts may include Customer, Sales Order, Order Item and Product. Rules may include inventory requirements or approval rules. A next workflow may be Order fulfillment.
+  const finished = semanticStore.workflowPlan();
+  semanticStore.complete(`Repository synchronized at ${shortSha(repoPreparation.currentCommit)}. Completed ${finished.completedWorkflows} workflow task${finished.completedWorkflows === 1 ? '' : 's'} and reused ${finished.reusedWorkflows} unchanged workflow${finished.reusedWorkflows === 1 ? '' : 's'}.`);
+  broadcast();
+}
 
-Start from the business use case "What happens when a customer places an order?" and extend into the next connected end-to-end use cases only when the current one is already known and trustworthy.
-
-The repository has ALREADY been prepared before this model call. You are given the authoritative preparation result containing currentCommit, previousCommit, changedFiles and knowledgeReuse. Do NOT call repo_prepare again.
-
-Rules:
-1. Treat repoPreparation.knowledgeReuse as authoritative incremental-discovery guidance. Reuse items under reusable without rereading/re-recording them. Re-read only items under needsReview or evidence needed for genuinely new connected workflows.
-2. If currentCommit equals previousCommit, move directly to missing knowledge or the next connected workflow instead of rediscovering known facts.
-3. If the commit changed, focus on changed files that affect needsReview items plus new code needed for a new connected workflow.
-4. Think like a business/process analyst, not like a graph-database or code-documentation tool.
-5. Every semantic_record_workflow call MUST describe a complete use case with trigger, outcome, immediate conceptIds, ruleIds and nextWorkflowIds. Record the referenced concepts/rules first when they are new.
-6. A workflow with no immediate business concepts is incomplete. A workflow should normally have multiple first-level business connections.
-7. Workflows connect to other workflows only where one directly triggers/hands off to the other. Do not connect them merely because they are vaguely related.
-8. Visible labels MUST be stable plain-English business names. Never use a raw class/service/entity/variable name as a visible label when a business phrase is possible.
-9. Maintain a canonical business glossary. Multiple code terms, variables, statuses or runtime representations of the same durable business object reuse one canonical concept id/label; implementation terms go in technicalNames/evidence.
-10. Persistence identity is strong evidence for canonicalization. Exact table/entity names remain persistent-data provenance rather than duplicate business concepts.
-11. Every newly recorded concept, rule or persistent dataset must attach to a workflow or another meaningful business relationship immediately.
-12. Persistent data must be recorded only when the repository proves a durable database/entity read or write; attach it to workflowId.
-13. Business rules/conditions must identify workflowId so they remain visibly attached to the use case they govern.
-14. Static/symbolic reasoning is sufficient for config/data branches. Runtime simulation is not required.
-15. Never invent evidence. Evidence should include repository-relative path plus symbol/service/line context where possible.
-16. Prefer targeted search and bounded file reads. Do not dump the whole repository.
-17. Before semantic_complete, verify every newly recorded workflow has a trigger, outcome and visible first-level connections in the semantic map.
-18. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
-19. Make progress in small tool-driven steps. Do not spend a long turn composing prose while more repository evidence is needed.
-20. Repository reading is evidence gathering. New, targeted evidence is useful progress. But once enough evidence supports a business fact, record that fact before continuing to widen the search.
-`;
-
-  const tools = toChatCompletionTools(modelTools.filter((tool) => tool.name !== 'repo_prepare'));
+async function exploreWorkflow({ task, businessDescription, repoUrl, repoPreparation, priorKnowledge }) {
+  const existingWorkflow = priorKnowledge.workflows?.find((workflow) => workflow.id === task.id) || null;
+  const tools = toChatCompletionTools(modelTools.filter((tool) => !['repo_prepare', 'semantic_complete'].includes(tool.name)));
   const messages = [
-    { role: 'system', content: instructions },
+    { role: 'system', content: workflowInstructions(task) },
     {
       role: 'user',
-      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExisting DataSong knowledge:\n${JSON.stringify(priorKnowledge, null, 2)}\n\nRepository preparation result:\n${JSON.stringify(repoPreparation, null, 2)}\n\nObey the knowledgeReuse plan. Build/extend complete end-to-end workflows, not code fragments. Reuse unchanged knowledge, re-check only affected items, then extend the business guide with the next missing connected use case where useful.`
+      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nCURRENT WORKFLOW TASK:\n${JSON.stringify(task, null, 2)}\n\nExisting workflow knowledge, if any:\n${JSON.stringify(existingWorkflow, null, 2)}\n\nKnown canonical knowledge you may reuse:\n${JSON.stringify(priorKnowledge, null, 2)}\n\nGit change assessment:\n${JSON.stringify({ currentCommit: repoPreparation.currentCommit, rootTree: repoPreparation.rootTree, changedFiles: repoPreparation.changedFiles, changedTrees: repoPreparation.changedTrees, topLevelChangedAreas: repoPreparation.topLevelChangedAreas }, null, 2)}\n\nWork ONLY on the current workflow. Search/read narrowly, record its concepts/rules/data/relationships, record the complete workflow using id '${task.id}', then call semantic_finish_workflow for '${task.id}'.`
     }
   ];
 
-  let previousCallSignature = '';
-  let repeatedCallCount = 0;
   let evidenceOnlyRounds = 0;
-  let trulyStagnantRounds = 0;
-  let synthesisPromptSent = false;
-  const seenEvidenceActions = new Set();
+  const seenOperations = new Set();
 
-  for (let round = 0; round < 40; round += 1) {
-    const roundNo = round + 1;
-    console.log(`[DataSong] DeepSeek round ${roundNo} started`);
-
+  for (let round = 1; round <= MAX_WORKFLOW_ROUNDS; round += 1) {
+    console.log(`[DataSong] ${task.id}: DeepSeek round ${round}`);
     const response = await withTimeout(
-      deepseek.chat.completions.create({
-        model,
-        messages,
-        tools,
-        tool_choice: 'auto',
-        max_tokens: MAX_MODEL_TOKENS,
-        temperature: 0
-      }),
+      deepseek.chat.completions.create({ model, messages, tools, tool_choice: 'auto', max_tokens: MAX_MODEL_TOKENS, temperature: 0 }),
       MODEL_TIMEOUT_MS,
-      `DeepSeek did not respond within ${Math.round(MODEL_TIMEOUT_MS / 1000)} seconds on round ${roundNo}`
+      `DeepSeek did not respond within ${Math.round(MODEL_TIMEOUT_MS / 1000)} seconds while working on '${task.name}'`
     );
-
-    const choice = response.choices?.[0];
-    const message = choice?.message;
-    if (!message) throw new Error(`DeepSeek returned no assistant message on round ${roundNo}`);
-
+    const message = response.choices?.[0]?.message;
+    if (!message) throw new Error(`DeepSeek returned no assistant message while working on '${task.name}'`);
     const calls = message.tool_calls || [];
-    console.log(`[DataSong] DeepSeek round ${roundNo} returned ${calls.length} tool call(s), finish=${choice?.finish_reason || 'unknown'}`);
-
     messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls });
 
     if (!calls.length) {
-      if (!message.content?.trim()) throw new Error(`DeepSeek returned neither tool calls nor an answer on round ${roundNo}`);
-      if (semanticStore.state.status !== 'complete') semanticStore.complete(message.content || 'Business knowledge updated');
-      broadcast();
-      return;
+      messages.push({ role: 'user', content: `You have not finished the workflow task. Record supported semantic knowledge and call semantic_finish_workflow for '${task.id}'. Do not answer in prose instead of finishing the task.` });
+      continue;
     }
 
-    const signature = calls.map((call) => `${call.function?.name}:${call.function?.arguments || '{}'}`).join('|');
-    if (signature === previousCallSignature) repeatedCallCount += 1;
-    else repeatedCallCount = 0;
-    previousCallSignature = signature;
-
-    if (repeatedCallCount >= 2) {
-      throw new Error(`DeepSeek repeated the same tool request three times on round ${roundNo}; stopping instead of looping`);
-    }
-
-    let semanticWritesThisRound = 0;
-    let newEvidenceActionsThisRound = 0;
-
+    let semanticWrites = 0;
+    let novelEvidenceOps = 0;
     for (const call of calls) {
       const name = call.function?.name;
       let args;
-      try {
-        args = JSON.parse(call.function?.arguments || '{}');
-      } catch {
-        throw new Error(`DeepSeek returned invalid JSON arguments for ${name || 'a tool'} on round ${roundNo}`);
-      }
+      try { args = JSON.parse(call.function?.arguments || '{}'); }
+      catch { throw new Error(`DeepSeek returned invalid JSON arguments for ${name || 'a tool'} while working on '${task.name}'`); }
+      if (name === 'semantic_record_workflow') args.id = task.id;
+      if (name === 'semantic_finish_workflow') args.workflowId = task.id;
 
-      semanticStore.emit({ type: 'tool_started', tool: name, args, message: toolProgressText(name, args) });
+      const operationKey = `${name}:${JSON.stringify(args)}`;
+      if (['repo_search', 'repo_read_file', 'repo_list'].includes(name) && !seenOperations.has(operationKey)) novelEvidenceOps += 1;
+      seenOperations.add(operationKey);
+
+      semanticStore.emit({ type: 'tool_started', tool: name, args, workflowTaskId: task.id, message: toolProgressText(name, args, task) });
       broadcast();
-
       const result = await executeTool(name, args);
-      semanticStore.emit({ type: 'tool_completed', tool: name, args, resultPreview: preview(result) });
+      semanticStore.emit({ type: 'tool_completed', tool: name, args, workflowTaskId: task.id, resultPreview: preview(result) });
       const learned = learningMessage(name, args, result);
-      if (learned) semanticStore.emit({ type: 'learning_update', message: learned });
-      if (isSemanticWrite(name)) semanticWritesThisRound += 1;
-
-      const evidenceAction = evidenceActionSignature(name, args, result);
-      if (evidenceAction && !seenEvidenceActions.has(evidenceAction)) {
-        seenEvidenceActions.add(evidenceAction);
-        newEvidenceActionsThisRound += 1;
-      }
-
+      if (learned) semanticStore.emit({ type: 'learning_update', workflowTaskId: task.id, message: learned });
+      if (isSemanticWrite(name)) semanticWrites += 1;
       broadcast();
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
     }
 
-    if (semanticWritesThisRound > 0) {
+    const plan = semanticStore.workflowPlan();
+    if (plan.tasks.find((item) => item.id === task.id)?.status === 'complete') return;
+    if (semanticWrites > 0) evidenceOnlyRounds = 0;
+    else if (novelEvidenceOps > 0) evidenceOnlyRounds += 1;
+    else evidenceOnlyRounds += 2;
+
+    if (evidenceOnlyRounds >= EVIDENCE_SYNTHESIS_ROUNDS) {
+      messages.push({ role: 'user', content: `You have gathered enough evidence for '${task.name}' without completing it. Stop broad searching. Synthesize the evidence into concepts, rules, persistent data and relations, record workflow '${task.id}', then call semantic_finish_workflow. Only read one more file if one specific missing fact prevents completion.` });
+      semanticStore.emit({ type: 'learning_update', workflowTaskId: task.id, message: `Evidence gathered for ${task.name}. Synthesizing the workflow now.` });
+      broadcast();
       evidenceOnlyRounds = 0;
-      trulyStagnantRounds = 0;
-      synthesisPromptSent = false;
-      console.log(`[DataSong] Round ${roundNo} recorded ${semanticWritesThisRound} semantic write(s)`);
-    } else if (newEvidenceActionsThisRound > 0) {
-      evidenceOnlyRounds += 1;
-      trulyStagnantRounds = 0;
-      console.log(`[DataSong] Round ${roundNo} gathered ${newEvidenceActionsThisRound} new evidence action(s); evidenceOnlyRounds=${evidenceOnlyRounds}`);
-
-      if (evidenceOnlyRounds >= EVIDENCE_SYNTHESIS_ROUNDS && !synthesisPromptSent) {
-        messages.push({
-          role: 'user',
-          content: `Synthesis checkpoint: you have gathered new repository evidence for ${evidenceOnlyRounds} consecutive rounds without recording semantic knowledge. Do not broaden the search further. Review the evidence already in this conversation and record the concrete business concepts, relationships, rules, persistence mappings, and complete workflow that are now supported. If one specific missing fact prevents synthesis, perform at most ONE narrowly targeted read/search and then synthesize.`
-        });
-        synthesisPromptSent = true;
-        semanticStore.emit({
-          type: 'discovery_checkpoint',
-          message: 'DataSong has gathered enough source evidence and is now turning it into business knowledge.'
-        });
-        broadcast();
-        console.log('[DataSong] Injected evidence synthesis checkpoint');
-      }
-
-      if (evidenceOnlyRounds >= EVIDENCE_STOP_ROUNDS) {
-        throw new Error(`DataSong gathered new source evidence for ${evidenceOnlyRounds} consecutive rounds but DeepSeek did not synthesize it into semantic knowledge`);
-      }
-    } else {
-      trulyStagnantRounds += 1;
-      console.log(`[DataSong] Round ${roundNo} produced no new evidence and no semantic writes; trulyStagnantRounds=${trulyStagnantRounds}`);
-
-      if (trulyStagnantRounds === TRUE_STAGNATION_RECOVERY_ROUNDS) {
-        messages.push({
-          role: 'user',
-          content: `Recovery instruction: the last ${trulyStagnantRounds} rounds produced neither new repository evidence nor semantic knowledge. Stop repeating searches/reads. On the NEXT turn, either record a concrete supported semantic fact from the evidence already gathered, make one genuinely new narrowly targeted evidence request, or call semantic_complete if the current business slice is complete.`
-        });
-        semanticStore.emit({
-          type: 'discovery_checkpoint',
-          message: 'DataSong noticed repeated source exploration and is switching back to synthesis.'
-        });
-        broadcast();
-        console.log('[DataSong] Injected true-stagnation recovery instruction');
-      }
-
-      if (trulyStagnantRounds >= TRUE_STAGNATION_STOP_ROUNDS) {
-        throw new Error(`Exploration produced no new evidence or semantic knowledge for ${trulyStagnantRounds} consecutive model rounds; stopping a genuine loop`);
-      }
     }
-
-    if (semanticStore.state.status === 'complete') return;
   }
-
-  throw new Error('Exploration reached the 40-round safety limit before completing');
+  throw new Error(`Workflow '${task.name}' did not complete within ${MAX_WORKFLOW_ROUNDS} bounded model rounds`);
 }
 
-function toolProgressText(name, args) {
-  if (name === 'repo_list') return `Looking through ${args.path || 'the application structure'}…`;
-  if (name === 'repo_search') return `Searching for evidence about ${humanizeQuery(args.query)}…`;
-  if (name === 'repo_read_file') return `Reading evidence in ${shortPath(args.path)}…`;
-  if (name === 'semantic_record_workflow') return `Writing the end-to-end workflow: ${args.name || 'business flow'}…`;
-  if (name === 'semantic_record_node') return `Understanding ${args.label || 'another business concept'}…`;
-  if (name === 'semantic_record_relation') return 'Connecting two parts of the business story…';
-  if (name === 'semantic_record_persistent_data') return `Tracing where ${args.businessLabel || 'business data'} is stored…`;
-  if (name === 'semantic_record_condition') return `Understanding the business rule: ${args.label || 'what changes the path'}…`;
-  if (name === 'semantic_complete') return 'Saving the updated business guide against this repository version…';
-  return 'Following the business story…';
+function workflowInstructions(task) {
+  return `You are DataSong's bounded workflow analyst. Your ONLY task is '${task.name}' (id '${task.id}').
+A workflow is one end-to-end enterprise story slice accomplishing ONE concrete customer/business use case, from business trigger to recognizable outcome. Functions, services, helpers and branches are not workflows by themselves.
+1. Inspect only source needed for this workflow.
+2. Reuse canonical business concepts; do not create synonyms.
+3. Record immediate concepts, rules, durable data and relationships as evidence supports them.
+4. Keep runtime/service/function names in technicalNames/evidence.
+5. Persistent data and conditions must attach to workflowId '${task.id}'.
+6. Record semantic_record_workflow with EXACT id '${task.id}', trigger, outcome, conceptIds, ruleIds and nextWorkflowIds.
+7. Next workflows must be direct handoffs/triggers.
+8. Never invent evidence; use repository-relative source locations.
+9. When complete, call semantic_finish_workflow. Do not explore another workflow.
+${task.mode === 'review' ? '10. This is a review caused by source changes. Prefer changed evidence and preserve unchanged facts.' : ''}`;
+}
+
+function assessmentMessage(repo) {
+  if (!repo.previousCommit) return `Git assessment complete at ${shortSha(repo.currentCommit)}. First semantic scan; root tree ${shortSha(repo.rootTree)}.`;
+  if (!repo.commitChanged) return `Git assessment complete. Repository and root tree are unchanged at ${shortSha(repo.currentCommit)}; validated workflows can be reused.`;
+  if (!repo.comparisonAvailable) return 'Git assessment could not prove the prior tree diff, so workflows will be reviewed conservatively.';
+  const areas = (repo.topLevelChangedAreas || []).slice(0, 4).map((area) => area.path).join(', ');
+  return `Git assessment complete: ${repo.changedFiles?.length || 0} files and ${repo.changedTrees?.length || 0} directory trees changed${areas ? ` across ${areas}` : ''}.`;
+}
+
+function toolProgressText(name, args, task) {
+  if (name === 'repo_list') return `Mapping the source area for ${task.name}…`;
+  if (name === 'repo_search') return `Looking for evidence about ${humanizeQuery(args.query)} in ${task.name}…`;
+  if (name === 'repo_read_file') return `Reading ${shortPath(args.path)} for ${task.name}…`;
+  if (name === 'semantic_record_workflow') return `Writing the end-to-end workflow: ${task.name}…`;
+  if (name === 'semantic_record_node') return `Learned a concept in ${task.name}: ${args.label || 'business concept'}…`;
+  if (name === 'semantic_record_relation') return `Connecting business knowledge inside ${task.name}…`;
+  if (name === 'semantic_record_persistent_data') return `Tracing durable data for ${task.name}: ${args.businessLabel || 'business data'}…`;
+  if (name === 'semantic_record_condition') return `Capturing rule in ${task.name}: ${args.label || 'business rule'}…`;
+  if (name === 'semantic_finish_workflow') return `Finishing workflow: ${task.name}…`;
+  return `Working on ${task.name}…`;
 }
 
 function learningMessage(name, args, result) {
-  if (name === 'repo_search') {
-    const count = Array.isArray(result) ? result.length : 0;
-    return count ? `Found ${count} source clue${count === 1 ? '' : 's'} about ${humanizeQuery(args.query)}.` : null;
-  }
+  if (name === 'repo_search') { const count = Array.isArray(result) ? result.length : 0; return count ? `Found ${count} source clue${count === 1 ? '' : 's'} about ${humanizeQuery(args.query)}.` : null; }
   if (name === 'repo_read_file') return `Found source evidence in ${shortPath(args.path)}.`;
-  if (name === 'semantic_record_workflow') return `Learned business flow: ${args.name} — ${args.outcome}`;
-  if (name === 'semantic_record_node') return `Learned what ${args.label} means in this business.`;
-  if (name === 'semantic_record_relation') {
-    const snapshot = semanticStore.snapshot();
-    const source = snapshot.nodes.find((node) => node.id === args.source)?.label || args.source;
-    const target = snapshot.nodes.find((node) => node.id === args.target)?.label || args.target;
-    return `Learned: ${source} ${args.relation} ${target}.`;
-  }
+  if (name === 'semantic_record_workflow') return `Learned end-to-end flow: ${args.name} — ${args.outcome}`;
+  if (name === 'semantic_record_node') return `Learned what ${args.label} means in the business.`;
+  if (name === 'semantic_record_relation') { const snapshot = semanticStore.snapshot(); const source = snapshot.nodes.find((node) => node.id === args.source)?.label || args.source; const target = snapshot.nodes.find((node) => node.id === args.target)?.label || args.target; return `Learned: ${source} ${args.relation} ${target}.`; }
   if (name === 'semantic_record_persistent_data') return `Learned where ${args.businessLabel} is persisted: ${args.technicalName}.`;
   if (name === 'semantic_record_condition') return `Learned business rule: ${args.label}`;
-  if (name === 'semantic_complete') return result?.message || args.summary;
+  if (name === 'semantic_finish_workflow') return result?.message || `Completed workflow ${args.workflowId}.`;
   return null;
 }
 
-function isSemanticWrite(name = '') {
-  return name.startsWith('semantic_record_') || name === 'semantic_complete';
-}
-
-function evidenceActionSignature(name = '', args = {}, result) {
-  if (name === 'repo_search') {
-    const count = Array.isArray(result) ? result.length : 0;
-    return count > 0 ? `search:${normalizeSignature(args.query)}` : null;
-  }
-  if (name === 'repo_read_file') {
-    return `read:${normalizeSignature(args.path)}:${args.startLine || 1}:${args.endLine || 240}`;
-  }
-  if (name === 'repo_list') {
-    const count = Array.isArray(result) ? result.length : 0;
-    return count > 0 ? `list:${normalizeSignature(args.path || '.')}` : null;
-  }
-  return null;
-}
-
-function normalizeSignature(value = '') {
-  return String(value).trim().toLowerCase().replaceAll('\\', '/');
-}
-
-function humanizeQuery(query = '') {
-  return query.replace(/[#_]/g, ' ').trim() || 'the next business step';
-}
-
-function shortPath(file = '') {
-  const parts = file.split('/');
-  return parts[parts.length - 1] || 'this source file';
-}
-
-function toChatCompletionTools(tools) {
-  return tools.map((tool) => ({
-    type: 'function',
-    function: { name: tool.name, description: tool.description, parameters: tool.parameters }
-  }));
-}
-
-function withTimeout(promise, ms, message) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function preview(value) {
-  const text = JSON.stringify(value);
-  return text.length > 900 ? `${text.slice(0, 900)}…` : text;
-}
-
-function broadcast() {
-  const payload = `data: ${JSON.stringify({ type: 'snapshot', state: semanticStore.snapshot() })}\n\n`;
-  for (const client of clients) client.write(payload);
-}
+function isSemanticWrite(name = '') { return name.startsWith('semantic_record_') || name === 'semantic_finish_workflow'; }
+function humanizeQuery(query = '') { return String(query).replace(/[#_]/g, ' ').trim() || 'the next business step'; }
+function shortPath(file = '') { const parts = String(file).split('/'); return parts[parts.length - 1] || 'this source file'; }
+function shortSha(value = '') { return value ? String(value).slice(0, 8) : 'unknown'; }
+function toChatCompletionTools(tools) { return tools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })); }
+function withTimeout(promise, ms, message) { let timer; const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }); return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)); }
+function preview(value) { const text = JSON.stringify(value); return text.length > 900 ? `${text.slice(0, 900)}…` : text; }
+function broadcast() { const payload = `data: ${JSON.stringify({ type: 'snapshot', state: semanticStore.snapshot() })}\n\n`; for (const client of clients) client.write(payload); }
 
 app.listen(port, () => {
   console.log(`DataSong demo server listening on http://localhost:${port}`);
