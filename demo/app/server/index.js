@@ -9,6 +9,8 @@ const port = Number(process.env.PORT || 3101);
 const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const MODEL_TIMEOUT_MS = 45_000;
 const MAX_MODEL_TOKENS = 1200;
+const STAGNATION_RECOVERY_ROUNDS = 3;
+const STAGNATION_STOP_ROUNDS = 5;
 const deepseek = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
@@ -121,6 +123,7 @@ Rules:
 17. Before semantic_complete, verify every newly recorded workflow has a trigger, outcome and visible first-level connections in the semantic map.
 18. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
 19. Make progress in small tool-driven steps. Do not spend a long turn composing prose while more repository evidence is needed.
+20. Repository reading is a means, not progress by itself. After enough evidence is available for a business fact, RECORD that semantic fact before doing more broad searches.
 `;
 
   const tools = toChatCompletionTools(modelTools.filter((tool) => tool.name !== 'repo_prepare'));
@@ -134,6 +137,7 @@ Rules:
 
   let previousCallSignature = '';
   let repeatedCallCount = 0;
+  let stagnantRounds = 0;
 
   for (let round = 0; round < 40; round += 1) {
     const roundNo = round + 1;
@@ -177,6 +181,8 @@ Rules:
       throw new Error(`DeepSeek repeated the same tool request three times on round ${roundNo}; stopping instead of looping`);
     }
 
+    let semanticWritesThisRound = 0;
+
     for (const call of calls) {
       const name = call.function?.name;
       let args;
@@ -193,8 +199,28 @@ Rules:
       semanticStore.emit({ type: 'tool_completed', tool: name, args, resultPreview: preview(result) });
       const learned = learningMessage(name, args, result);
       if (learned) semanticStore.emit({ type: 'learning_update', message: learned });
+      if (isSemanticWrite(name)) semanticWritesThisRound += 1;
       broadcast();
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+    }
+
+    if (semanticWritesThisRound > 0) {
+      stagnantRounds = 0;
+    } else {
+      stagnantRounds += 1;
+      console.log(`[DataSong] No semantic writes in round ${roundNo}; stagnantRounds=${stagnantRounds}`);
+    }
+
+    if (stagnantRounds === STAGNATION_RECOVERY_ROUNDS) {
+      messages.push({
+        role: 'user',
+        content: `Recovery instruction: you have spent ${stagnantRounds} consecutive rounds reading/searching without recording any business knowledge. Stop broad exploration. Using the evidence already gathered, your NEXT turn must either (a) record at least one concrete workflow/concept/rule/persistent-data/relation that is supported by that evidence, or (b) call semantic_complete if there is genuinely nothing new to add. Only perform another repository read if one narrowly identified missing fact blocks a semantic write.`
+      });
+      console.log('[DataSong] Injected stagnation recovery instruction');
+    }
+
+    if (stagnantRounds >= STAGNATION_STOP_ROUNDS) {
+      throw new Error(`Exploration made no semantic progress for ${stagnantRounds} consecutive model rounds; stopping instead of looping on repository reads`);
     }
 
     if (semanticStore.state.status === 'complete') return;
@@ -234,6 +260,10 @@ function learningMessage(name, args, result) {
   if (name === 'semantic_record_condition') return `Learned business rule: ${args.label}`;
   if (name === 'semantic_complete') return result?.message || args.summary;
   return null;
+}
+
+function isSemanticWrite(name = '') {
+  return name.startsWith('semantic_record_') || name === 'semantic_complete';
 }
 
 function humanizeQuery(query = '') {
