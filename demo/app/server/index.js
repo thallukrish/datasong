@@ -48,26 +48,33 @@ app.post('/api/explore', async (req, res) => {
 
 async function explore({ businessDescription, repoUrl }) {
   const instructions = `
-You are the DataSong enterprise semantic explorer running a focused product demo.
+You are DataSong examining how a business works by reading its application repository.
 
-Goal: inspect an unfamiliar business application's Git repository and progressively construct an evidence-backed semantic map connecting:
-- business concepts,
-- end-to-end workflows,
-- services/functions,
-- persistent datasets/entities/tables,
-- important configuration or data-driven conditions.
+This demo is NOT a generic architecture scan. Tell ONE connected, understandable business story:
+"What happens when a customer places an order?"
 
-Critical rules:
-1. Start from business workflows, not implementation names. Discover several major flows that explain how the stated business operates.
-2. Always distinguish runtime/transient values from persistent data. Only call semantic_record_persistent_data when repository evidence shows an entity/table/database read or write.
-3. Record persistent fields and the workflow that reads/writes them when evidence supports it.
-4. Treat workflow and dataset/table as first-class semantic-map objects.
-5. Record branches when config or data values alter reachability or outcomes. Static/symbolic evidence is enough; runtime simulation is not required.
-6. Never invent evidence. Evidence strings should include repository path and useful symbol/service/line context.
-7. Prefer bounded file reads and targeted searches. Do not dump the entire repository.
-8. Record discoveries incrementally as soon as they are supported so the UI can grow while you explore.
-9. Do not stop after only one workflow. Build enough of the commerce/order-to-cash map to make the final map useful for a question such as "Why did sales fall last quarter?"
-10. Finish with semantic_complete.
+Target story boundary for this first slice:
+Customer -> Sales Order -> Order Items -> Product -> inventory decision/check -> order placement/approval.
+Stop before shipment, invoicing and payment unless a tiny reference is required to understand the boundary.
+
+Your job is to discover the story from repository evidence and progressively record it in plain business language, while preserving technical evidence underneath.
+
+Rules:
+1. Think like a business/process analyst examining an unfamiliar company, not like a graph-database tool.
+2. Visible labels MUST be plain English: Customer, Sales Order, Order Items, Product, Inventory required?, Stock available?, Order approval. Never use a raw class/service/entity name as the visible label when a business phrase is possible.
+3. Keep exact implementation names in technicalNames, technicalName, fields and evidence. That provenance is important but secondary in the UI.
+4. Start by locating evidence for the order-placement flow. Follow calls only as far as needed to explain this slice end-to-end.
+5. Every recorded story object must connect to the current story. Do not create isolated concepts, services, datasets or conditions.
+6. Record a relation immediately whenever you add a new story object and evidence supports the connection. A useful map is a connected story, not a collection of boxes.
+7. Do not add services/functions as primary visible nodes unless they represent a meaningful business step that cannot be expressed otherwise. Prefer keeping services in technicalNames/evidence.
+8. Distinguish runtime/transient values from durable data. Only use semantic_record_persistent_data when repository evidence shows a persistent entity/table/database read or write.
+9. When persistent data is found, explain what it represents in this business story, keep the exact entity/table name, and connect it to the business concept/workflow it supports.
+10. Record important business decisions/branches (for example inventory required or stock availability) when code/config/data controls whether the path continues, changes or stops.
+11. Static/symbolic reasoning is sufficient for config/data branches. Runtime simulation is not required.
+12. Never invent evidence. Evidence should include repository path plus symbol/service/line context where possible.
+13. Prefer targeted search and bounded file reads. Do not dump the whole repository.
+14. Before semantic_complete, verify that the main story is visibly connected by relationships and that persistent data hangs off the relevant business steps rather than appearing as unrelated boxes.
+15. Finish with a short plain-English summary of what happens when a customer places an order.
 `;
 
   const tools = toChatCompletionTools(modelTools);
@@ -75,32 +82,20 @@ Critical rules:
     { role: 'system', content: instructions },
     {
       role: 'user',
-      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nBegin by preparing the repo, then explore it and build the semantic map.`
+      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExamine the repository and tell the connected business story: what happens when a customer places an order? Begin by preparing the repo.`
     }
   ];
 
   for (let round = 0; round < 80; round += 1) {
-    const response = await deepseek.chat.completions.create({
-      model,
-      messages,
-      tools,
-      tool_choice: 'auto'
-    });
-
+    const response = await deepseek.chat.completions.create({ model, messages, tools, tool_choice: 'auto' });
     const message = response.choices?.[0]?.message;
     if (!message) throw new Error('DeepSeek returned no assistant message');
 
-    messages.push({
-      role: 'assistant',
-      content: message.content ?? null,
-      tool_calls: message.tool_calls
-    });
-
+    messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls });
     const calls = message.tool_calls || [];
+
     if (!calls.length) {
-      if (semanticStore.state.status !== 'complete') {
-        semanticStore.complete(message.content || 'Exploration complete');
-      }
+      if (semanticStore.state.status !== 'complete') semanticStore.complete(message.content || 'Business story explored');
       broadcast();
       return;
     }
@@ -109,20 +104,9 @@ Critical rules:
       const name = call.function?.name;
       const args = JSON.parse(call.function?.arguments || '{}');
       const result = await executeTool(name, args);
-
-      semanticStore.emit({
-        type: 'tool_completed',
-        tool: name,
-        args,
-        resultPreview: preview(result)
-      });
+      semanticStore.emit({ type: 'tool_completed', tool: name, args, resultPreview: preview(result) });
       broadcast();
-
-      messages.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: JSON.stringify(result)
-      });
+      messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
     }
 
     if (semanticStore.state.status === 'complete') return;
@@ -135,11 +119,7 @@ Critical rules:
 function toChatCompletionTools(tools) {
   return tools.map((tool) => ({
     type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters
-    }
+    function: { name: tool.name, description: tool.description, parameters: tool.parameters }
   }));
 }
 
