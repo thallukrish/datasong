@@ -10,47 +10,85 @@ const TEXT_EXTENSIONS = new Set([
 
 let workspace = null;
 let searchableFiles = [];
-let repoName = null;
+let repositoryName = '';
 
-export async function prepareRepo(repoUrl) {
+export async function prepareRepo(repoUrl, previousCommit = null) {
   if (workspace) await fs.rm(workspace, { recursive: true, force: true });
   workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'datasong-demo-'));
   searchableFiles = [];
-  repoName = repositoryNameFromUrl(repoUrl);
-  await simpleGit().clone(repoUrl, workspace, ['--depth', '1']);
+  repositoryName = repoNameFromUrl(repoUrl);
+
+  await simpleGit().clone(repoUrl, workspace, ['--depth', '100']);
+  const git = simpleGit(workspace);
+  const currentCommit = (await git.revparse(['HEAD'])).trim();
+
+  let changedFiles = [];
+  let comparisonAvailable = true;
+  let comparisonReason = previousCommit ? 'repository unchanged' : 'first scan';
+
+  if (previousCommit && previousCommit !== currentCommit) {
+    try {
+      let hasPrevious = true;
+      try {
+        await git.raw(['cat-file', '-e', `${previousCommit}^{commit}`]);
+      } catch {
+        hasPrevious = false;
+      }
+
+      if (!hasPrevious) {
+        try {
+          await git.fetch(['origin', previousCommit, '--depth', '1']);
+        } catch {
+          // If this commit cannot be fetched directly, the caller will conservatively re-check existing knowledge.
+        }
+      }
+
+      await git.raw(['cat-file', '-e', `${previousCommit}^{commit}`]);
+      const diff = await git.diff(['--name-only', previousCommit, currentCommit]);
+      changedFiles = diff.split(/\r?\n/).map((item) => item.trim().replaceAll('\\', '/')).filter(Boolean);
+      comparisonReason = `${changedFiles.length} files changed since the last completed scan`;
+    } catch (error) {
+      comparisonAvailable = false;
+      changedFiles = null;
+      comparisonReason = `unable to compare with prior commit ${previousCommit}: ${error.message}`;
+    }
+  }
+
   searchableFiles = (await walk(workspace)).filter((file) => TEXT_EXTENSIONS.has(path.extname(file).toLowerCase()));
-  return { workspace, repoUrl, repoName, searchableFiles: searchableFiles.length };
+
+  return {
+    workspace,
+    repoUrl,
+    repositoryName,
+    currentCommit,
+    previousCommit,
+    commitChanged: Boolean(previousCommit && previousCommit !== currentCommit),
+    comparisonAvailable,
+    comparisonReason,
+    changedFiles,
+    searchableFiles: searchableFiles.length
+  };
 }
 
 export async function listRepo(relativePath = '.') {
   ensureWorkspace();
   const normalizedPath = normalizeRepoPath(relativePath);
   const root = safeResolve(normalizedPath);
-
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
-    return {
-      path: normalizedPath,
-      entries: entries.slice(0, 200).map((entry) => ({
-        name: entry.name,
-        path: path.relative(workspace, path.join(root, entry.name)).replaceAll('\\', '/'),
-        type: entry.isDirectory() ? 'directory' : 'file'
-      }))
-    };
+    return entries.slice(0, 200).map((entry) => ({
+      name: entry.name,
+      path: path.relative(workspace, path.join(root, entry.name)).replaceAll('\\', '/'),
+      type: entry.isDirectory() ? 'directory' : 'file'
+    }));
   } catch (error) {
-    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
-
+    if (error?.code !== 'ENOENT') throw error;
     const rootEntries = await fs.readdir(workspace, { withFileTypes: true });
     return {
-      path: normalizedPath,
-      error: `Repository path not found: ${relativePath}`,
-      hint: 'The submitted repository is already cloned at the repository root. Use "." or one of the returned root paths instead of prefixing paths with the repository name.',
-      repoName,
-      rootEntries: rootEntries.slice(0, 100).map((entry) => ({
-        name: entry.name,
-        path: entry.name,
-        type: entry.isDirectory() ? 'directory' : 'file'
-      }))
+      error: `Path '${relativePath}' does not exist in the cloned repository. Repository root is already '${repositoryName || 'the submitted repository'}'.`,
+      normalizedPath,
+      suggestion: 'Use paths relative to the repository root.',
+      rootEntries: rootEntries.slice(0, 80).map((entry) => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : 'file' }))
     };
   }
 }
@@ -91,6 +129,7 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
   const to = Math.min(lines.length, Math.max(from, endLine));
   return {
     path: normalizedPath,
+    requestedPath: relativePath,
     startLine: from,
     endLine: to,
     totalLines: lines.length,
@@ -103,32 +142,21 @@ function ensureWorkspace() {
 }
 
 function normalizeRepoPath(relativePath = '.') {
-  let value = String(relativePath || '.').trim().replaceAll('\\', '/');
-  value = value.replace(/^\.\//, '').replace(/^\/+/, '');
-
-  if (!value || value === '.' || value === repoName) return '.';
-
-  if (repoName) {
-    const lower = value.toLowerCase();
-    const prefix = `${repoName.toLowerCase()}/`;
-    if (lower.startsWith(prefix)) value = value.slice(repoName.length + 1);
+  let value = String(relativePath || '.').replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  if (!value || value === '.') return '.';
+  const firstSlash = value.indexOf('/');
+  const firstSegment = firstSlash >= 0 ? value.slice(0, firstSlash) : value;
+  if (repositoryName && firstSegment.toLowerCase() === repositoryName.toLowerCase()) {
+    value = firstSlash >= 0 ? value.slice(firstSlash + 1) : '.';
   }
-
   return value || '.';
 }
 
 function safeResolve(relativePath) {
   const root = path.resolve(workspace);
-  const resolved = path.resolve(workspace, relativePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Path escapes repository workspace');
+  const resolved = path.resolve(root, relativePath);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) throw new Error('Path escapes repository workspace');
   return resolved;
-}
-
-function repositoryNameFromUrl(repoUrl = '') {
-  const cleaned = String(repoUrl).replace(/[?#].*$/, '').replace(/\/$/, '');
-  const tail = cleaned.split('/').pop() || '';
-  return tail.replace(/\.git$/i, '') || null;
 }
 
 async function walk(root) {
@@ -146,4 +174,9 @@ async function walk(root) {
     }
   }
   return out;
+}
+
+function repoNameFromUrl(repoUrl = '') {
+  const cleaned = String(repoUrl).replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
+  return cleaned.split('/').filter(Boolean).pop() || '';
 }
