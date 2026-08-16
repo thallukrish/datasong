@@ -32,7 +32,7 @@ export default function App() {
   }, [selectedId, workflows]);
 
   const selected = state.nodes.find((node) => node.id === selectedId) || workflows.find((flow) => flow.id === selectedId) || null;
-  const latestDiscovery = [...state.events].reverse().find((event) => event.type !== 'tool_completed');
+  const latestDiscovery = latestBusinessEvent(state.events);
   const progress = discoveryProgress(state);
 
   async function explore() {
@@ -253,29 +253,54 @@ function WikiLink({ node, visited, navigate, block = false }) {
   >{node.label || node.name}</a>;
 }
 
+function latestBusinessEvent(events = []) {
+  const semanticTypes = new Set([
+    'learning_update', 'workflow_found', 'workflow_enriched', 'node_upserted', 'node_enriched',
+    'edge_upserted', 'edge_enriched', 'persistent_data_found', 'persistent_data_enriched',
+    'condition_found', 'condition_enriched', 'exploration_started', 'exploration_complete', 'error'
+  ]);
+  return [...events].reverse().find((event) => semanticTypes.has(event.type)) || null;
+}
+
 function discoveryProgress(state) {
   if (state.status === 'idle') return 0;
   if (state.status === 'complete') return 100;
-  if (state.status === 'error') return Math.min(95, progressWhileExploring(state));
-  return progressWhileExploring(state);
+  const value = progressWhileExploring(state);
+  return state.status === 'error' ? Math.min(95, value) : value;
 }
 
 function progressWhileExploring(state) {
-  const startedTools = state.events.filter((event) => event.type === 'tool_started');
-  const semanticTypes = new Set([
-    'workflow_found', 'workflow_enriched', 'node_upserted', 'node_enriched',
-    'edge_upserted', 'edge_enriched', 'persistent_data_found', 'persistent_data_enriched',
-    'condition_found', 'condition_enriched'
-  ]);
-  const semanticEvents = state.events.filter((event) => semanticTypes.has(event.type));
+  const completedTools = state.events.filter((event) => event.type === 'tool_completed');
+  const prepareDone = completedTools.some((event) => event.tool === 'repo_prepare');
+  const searches = uniqueToolOperations(completedTools, 'repo_search', (event) => event.args?.query);
+  const reads = uniqueToolOperations(completedTools, 'repo_read_file', (event) => `${event.args?.path}:${event.args?.startLine}:${event.args?.endLine}`);
 
-  let base = 8;
-  if (startedTools.some((event) => event.tool === 'repo_prepare')) base = 14;
-  if (startedTools.some((event) => ['repo_list', 'repo_search'].includes(event.tool))) base = 22;
-  if (startedTools.some((event) => event.tool === 'repo_read_file')) base = 30;
-  if (startedTools.some((event) => event.tool?.startsWith('semantic_record_'))) base = 40;
+  const workflows = uniqueSemanticCount(state.events, ['workflow_found', 'workflow_enriched'], (event) => event.workflow?.id);
+  const concepts = uniqueSemanticCount(state.events, ['node_upserted', 'node_enriched'], (event) => event.node?.kind === 'business_concept' ? event.node?.id : null);
+  const rules = uniqueSemanticCount(state.events, ['condition_found', 'condition_enriched'], (event) => event.condition?.id);
+  const persistent = uniqueSemanticCount(state.events, ['persistent_data_found', 'persistent_data_enriched'], (event) => event.item?.id);
+  const relations = uniqueSemanticCount(state.events, ['edge_upserted', 'edge_enriched'], (event) => event.edge?.id);
 
-  return Math.min(96, base + semanticEvents.length * 4 + Math.min(12, startedTools.length));
+  let value = 6;
+  if (prepareDone) value += 12;
+  value += Math.min(12, searches * 2);
+  value += Math.min(18, reads * 3);
+  value += Math.min(18, workflows * 9);
+  value += Math.min(15, concepts * 3);
+  value += Math.min(12, rules * 4);
+  value += Math.min(10, persistent * 3);
+  value += Math.min(12, relations * 2);
+
+  return Math.min(96, value);
+}
+
+function uniqueToolOperations(events, tool, keyFn) {
+  return new Set(events.filter((event) => event.tool === tool).map(keyFn).filter(Boolean)).size;
+}
+
+function uniqueSemanticCount(events, types, keyFn) {
+  const allowed = new Set(types);
+  return new Set(events.filter((event) => allowed.has(event.type)).map(keyFn).filter(Boolean)).size;
 }
 
 function progressText(event, status) {
@@ -283,13 +308,13 @@ function progressText(event, status) {
   if (status === 'complete') return 'Business guide ready to browse.';
   if (status === 'error') return event?.message || 'Exploration needs attention.';
   if (!event) return 'Reading the application structure…';
-  if (event.type === 'tool_started' || event.type === 'model_working') return event.message || 'Following the business flow…';
+  if (event.type === 'learning_update') return event.message;
   if (['workflow_found', 'workflow_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Found'} business flow: ${event.workflow?.name || 'following it now'}…`;
   if (['persistent_data_found', 'persistent_data_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Found'} where ${event.item?.businessLabel || 'business data'} is stored…`;
   if (['condition_found', 'condition_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Found'} business rule: ${event.condition?.label || 'checking its effect'}…`;
-  if (['edge_upserted', 'edge_enriched'].includes(event.type)) return 'Connecting new evidence into the business guide…';
-  if (['node_upserted', 'node_enriched'].includes(event.type)) return `${event.reused ? 'Enriching' : 'Understanding'} ${event.node?.label || 'another part of the business'}…`;
-  return event.message || 'Following the business flow through the application…';
+  if (['edge_upserted', 'edge_enriched'].includes(event.type)) return 'Connected another part of the business story.';
+  if (['node_upserted', 'node_enriched'].includes(event.type)) return `${event.reused ? 'Enriched' : 'Learned'} ${event.node?.label || 'another business concept'}…`;
+  return event.message || 'Following the business story through the application…';
 }
 
 function pageType(kind) {
