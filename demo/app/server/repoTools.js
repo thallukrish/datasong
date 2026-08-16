@@ -10,25 +10,49 @@ const TEXT_EXTENSIONS = new Set([
 
 let workspace = null;
 let searchableFiles = [];
+let repoName = null;
 
 export async function prepareRepo(repoUrl) {
   if (workspace) await fs.rm(workspace, { recursive: true, force: true });
   workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'datasong-demo-'));
   searchableFiles = [];
+  repoName = repositoryNameFromUrl(repoUrl);
   await simpleGit().clone(repoUrl, workspace, ['--depth', '1']);
   searchableFiles = (await walk(workspace)).filter((file) => TEXT_EXTENSIONS.has(path.extname(file).toLowerCase()));
-  return { workspace, repoUrl, searchableFiles: searchableFiles.length };
+  return { workspace, repoUrl, repoName, searchableFiles: searchableFiles.length };
 }
 
 export async function listRepo(relativePath = '.') {
   ensureWorkspace();
-  const root = safeResolve(relativePath);
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  return entries.slice(0, 200).map((entry) => ({
-    name: entry.name,
-    path: path.relative(workspace, path.join(root, entry.name)).replaceAll('\\', '/'),
-    type: entry.isDirectory() ? 'directory' : 'file'
-  }));
+  const normalizedPath = normalizeRepoPath(relativePath);
+  const root = safeResolve(normalizedPath);
+
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    return {
+      path: normalizedPath,
+      entries: entries.slice(0, 200).map((entry) => ({
+        name: entry.name,
+        path: path.relative(workspace, path.join(root, entry.name)).replaceAll('\\', '/'),
+        type: entry.isDirectory() ? 'directory' : 'file'
+      }))
+    };
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
+
+    const rootEntries = await fs.readdir(workspace, { withFileTypes: true });
+    return {
+      path: normalizedPath,
+      error: `Repository path not found: ${relativePath}`,
+      hint: 'The submitted repository is already cloned at the repository root. Use "." or one of the returned root paths instead of prefixing paths with the repository name.',
+      repoName,
+      rootEntries: rootEntries.slice(0, 100).map((entry) => ({
+        name: entry.name,
+        path: entry.name,
+        type: entry.isDirectory() ? 'directory' : 'file'
+      }))
+    };
+  }
 }
 
 export async function searchRepo(query, maxResults = 30) {
@@ -59,13 +83,14 @@ export async function searchRepo(query, maxResults = 30) {
 
 export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
   ensureWorkspace();
-  const file = safeResolve(relativePath);
+  const normalizedPath = normalizeRepoPath(relativePath);
+  const file = safeResolve(normalizedPath);
   const text = await fs.readFile(file, 'utf8');
   const lines = text.split('\n');
   const from = Math.max(1, startLine);
   const to = Math.min(lines.length, Math.max(from, endLine));
   return {
-    path: relativePath,
+    path: normalizedPath,
     startLine: from,
     endLine: to,
     totalLines: lines.length,
@@ -77,10 +102,33 @@ function ensureWorkspace() {
   if (!workspace) throw new Error('Repository not prepared. Call repo_prepare first.');
 }
 
+function normalizeRepoPath(relativePath = '.') {
+  let value = String(relativePath || '.').trim().replaceAll('\\', '/');
+  value = value.replace(/^\.\//, '').replace(/^\/+/, '');
+
+  if (!value || value === '.' || value === repoName) return '.';
+
+  if (repoName) {
+    const lower = value.toLowerCase();
+    const prefix = `${repoName.toLowerCase()}/`;
+    if (lower.startsWith(prefix)) value = value.slice(repoName.length + 1);
+  }
+
+  return value || '.';
+}
+
 function safeResolve(relativePath) {
+  const root = path.resolve(workspace);
   const resolved = path.resolve(workspace, relativePath);
-  if (!resolved.startsWith(path.resolve(workspace))) throw new Error('Path escapes repository workspace');
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Path escapes repository workspace');
   return resolved;
+}
+
+function repositoryNameFromUrl(repoUrl = '') {
+  const cleaned = String(repoUrl).replace(/[?#].*$/, '').replace(/\/$/, '');
+  const tail = cleaned.split('/').pop() || '';
+  return tail.replace(/\.git$/i, '') || null;
 }
 
 async function walk(root) {
