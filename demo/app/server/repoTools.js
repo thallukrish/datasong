@@ -134,11 +134,53 @@ export async function readRepoFile(relativePath, startLine = 1, endLine = 240) {
   ensureWorkspace();
   const normalizedPath = normalizeRepoPath(relativePath);
   const file = safeResolve(normalizedPath);
+
+  let stat;
+  try {
+    stat = await fs.stat(file);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    return {
+      ok: false,
+      error: 'path_not_found',
+      path: normalizedPath,
+      requestedPath: relativePath,
+      suggestion: 'Search for the symbol or list the nearest known parent directory before reading a file.'
+    };
+  }
+
+  if (stat.isDirectory()) {
+    const entries = await fs.readdir(file, { withFileTypes: true });
+    return {
+      ok: false,
+      error: 'path_is_directory',
+      path: normalizedPath,
+      requestedPath: relativePath,
+      suggestion: `Do not read '${normalizedPath}' as a file. Choose one file below it or request a directory listing.`,
+      entries: entries.slice(0, 120).map((entry) => ({
+        name: entry.name,
+        path: path.relative(workspace, path.join(file, entry.name)).replaceAll('\\', '/'),
+        type: entry.isDirectory() ? 'directory' : 'file'
+      }))
+    };
+  }
+
+  if (!stat.isFile()) {
+    return {
+      ok: false,
+      error: 'path_not_regular_file',
+      path: normalizedPath,
+      requestedPath: relativePath,
+      suggestion: 'Choose a regular text file returned by repository search or listing.'
+    };
+  }
+
   const text = await fs.readFile(file, 'utf8');
   const lines = text.split('\n');
   const from = Math.max(1, startLine);
   const to = Math.min(lines.length, Math.max(from, endLine));
   return {
+    ok: true,
     path: normalizedPath,
     requestedPath: relativePath,
     startLine: from,
