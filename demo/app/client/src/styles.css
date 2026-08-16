@@ -21,7 +21,11 @@ button { cursor: pointer; }
 .setup textarea, .setup input { width: 100%; border: 1px solid #d2d2d7; background: #fff; border-radius: 12px; padding: 13px 15px; color: #1d1d1f; outline: none; box-shadow: 0 1px 2px #00000008; }
 .setup textarea { resize: vertical; line-height: 1.45; }
 .setup textarea:focus, .setup input:focus { border-color: #86868b; box-shadow: 0 0 0 3px #0000000a; }
-.setup button { justify-self: center; border: 0; border-radius: 999px; padding: 11px 24px; font-weight: 600; background: #1d1d1f; color: white; }
+.setup-actions { display: flex; justify-content: center; align-items: center; gap: 14px; }
+.setup button { border: 0; border-radius: 999px; padding: 11px 24px; font-weight: 600; }
+.setup .explore-button { background: #1d1d1f; color: white; }
+.setup .reset-button { background: transparent; color: #86868b; padding-left: 8px; padding-right: 8px; font-size: 12px; }
+.setup .reset-button:hover { color: #1d1d1f; text-decoration: underline; }
 .setup button:disabled { opacity: .5; cursor: default; }
 
 .discovery-strip { width: min(980px, calc(100% - 64px)); margin: 24px auto 32px; }
