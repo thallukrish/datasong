@@ -72,45 +72,55 @@ async function explore({ businessDescription, repoUrl, priorKnowledge }) {
     args: { repoUrl },
     resultPreview: preview(repoPreparation)
   });
+  semanticStore.emit({
+    type: 'learning_update',
+    message: repoPreparation.currentCommit === repoPreparation.previousCommit
+      ? 'The source has not changed. Reusing the business knowledge already validated against this commit.'
+      : repoPreparation.previousCommit
+        ? `The source changed in ${repoPreparation.changedFiles?.length || 0} file(s). Rechecking only the affected business knowledge.`
+        : 'No prior source version was available. Building the first validated business guide for this repository.'
+  });
   broadcast();
 
   const instructions = `
 You are DataSong examining how a business works by reading its application repository.
 
-This demo is NOT a generic architecture scan. Build a connected, understandable business knowledge base starting with:
-"What happens when a customer places an order?"
+DataSong builds a browsable enterprise story. The fundamental unit called a WORKFLOW has a strict business meaning:
+- A workflow is one end-to-end conversation/story slice in the enterprise that accomplishes ONE concrete customer or business use case.
+- It starts with a business trigger or intent and ends with a recognizable business/customer outcome.
+- It is NOT a function, service call, branch, helper, entity operation, or arbitrary code path.
+- A workflow must connect directly to the immediate canonical business concepts it acts on, the business rules that govern it, the durable data it uses, and any next workflow it directly triggers or hands off to.
+- Smaller implementation steps stay inside the workflow narrative/evidence. They do not become workflows merely because they are separate functions.
 
-Initial story boundary:
-Customer -> Sales Order -> Order Items -> Product -> inventory decision/check -> order placement/approval.
-Once an already-known slice is trustworthy, prefer extending the knowledge base into the next connected business flow rather than rediscovering it.
+Example workflow: "Customer places an order".
+Trigger: a customer starts or resumes a cart and chooses to buy products.
+Outcome: a Sales Order is placed/approved and ready for the next business process.
+Immediate concepts may include Customer, Sales Order, Order Item and Product. Rules may include inventory requirements or approval rules. A next workflow may be Order fulfillment.
+
+Start from the business use case "What happens when a customer places an order?" and extend into the next connected end-to-end use cases only when the current one is already known and trustworthy.
 
 The repository has ALREADY been prepared before this model call. You are given the authoritative preparation result containing currentCommit, previousCommit, changedFiles and knowledgeReuse. Do NOT call repo_prepare again.
 
 Rules:
-1. Treat the supplied repoPreparation.knowledgeReuse as authoritative incremental-discovery guidance:
-   - reusable: existing semantic items whose supporting evidence is unchanged. Reuse them as-is. DO NOT re-read their evidence or re-record them merely to confirm them.
-   - needsReview: existing semantic items whose evidence changed, whose provenance is missing, or whose Git comparison could not be proven. Re-read only the evidence needed to validate/update these.
-2. If currentCommit equals previousCommit, do not rediscover already-known items. Move directly to missing knowledge or the next connected workflow.
-3. If the commit changed, focus repository inspection on changed files that affect needsReview items, plus new code needed for a new connected workflow. Do not crawl unaffected evidence files.
-4. Think like a business/process analyst examining an unfamiliar company, not like a graph-database tool.
-5. Visible labels MUST be stable plain-English business names: Customer, Sales Order, Order Item, Product, Inventory required?, Stock available?, Order approval. Never use a raw class/service/entity/variable name as the visible label when a business phrase is possible.
-6. MAINTAIN A CANONICAL BUSINESS GLOSSARY. Before recording a new business concept, ask whether it is actually the same durable business thing as something already recorded.
-7. If multiple code terms, variables, statuses or runtime representations refer to the same durable business object, DO NOT create separate wiki concepts. Reuse the existing concept id and canonical label, and add implementation terms to technicalNames/evidence instead.
-8. A state or role difference should become a separate concept only when it has genuinely different business identity, persistence, lifecycle or relationships. Otherwise describe it as a state/condition on the canonical concept.
-9. Persistence identity is strong evidence for canonicalization: if two runtime/code names resolve to the same persistent entity and business record identity, normally use one canonical business concept. Exact table/entity names remain separately recorded as persistent-data provenance.
-10. Keep exact implementation names in technicalNames, technicalName, fields and evidence. Runtime variables, service parameters and local object names belong there, not in the visible glossary.
-11. Every newly recorded story object must connect to the business story. Do not create isolated concepts, services, datasets or conditions.
-12. Record a relation immediately whenever you add a new story object and evidence supports the connection.
-13. Do not add services/functions as primary visible nodes unless they represent a meaningful business step that cannot be expressed otherwise. Prefer keeping services in technicalNames/evidence.
-14. Distinguish runtime/transient values from durable data. Only use semantic_record_persistent_data when repository evidence shows a persistent entity/table/database read or write.
-15. When persistent data is found, explain what it represents in this business story, keep the exact entity/table name, and connect it to the canonical business concept/workflow it supports.
-16. Record important business decisions/branches when code/config/data controls whether the path continues, changes or stops. Use business wording for the rule; preserve code expressions underneath.
-17. Static/symbolic reasoning is sufficient for config/data branches. Runtime simulation is not required.
-18. Never invent evidence. Evidence should include repository-relative path plus symbol/service/line context where possible. Repository-relative file paths are important because DataSong stores them as semantic provenance.
-19. Prefer targeted search and bounded file reads. Do not dump the whole repository.
-20. Before semantic_complete, review the glossary for duplicate concepts/synonyms and consolidate them by reusing/updating canonical ids wherever the evidence says they are the same business thing.
-21. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
-22. Make progress in small tool-driven steps. Do not spend a long turn composing prose while more repository evidence is needed.
+1. Treat repoPreparation.knowledgeReuse as authoritative incremental-discovery guidance. Reuse items under reusable without rereading/re-recording them. Re-read only items under needsReview or evidence needed for genuinely new connected workflows.
+2. If currentCommit equals previousCommit, move directly to missing knowledge or the next connected workflow instead of rediscovering known facts.
+3. If the commit changed, focus on changed files that affect needsReview items plus new code needed for a new connected workflow.
+4. Think like a business/process analyst, not like a graph-database or code-documentation tool.
+5. Every semantic_record_workflow call MUST describe a complete use case with trigger, outcome, immediate conceptIds, ruleIds and nextWorkflowIds. Record the referenced concepts/rules first when they are new.
+6. A workflow with no immediate business concepts is incomplete. A workflow should normally have multiple first-level business connections.
+7. Workflows connect to other workflows only where one directly triggers/hands off to the other. Do not connect them merely because they are vaguely related.
+8. Visible labels MUST be stable plain-English business names. Never use a raw class/service/entity/variable name as a visible label when a business phrase is possible.
+9. Maintain a canonical business glossary. Multiple code terms, variables, statuses or runtime representations of the same durable business object reuse one canonical concept id/label; implementation terms go in technicalNames/evidence.
+10. Persistence identity is strong evidence for canonicalization. Exact table/entity names remain persistent-data provenance rather than duplicate business concepts.
+11. Every newly recorded concept, rule or persistent dataset must attach to a workflow or another meaningful business relationship immediately.
+12. Persistent data must be recorded only when the repository proves a durable database/entity read or write; attach it to workflowId.
+13. Business rules/conditions must identify workflowId so they remain visibly attached to the use case they govern.
+14. Static/symbolic reasoning is sufficient for config/data branches. Runtime simulation is not required.
+15. Never invent evidence. Evidence should include repository-relative path plus symbol/service/line context where possible.
+16. Prefer targeted search and bounded file reads. Do not dump the whole repository.
+17. Before semantic_complete, verify every newly recorded workflow has a trigger, outcome and visible first-level connections in the semantic map.
+18. Finish with a short plain-English summary of what was reused, what changed, and what new business knowledge was added.
+19. Make progress in small tool-driven steps. Do not spend a long turn composing prose while more repository evidence is needed.
 `;
 
   const tools = toChatCompletionTools(modelTools.filter((tool) => tool.name !== 'repo_prepare'));
@@ -118,7 +128,7 @@ Rules:
     { role: 'system', content: instructions },
     {
       role: 'user',
-      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExisting DataSong knowledge:\n${JSON.stringify(priorKnowledge, null, 2)}\n\nRepository preparation result:\n${JSON.stringify(repoPreparation, null, 2)}\n\nObey the knowledgeReuse plan above. Reuse unchanged semantic items without rediscovering them; re-check only affected items; then extend the business guide with missing or next connected workflows where useful.`
+      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nExisting DataSong knowledge:\n${JSON.stringify(priorKnowledge, null, 2)}\n\nRepository preparation result:\n${JSON.stringify(repoPreparation, null, 2)}\n\nObey the knowledgeReuse plan. Build/extend complete end-to-end workflows, not code fragments. Reuse unchanged knowledge, re-check only affected items, then extend the business guide with the next missing connected use case where useful.`
     }
   ];
 
@@ -127,12 +137,6 @@ Rules:
 
   for (let round = 0; round < 40; round += 1) {
     const roundNo = round + 1;
-    semanticStore.emit({
-      type: 'model_request_started',
-      round: roundNo,
-      message: `Asking DeepSeek what to do next (round ${roundNo})…`
-    });
-    broadcast();
     console.log(`[DataSong] DeepSeek round ${roundNo} started`);
 
     const response = await withTimeout(
@@ -153,15 +157,6 @@ Rules:
     if (!message) throw new Error(`DeepSeek returned no assistant message on round ${roundNo}`);
 
     const calls = message.tool_calls || [];
-    semanticStore.emit({
-      type: 'model_response_received',
-      round: roundNo,
-      toolCallCount: calls.length,
-      message: calls.length
-        ? `DeepSeek chose ${calls.length} next step${calls.length === 1 ? '' : 's'} (round ${roundNo}).`
-        : `DeepSeek finished its reasoning (round ${roundNo}).`
-    });
-    broadcast();
     console.log(`[DataSong] DeepSeek round ${roundNo} returned ${calls.length} tool call(s), finish=${choice?.finish_reason || 'unknown'}`);
 
     messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls });
@@ -196,6 +191,8 @@ Rules:
 
       const result = await executeTool(name, args);
       semanticStore.emit({ type: 'tool_completed', tool: name, args, resultPreview: preview(result) });
+      const learned = learningMessage(name, args, result);
+      if (learned) semanticStore.emit({ type: 'learning_update', message: learned });
       broadcast();
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
     }
@@ -208,24 +205,44 @@ Rules:
 
 function toolProgressText(name, args) {
   if (name === 'repo_list') return `Looking through ${args.path || 'the application structure'}…`;
-  if (name === 'repo_search') return `Searching for how the business handles ${humanizeQuery(args.query)}…`;
-  if (name === 'repo_read_file') return `Reading the part of the application that explains ${shortPath(args.path)}…`;
-  if (name === 'semantic_record_workflow') return `Updating the business story: ${args.name || 'business flow'}…`;
-  if (name === 'semantic_record_node') return `Understanding ${args.label || 'another part of the business'}…`;
+  if (name === 'repo_search') return `Searching for evidence about ${humanizeQuery(args.query)}…`;
+  if (name === 'repo_read_file') return `Reading evidence in ${shortPath(args.path)}…`;
+  if (name === 'semantic_record_workflow') return `Writing the end-to-end workflow: ${args.name || 'business flow'}…`;
+  if (name === 'semantic_record_node') return `Understanding ${args.label || 'another business concept'}…`;
   if (name === 'semantic_record_relation') return 'Connecting two parts of the business story…';
-  if (name === 'semantic_record_persistent_data') return `Finding where ${args.businessLabel || 'business data'} is stored…`;
-  if (name === 'semantic_record_condition') return `Understanding the rule: ${args.label || 'what changes the path'}…`;
+  if (name === 'semantic_record_persistent_data') return `Tracing where ${args.businessLabel || 'business data'} is stored…`;
+  if (name === 'semantic_record_condition') return `Understanding the business rule: ${args.label || 'what changes the path'}…`;
   if (name === 'semantic_complete') return 'Saving the updated business guide against this repository version…';
-  return 'Following the business flow…';
+  return 'Following the business story…';
+}
+
+function learningMessage(name, args, result) {
+  if (name === 'repo_search') {
+    const count = Array.isArray(result) ? result.length : 0;
+    return count ? `Found ${count} source clue${count === 1 ? '' : 's'} about ${humanizeQuery(args.query)}.` : null;
+  }
+  if (name === 'repo_read_file') return `Found source evidence in ${shortPath(args.path)}.`;
+  if (name === 'semantic_record_workflow') return `Learned business flow: ${args.name} — ${args.outcome}`;
+  if (name === 'semantic_record_node') return `Learned what ${args.label} means in this business.`;
+  if (name === 'semantic_record_relation') {
+    const snapshot = semanticStore.snapshot();
+    const source = snapshot.nodes.find((node) => node.id === args.source)?.label || args.source;
+    const target = snapshot.nodes.find((node) => node.id === args.target)?.label || args.target;
+    return `Learned: ${source} ${args.relation} ${target}.`;
+  }
+  if (name === 'semantic_record_persistent_data') return `Learned where ${args.businessLabel} is persisted: ${args.technicalName}.`;
+  if (name === 'semantic_record_condition') return `Learned business rule: ${args.label}`;
+  if (name === 'semantic_complete') return result?.message || args.summary;
+  return null;
 }
 
 function humanizeQuery(query = '') {
-  return query.replace(/[#_]/g, ' ').trim() || 'the next step';
+  return query.replace(/[#_]/g, ' ').trim() || 'the next business step';
 }
 
 function shortPath(file = '') {
   const parts = file.split('/');
-  return parts[parts.length - 1] || 'this step';
+  return parts[parts.length - 1] || 'this source file';
 }
 
 function toChatCompletionTools(tools) {
