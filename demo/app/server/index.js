@@ -6,8 +6,13 @@ import { semanticStore } from './store.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3101);
-const model = process.env.OPENAI_MODEL || 'gpt-5.6';
-const openai = process.env.OPENAI_API_KEY ? new OpenAI() : null;
+const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const deepseek = process.env.DEEPSEEK_API_KEY
+  ? new OpenAI({
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseURL: 'https://api.deepseek.com'
+    })
+  : null;
 const clients = new Set();
 
 app.use(cors());
@@ -28,7 +33,7 @@ app.get('/api/events', (req, res) => {
 app.post('/api/explore', async (req, res) => {
   const { businessDescription, repoUrl } = req.body || {};
   if (!businessDescription || !repoUrl) return res.status(400).json({ error: 'businessDescription and repoUrl are required' });
-  if (!openai) return res.status(400).json({ error: 'OPENAI_API_KEY is not configured' });
+  if (!deepseek) return res.status(400).json({ error: 'DEEPSEEK_API_KEY is not configured' });
 
   semanticStore.begin({ businessDescription, repoUrl });
   broadcast();
@@ -65,48 +70,77 @@ Critical rules:
 10. Finish with semantic_complete.
 `;
 
-  let response = await openai.responses.create({
-    model,
-    instructions,
-    tools: modelTools,
-    tool_choice: 'auto',
-    input: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nBegin by preparing the repo, then explore it and build the semantic map.`
-  });
+  const tools = toChatCompletionTools(modelTools);
+  const messages = [
+    { role: 'system', content: instructions },
+    {
+      role: 'user',
+      content: `Business description:\n${businessDescription}\n\nRepository:\n${repoUrl}\n\nBegin by preparing the repo, then explore it and build the semantic map.`
+    }
+  ];
 
   for (let round = 0; round < 80; round += 1) {
-    const calls = response.output.filter((item) => item.type === 'function_call');
+    const response = await deepseek.chat.completions.create({
+      model,
+      messages,
+      tools,
+      tool_choice: 'auto'
+    });
+
+    const message = response.choices?.[0]?.message;
+    if (!message) throw new Error('DeepSeek returned no assistant message');
+
+    messages.push({
+      role: 'assistant',
+      content: message.content ?? null,
+      tool_calls: message.tool_calls
+    });
+
+    const calls = message.tool_calls || [];
     if (!calls.length) {
-      if (semanticStore.state.status !== 'complete') semanticStore.complete(response.output_text || 'Exploration complete');
+      if (semanticStore.state.status !== 'complete') {
+        semanticStore.complete(message.content || 'Exploration complete');
+      }
       broadcast();
       return;
     }
 
-    const outputs = [];
     for (const call of calls) {
-      const args = JSON.parse(call.arguments || '{}');
-      const result = await executeTool(call.name, args);
-      semanticStore.emit({ type: 'tool_completed', tool: call.name, args, resultPreview: preview(result) });
+      const name = call.function?.name;
+      const args = JSON.parse(call.function?.arguments || '{}');
+      const result = await executeTool(name, args);
+
+      semanticStore.emit({
+        type: 'tool_completed',
+        tool: name,
+        args,
+        resultPreview: preview(result)
+      });
       broadcast();
-      outputs.push({
-        type: 'function_call_output',
-        call_id: call.call_id,
-        output: JSON.stringify(result)
+
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: JSON.stringify(result)
       });
     }
 
     if (semanticStore.state.status === 'complete') return;
-
-    response = await openai.responses.create({
-      model,
-      previous_response_id: response.id,
-      tools: modelTools,
-      tool_choice: 'auto',
-      input: outputs
-    });
   }
 
   semanticStore.complete('Stopped after exploration safety limit');
   broadcast();
+}
+
+function toChatCompletionTools(tools) {
+  return tools.map((tool) => ({
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters
+    }
+  }));
 }
 
 function preview(value) {
@@ -121,4 +155,5 @@ function broadcast() {
 
 app.listen(port, () => {
   console.log(`DataSong demo server listening on http://localhost:${port}`);
+  console.log(`Model: ${model} via DeepSeek API`);
 });
