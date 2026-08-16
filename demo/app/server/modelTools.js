@@ -28,17 +28,22 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_workflow',
-    description: 'Record or enrich the current business workflow using a plain-English name and story. Reuse a known canonical id when the workflow already exists. Keep implementation names in technicalNames/evidence.',
+    description: 'Record or enrich one end-to-end enterprise story slice that accomplishes a concrete customer or business use case. A workflow has a clear trigger/start, a business outcome, immediate business concepts it acts on, governing rules, and optionally the next workflows it triggers. It is not merely a function, service, branch, or arbitrary code path.',
     parameters: {
       type: 'object',
       properties: {
         id: { type: 'string' },
-        name: { type: 'string', description: 'Plain-English business name, e.g. Customer places an order.' },
-        description: { type: 'string', description: 'Short human-readable explanation of what happens in the business.' },
+        name: { type: 'string', description: 'Plain-English end-to-end use case, e.g. Customer places an order.' },
+        trigger: { type: 'string', description: 'What starts this business use case, in business language.' },
+        outcome: { type: 'string', description: 'The business/customer outcome when this workflow completes.' },
+        description: { type: 'string', description: 'Readable end-to-end explanation from trigger to outcome.' },
+        conceptIds: { type: 'array', items: { type: 'string' }, description: 'Canonical business concepts immediately involved in this workflow.' },
+        ruleIds: { type: 'array', items: { type: 'string' }, description: 'Business rules/conditions that directly govern this workflow.' },
+        nextWorkflowIds: { type: 'array', items: { type: 'string' }, description: 'Known workflows this workflow directly triggers or hands off to. Use [] if not yet known.' },
         technicalNames: { type: 'array', items: { type: 'string' } },
         evidence: { type: 'array', items: { type: 'string' } }
       },
-      required: ['id', 'name', 'description', 'technicalNames', 'evidence'], additionalProperties: false
+      required: ['id', 'name', 'trigger', 'outcome', 'description', 'conceptIds', 'ruleIds', 'nextWorkflowIds', 'technicalNames', 'evidence'], additionalProperties: false
     }
   },
   {
@@ -71,7 +76,7 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_persistent_data',
-    description: 'Record or enrich durable business data encountered through a database/entity read or write. Give it a human businessLabel and preserve the exact entity/table in technicalName.',
+    description: 'Record or enrich durable business data encountered through a database/entity read or write. Give it a human businessLabel and preserve the exact entity/table in technicalName. It must be attached to the workflow in which it is used.',
     parameters: {
       type: 'object',
       properties: {
@@ -89,11 +94,12 @@ export const modelTools = [
   },
   {
     type: 'function', name: 'semantic_record_condition',
-    description: 'Record or enrich a business rule or decision point that changes the current workflow path. The visible label must be understandable without seeing code.',
+    description: 'Record or enrich a business rule or decision point that changes a workflow path. It must identify the workflow it governs.',
     parameters: {
       type: 'object',
       properties: {
         id: { type: 'string' },
+        workflowId: { type: 'string', description: 'The end-to-end workflow directly governed by this rule.' },
         label: { type: 'string', description: 'Plain-English question such as Inventory required?' },
         expression: { type: 'string', description: 'Technical expression/config behind the decision.' },
         driver: { type: 'string', enum: ['config', 'data', 'runtime', 'unknown'] },
@@ -101,12 +107,12 @@ export const modelTools = [
         technicalNames: { type: 'array', items: { type: 'string' } },
         evidence: { type: 'array', items: { type: 'string' } }
       },
-      required: ['id', 'label', 'expression', 'driver', 'truePath', 'falsePath', 'technicalNames', 'evidence'], additionalProperties: false
+      required: ['id', 'workflowId', 'label', 'expression', 'driver', 'truePath', 'falsePath', 'technicalNames', 'evidence'], additionalProperties: false
     }
   },
   {
     type: 'function', name: 'semantic_complete',
-    description: 'Finish only after the current business story is connected end-to-end and its important persistent data and branch conditions are attached to that story.',
+    description: 'Finish only after every newly recorded workflow has a clear trigger/outcome and at least one immediate business connection, with important persistent data and branch conditions attached to the appropriate workflow.',
     parameters: { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false }
   }
 ];
@@ -128,10 +134,22 @@ export async function executeTool(name, args) {
         label: args.name,
         kind: 'workflow',
         description: args.description,
+        trigger: args.trigger,
+        outcome: args.outcome,
         technicalNames: args.technicalNames,
         evidence: args.evidence
       });
-      return semanticStore.addWorkflow(args);
+      const workflowEvent = semanticStore.addWorkflow(args);
+      for (const conceptId of args.conceptIds || []) {
+        semanticStore.upsertEdge({ source: args.id, target: conceptId, relation: 'involves', confidence: 1, evidence: args.evidence });
+      }
+      for (const ruleId of args.ruleIds || []) {
+        semanticStore.upsertEdge({ source: args.id, target: ruleId, relation: 'governed by', confidence: 1, evidence: args.evidence });
+      }
+      for (const nextWorkflowId of args.nextWorkflowIds || []) {
+        semanticStore.upsertEdge({ source: args.id, target: nextWorkflowId, relation: 'may trigger', confidence: 0.9, evidence: args.evidence });
+      }
+      return workflowEvent;
     }
     case 'semantic_record_node': return semanticStore.upsertNode(args);
     case 'semantic_record_relation': return semanticStore.upsertEdge(args);
@@ -144,7 +162,9 @@ export async function executeTool(name, args) {
         technicalNames: [args.technicalName],
         evidence: args.evidence
       });
-      return semanticStore.addPersistentData(args);
+      const event = semanticStore.addPersistentData(args);
+      semanticStore.upsertEdge({ source: args.workflowId, target: args.id, relation: 'uses data', confidence: 1, evidence: args.evidence });
+      return event;
     }
     case 'semantic_record_condition': {
       semanticStore.upsertNode({
@@ -155,7 +175,9 @@ export async function executeTool(name, args) {
         technicalNames: args.technicalNames,
         evidence: args.evidence
       });
-      return semanticStore.addCondition(args);
+      const event = semanticStore.addCondition(args);
+      semanticStore.upsertEdge({ source: args.workflowId, target: args.id, relation: 'governed by', confidence: 1, evidence: args.evidence });
+      return event;
     }
     case 'semantic_complete': return semanticStore.complete(args.summary);
     default: throw new Error(`Unknown tool: ${name}`);
