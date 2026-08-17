@@ -8,7 +8,7 @@
     :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#151515; background:#f5f6f7; }
     * { box-sizing:border-box; }
     body { margin:0; }
-    main { max-width:1120px; margin:0 auto; padding:38px 22px 80px; }
+    main { max-width:1100px; margin:0 auto; padding:38px 22px 80px; }
     h1 { margin:0; font-size:34px; letter-spacing:-1px; }
     .subtitle { color:#666; margin:8px 0 28px; }
     .panel { background:white; border:1px solid #e4e6e8; border-radius:18px; padding:20px; margin-bottom:18px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
@@ -18,7 +18,7 @@
     button:disabled { opacity:.45; cursor:default; }
     .meta { display:flex; gap:18px; flex-wrap:wrap; color:#666; font-size:14px; }
     .status { margin-top:14px; font-size:16px; }
-    .stories { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:14px; }
+    .stories { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; }
     .story { background:#fff; border:1px solid #e4e6e8; border-radius:16px; padding:18px; }
     .story-head { display:flex; justify-content:space-between; gap:12px; align-items:start; }
     .story-title { font-weight:750; font-size:18px; }
@@ -26,12 +26,9 @@
     .pct { font-variant-numeric:tabular-nums; font-weight:750; }
     .bar { height:8px; background:#eceeef; border-radius:99px; overflow:hidden; margin:13px 0; }
     .fill { height:100%; background:#34a853; transition:width .3s ease; }
-    .step { position:relative; padding:8px 0 8px 18px; border-left:2px solid #e7e9eb; margin-left:4px; }
-    .step:before { content:""; position:absolute; left:-5px; top:14px; width:8px; height:8px; border-radius:50%; background:#777; }
-    .step-main { line-height:1.4; font-size:14px; }
-    .bridge { color:#777; font-size:12px; margin-top:3px; line-height:1.35; }
-    .scores { color:#aaa; font-size:11px; margin-top:3px; }
+    .narrative { line-height:1.45; color:#333; font-size:14px; }
     .branch { display:grid; grid-template-columns:1fr auto; gap:8px; padding:7px 0; border-top:1px solid #f0f1f2; font-size:13px; }
+    .branch:first-child { margin-top:10px; }
     .smallbar { height:5px; background:#eceeef; border-radius:99px; overflow:hidden; margin-top:4px; }
     .smallfill { height:100%; background:#777; }
     .deps, .gaps { margin-top:12px; font-size:13px; color:#555; }
@@ -39,13 +36,18 @@
     .artifact { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; color:#555; overflow-wrap:anywhere; }
     .empty { color:#8b8b8b; padding:24px 0; }
     .token { font-variant-numeric:tabular-nums; }
-    .tag { display:inline-block; font-size:10px; padding:2px 5px; border:1px solid #ddd; border-radius:99px; color:#777; margin-left:5px; vertical-align:1px; }
+    .step-row { position:relative; padding:0 0 16px 20px; font-size:13px; }
+    .step-row:before { content:""; position:absolute; left:3px; top:6px; width:7px; height:7px; border-radius:50%; background:#8b8b8b; }
+    .step-row:after { content:""; position:absolute; left:6px; top:13px; bottom:0; width:1px; background:#ddd; }
+    .step-row:last-child:after { display:none; }
+    .step-bridge { color:#666; margin-top:3px; }
+    .scores { color:#999; font-size:11px; margin-top:4px; }
   </style>
 </head>
 <body>
 <main>
   <h1>DataSong v2</h1>
-  <div class="subtitle">Semantic exploration over code topology — artifacts are fitted into ordered stories as evidence emerges.</div>
+  <div class="subtitle">Semantic exploration over code topology — orientation stays separate while coherent stories emerge from behavior.</div>
 
   <div class="panel">
     <form id="form">
@@ -55,6 +57,7 @@
     <div class="meta" style="margin-top:16px">
       <span>Status: <b id="status">idle</b></span>
       <span>Step: <b id="step">0</b></span>
+      <span>Orientation: <b id="orientation">0</b></span>
       <span class="token">Tokens: <b id="tokens">0</b></span>
       <span class="token">Prompt: <b id="promptTokens">0</b></span>
       <span class="token">Completion: <b id="completionTokens">0</b></span>
@@ -68,6 +71,7 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const esc = (s='') => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  let state = {};
 
   $('form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -83,10 +87,11 @@
   const events = new EventSource('/api/events');
   events.onmessage = (event) => render(JSON.parse(event.data));
 
-  function render(state) {
-    state = state || {};
+  function render(next) {
+    state = next || {};
     $('status').textContent = state.status || 'idle';
     $('step').textContent = state.step || 0;
+    $('orientation').textContent = (state.orientation || []).length;
     $('tokens').textContent = state.tokenUsage?.total || 0;
     $('promptTokens').textContent = state.tokenUsage?.prompt || 0;
     $('completionTokens').textContent = state.tokenUsage?.completion || 0;
@@ -96,7 +101,7 @@
 
     const stories = state.stories || [];
     if (!stories.length) {
-      $('stories').innerHTML = '<div class="empty">No semantic story has crystallized yet.</div>';
+      $('stories').innerHTML = '<div class="empty">Orienting in the evidence world; no coherent story has crystallized yet.</div>';
       return;
     }
     $('stories').innerHTML = stories.map(renderStory).join('');
@@ -104,12 +109,11 @@
 
   function renderStory(story) {
     const steps = (story.steps || []).map((s) => `
-      <div class="step">
-        <div class="step-main">${esc(s.meaning || 'Observed step')}${s.relation && s.relation !== 'continue' ? `<span class="tag">${esc(s.relation)}</span>` : ''}</div>
-        ${s.bridge ? `<div class="bridge">${esc(s.bridge)}</div>` : ''}
+      <div class="step-row">
+        <div>${esc(s.meaning || s.artifactPath || '')}</div>
+        ${s.bridge ? `<div class="step-bridge">${esc(s.bridge)}</div>` : ''}
         <div class="scores">continuity ${Math.round((Number(s.continuity)||0)*100)}% · placement ${Math.round((Number(s.placementConfidence)||0)*100)}% · coherence +${Math.round((Number(s.coherenceGain)||0)*100)}%</div>
       </div>`).join('');
-
     const branches = (story.branches || []).map((b) => `
       <div class="branch">
         <div>
@@ -118,10 +122,8 @@
         </div>
         <div>${Number(b.progress)||0}%</div>
       </div>`).join('');
-
     const deps = (story.dependencies || []).map((d) => `${esc(d.label)} <span style="color:#999">[${esc(d.scope)}]</span>${d.contract ? ` — ${esc(d.contract)}` : ''}`).join('<br>');
-    const gaps = (story.openQuestions || []).map((g) => `• ${esc(g)}`).join('<br>');
-
+    const gaps = (story.openQuestions || []).map((q) => `• ${esc(q?.text || q)}`).join('<br>');
     return `
       <article class="story">
         <div class="story-head">
