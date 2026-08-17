@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ProgressiveRepositoryTopologyV3 } from './progressiveRepositoryTopologyV3.js';
-import { ProgressiveRepositoryExplorerV3 } from './progressiveRepositoryExplorerV3.js';
+import { ProgressiveRepositoryTopologyV4 } from './progressiveRepositoryTopologyV4.js';
+import { ProgressiveRepositoryExplorerV4 } from './progressiveRepositoryExplorerV4.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,8 +11,8 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new ProgressiveRepositoryTopologyV3({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV3({
+const topology = new ProgressiveRepositoryTopologyV4({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new ProgressiveRepositoryExplorerV4({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] progressive repository browser → semantic traversal; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] progressive repository browser → proto threads → semantic traversal; detailed traces go to data/runs/*.jsonl');
 });
