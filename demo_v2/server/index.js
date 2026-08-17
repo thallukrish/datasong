@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CodeTopology } from './topology.js';
-import { SemanticExplorer } from './explorer.js';
+import { VerticalSliceExplorer } from './verticalSliceExplorer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new CodeTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new SemanticExplorer({
+const explorer = new VerticalSliceExplorer({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
