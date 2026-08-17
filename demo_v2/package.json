@@ -1,0 +1,14 @@
+{
+  "name": "datasong-semantic-explorer-v2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server/index.js",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "openai": "^5.12.2",
+    "simple-git": "^3.28.0"
+  }
+}

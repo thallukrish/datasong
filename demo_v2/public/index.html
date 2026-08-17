@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DataSong v2 — Semantic Explorer</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#151515; background:#f5f6f7; }
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    main { max-width:1100px; margin:0 auto; padding:38px 22px 80px; }
+    h1 { margin:0; font-size:34px; letter-spacing:-1px; }
+    .subtitle { color:#666; margin:8px 0 28px; }
+    .panel { background:white; border:1px solid #e4e6e8; border-radius:18px; padding:20px; margin-bottom:18px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
+    form { display:flex; gap:10px; }
+    input { flex:1; border:1px solid #d7dadd; border-radius:11px; padding:12px 14px; font-size:15px; }
+    button { border:0; border-radius:11px; background:#111; color:white; padding:12px 18px; font-weight:650; cursor:pointer; }
+    button:disabled { opacity:.45; cursor:default; }
+    .meta { display:flex; gap:18px; flex-wrap:wrap; color:#666; font-size:14px; }
+    .status { margin-top:14px; font-size:16px; }
+    .stories { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; }
+    .story { background:#fff; border:1px solid #e4e6e8; border-radius:16px; padding:18px; }
+    .story-head { display:flex; justify-content:space-between; gap:12px; align-items:start; }
+    .story-title { font-weight:750; font-size:18px; }
+    .nature { color:#777; font-size:13px; margin-top:3px; }
+    .pct { font-variant-numeric:tabular-nums; font-weight:750; }
+    .bar { height:8px; background:#eceeef; border-radius:99px; overflow:hidden; margin:13px 0; }
+    .fill { height:100%; background:#34a853; transition:width .3s ease; }
+    .narrative { line-height:1.45; color:#333; font-size:14px; }
+    .branch { display:grid; grid-template-columns:1fr auto; gap:8px; padding:7px 0; border-top:1px solid #f0f1f2; font-size:13px; }
+    .branch:first-child { margin-top:10px; }
+    .smallbar { height:5px; background:#eceeef; border-radius:99px; overflow:hidden; margin-top:4px; }
+    .smallfill { height:100%; background:#777; }
+    .deps, .gaps { margin-top:12px; font-size:13px; color:#555; }
+    .label { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:#999; margin-bottom:5px; }
+    .artifact { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; color:#555; overflow-wrap:anywhere; }
+    .empty { color:#8b8b8b; padding:24px 0; }
+    .token { font-variant-numeric:tabular-nums; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>DataSong v2</h1>
+  <div class="subtitle">Semantic exploration over code topology — watch stories emerge rather than defining workflows first.</div>
+
+  <div class="panel">
+    <form id="form">
+      <input id="repo" value="https://github.com/moqui/PopCommerce" aria-label="Repository URL" />
+      <button id="go">Explore</button>
+    </form>
+    <div class="meta" style="margin-top:16px">
+      <span>Status: <b id="status">idle</b></span>
+      <span>Step: <b id="step">0</b></span>
+      <span class="token">Tokens: <b id="tokens">0</b></span>
+      <span class="token">Prompt: <b id="promptTokens">0</b></span>
+      <span class="token">Completion: <b id="completionTokens">0</b></span>
+    </div>
+    <div id="message" class="status"></div>
+    <div style="margin-top:12px"><span class="label">Current artifact</span><div id="artifact" class="artifact">—</div></div>
+  </div>
+
+  <div id="stories" class="stories"><div class="empty">No semantic story has crystallized yet.</div></div>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (s='') => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  let state = {};
+
+  $('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('go').disabled = true;
+    const res = await fetch('/api/explore', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ repoUrl:$('repo').value.trim() }) });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert(body.error || 'Could not start exploration');
+      $('go').disabled = false;
+    }
+  });
+
+  const events = new EventSource('/api/events');
+  events.onmessage = (event) => render(JSON.parse(event.data));
+
+  function render(next) {
+    state = next || {};
+    $('status').textContent = state.status || 'idle';
+    $('step').textContent = state.step || 0;
+    $('tokens').textContent = state.tokenUsage?.total || 0;
+    $('promptTokens').textContent = state.tokenUsage?.prompt || 0;
+    $('completionTokens').textContent = state.tokenUsage?.completion || 0;
+    $('message').textContent = state.lastMessage || '';
+    $('artifact').textContent = state.currentArtifact?.path || '—';
+    $('go').disabled = ['preparing','exploring'].includes(state.status);
+
+    const stories = state.stories || [];
+    if (!stories.length) {
+      $('stories').innerHTML = '<div class="empty">No semantic story has crystallized yet.</div>';
+      return;
+    }
+    $('stories').innerHTML = stories.map(renderStory).join('');
+  }
+
+  function renderStory(story) {
+    const branches = (story.branches || []).map((b) => `
+      <div class="branch">
+        <div>
+          <div>${esc(b.label || b.id)} ${b.status === 'closed' ? '✓' : b.status === 'bounded' ? '↳ bounded' : ''}</div>
+          <div class="smallbar"><div class="smallfill" style="width:${Number(b.progress)||0}%"></div></div>
+          ${b.gap ? `<div style="color:#888;margin-top:3px">${esc(b.gap)}</div>` : ''}
+        </div>
+        <div>${Number(b.progress)||0}%</div>
+      </div>`).join('');
+    const deps = (story.dependencies || []).map((d) => `${esc(d.label)} <span style="color:#999">[${esc(d.scope)}]</span>${d.contract ? ` — ${esc(d.contract)}` : ''}`).join('<br>');
+    const gaps = (story.unresolved || []).map((g) => `• ${esc(g)}`).join('<br>');
+    return `
+      <article class="story">
+        <div class="story-head">
+          <div><div class="story-title">${esc(story.title)}</div><div class="nature">${esc(story.nature || story.status || '')}</div></div>
+          <div class="pct">${Number(story.progress)||0}%</div>
+        </div>
+        <div class="bar"><div class="fill" style="width:${Number(story.progress)||0}%"></div></div>
+        <div class="narrative">${esc(story.narrative || '')}</div>
+        ${branches ? `<div style="margin-top:12px"><div class="label">Branches</div>${branches}</div>` : ''}
+        ${deps ? `<div class="deps"><div class="label">Dependencies / sub-flows</div>${deps}</div>` : ''}
+        ${gaps ? `<div class="gaps"><div class="label">Unresolved</div>${gaps}</div>` : ''}
+      </article>`;
+  }
+
+  fetch('/api/state').then((r) => r.json()).then(render);
+</script>
+</body>
+</html>
