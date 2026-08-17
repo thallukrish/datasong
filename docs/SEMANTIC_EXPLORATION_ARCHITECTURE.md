@@ -4,11 +4,15 @@
 
 This document captures the current exploration architecture for DataSong.
 
-It replaces the earlier workflow-first design as the primary discovery model. Workflows remain one important kind of enterprise story, but they are not assumed in advance and are not the primitive objects of exploration.
+The earlier workflow-first design is no longer the primary discovery model. DataSong does not begin by assuming that every artifact is a workflow, business concept, rule, or persistent dataset.
 
-The central idea is:
+The current objective is:
 
-> DataSong explores a structured world of enterprise artifacts, chooses what to inspect next based on expected semantic information gain, and incrementally assembles observed evidence into coherent, evidence-backed enterprise stories.
+> **Discover and close end-to-end vertical slices of enterprise use cases from heterogeneous evidence.**
+
+A vertical slice is a coherent chain of behavior that starts from a meaningful trigger, intent, input, event, schedule, or request; crosses the relevant implementation, data, configuration, and policy boundaries; and reaches a meaningful outcome or produced state.
+
+The nature of the slice is allowed to emerge from evidence. A slice may ultimately be understood as a customer workflow, employee workflow, ETL/data pipeline, algorithmic process, service interaction, operational procedure, policy-driven process, or something else.
 
 ---
 
@@ -28,158 +32,91 @@ An enterprise contains many kinds of artifacts:
 - agreements and contracts
 - tickets and operational notes
 
-A source repository may contain a customer workflow, an ETL pipeline, a numerical algorithm, a microservice, a utility, infrastructure code, or some mixture of these.
+No single artifact type is assumed to contain the whole truth.
 
-A policy document may describe intent that is not visible in code.
+Code may implement behavior without explaining business intent. A policy document may explain intent that is only partially implemented. A Slack thread may explain a temporary exception. A table may reveal durable state that code refers to indirectly.
 
-A Slack conversation may explain why a production rule differs from an older written policy.
+DataSong therefore operates over two fundamental layers:
 
-A table may reveal durable state that code only refers to indirectly.
-
-Therefore DataSong must not begin by forcing every artifact into a fixed ontology such as concept, rule, workflow, or persistent data.
-
-There are two fundamental things:
-
-1. **Evidence** — the raw source material and the topology that makes it navigable.
-2. **Emerging meaning** — semantic statements that increasingly connect into coherent stories.
+1. **Evidence world** — raw artifacts plus the topology that makes them navigable.
+2. **Emerging semantic world** — evidence-backed statements connected into end-to-end vertical slices.
 
 ---
 
-## 2. The jigsaw-puzzle model
-
-Each observed artifact is a piece of a large enterprise jigsaw puzzle.
-
-A newly observed piece may:
-
-- continue an existing story strongly;
-- continue an existing story weakly;
-- fill a gap between two already-known steps;
-- reveal a branch;
-- reveal a reusable sub-flow;
-- connect two previously separate stories;
-- begin a new story;
-- remain unattached for now.
-
-Example:
-
-```text
-Story A
-Customer reviews cart
-→ ?
-→ placed order
-```
-
-A newly observed service may reveal:
-
-```text
-Validate stock and totals
-```
-
-and fit between the two known steps:
-
-```text
-Customer reviews cart
-→ validate stock and totals
-→ placed order
-```
-
-A different artifact may reveal a nightly sales aggregation job. That does not continue Story A, but it can seed Story B rather than being discarded as irrelevant.
-
-The exploration board therefore contains several evolving stories at once, each with its own momentum, open branches, unresolved gaps, and confidence.
-
----
-
-## 3. Topology layer
+## 2. Topology layer
 
 Artifacts should not be presented to the semantic explorer randomly.
 
-The first layer of DataSong is a **topology layer** that exposes local structure and plausible next observations.
+The topology layer exposes the structure already present in each source or constructs a useful hierarchy when the source is weakly structured.
 
-The topology layer answers:
+Its question is:
 
-> What artifacts are reasonably reachable from where I am now?
+> **What artifacts are reasonably reachable from where I am now?**
 
 It does not decide what those artifacts mean.
 
-### Code topology
+### Code
 
-Code already has strong structure:
+Code already provides strong topology:
 
-- repository → directory → file → symbol hierarchy
-- function and method calls
+- repository → directory → file → symbol
 - callers and callees
 - imports
 - service invocations
 - routes and handlers
 - entity/table references
 - configuration references
-- module/component dependencies
+- component dependencies
 - tests
 
-The explorer should normally see the immediate neighboring artifacts rather than arbitrary files from the repository.
+### Slack and email
 
-### Slack topology
+Conversation sources provide:
 
-Slack can expose:
-
-- workspace → channel → thread hierarchy
-- replies
-- participants
-- timestamps
-- linked files and URLs
-- semantic subclusters inside long threads
-
-A thread with 1,000 messages can still be a locally coherent exploration neighborhood.
-
-### Email topology
-
-Email can expose:
-
-- thread chains
-- replies and forwards
+- channel/thread/reply hierarchy
 - participants
 - attachments
-- referenced documents
-- related-message clusters
+- referenced links/documents
+- time relationships
+- semantic subclusters when a thread is large
 
-### Document topology
+### Documents
 
 Documents can expose:
 
-- corpus → cluster → document → section → paragraph hierarchy
+- corpus → cluster → document → section → paragraph
 - headings
 - references
 - hyperlinks
 - defined terms
 - semantic similarity
 
-Hierarchical clustering can turn a large, weakly organized English-text corpus into something navigable much like a code repository.
+Hierarchical clustering can make a large English-text corpus navigable much like a source repository.
 
-### Data topology
+### Tables and structured data
 
-Tables and structured data can expose:
+Data topology can include:
 
-- database → schema → table → column hierarchy
-- keys and foreign keys
+- database → schema → table → column
+- foreign keys
 - value relationships
 - lineage
 - query/view dependencies
 - source/derived relationships
 - timestamp relationships
-- semantic clusters of tables and columns
+- semantic clusters of datasets and columns
 
 ### Logs and traces
 
 Runtime evidence can expose:
 
-- trace → span hierarchy
-- request chains
-- sessions
+- trace → span
+- request/session chains
+- event correlation
 - service transitions
-- event correlations
 - temporal neighborhoods
 
-### General topology abstraction
+The common abstraction is:
 
 ```text
 RAW ARTIFACTS
@@ -191,782 +128,338 @@ HIERARCHIES + EDGES + CLUSTERS
 LOCAL CANDIDATE NEIGHBORHOODS
 ```
 
-This is the common interface presented to the semantic explorer.
-
 ---
 
-## 4. Exploration policy
+## 3. Orientation is not a vertical slice
 
-Given several reachable artifacts, DataSong chooses the artifact whose inspection is expected to maximize semantic information gain.
-
-The core question is:
-
-> **Which artifact should I inspect next to most improve my current understanding?**
-
-Information gain is not the amount of text returned. It is the expected improvement in the semantic world model.
-
-An artifact can have high expected gain because it may:
-
-- continue the currently strongest story;
-- fill an unresolved transition;
-- explain why a known behavior happens;
-- place an already-known step more precisely;
-- close an open branch;
-- reveal an important branch;
-- establish the beginning or outcome of a story;
-- connect two separate stories;
-- reveal a meaningful new story;
-- disambiguate conflicting evidence.
-
-The policy is therefore a balance between:
-
-- **continuation value** — does this likely advance something already understood?
-- **coherence gain** — does this likely make the story structure clearer?
-- **novelty value** — could this reveal an important new path?
-- **completion pressure** — is a nearly coherent story worth finishing now?
-- **exploration cost** — how much source material must be inspected?
-
-The first implementation can use LLM-estimated scores. Later, the scoring policy itself can learn from historical exploration outcomes.
-
----
-
-## 5. Evidence continuity vs semantic continuity
-
-A mechanically connected artifact is not necessarily semantically useful.
-
-### Evidence continuity
-
-Evidence continuity is structural adjacency in the evidence world.
+Some artifacts are extremely useful for navigation without being part of an end-to-end use case.
 
 Examples:
 
-- caller → callee
-- route → handler
-- import → dependency
-- table → foreign key
-- message → reply
-- document section → referenced section
-- trace span → child span
+- repository root
+- directory structure
+- README
+- build files
+- component descriptors
+- ignore files
+- framework bootstrap/configuration
 
-The topology layer can often determine this cheaply and deterministically.
+These should update **orientation context**, not create semantic stories such as "Repository overview" or "Configuration".
 
-### Semantic continuity
+Likewise, a test artifact can reveal a real use case, but the slice is the behavior under test, not "JMeter tests" or "test suite".
 
-Semantic continuity asks:
-
-> Does the meaning of this new artifact actually continue one of the stories we are building?
-
-For example:
-
-```text
-OrderService → GenericDateFormatter
-```
-
-has strong code adjacency but probably weak semantic continuity.
-
-Whereas:
-
-```text
-OrderService → PaymentService
-```
-
-may have both strong evidence continuity and strong semantic continuity.
-
-The semantic score must therefore not reward code proximity by itself.
+Orientation helps the explorer find meaningful entry points. It is not itself the target semantic model.
 
 ---
 
-## 6. The minimal LLM observation contract
+## 4. The target object: an end-to-end vertical slice
 
-The LLM should not rewrite the entire semantic board on every observation.
+A useful vertical slice normally has a semantic progression such as:
 
-DataSong owns durable state. The model only interprets the newly observed artifact relative to that state.
+```text
+trigger / intent / input
+        ↓
+action or processing
+        ↓
+decision / transformation / state change
+        ↓
+possible branches or handoffs
+        ↓
+meaningful outcome
+```
 
-For each artifact, the model should answer a compact set of questions:
+Examples:
 
-1. **What does this artifact mean?**
-2. **Which existing story/path does it continue, if any?**
-3. **How strong is that continuity?**
-4. **How exactly does it connect semantically?**
-5. **What structural role does it appear to play?**
-6. **Where does it fit relative to already-known steps?**
-7. **Which available next artifact is expected to add the most information?**
+```text
+Customer places an order
+UI intent → validation → order placement → persistence → approval branch → order outcome
+```
+
+```text
+Nightly sales aggregation
+schedule → extract transactions → transform → aggregate → reporting dataset
+```
+
+```text
+Refund approval
+refund request → policy check → approval branch → refund execution → recorded result
+```
+
+The explorer is not required to know the slice identity at the beginning. It crystallizes as evidence accumulates.
+
+---
+
+## 5. Compact LLM semantic contract
+
+The inner loop should not ask the LLM to regenerate the full world model on every turn.
+
+For each newly observed artifact the LLM only needs to determine:
+
+1. **Meaning** — what does this artifact represent semantically?
+2. **Role** — orientation, story evidence, or unattached evidence?
+3. **Path identity** — which existing vertical slice does it continue, or does it begin a new one?
+4. **Continuity** — how strongly does it belong to that slice?
+5. **Semantic bridge** — how exactly does it advance or relate to that slice?
+6. **Relative placement** — where does it fit relative to already-known steps?
+7. **Structural signal** — continuation, branch, or reusable sub-flow?
+8. **Next evidence** — which available artifact is expected to produce the greatest information gain toward closing a vertical slice?
 
 A compact response can look like:
 
 ```json
 {
-  "meaning": "Validates cart totals and stock before order submission.",
+  "meaning": "Validates stock and totals before order submission.",
+  "semanticRole": "story",
   "pathId": "customer-places-order",
-  "continuity": 0.88,
-  "bridge": "This occurs after cart review and before the order-placement action.",
+  "continuity": 0.91,
+  "bridge": "Adds the validation step between cart review and order placement.",
   "relation": "continue",
   "placement": {
-    "after": "review-cart",
-    "before": "place-order",
-    "confidence": 0.84
+    "type": "between",
+    "afterStepId": "review-cart",
+    "beforeStepId": "place-order",
+    "confidence": 0.88
   },
-  "nextArtifactId": "service:place-order",
-  "expectedGain": 0.92
+  "coherenceGain": 0.86,
+  "next": {
+    "type": "artifact",
+    "artifactId": "service:place-order",
+    "expectedGain": 0.93,
+    "reason": "Direct continuation toward the order outcome."
+  }
 }
 ```
 
-Possible `relation` values are intentionally small and semantic:
-
-- `continue`
-- `branch`
-- `subflow`
-- `new_story`
-- `connect_paths`
-- `unattached`
-
-This contract should remain compact. Existing stories, branches, dependencies, progress, visited evidence, and token accounting are maintained by DataSong rather than regenerated by the model.
+DataSong owns the accumulated state. The model returns only the delta.
 
 ---
 
-## 7. Story order is not discovery order
+## 6. Discovery order is not story order
 
-Artifacts will often be discovered out of sequence.
+An artifact found later may belong earlier in the slice.
 
-The explorer must not assume:
+Therefore steps should be positioned relatively:
 
-```text
-artifact 1 discovered
-→ artifact 2 discovered
-→ artifact 3 discovered
-```
+- before
+- after
+- between
+- branch from
+- parallel to
+- unknown
 
-means that this is their semantic order.
+Absolute step numbers should not be used as the primary representation because they become brittle as new evidence is inserted.
 
-A newly observed artifact may belong before, after, between, parallel to, or on a branch from already-known steps.
+A vertical slice is therefore best represented as an ordered semantic DAG rather than a discovery transcript.
 
-Therefore the model should express **relative placement**, not brittle absolute step numbers.
+Three different signals are useful:
 
-Useful placement forms include:
+- **continuity** — does this evidence belong to the slice?
+- **placement confidence** — do we know where it belongs?
+- **coherence gain** — how much does inserting it improve the slice structure?
 
-```text
-after X
-before Y
-between X and Y
-parallel to X
-branch from X
-unknown position
-```
+An artifact that fills a known gap between two existing steps can have especially high coherence gain.
+
+---
+
+## 7. Exploration policy and information gain
+
+Given several reachable artifacts, DataSong chooses the artifact expected to most improve the semantic world model.
+
+The core question is:
+
+> **Which artifact should I inspect next to most advance or close an end-to-end vertical slice?**
+
+Information gain is not token volume. Useful gain includes:
+
+- extending the active slice toward its start or outcome
+- filling an unexplained transition
+- placing an existing step more precisely
+- resolving an open question
+- revealing or closing a material branch
+- exposing a meaningful sub-flow
+- connecting previously separate evidence
+- discovering a credible new vertical slice when the current one has dampened
+
+Code adjacency is useful but not sufficient. A direct function call can be mechanically close while semantically irrelevant. A service call that continues the use case is much more valuable.
+
+---
+
+## 8. Path momentum, dampening, and completion pressure
+
+A high-signal slice should acquire momentum.
 
 Example:
 
 ```text
-Known:
-Review cart → Place order
-
-New artifact:
-Validate availability
-
-Model:
-after Review cart
-before Place order
-```
-
-DataSong can then insert the step:
-
-```text
-Review cart
-→ Validate availability
-→ Place order
-```
-
-Relative ordering allows the story to improve incrementally without renumbering or rewriting the entire narrative.
-
----
-
-## 8. Three distinct semantic scores
-
-One generic score is not sufficient.
-
-For an observed artifact, DataSong should distinguish at least:
-
-### Continuity
-
-> Does this artifact belong to this story?
-
-### Placement confidence
-
-> How confidently do we know where this artifact belongs relative to known steps?
-
-### Coherence gain
-
-> How much does adding this artifact improve the structural coherence of the story?
-
-A piece that fills a known gap between two strong steps should receive particularly high coherence gain.
-
-Example:
-
-```text
-A → ? → C
-```
-
-New artifact B:
-
-```text
-A → B → C
-```
-
-Even if B is not itself a dramatic business event, closing that semantic gap can be very high-value exploration.
-
-These signals can also influence frontier ranking. A candidate likely to resolve a poorly placed or missing transition may deserve more attention than a candidate that merely extends an already well-understood chain.
-
----
-
-## 9. The semantic world model is an ordered graph of stories
-
-The semantic board should not be a bag of facts and should not be a single linear narrative.
-
-A useful internal representation is an ordered semantic DAG.
-
-Example:
-
-```text
-Review cart
-    ↓
-Validate availability
-    ↓
-Place order
-    ↓
-Approval required?
-    ├─ no  → confirmed
-    └─ yes → approval
-```
-
-Each node is an evidence-backed semantic step.
-
-Each edge expresses a semantic relationship such as:
-
-- follows
-- precedes
-- branches from
-- rejoins
-- depends on
-- invokes sub-flow
-- explains
-- derived from
-
-Each step retains provenance back to one or more raw artifacts.
-
-The world model can contain many stories simultaneously:
-
-```text
-Customer places order
-Nightly sales aggregation
-Refund approval
-Customer registration
-Inventory synchronization
-...
-```
-
-Their nature is allowed to emerge rather than being predetermined.
-
----
-
-## 10. Path momentum and dampening
-
-A high-signal path often gains momentum:
-
-```text
-Order screen
-→ Place Order action
-→ Order service
+checkout screen
+→ place-order action
+→ order service
 → durable order state
 → approval decision
 ```
 
-Each strong continuation makes nearby unresolved evidence more attractive.
+When successive artifacts strongly continue the same use case, the explorer should prefer that local path over unrelated global novelty.
 
-But a path can dampen:
+If the path begins producing generic helpers, logging, serialization, framework internals, or other low-semantic-gain artifacts, its marginal value dampens and other frontiers can compete again.
 
-```text
-→ logger
-→ serializer
-→ framework plumbing
-```
+Nearly coherent slices should receive **completion pressure** so the explorer does not abandon a 90%-formed path for a shiny unrelated artifact.
 
-When marginal semantic gain falls, the explorer should park that frontier and rerank the board.
+This creates three intuitive modes:
 
 ```text
-high gain
-→ continue exploiting path
-→ gain falls
-→ park path frontier
-→ choose another high-value frontier
+EXPLORE  → what use-case paths exist here?
+BUILD    → how do these pieces connect?
+CLOSE    → what minimum evidence remains to make this slice coherent end to end?
 ```
-
-A parked path is not abandoned. Later evidence may increase its expected value and cause the explorer to return.
 
 ---
 
-## 11. Exploration vs completion pressure
+## 9. Branches, sub-flows, and dependencies
 
-Pure global information-gain maximization can cause wandering.
+A vertical slice is not necessarily linear.
 
-A story may become 90% coherent and then lose attention to several novel but less important artifacts.
+### Branches
 
-To prevent this, mature stories acquire **completion pressure**.
-
-Conceptually:
+A material branch belongs to the current slice.
 
 ```text
-Early story
-EXPLORE
-What is this?
-
-Maturing story
-BUILD
-How do these pieces connect?
-
-Nearly closed story
-CLOSE
-What minimum unresolved evidence is still needed?
+validate order
+   ├─ valid → place order
+   ├─ invalid → reject
+   └─ approval required → approval path
 ```
 
-The policy should therefore favor closing mature stories when useful local evidence remains, while still allowing a switch if the current frontier has very low semantic value.
+Completing the happy path does not make the parent slice complete while material branches remain unexplored.
 
-The goal is to finish the semantic story, not exhaust every artifact around it.
+### Sub-flows
 
----
-
-## 12. Branches and hierarchical completion
-
-A story is not necessarily a line.
-
-Suppose exploration discovers:
-
-```text
-Customer places order
-        ↓
-Validate order
-        ├─ valid → place order → success
-        ├─ invalid → reject
-        └─ approval required → approval
-```
-
-The explorer may first follow the happy path because it has the strongest continuity or highest expected runtime frequency.
-
-Completing that branch does not close the parent story.
-
-The board may show:
-
-```text
-Customer places order            67%
-
-  Standard path                 100% ✓
-  Approval branch                35%
-  Invalid-order branch            0%
-```
-
-When the happy path closes, its frontier value falls and unresolved branches gain priority.
-
-Progress is therefore hierarchical:
-
-- branch closure
-- parent-story closure
-- optional overall world coverage
-
-Progress need not be monotonic. If new evidence reveals a previously unknown material branch, parent-story progress can decrease because the story is now understood to be richer than previously believed.
-
-A story reaches 100% only when all semantically material discovered branches are closed or explicitly bounded.
-
----
-
-## 13. Branches are different from sub-flows
-
-A branch changes the behavior of the current story and normally remains inside it.
-
-A **sub-flow** is a reusable or independently meaningful semantic path that the current story invokes.
+A reusable independently meaningful process should not be recursively inlined into the parent slice.
 
 Example:
 
 ```text
 Order placement
-→ Payment processing
-→ Order confirmed
-```
-
-Payment processing might itself contain authorization, retries, fraud review, settlement, and provider-specific behavior.
-
-Inlining all of that recursively into the order story would make exploration unbounded.
-
-Instead, the parent story records a semantic contract:
-
-```text
+   ↓
 Payment processing
-
-input:
-amount + payment instruction
-
-output:
-authorized / declined / pending
-
-relevant effect:
-order progression depends on an acceptable payment result
+   ↓
+Order confirmed
 ```
 
-The payment path can then appear independently on the semantic board and be explored later.
+The parent slice only needs a semantic contract for payment processing sufficient to understand its effect. Payment processing can exist as another separately explorable vertical slice.
 
-Rule:
+### External dependencies
 
-> **Branches expand the current story; reusable sub-flows become referenced stories.**
+If implementation is outside the supplied enterprise evidence boundary, treat it as a black box.
+
+Record only what is needed to continue the local slice:
+
+```text
+input → external dependency → observable output/effect
+```
+
+Do not recursively descend through SDKs, HTTP stacks, libraries, or infrastructure that are outside the evidence boundary.
 
 ---
 
-## 14. Local dependencies vs external black boxes
+## 10. Closure and progress
 
-Dependencies must respect the evidence boundary.
+Progress belongs to the semantic slice, not to source-code coverage.
 
-If a dependency has implementation evidence inside the supplied enterprise world, it remains explorable.
+A slice is complete when:
 
-Example:
+- its identity/use case is coherent
+- it has a meaningful beginning
+- its main progression is connected
+- it reaches a meaningful outcome
+- every material discovered branch is closed or bounded
+- local sub-flows have enough contract information for the parent
+- external dependencies have adequate black-box contracts
+- no remaining frontier is likely to materially change the slice's meaning
 
-```text
-OrderService → InventoryService
-```
+Progress may decrease if newly observed evidence reveals an important previously unknown branch or missing transition.
 
-If `InventoryService` exists in the supplied repo or another supplied internal repo, DataSong should track it as a local semantic dependency.
+A branch can be 100% while its parent slice is still incomplete.
 
-If the source is outside the available enterprise boundary, DataSong should stop traversal and treat the dependency as a black box.
-
-Example:
-
-```text
-OrderService → external payment SDK/API
-```
-
-Record only what is needed to continue the local story:
-
-```text
-input: amount + payment reference
-output: payment status + transaction id
-effect: requests external payment authorization
-boundary: external source not explored
-```
-
-Do not descend through external SDK internals, HTTP stacks, framework libraries, or infrastructure merely because they are technically reachable.
-
-This prevents semantic exploration from becoming dependency archaeology.
+The explorer should finish the **semantic use case**, not exhaust every nearby source artifact.
 
 ---
 
-## 15. Closure rule
+## 11. Source-agnostic architecture
 
-A story can be considered semantically closed when:
-
-1. its main progression is coherent;
-2. the ordering of its important steps is sufficiently known;
-3. all semantically material discovered branches are closed or bounded;
-4. local sub-flows have enough contract information for the parent and are separately tracked when deeper exploration remains;
-5. external dependencies have adequate black-box contracts;
-6. no unresolved frontier remains that could materially change the story's meaning.
-
-This does not mean every supporting source branch was explored.
-
-It means the story itself is coherent enough to stand as an evidence-backed representation of enterprise behavior.
-
----
-
-## 16. Weak topology and semantic search
-
-Code has strong native topology. Other enterprise sources can be much weaker.
-
-When source topology is weak, unresolved semantic questions can create navigation structure.
-
-Example:
+The same explorer should work over many evidence types because topology is source-specific while semantic reasoning is shared.
 
 ```text
-Customer requests refund
-→ support review
-→ threshold approval
-→ ?
-→ refund issued
-```
-
-The gap creates the query:
-
-> What authorizes or executes the refund after threshold approval?
-
-Search, clustering, and retrieval utilities can then surface candidate artifacts from Slack, email, policy documents, code, and data.
-
-So the general rule is:
-
-> When the artifact world has strong topology, follow topology.
->
-> When topology is weak, use clustering and unresolved semantic gaps to construct it.
-
----
-
-## 17. Hierarchical clustering as generalized topology
-
-Hierarchical clustering can make heterogeneous sources behave more like navigable repositories.
-
-Example:
-
-```text
-Enterprise text corpus
-  ├─ Customer service
-  │   ├─ Refunds
-  │   │   ├─ Approval policy
-  │   │   └─ Exceptions
-  │   └─ Returns
-  ├─ Finance
-  │   ├─ Settlement
-  │   └─ Invoice disputes
-  └─ Operations
-      ├─ Inventory
-      └─ Fulfillment
-```
-
-The explorer can then work with the same abstraction used for code:
-
-```text
-current node
-→ immediate children / neighbors
-→ compact descriptors
-→ select next observation
-```
-
-The topology implementation differs by source, but the exploration interface remains similar.
-
----
-
-## 18. Three-layer architecture
-
-The current architecture is:
-
-```text
-                ENTERPRISE ARTIFACTS
-                        ↓
-
-1. TOPOLOGY LAYER
-   What is connected/reachable?
-
-   code hierarchy and call graph
-   schema/data relationships
-   message/document clusters
-   threads and traces
-   search neighborhoods
-
-                        ↓
-
-2. SEMANTIC EXPLORATION POLICY
-   Which artifact should be inspected next?
-
-   expected information gain
-   continuity
-   placement uncertainty
-   coherence gain
-   path momentum
-   novelty
-   completion pressure
-   exploration cost
-
-                        ↓
-
+ENTERPRISE ARTIFACTS
+        ↓
+1. TOPOLOGY
+   what can be inspected next?
+        ↓
+2. EXPLORATION POLICY
+   which candidate maximizes expected semantic information gain?
+        ↓
 3. SEMANTIC WORLD MODEL
-   What does the observed evidence mean together?
-
-   ordered evidence-backed steps
-   branches
-   sub-flow references
-   black-box dependencies
-   unresolved gaps
-   cross-story connections
+   which vertical slice does this evidence advance, and where does it fit?
 ```
 
-The topology layer should be deterministic and inexpensive wherever possible.
+For weakly structured sources, hierarchical clustering, search, embeddings, thread reconstruction, or temporal grouping can manufacture useful topology before the semantic explorer operates.
 
-The LLM should concentrate on semantic interpretation and frontier choice, not repository mechanics or repeated state regeneration.
-
----
-
-## 19. RL-like interpretation
-
-This architecture resembles reinforcement learning / world exploration even if the first implementation uses an LLM directly rather than a separately trained RL policy.
-
-### Environment
-
-The enterprise artifact world and its topology.
-
-### State
-
-The current semantic board:
-
-- stories
-- ordered steps
-- branches
-- dependencies
-- unresolved gaps
-- open frontiers
-- visited evidence
-
-### Action
-
-Choose one artifact to inspect next.
-
-### Observation
-
-A bounded representation of that artifact.
-
-### LLM role
-
-The LLM acts as semantic evaluator and policy estimator:
-
-- describe artifact meaning;
-- identify story continuity;
-- provide semantic bridge;
-- identify branch/sub-flow/new-story signals;
-- place the new step relative to known steps;
-- estimate expected value of the next candidate.
-
-### Reward intuition
-
-Positive semantic gain comes from:
-
-- strong continuity;
-- filling a gap;
-- improving ordering confidence;
-- connecting previously separate evidence;
-- resolving uncertainty;
-- discovering a meaningful new path;
-- closing a branch;
-- closing a story.
-
-Low or negative value comes from:
-
-- revisiting understood evidence;
-- high code adjacency with low semantic relevance;
-- repeatedly entering generic helpers/framework internals;
-- consuming evidence without improving story coherence.
-
-Over time, historical runs can teach the policy patterns such as:
-
-> Following relation X from semantic state Y tends to produce useful enterprise meaning.
-
-These learned exploration tendencies are more general than hand-defining rewards for concepts, rules, tables, or workflows.
+When native topology is strong, follow it. When topology is weak, unresolved semantic questions can drive search and clustering.
 
 ---
 
-## 20. Token-efficient LLM loop
+## 12. RL-like interpretation
 
-The inner loop should remain deliberately small.
+The architecture resembles reinforcement learning/world exploration even if the initial implementation uses an LLM-scored policy rather than a trained RL model.
 
-DataSong provides:
+- **Environment:** enterprise evidence world plus topology
+- **State:** current vertical slices, unresolved gaps, branches, orientation, visited artifacts, and frontier
+- **Action:** inspect one candidate artifact/search neighborhood
+- **Observation:** bounded artifact content
+- **Evaluator/simulator:** LLM semantic interpretation
+- **Reward intuition:** semantic continuity, coherence gain, uncertainty reduction, branch closure, use-case closure, and useful new-slice discovery
+
+The policy can eventually learn patterns such as:
+
+> Given this kind of semantic state and source topology, following this kind of edge tends to increase vertical-slice coherence.
+
+The learned parameters should be about exploration effectiveness, not fixed business categories.
+
+---
+
+## 13. Logging and token efficiency
+
+The live console should remain terse:
 
 ```text
-CURRENT OBSERVED ARTIFACT
-+ compact relevant story/path state
-+ immediate topology candidates
+[LLM #12] slices: Customer places an order 64% | tokens +840 | cumulative 11230
 ```
 
-The model returns only a semantic delta such as:
-
-```json
-{
-  "meaning": "...",
-  "pathId": "...",
-  "continuity": 0.91,
-  "bridge": "...",
-  "relation": "continue",
-  "placement": {
-    "after": "...",
-    "before": "...",
-    "confidence": 0.86
-  },
-  "nextArtifactId": "...",
-  "expectedGain": 0.93
-}
-```
-
-DataSong then:
-
-1. updates the semantic DAG;
-2. updates branch/sub-flow state;
-3. recomputes progress and path momentum;
-4. applies the topology action;
-5. retrieves only the selected artifact;
-6. repeats.
-
-The model should not regenerate full story descriptions, full branch lists, full dependency lists, or the complete semantic board every round.
-
-That state belongs to DataSong.
-
-This is both more token-efficient and less fragile than asking the LLM to repeatedly serialize the entire world model.
-
----
-
-## 21. Logging and observability
-
-Every exploration run should maintain a detailed machine-readable trace separate from the console.
-
-The detailed run log should contain, for each LLM call:
-
-- observed artifact ID and provenance;
-- bounded artifact content/excerpt;
-- candidate next artifacts;
-- compact semantic context sent to the model;
-- exact prompt;
-- raw model response;
-- parsed semantic delta;
-- selected next artifact/action;
-- token usage for the call;
-- cumulative token usage;
-- parse/retry information when applicable.
-
-The console should remain terse and operational:
+Detailed debugging belongs in the persistent run trace:
 
 ```text
-[LLM #7] Customer places order 78% | Refund flow 22% | tokens +1542 | cumulative 9184
+data/runs/<run-id>.jsonl
 ```
 
-The full semantic reasoning trace belongs in the run log, not in console noise.
+The trace should record:
+
+- observed artifact
+- candidate artifacts
+- prompt/system instruction
+- raw model response
+- parsed semantic delta
+- before/after state
+- branch/sub-flow decisions
+- per-call token usage
+- cumulative token usage
+
+The compact delta contract is specifically intended to avoid repeatedly sending and regenerating a large narrative/checklist structure.
 
 ---
 
-## 22. Current code-demo objective
+## 14. Current demo objective
 
-For the code-topology demo, the goal is not to enumerate all workflows in advance.
+`demo_v2` currently tests one narrow but important hypothesis:
 
-The experiment is:
+> Starting from an unknown code repository, can DataSong use code topology plus compact LLM semantic decisions to autonomously discover and close at least one coherent end-to-end vertical slice of a use case without wandering through the repository exhaustively?
 
-> Start at an unknown repository root and use local code topology plus compact semantic LLM decisions to discover, order, branch, and close one or more coherent semantic stories.
-
-The demo should visibly show:
-
-- current observed artifact;
-- emerging stories;
-- story progress;
-- branch progress;
-- current semantic placement/bridge;
-- next selected artifact;
-- per-call tokens;
-- cumulative tokens.
-
-Detailed prompts and responses remain in the JSONL run log.
-
----
-
-## 23. Open questions
-
-The following remain research/design questions rather than fixed assumptions:
-
-1. How should continuity, placement confidence, and coherence gain be calibrated against one another?
-2. How should DataSong derive parent-story progress from ordered steps and discovered branches without returning to a rigid checklist?
-3. When should two emerging stories merge?
-4. When should one story split into two?
-5. How should contradictory evidence be represented?
-6. How should temporal validity be represented when behavior or policy changes?
-7. What evidence is sufficient to mark a branch as bounded rather than explored?
-8. What evidence is sufficient for a stable sub-flow contract?
-9. How should the frontier policy learn from historical exploration runs?
-10. How should exploration resume when new enterprise artifacts appear later?
-11. What common topology API should cover code, tables, documents, messages, and traces?
-12. How should hierarchical clustering be updated incrementally as enterprise evidence changes?
-13. What global stopping condition indicates that the enterprise world has been explored sufficiently?
-
-These are now the central design questions. The earlier fixed workflow checklist and repeated full-story LLM regeneration are no longer part of the core architecture.
+Once this works reliably for code, the same topology/exploration abstraction can be extended to documents, Slack/email, tables, logs, and mixed enterprise evidence.
