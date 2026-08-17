@@ -200,7 +200,9 @@ export class VerticalSliceExplorer extends SemanticExplorer {
       ],
       response_format: { type: 'json_object' },
       max_tokens: maxTokens,
-      extra_body: { thinking: { type: 'disabled' } }
+      // DeepSeek's Node/OpenAI-compatible API expects this at the top level.
+      // Putting it under extra_body leaves V4 thinking enabled by default.
+      thinking: { type: 'disabled' }
     });
   }
 
