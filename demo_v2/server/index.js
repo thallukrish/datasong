@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CanonicalSemanticTopologyV2 } from './canonicalSemanticTopologyV2.js';
+import { CanonicalSemanticTopologyV3 } from './canonicalSemanticTopologyV3.js';
 import { EmergentFlowExplorer } from './emergentFlowExplorer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,7 +11,7 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new CanonicalSemanticTopologyV2({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const topology = new CanonicalSemanticTopologyV3({ cacheRoot: path.join(dataRoot, 'repo-cache') });
 const explorer = new EmergentFlowExplorer({
   topology,
   dataRoot,
