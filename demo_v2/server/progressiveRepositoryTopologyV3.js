@@ -7,8 +7,35 @@ const ALLOWED_RELATIONS = new Set([
 ]);
 
 function lower(value) { return String(value || '').trim().toLowerCase(); }
+function isQualified(name) { return /[.#:/]/.test(String(name || '')); }
 
 export class ProgressiveRepositoryTopologyV3 extends ProgressiveRepositoryTopologyV2 {
+  resolveOutboundReference(symbol, ref) {
+    const name = String(ref?.name || '');
+    const simple = String(ref?.simpleName || '');
+    const indexed = this.nameIndex.get(lower(name)) || [];
+    const candidates = indexed.map((id) => this.symbolById.get(id)).filter(Boolean);
+
+    if (isQualified(name)) return candidates;
+
+    // Unqualified names are dangerous in a large repo because the shared name
+    // index intentionally contains all same-named functions. Prefer same-file
+    // resolution; use a repository-wide target only when it is unambiguous.
+    const local = candidates.filter((target) => target.sourcePath === symbol.sourcePath);
+    if (local.length) return local;
+    if (candidates.length === 1) return candidates;
+
+    if (simple && lower(simple) !== lower(name)) {
+      const simpleCandidates = (this.nameIndex.get(lower(simple)) || [])
+        .map((id) => this.symbolById.get(id))
+        .filter(Boolean);
+      const simpleLocal = simpleCandidates.filter((target) => target.sourcePath === symbol.sourcePath);
+      if (simpleLocal.length) return simpleLocal;
+      if (simpleCandidates.length === 1) return simpleCandidates;
+    }
+    return [];
+  }
+
   outboundReferenceCandidates(symbol) {
     const out = [];
     const seen = new Set();
@@ -16,11 +43,7 @@ export class ProgressiveRepositoryTopologyV3 extends ProgressiveRepositoryTopolo
       const relation = String(ref?.relation || 'reference');
       if (!ALLOWED_RELATIONS.has(relation)) continue;
 
-      const exactIds = this.nameIndex.get(lower(ref.name)) || [];
-      const simpleIds = exactIds.length ? [] : (this.nameIndex.get(lower(ref.simpleName)) || []);
-      const ids = [...exactIds, ...simpleIds];
-      for (const id of ids) {
-        const target = this.symbolById.get(id);
+      for (const target of this.resolveOutboundReference(symbol, ref)) {
         if (!target || target.id === symbol.id || seen.has(`${relation}:${target.id}`)) continue;
         // next_in_source is only a local structured-source ordering edge. Never
         // allow it to hop into another file and accidentally widen a rollout.
