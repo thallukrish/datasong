@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ProgressiveRepositoryTopology } from './progressiveRepositoryTopology.js';
+import { ProgressiveRepositoryTopologyV2 } from './progressiveRepositoryTopologyV2.js';
 import { ProgressiveRepositoryExplorerV2 } from './progressiveRepositoryExplorerV2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,7 +11,7 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new ProgressiveRepositoryTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const topology = new ProgressiveRepositoryTopologyV2({ cacheRoot: path.join(dataRoot, 'repo-cache') });
 const explorer = new ProgressiveRepositoryExplorerV2({
   topology,
   dataRoot,
