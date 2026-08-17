@@ -630,7 +630,161 @@ No single source is assumed to contain the truth by itself.
 
 ---
 
-## 15. Implications for DataSong
+## 15. Branches, sub-flows, dependencies, and closure
+
+A semantic path should not be treated as a simple line. As exploration proceeds it may reveal branches, reusable sub-flows, and external dependencies.
+
+### Branches belong to the current story
+
+Suppose exploration discovers:
+
+```text
+Customer places order
+        |
+        v
+validate order
+        |
+        +---- valid --------> place order --------> success
+        |
+        +---- invalid ------> reject / return error
+        |
+        +---- approval -----> approval flow
+```
+
+The explorer may initially follow the happy path because it has the strongest expected information gain or likely runtime frequency.
+
+Completing that branch does **not** make the parent story complete.
+
+The semantic board should retain the unresolved branches explicitly:
+
+```text
+Customer places order                 67%
+
+  ✓ Standard order path              100%
+  → Approval-required branch          35%
+  · Invalid-order branch               0%
+```
+
+When one branch closes, its exploration priority falls and the unresolved branches become stronger frontiers.
+
+A parent story can reach closure only when all semantically material discovered branches are either explored or explicitly bounded.
+
+### Progress is hierarchical
+
+Progress should therefore exist at more than one level:
+
+- current branch closure
+- parent story closure
+- optional overall world coverage
+
+A branch may be 100% while its parent remains incomplete.
+
+Progress need not be monotonic. If new evidence reveals an important previously unknown branch, parent-story closure may decrease because the explorer has discovered that the story is richer than previously believed.
+
+### Sub-flows are not the same as branches
+
+A branch changes the behavior of the current story and normally belongs inside it.
+
+A **sub-flow** or semantic dependency is a meaningful process that can be understood independently.
+
+Example:
+
+```text
+Order placement
+   ↓
+Payment processing
+   ↓
+Order confirmed
+```
+
+Payment processing may itself contain card authorization, retries, fraud review, settlement, refunds, and multiple providers.
+
+Recursively expanding all of those details inside the order story would make semantic exploration exhaustive and potentially unbounded.
+
+Instead, the parent story should understand the dependency through a semantic contract:
+
+```text
+Payment processing
+
+input:
+payment instruction + amount
+
+possible outcomes:
+authorized / declined / pending
+
+relevant effect:
+the order can proceed only when an acceptable payment state is returned
+```
+
+The sub-flow is then represented as another path on the semantic board and may be explored independently.
+
+### Local dependencies vs external dependencies
+
+Dependencies should be resolved according to the evidence boundary.
+
+If implementation evidence is available inside the enterprise evidence world — for example in the same repository, another supplied repository, local schema, configuration, or internal service source — it remains an explorable semantic dependency.
+
+```text
+OrderService
+→ InventoryService
+```
+
+If `InventoryService` is locally available, DataSong should track it as a local dependency and eventually understand it sufficiently.
+
+If a dependency crosses outside the available enterprise evidence boundary, it should be treated as a semantic black box rather than recursively traversed.
+
+Example:
+
+```text
+OrderService
+→ external payment SDK/API
+```
+
+The explorer should record only the contract needed to continue the local story:
+
+```text
+External payment dependency
+
+input:
+amount + payment reference + customer context
+
+observed output:
+payment status / transaction identifier
+
+semantic effect:
+requests external payment authorization
+
+boundary:
+external implementation not explored
+```
+
+The explorer should not descend through external SDK internals, HTTP stacks, framework libraries, or infrastructure unless those artifacts themselves are explicitly part of the enterprise evidence world.
+
+### Closure rule
+
+A story is semantically closed when:
+
+1. its main progression is coherent;
+2. all important discovered branches are closed or explicitly bounded;
+3. local semantic dependencies have enough contract information for the parent story and are separately tracked when deeper exploration remains;
+4. external dependencies have adequate black-box input/output/effect descriptions;
+5. no unresolved frontier remains that could materially change the meaning of the story.
+
+This means the explorer should:
+
+> **Follow every semantically material branch, but do not recursively inline every semantically meaningful dependency.**
+
+Branches expand the current story.
+
+Sub-flows become referenced stories.
+
+External dependencies become contracts.
+
+This allows DataSong to be thorough without becoming exhaustive.
+
+---
+
+## 16. Implications for DataSong
 
 This direction changes the role of the current workflow checklist architecture.
 
@@ -646,7 +800,7 @@ Those stories are the substrate from which workflows, policies, datasets, system
 
 ---
 
-## 16. Open questions
+## 17. Open questions
 
 This note intentionally leaves several questions unresolved:
 
@@ -662,5 +816,8 @@ This note intentionally leaves several questions unresolved:
 10. What stopping criterion indicates that the enterprise has been explored sufficiently?
 11. What common topology API can cover code, tables, documents, messages, and traces?
 12. How should source-specific clustering and indexing remain inexpensive enough for continuous enterprise operation?
+13. How should the explorer distinguish a branch of the current story from a reusable sub-flow?
+14. What evidence is sufficient to define a stable semantic contract for a local or external dependency?
+15. How should parent-story completion be computed from branch closure and dependency state without returning to a rigid predefined checklist?
 
 These are now more central research/design questions than the previous fixed workflow traversal mechanics.
