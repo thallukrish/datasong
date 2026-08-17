@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CanonicalSemanticTopologyV4 } from './canonicalSemanticTopologyV4.js';
-import { ModelDirectedExplorerV2 } from './modelDirectedExplorerV2.js';
+import { ProgressiveRepositoryTopology } from './progressiveRepositoryTopology.js';
+import { ProgressiveRepositoryExplorer } from './progressiveRepositoryExplorer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,8 +11,8 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new CanonicalSemanticTopologyV4({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ModelDirectedExplorerV2({
+const topology = new ProgressiveRepositoryTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new ProgressiveRepositoryExplorer({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] model-directed canonical browsing; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] progressive repository browser → semantic traversal; detailed traces go to data/runs/*.jsonl');
 });
