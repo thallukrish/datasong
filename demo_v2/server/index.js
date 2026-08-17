@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BoundaryAwareTopology } from './boundaryAwareTopology.js';
-import { CycleSafeExplorer } from './cycleSafeExplorer.js';
+import { SemanticFunctionTopology } from './semanticFunctionTopology.js';
+import { SemanticFunctionExplorer } from './semanticFunctionExplorer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,8 +11,8 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new BoundaryAwareTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new CycleSafeExplorer({
+const topology = new SemanticFunctionTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new SemanticFunctionExplorer({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
