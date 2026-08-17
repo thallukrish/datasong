@@ -2,30 +2,46 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import OpenAI from 'openai';
 
-const MAX_STORIES_IN_PROMPT = 8;
-const MAX_STEPS_PER_STORY_IN_PROMPT = 14;
-const MAX_FRONTIERS_IN_PROMPT = 14;
+const MAX_STORIES_IN_PROMPT = 6;
+const MAX_STEPS_PER_STORY_IN_PROMPT = 12;
+const MAX_LOCAL_CANDIDATES = 10;
+const MAX_GLOBAL_CANDIDATES = 4;
 const MAX_STEPS = Number(process.env.MAX_EXPLORATION_STEPS || 60);
 const MODEL_TIMEOUT_MS = 60_000;
-const MAX_MODEL_TOKENS = Number(process.env.MAX_MODEL_TOKENS || 1800);
-const RETRY_MODEL_TOKENS = Number(process.env.RETRY_MODEL_TOKENS || Math.max(3200, MAX_MODEL_TOKENS * 2));
+const MAX_MODEL_TOKENS = Number(process.env.MAX_MODEL_TOKENS || 1000);
+const RETRY_MODEL_TOKENS = Number(process.env.RETRY_MODEL_TOKENS || Math.max(1800, MAX_MODEL_TOKENS * 2));
 
-const SYSTEM_PROMPT = `You are the semantic interpretation and exploration policy for DataSong.
+const SYSTEM_PROMPT = `You are DataSong's semantic interpretation and exploration policy.
 
-You inspect one artifact at a time from an unknown enterprise evidence world. Do not assume that an artifact belongs to a business workflow. It may represent a workflow step, ETL stage, service, algorithm, helper, policy implementation, infrastructure, data transformation, or something else.
+You inspect one artifact at a time from an unknown enterprise evidence world.
 
-Your job for each observed artifact is deliberately small:
-1. state its semantic meaning;
-2. decide whether it continues an existing semantic story, starts a new story, is a branch/sub-flow, or remains unattached;
-3. if it belongs to a story, explain the semantic bridge and where it fits relative to already known steps;
-4. estimate semantic continuity, placement confidence, and coherence gain;
-5. choose the next local artifact/search expected to maximize information gain, while preferring closure of a mature unfinished story over unrelated novelty when gains are comparable.
+There are TWO different things you may observe:
 
-Discovery order is NOT story order. A newly found artifact may belong before, after, between, parallel to, or on a branch from existing steps.
+1. ORIENTATION EVIDENCE
+   Repository roots, directories, README files, build files, component descriptors, ignore files, generic framework configuration and similar artifacts may help you understand what kind of system you are in. They are NOT themselves semantic stories.
 
-A branch is part of the current story and must remain open until explored or explicitly bounded. A reusable sub-flow should become a separately explorable story/dependency rather than being recursively inlined. Source outside the supplied repository is an external black box: describe its input/output/effect only and do not ask to inspect its implementation.
+2. STORY EVIDENCE
+   Code, tests, routes, service calls, queries, schemas, configuration, documents or other evidence that describes or implements an actual coherent behavior, process, transformation, algorithm, policy, data flow or other end-to-end semantic path.
 
-Return strict JSON only. Return only the delta for this artifact; never rewrite the whole semantic board.`;
+Never create a story called "Repository overview", "README", "configuration", "tests", "JMeter tests", or another artifact/container name merely because that artifact was inspected. A story title must name the behavior or meaning that the evidence is revealing, for example "Customer places an order", "Nightly sales aggregation", or "Price calculation".
+
+For each artifact return only a compact semantic delta:
+- what it means;
+- semanticRole = orientation | story | unattached;
+- if story: which existing path it continues, or NEW;
+- semantic continuity with that path;
+- one semantic bridge explaining how it continues;
+- where it belongs relative to known steps;
+- whether it continues, branches, or exposes a reusable subflow;
+- the next local artifact/search with the highest expected information gain.
+
+Discovery order is not story order. Relative placement may be before, after, between, branch_from, parallel, or unknown.
+
+Prefer continuing a coherent active story when a local call/service/route/entity/reference is likely to advance it. Do not wander to unrelated root metadata while a high-signal local path remains. If local semantic gain dampens, another frontier may become preferable.
+
+A branch belongs to its parent story until closed or bounded. A reusable independently meaningful sub-flow becomes a separately explorable dependency/path. Source outside the supplied repository is a black box: record only its input/output/effect and do not request its implementation.
+
+Return strict JSON only. Never regenerate the whole semantic board.`;
 
 function clamp01(n) {
   const x = Number(n);
@@ -54,6 +70,7 @@ export class SemanticExplorer {
     this.state = this.emptyState();
     this.runLogPath = null;
     this.modelCallCount = 0;
+    this.activeStoryId = '';
   }
 
   emptyState() {
@@ -62,6 +79,7 @@ export class SemanticExplorer {
       repoUrl: '',
       commit: '',
       currentArtifact: null,
+      orientation: [],
       stories: [],
       unattachedFragments: [],
       frontier: [],
@@ -76,8 +94,10 @@ export class SemanticExplorer {
 
   async run(repoUrl) {
     if (!this.client) throw new Error('DEEPSEEK_API_KEY is not configured');
+
     this.state = this.emptyState();
     this.modelCallCount = 0;
+    this.activeStoryId = '';
     this.state.status = 'preparing';
     this.state.repoUrl = repoUrl;
     this.emit();
@@ -86,49 +106,45 @@ export class SemanticExplorer {
     this.state.commit = prep.commit;
     this.state.status = 'exploring';
     this.state.currentArtifact = prep.root;
-    this.state.frontier = prep.root.neighbors || [];
+    this.mergeFrontier(prep.root.neighbors || []);
     await this.startRunLog(prep);
     this.emit();
 
     let observation = prep.root;
+
     for (let i = 0; i < MAX_STEPS; i += 1) {
       this.state.step = i + 1;
       this.state.currentArtifact = observation;
       if (!this.state.visited.includes(observation.id)) this.state.visited.push(observation.id);
       this.mergeFrontier(observation.neighbors || []);
 
-      const candidates = this.activeCandidates().slice(0, MAX_FRONTIERS_IN_PROMPT);
+      const candidates = this.candidatesFor(observation);
       const before = this.snapshot();
       const dynamicPrompt = this.buildPrompt(observation, candidates);
-      const { parsed, raw, usage, finishReason, callNumber, retry, promptUsed } = await this.getSemanticUpdate({
-        dynamicPrompt,
-        observation,
-        candidates,
-        before
-      });
+      const result = await this.getSemanticUpdate({ dynamicPrompt, observation, candidates, before });
 
-      this.applyDelta(parsed, observation);
+      this.applyDelta(result.parsed, observation);
 
       await this.appendRunLog({
         type: 'llm_call_applied',
-        call: callNumber,
+        call: result.callNumber,
         explorationStep: this.state.step,
-        retry,
+        retry: result.retry,
         timestamp: new Date().toISOString(),
         observedArtifact: observation,
         candidates,
         semanticBoardBefore: before,
         systemPrompt: SYSTEM_PROMPT,
-        prompt: promptUsed,
-        rawResponse: raw,
-        parsedResponse: parsed,
-        finishReason,
-        usage,
+        prompt: result.promptUsed,
+        rawResponse: result.raw,
+        parsedResponse: result.parsed,
+        finishReason: result.finishReason,
+        usage: result.usage,
         cumulativeUsage: { ...this.state.tokenUsage },
         semanticBoardAfter: this.snapshot()
       });
 
-      this.printCallSummary(usage, callNumber, retry ? 'retry applied' : 'applied');
+      this.printCallSummary(result.usage, result.callNumber, result.retry ? 'retry applied' : 'applied');
       this.emit();
 
       const closed = this.state.stories.find((s) => s.progress >= 100 && s.status === 'closed');
@@ -140,7 +156,7 @@ export class SemanticExplorer {
         return this.snapshot();
       }
 
-      const next = await this.resolveNextAction(parsed.next, candidates);
+      const next = await this.resolveNextAction(result.parsed.next, candidates);
       if (!next) {
         this.state.status = 'complete';
         this.state.lastMessage = 'No meaningful frontier remains within the current evidence boundary.';
@@ -165,112 +181,96 @@ export class SemanticExplorer {
       nature: story.nature,
       progress: story.progress,
       status: story.status,
-      steps: story.steps.slice(-MAX_STEPS_PER_STORY_IN_PROMPT).map((step) => ({
-        id: step.id,
-        meaning: step.meaning,
-        bridge: step.bridge,
-        relation: step.relation,
-        branchId: step.branchId || null
-      })),
+      steps: story.steps.slice(-MAX_STEPS_PER_STORY_IN_PROMPT).map((step) => ({ id: step.id, meaning: step.meaning, bridge: step.bridge, relation: step.relation, branchId: step.branchId || null })),
       branches: story.branches.map((b) => ({ id: b.id, label: b.label, status: b.status, progress: b.progress })),
       dependencies: story.dependencies.map((d) => ({ id: d.id, label: d.label, scope: d.scope, contract: d.contract })),
-      openQuestions: story.openQuestions.slice(0, 8)
+      openQuestions: story.openQuestions.slice(0, 6)
     }));
 
-    const candidateDescriptors = candidates.map((c) => ({
-      id: c.id,
-      path: c.path,
-      kind: c.kind,
-      relation: c.relation,
-      label: c.label,
-      hint: safeString(c.hint, 260)
-    }));
+    const candidateDescriptors = candidates.map((c) => ({ id: c.id, path: c.path, kind: c.kind, relation: c.relation, label: c.label, hint: safeString(c.hint, 180), locality: c._locality || 'global' }));
 
     const shape = {
-      meaning: 'what this artifact means semantically',
+      meaning: 'one short semantic statement',
+      semanticRole: 'orientation|story|unattached',
       pathId: 'existing story id | NEW | UNATTACHED',
-      pathTitle: 'only when NEW, or if an existing title should be clarified',
-      pathNature: 'optional emergent type such as order flow, ETL pipeline, utility, algorithm',
+      pathTitle: 'only for NEW; name the behavior, never the artifact/container',
+      pathNature: 'optional emergent type',
       continuity: 0.0,
-      bridge: 'how this artifact continues or relates to the chosen story',
+      bridge: 'one short semantic bridge',
       relation: 'continue|branch|subflow|new_story|unattached',
-      placement: {
-        type: 'after|before|between|branch_from|parallel|unknown',
-        afterStepId: 'optional existing step id',
-        beforeStepId: 'optional existing step id',
-        branchFromStepId: 'optional existing step id',
-        confidence: 0.0
-      },
+      placement: { type: 'after|before|between|branch_from|parallel|unknown', afterStepId: 'optional', beforeStepId: 'optional', branchFromStepId: 'optional', confidence: 0.0 },
       coherenceGain: 0.0,
-      branch: { id: 'optional branch id', label: 'optional branch label', status: 'open|closed|bounded' },
-      dependency: { label: 'optional sub-flow/dependency label', scope: 'local|external', contract: 'input/output/effect if known' },
+      branch: { id: 'optional', label: 'optional', status: 'open|closed|bounded' },
+      dependency: { label: 'optional', scope: 'local|external', contract: 'optional input/output/effect' },
       closes: 'none|branch|story',
-      openQuestion: 'optional most important semantic gap exposed by this artifact',
+      resolvesQuestionIds: ['optional existing question ids'],
+      openQuestion: 'optional next semantic gap',
       next: { type: 'artifact|search|stop', artifactId: 'candidate id', query: 'search query', expectedGain: 0.0, reason: 'short reason' }
     };
 
-    return `CURRENT SEMANTIC BOARD\n${JSON.stringify(board)}\n\nOBSERVED ARTIFACT\n${JSON.stringify({
-      id: observation.id,
-      path: observation.path,
-      kind: observation.kind,
-      summary: observation.summary,
-      excerpt: observation.excerpt || ''
-    })}\n\nAVAILABLE NEXT ARTIFACTS\n${JSON.stringify(candidateDescriptors)}\n\nRECENTLY VISITED IDS\n${JSON.stringify(this.state.visited.slice(-50))}\n\nReturn exactly one compact JSON object shaped like:\n${JSON.stringify(shape)}\n\nImportant:\n- pathId must refer to one existing story id, NEW, or UNATTACHED.\n- relation describes this artifact only; do not regenerate prior story state.\n- use relative placement, not absolute step numbers.\n- continuity asks whether it belongs to the story; placement.confidence asks whether its relative position is known; coherenceGain asks how much inserting it improves story coherence.\n- if this reveals a material alternative branch, set relation=branch and branch.status=open unless this artifact itself closes it.\n- use subflow only for an independently meaningful reusable local/external dependency.\n- choose next from AVAILABLE NEXT ARTIFACTS when possible; use search only if a specific semantic gap cannot be resolved locally.\n- keep the whole response very short.`;
+    return `ORIENTATION CONTEXT\n${JSON.stringify(this.state.orientation.slice(-8))}\n\nCURRENT SEMANTIC STORIES\n${JSON.stringify(board)}\n\nACTIVE STORY\n${JSON.stringify(this.activeStoryId || null)}\n\nOBSERVED ARTIFACT\n${JSON.stringify({ id: observation.id, path: observation.path, kind: observation.kind, summary: observation.summary, excerpt: observation.excerpt || '' })}\n\nAVAILABLE NEXT ARTIFACTS\n${JSON.stringify(candidateDescriptors)}\n\nReturn exactly one compact JSON object shaped like:\n${JSON.stringify(shape)}\n\nRules:\n- Root/directories/README/build/component/ignore/framework configuration normally have semanticRole=orientation, not story.\n- Tests may reveal a real story, but the story is the behavior under test, never \"tests\" or the test framework itself.\n- Only semanticRole=story can create or update a story.\n- pathId must be an existing story id, NEW, or UNATTACHED.\n- Prefer candidates marked locality=local when they continue a meaningful path.\n- Use relative placement, not absolute step numbers.\n- If a candidate is a direct reference/call from the current artifact, treat that structural adjacency as useful evidence but still judge semantic continuity.\n- Use search only when the required continuation is not among local candidates.\n- Keep the entire response compact.`;
+  }
+
+  candidatesFor(observation) {
+    const localIds = new Set(safeArray(observation.neighbors).map((x) => x.id));
+    const local = safeArray(observation.neighbors)
+      .filter((x) => x?.id && !this.state.visited.includes(x.id))
+      .map((x) => ({ ...x, _locality: 'local' }))
+      .sort((a, b) => this.candidatePriority(b) - this.candidatePriority(a))
+      .slice(0, MAX_LOCAL_CANDIDATES);
+
+    const chosen = new Set(local.map((x) => x.id));
+    const global = this.state.frontier
+      .filter((x) => x?.id && !this.state.visited.includes(x.id) && !chosen.has(x.id) && !localIds.has(x.id))
+      .map((x) => ({ ...x, _locality: 'global' }))
+      .sort((a, b) => this.candidatePriority(b) - this.candidatePriority(a))
+      .slice(0, MAX_GLOBAL_CANDIDATES);
+
+    return [...local, ...global];
+  }
+
+  candidatePriority(candidate) {
+    let score = 0;
+    const relation = String(candidate?.relation || '');
+    const p = String(candidate?.path || '').toLowerCase();
+    const label = String(candidate?.label || '').toLowerCase();
+
+    if (relation === 'reference') score += 100;
+    else if (relation === 'symbol_reference') score += 95;
+    else if (relation === 'search') score += 85;
+    else if (relation === 'contains') score += 30;
+    else if (relation === 'sibling') score += 8;
+
+    if (candidate?.kind === 'directory') {
+      score += 12;
+      if (/(screen|service|src|app|route|controller|workflow|process|pipeline|api|test|script)/.test(p)) score += 28;
+    }
+
+    if (/\.(xml|js|jsx|ts|tsx|py|java|kt|sql|groovy|gradle)$/.test(p)) score += 10;
+    if (/(readme|license|gitignore|package-lock|yarn\.lock|gradle\.properties|build\.gradle|pom\.xml|component\.xml)$/.test(p)) score -= 22;
+    if (label.startsWith('.')) score -= 12;
+
+    return score;
   }
 
   async getSemanticUpdate({ dynamicPrompt, observation, candidates, before }) {
-    const first = await this.callAndRecordAttempt({
-      dynamicPrompt,
-      observation,
-      candidates,
-      before,
-      maxTokens: MAX_MODEL_TOKENS,
-      retry: false
-    });
+    const first = await this.callAndRecordAttempt({ dynamicPrompt, observation, candidates, before, maxTokens: MAX_MODEL_TOKENS, retry: false });
 
     try {
       return { ...first, parsed: this.parseModelOutput(first.raw) };
     } catch (error) {
-      await this.appendRunLog({
-        type: 'llm_parse_error',
-        call: first.callNumber,
-        explorationStep: this.state.step,
-        timestamp: new Date().toISOString(),
-        error: error.message,
-        finishReason: first.finishReason,
-        rawResponse: first.raw,
-        usage: first.usage,
-        cumulativeUsage: { ...this.state.tokenUsage }
-      });
+      await this.appendRunLog({ type: 'llm_parse_error', call: first.callNumber, explorationStep: this.state.step, timestamp: new Date().toISOString(), error: error.message, finishReason: first.finishReason, rawResponse: first.raw, usage: first.usage, cumulativeUsage: { ...this.state.tokenUsage } });
       this.printCallSummary(first.usage, first.callNumber, `invalid JSON${first.finishReason ? `/${first.finishReason}` : ''}`);
 
-      const retryPrompt = `${dynamicPrompt}\n\nRETRY: your previous answer was invalid JSON. Return COMPLETE VALID JSON only. Keep every string to one short sentence and omit optional branch/dependency/openQuestion fields if they are not needed.`;
-      const second = await this.callAndRecordAttempt({
-        dynamicPrompt: retryPrompt,
-        observation,
-        candidates,
-        before,
-        maxTokens: RETRY_MODEL_TOKENS,
-        retry: true
-      });
+      const retryPrompt = `${dynamicPrompt}\n\nRETRY: Return COMPLETE VALID JSON only. Use very short strings and omit optional branch/dependency/openQuestion fields when unnecessary.`;
+      const second = await this.callAndRecordAttempt({ dynamicPrompt: retryPrompt, observation, candidates, before, maxTokens: RETRY_MODEL_TOKENS, retry: true });
 
       try {
         return { ...second, parsed: this.parseModelOutput(second.raw) };
       } catch (retryError) {
-        await this.appendRunLog({
-          type: 'llm_parse_error',
-          call: second.callNumber,
-          explorationStep: this.state.step,
-          timestamp: new Date().toISOString(),
-          error: retryError.message,
-          finishReason: second.finishReason,
-          rawResponse: second.raw,
-          usage: second.usage,
-          cumulativeUsage: { ...this.state.tokenUsage },
-          terminalForStep: true
-        });
+        await this.appendRunLog({ type: 'llm_parse_error', call: second.callNumber, explorationStep: this.state.step, timestamp: new Date().toISOString(), error: retryError.message, finishReason: second.finishReason, rawResponse: second.raw, usage: second.usage, cumulativeUsage: { ...this.state.tokenUsage }, terminalForStep: true });
         this.printCallSummary(second.usage, second.callNumber, `invalid JSON${second.finishReason ? `/${second.finishReason}` : ''}`);
-        throw new Error(`Model returned invalid JSON twice at exploration step ${this.state.step}. See ${this.runLogPath || 'data/runs/*.jsonl'} for the raw responses.`);
+        throw new Error(`Model returned invalid JSON twice at exploration step ${this.state.step}. See ${this.runLogPath || 'data/runs/*.jsonl'} for raw responses.`);
       }
     }
   }
@@ -282,36 +282,12 @@ export class SemanticExplorer {
     const usage = this.accountUsage(response.usage || {});
     const callNumber = ++this.modelCallCount;
 
-    await this.appendRunLog({
-      type: 'llm_attempt',
-      call: callNumber,
-      explorationStep: this.state.step,
-      retry,
-      timestamp: new Date().toISOString(),
-      observedArtifact: observation,
-      candidates,
-      semanticBoardBefore: before,
-      systemPrompt: SYSTEM_PROMPT,
-      prompt: dynamicPrompt,
-      rawResponse: raw,
-      finishReason,
-      usage,
-      cumulativeUsage: { ...this.state.tokenUsage }
-    });
-
+    await this.appendRunLog({ type: 'llm_attempt', call: callNumber, explorationStep: this.state.step, retry, timestamp: new Date().toISOString(), observedArtifact: observation, candidates, semanticBoardBefore: before, systemPrompt: SYSTEM_PROMPT, prompt: dynamicPrompt, rawResponse: raw, finishReason, usage, cumulativeUsage: { ...this.state.tokenUsage } });
     return { raw, usage, finishReason, callNumber, retry, promptUsed: dynamicPrompt };
   }
 
   async callModel(dynamicPrompt, maxTokens = MAX_MODEL_TOKENS) {
-    return this.client.chat.completions.create({
-      model: this.modelName,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: dynamicPrompt }
-      ],
-      response_format: { type: 'json_object' },
-      max_tokens: maxTokens
-    });
+    return this.client.chat.completions.create({ model: this.modelName, messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: dynamicPrompt }], response_format: { type: 'json_object' }, max_tokens: maxTokens });
   }
 
   parseModelOutput(raw) {
@@ -328,56 +304,49 @@ export class SemanticExplorer {
   }
 
   applyDelta(parsed, observation) {
-    const relation = ['continue', 'branch', 'subflow', 'new_story', 'unattached'].includes(parsed.relation)
-      ? parsed.relation
-      : 'unattached';
+    const semanticRole = ['orientation', 'story', 'unattached'].includes(parsed.semanticRole) ? parsed.semanticRole : 'unattached';
     const meaning = safeString(parsed.meaning, 500);
+
+    if (semanticRole === 'orientation') {
+      if (meaning) {
+        this.state.orientation.push({ artifactId: observation.id, path: observation.path, meaning });
+        this.state.orientation = this.state.orientation.slice(-24);
+      }
+      this.state.lastMessage = meaning || 'Added orientation context.';
+      return;
+    }
+
+    if (semanticRole === 'unattached' || parsed.pathId === 'UNATTACHED') {
+      if (meaning) this.state.unattachedFragments.push({ artifactId: observation.id, meaning });
+      this.state.unattachedFragments = this.state.unattachedFragments.slice(-40);
+      this.state.lastMessage = meaning || 'Observed evidence that does not yet attach confidently to a story.';
+      return;
+    }
+
+    const relation = ['continue', 'branch', 'subflow', 'new_story'].includes(parsed.relation) ? parsed.relation : (parsed.pathId === 'NEW' ? 'new_story' : 'continue');
     const bridge = safeString(parsed.bridge, 500);
     const continuity = clamp01(parsed.continuity);
     const coherenceGain = clamp01(parsed.coherenceGain);
     const placement = this.normalizePlacement(parsed.placement);
 
-    if (relation === 'unattached' || parsed.pathId === 'UNATTACHED') {
-      if (meaning) this.state.unattachedFragments.push({ artifactId: observation.id, meaning });
-      this.state.unattachedFragments = this.state.unattachedFragments.slice(-40);
-      this.state.lastMessage = meaning || 'Observed an artifact that does not yet attach confidently to a story.';
-      return;
-    }
-
     let story = null;
     if (parsed.pathId && parsed.pathId !== 'NEW') story = this.state.stories.find((s) => s.id === parsed.pathId);
+
     if (!story) {
-      story = {
-        id: this.newId('story'),
-        title: safeString(parsed.pathTitle, 140) || 'Emerging story',
-        nature: safeString(parsed.pathNature, 180),
-        status: 'early',
-        progress: 0,
-        steps: [],
-        branches: [],
-        dependencies: [],
-        openQuestions: [],
-        recentGain: 0,
-        evidence: []
-      };
+      const title = safeString(parsed.pathTitle, 140);
+      if (!title) {
+        if (meaning) this.state.unattachedFragments.push({ artifactId: observation.id, meaning });
+        this.state.lastMessage = meaning || 'Story-like evidence found, but no coherent path identity yet.';
+        return;
+      }
+      story = { id: this.newId('story'), title, nature: safeString(parsed.pathNature, 180), status: 'early', progress: 0, steps: [], branches: [], dependencies: [], openQuestions: [], recentGain: 0, evidence: [] };
       this.state.stories.push(story);
     } else {
       story.title = safeString(parsed.pathTitle, 140) || story.title;
       story.nature = safeString(parsed.pathNature, 180) || story.nature;
     }
 
-    const step = {
-      id: this.newId('step'),
-      artifactId: observation.id,
-      artifactPath: observation.path,
-      meaning,
-      bridge,
-      relation,
-      continuity,
-      placementConfidence: placement.confidence,
-      coherenceGain,
-      branchId: null
-    };
+    const step = { id: this.newId('step'), artifactId: observation.id, artifactPath: observation.path, meaning, bridge, relation, continuity, placementConfidence: placement.confidence, coherenceGain, branchId: null };
 
     if (relation === 'branch') {
       const branch = this.upsertBranch(story, parsed.branch, placement, meaning);
@@ -390,46 +359,37 @@ export class SemanticExplorer {
     this.insertStep(story, step, placement);
     if (!story.evidence.includes(observation.id)) story.evidence.push(observation.id);
 
-    const question = safeString(parsed.openQuestion, 300);
-    if (question && !story.openQuestions.includes(question)) story.openQuestions.push(question);
-    story.openQuestions = story.openQuestions.slice(-10);
+    const resolvedIds = new Set(safeArray(parsed.resolvesQuestionIds).map((x) => safeString(x, 100)).filter(Boolean));
+    if (resolvedIds.size) story.openQuestions = story.openQuestions.filter((q) => !resolvedIds.has(q.id));
 
-    if (parsed.closes === 'story') {
-      for (const branch of story.branches) if (branch.status === 'open') branch.status = 'bounded';
+    const questionText = safeString(parsed.openQuestion, 300);
+    if (questionText && !story.openQuestions.some((q) => q.text === questionText)) story.openQuestions.push({ id: this.newId('q'), text: questionText });
+    story.openQuestions = story.openQuestions.slice(-8);
+
+    if (parsed.closes === 'story' && !story.branches.some((b) => b.status === 'open')) {
       story.openQuestions = [];
       story.status = 'closed';
     }
 
     story.recentGain = clamp01((continuity * 0.45) + (coherenceGain * 0.35) + (placement.confidence * 0.20));
     story.progress = this.computeStoryProgress(story);
-    if (story.status !== 'closed') {
-      story.status = story.progress >= 85 ? 'closing' : story.progress >= 35 ? 'building' : 'early';
-    }
+    if (story.status !== 'closed') story.status = story.progress >= 82 ? 'closing' : story.progress >= 30 ? 'building' : 'early';
 
+    this.activeStoryId = story.id;
     this.state.lastMessage = bridge || meaning || `Updated ${story.title}.`;
   }
 
   normalizePlacement(input) {
     const type = ['after', 'before', 'between', 'branch_from', 'parallel', 'unknown'].includes(input?.type) ? input.type : 'unknown';
-    return {
-      type,
-      afterStepId: safeString(input?.afterStepId, 100),
-      beforeStepId: safeString(input?.beforeStepId, 100),
-      branchFromStepId: safeString(input?.branchFromStepId, 100),
-      confidence: clamp01(input?.confidence)
-    };
+    return { type, afterStepId: safeString(input?.afterStepId, 100), beforeStepId: safeString(input?.beforeStepId, 100), branchFromStepId: safeString(input?.branchFromStepId, 100), confidence: clamp01(input?.confidence) };
   }
 
   insertStep(story, step, placement) {
-    if (!story.steps.length) {
-      story.steps.push(step);
-      return;
-    }
+    if (!story.steps.length) { story.steps.push(step); return; }
     const indexOf = (id) => story.steps.findIndex((s) => s.id === id);
     const after = indexOf(placement.afterStepId);
     const before = indexOf(placement.beforeStepId);
     const branchFrom = indexOf(placement.branchFromStepId);
-
     if (placement.type === 'before' && before >= 0) story.steps.splice(before, 0, step);
     else if (placement.type === 'between' && after >= 0 && before >= 0 && after < before) story.steps.splice(after + 1, 0, step);
     else if (placement.type === 'after' && after >= 0) story.steps.splice(after + 1, 0, step);
@@ -441,18 +401,13 @@ export class SemanticExplorer {
     const requested = safeString(input?.id, 100);
     let branch = requested ? story.branches.find((b) => b.id === requested) : null;
     if (!branch) {
-      branch = {
-        id: requested || this.newId('branch'),
-        label: safeString(input?.label, 180) || meaning || 'Discovered branch',
-        status: ['open', 'closed', 'bounded'].includes(input?.status) ? input.status : 'open',
-        progress: 0,
-        fromStepId: placement.branchFromStepId || placement.afterStepId || ''
-      };
+      branch = { id: requested || this.newId('branch'), label: safeString(input?.label, 180) || meaning || 'Discovered branch', status: ['open', 'closed', 'bounded'].includes(input?.status) ? input.status : 'open', progress: 0, fromStepId: placement.branchFromStepId || placement.afterStepId || '' };
       story.branches.push(branch);
     } else {
       branch.label = safeString(input?.label, 180) || branch.label;
       if (['open', 'closed', 'bounded'].includes(input?.status)) branch.status = input.status;
     }
+    branch.progress = branch.status === 'closed' || branch.status === 'bounded' ? 100 : Math.max(branch.progress, 10);
     return branch;
   }
 
@@ -464,12 +419,7 @@ export class SemanticExplorer {
       existing.scope = input?.scope === 'external' ? 'external' : existing.scope;
       return existing;
     }
-    const dep = {
-      id: this.newId('dep'),
-      label,
-      scope: input?.scope === 'external' ? 'external' : 'local',
-      contract: safeString(input?.contract, 500)
-    };
+    const dep = { id: this.newId('dep'), label, scope: input?.scope === 'external' ? 'external' : 'local', contract: safeString(input?.contract, 500) };
     story.dependencies.push(dep);
     return dep;
   }
@@ -478,25 +428,19 @@ export class SemanticExplorer {
     if (story.status === 'closed') return 100;
     const stepCount = story.steps.length;
     if (!stepCount) return 0;
-
-    const continuity = story.steps.reduce((sum, s) => sum + s.continuity, 0) / stepCount;
-    const placement = story.steps.reduce((sum, s) => sum + s.placementConfidence, 0) / stepCount;
-    const coherence = story.steps.reduce((sum, s) => sum + s.coherenceGain, 0) / stepCount;
-    const baseMaturity = Math.min(75, 12 + (stepCount * 7));
-    const quality = 0.45 * continuity + 0.30 * coherence + 0.25 * placement;
-    let progress = baseMaturity * (0.45 + 0.55 * quality);
-
+    const avg = (key) => story.steps.reduce((sum, step) => sum + Number(step[key] || 0), 0) / stepCount;
+    const quality = (0.45 * avg('continuity')) + (0.35 * avg('coherenceGain')) + (0.20 * avg('placementConfidence'));
+    const maturity = 1 - Math.exp(-stepCount / 4.5);
+    let progress = 88 * maturity * (0.55 + 0.45 * quality);
     const openBranches = story.branches.filter((b) => b.status === 'open').length;
-    const closedBranches = story.branches.filter((b) => b.status !== 'open').length;
+    const resolvedBranches = story.branches.filter((b) => b.status !== 'open').length;
     if (story.branches.length) {
-      const branchCoverage = closedBranches / story.branches.length;
-      progress *= 0.72 + (0.28 * branchCoverage);
-      progress -= openBranches * 4;
+      const coverage = resolvedBranches / story.branches.length;
+      progress *= 0.68 + (0.32 * coverage);
+      progress -= openBranches * 5;
     }
-
-    progress -= Math.min(15, story.openQuestions.length * 3);
-    if (!openBranches && !story.openQuestions.length && stepCount >= 3) progress = Math.max(progress, 82);
-    return clampProgress(Math.min(99, progress));
+    progress -= Math.min(18, story.openQuestions.length * 4);
+    return clampProgress(Math.min(96, progress));
   }
 
   async resolveNextAction(action, candidates) {
@@ -504,36 +448,28 @@ export class SemanticExplorer {
     if (type === 'stop') return null;
     if (type === 'search') {
       const query = safeString(action.query, 180);
-      if (!query) return this.observeFallback(candidates);
-      const hits = await this.topology.search(query);
-      this.mergeFrontier(hits);
-      const hit = this.fallbackCandidate(hits);
-      if (hit) {
-        this.removeFrontier(hit.id);
-        return this.topology.observe(hit.id);
+      if (query) {
+        const hits = await this.topology.search(query);
+        this.mergeFrontier(hits);
+        const rankedHits = hits.filter((x) => !this.state.visited.includes(x.id)).sort((a, b) => this.candidatePriority(b) - this.candidatePriority(a));
+        const hit = rankedHits[0];
+        if (hit) { this.removeFrontier(hit.id); return this.topology.observe(hit.id); }
       }
       return this.observeFallback(candidates);
     }
     if (type === 'artifact') {
       const id = safeString(action.artifactId, 500);
       const candidate = this.state.frontier.find((x) => x.id === id && !this.state.visited.includes(x.id));
-      if (candidate) {
-        this.removeFrontier(candidate.id);
-        return this.topology.observe(candidate.id);
-      }
+      if (candidate) { this.removeFrontier(candidate.id); return this.topology.observe(candidate.id); }
     }
     return this.observeFallback(candidates);
   }
 
   async observeFallback(candidates) {
-    const fallback = this.fallbackCandidate(candidates);
+    const fallback = safeArray(candidates).filter((x) => !this.state.visited.includes(x.id)).sort((a, b) => this.candidatePriority(b) - this.candidatePriority(a))[0];
     if (!fallback) return null;
     this.removeFrontier(fallback.id);
     return this.topology.observe(fallback.id);
-  }
-
-  fallbackCandidate(candidates) {
-    return safeArray(candidates).find((x) => !this.state.visited.includes(x.id)) || null;
   }
 
   mergeFrontier(items) {
@@ -546,13 +482,7 @@ export class SemanticExplorer {
     this.state.frontier = this.state.frontier.slice(-120);
   }
 
-  activeCandidates() {
-    return this.state.frontier.filter((x) => !this.state.visited.includes(x.id));
-  }
-
-  removeFrontier(id) {
-    this.state.frontier = this.state.frontier.filter((x) => x.id !== id);
-  }
+  removeFrontier(id) { this.state.frontier = this.state.frontier.filter((x) => x.id !== id); }
 
   accountUsage(usage) {
     const prompt = Number(usage.prompt_tokens || 0);
@@ -570,9 +500,7 @@ export class SemanticExplorer {
   }
 
   printCallSummary(usage, callNumber, suffix = '') {
-    const stories = this.state.stories.length
-      ? this.state.stories.slice(0, 6).map((s) => `${s.title} ${s.progress}%`).join(' | ')
-      : 'no story crystallized yet';
+    const stories = this.state.stories.length ? this.state.stories.slice(0, 6).map((s) => `${s.title} ${s.progress}%`).join(' | ') : 'no story crystallized yet';
     console.log(`[LLM #${callNumber}] stories: ${stories} | tokens +${usage.total} (prompt ${usage.prompt}, completion ${usage.completion}) | cumulative ${this.state.tokenUsage.total}${suffix ? ` | ${suffix}` : ''}`);
   }
 
@@ -581,15 +509,7 @@ export class SemanticExplorer {
     await fs.mkdir(runs, { recursive: true });
     const id = new Date().toISOString().replace(/[:.]/g, '-');
     this.runLogPath = path.join(runs, `${id}.jsonl`);
-    await this.appendRunLog({
-      type: 'run_start',
-      timestamp: new Date().toISOString(),
-      repoUrl: prep.repoUrl,
-      commit: prep.commit,
-      searchableFiles: prep.searchableFiles,
-      model: this.modelName,
-      contract: 'compact-semantic-bridge-v2'
-    });
+    await this.appendRunLog({ type: 'run_start', timestamp: new Date().toISOString(), repoUrl: prep.repoUrl, commit: prep.commit, searchableFiles: prep.searchableFiles, model: this.modelName, contract: 'orientation-plus-semantic-bridge-v3' });
   }
 
   async appendRunLog(record) {
@@ -597,9 +517,6 @@ export class SemanticExplorer {
     await fs.appendFile(this.runLogPath, `${JSON.stringify(record)}\n`, 'utf8');
   }
 
-  newId(prefix) {
-    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  }
-
+  newId(prefix) { return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`; }
   emit() { this.onState(this.snapshot()); }
 }
