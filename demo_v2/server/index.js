@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SemanticFunctionTopology } from './semanticFunctionTopology.js';
-import { StackGuidedExplorer } from './stackGuidedExplorer.js';
+import { CanonicalSemanticTopology } from './canonicalSemanticTopology.js';
+import { EmergentFlowExplorer } from './emergentFlowExplorer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,8 +11,8 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new SemanticFunctionTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new StackGuidedExplorer({
+const topology = new CanonicalSemanticTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new EmergentFlowExplorer({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] exploration console is intentionally terse; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] canonical semantic-function explorer; detailed traces go to data/runs/*.jsonl');
 });
