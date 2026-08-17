@@ -57,9 +57,20 @@ The browsing boundary is deliberately not universal.
 
 ### Directories
 
-DataSong returns only the directory listing: child directories and files with stable IDs/paths.
+DataSong returns the directory listing plus deterministic structural previews for child directories.
 
-The model chooses where to zoom in.
+A directory preview may contain:
+
+- descendant file count
+- direct file/directory counts
+- file-extension distribution
+- a small sample of file paths
+- a shallow subtree, typically a few levels deep
+- a `drillTarget` when a directory collapses through a single-child chain before files appear
+
+These previews contain no file contents and no semantic ranking. They exist only to avoid wasting model calls on mechanically descending paths such as `src/ -> test/ -> groovy/` and to give the model enough structural evidence to choose where information gain is likely to be higher.
+
+The model may jump directly to any deeper directory path exposed in a preview. DataSong still does not decide which directory is semantically important.
 
 ### Source files
 
@@ -227,24 +238,21 @@ A typical source-code exploration becomes:
 
 ```text
 DataSong: listDirectory("/")
-model: listDirectory("screen")
-DataSong: files/directories under screen/
-model: getArtifact("screen/.../OrderDetail.xml")
-DataSong: XML file
-model: follows meaningful service/action reference
-
-or
-
-DataSong: listDirectory("src")
-model: getArtifact("src/order.js")
+             screen/  36 XML files, samples..., shallow preview...
+             src/      3 Groovy files under src/test/groovy, drillTarget=src/test/groovy
+model: listDirectory("src/test/groovy")
+DataSong: files under src/test/groovy/
+model: getArtifact("src/test/groovy/PopCommerceScreenTests.groovy")
 DataSong: function signatures only
-model: getFunction(placeOrder)
+model: getFunction(testOrderDetail)
 DataSong: body + called function signatures
-model: getNeighbors(placeOrder, 3)
+model: getNeighbors(testOrderDetail, 3)
 DataSong: bounded lightweight call graph
 model: continuity/coherence/gain scores + advance
 DataSong: chooses strongest admissible path
 ```
+
+The same model may instead choose `screen/` from the root preview if that appears more promising. The preview supplies evidence; it does not prescribe the choice.
 
 This preserves model agency while keeping payloads focused and repository mechanics deterministic.
 
