@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ResolvedSymbolTopology } from './resolvedSymbolTopology.js';
-import { VerticalSliceExplorer } from './verticalSliceExplorer.js';
+import { BoundaryAwareTopology } from './boundaryAwareTopology.js';
+import { BoundaryAwareExplorer } from './boundaryAwareExplorer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,8 +11,8 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new ResolvedSymbolTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new VerticalSliceExplorer({
+const topology = new BoundaryAwareTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new BoundaryAwareExplorer({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -43,6 +43,9 @@ app.post('/api/explore', async (req, res) => {
   running = true;
   res.status(202).json({ ok: true });
   explorer.run(repoUrl)
+    .then((state) => {
+      console.log(`[DataSong v2] ${state.status} — ${state.lastMessage || 'exploration finished'}`);
+    })
     .catch((error) => {
       const state = explorer.snapshot();
       state.status = 'error';
