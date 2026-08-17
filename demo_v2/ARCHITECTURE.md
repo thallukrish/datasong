@@ -4,213 +4,250 @@
 
 DataSong does not hard-code a closed definition of a flow.
 
-A flow emerges when evidence encountered while traversing the enterprise topology sustains a coherent story around one end-to-end concept. The concept may be small or large. It may begin at a UI action, service, batch job, configuration-driven action, data access, event, function, document rule or any other meaningful point. Structural type does not make something a flow; sustained semantic continuity and coherence do.
+A flow emerges when evidence sustains a coherent story around one concept. The concept may be small or large and may begin anywhere. Structural type does not make something a flow; sustained semantic continuity and coherence do.
 
-## Role inversion: model navigates, DataSong supplies evidence
+## Progressive repository browsing first, semantic traversal second
 
-The model is the semantic navigator. DataSong is the deterministic evidence environment, graph engine and durable state manager.
+DataSong should not force every repository artifact into a semantic-function abstraction before the model has decided that the artifact matters.
 
-The model does not receive arbitrary files pushed by DataSong and is not asked to choose from opaque filename-level entrypoints. Instead it asks for canonical evidence as its semantic understanding develops.
+The model begins by browsing the repository at its natural structure:
 
-The evidence operations are:
+1. DataSong lists the current directory.
+2. The model chooses a directory or file to inspect.
+3. DataSong exposes that artifact at the appropriate granularity for its type.
+4. Once the model selects a meaningful function/config/XML unit, DataSong switches to semantic graph traversal around that unit.
+5. Continuity/coherence scoring, neighborhood rollouts, DFS/backtracking and flow construction operate from there.
 
-- `getArtifact(id)` — return one canonical semantic function/config/object;
-- `getNeighbors(id, depth)` — return a bounded canonical topology neighborhood, depth 1 through 4;
-- `searchSemantic(query)` — return canonical semantic functions relevant to a semantic question;
-- `advance` — after a neighborhood evaluation, ask DataSong to choose the strongest admissible path from the model's continuity/coherence/information-gain scores;
-- `backtrack` — signal that the present trajectory has flattened or drifted so DataSong should resume another stored DFS branch;
-- `stop` — no useful semantic evidence request remains from the model's current perspective.
+Repository orientation and semantic execution traversal are therefore separate concerns, although the model may move between them when needed.
 
-The model chooses semantic direction and semantic questions. DataSong resolves those requests against the real graph and controls exact traversal mechanics.
+## Model is navigator; DataSong is the evidence environment
 
-## Canonical semantic-function boundary
+The model decides what evidence it wants to inspect and what semantic question it is pursuing.
 
-Source language is an extraction concern, not a reasoning concern.
+DataSong owns deterministic mechanics:
 
-Before evidence reaches the model, source-specific structure is converted into canonical semantic functions. The model reasons over the same shape whether the source was JavaScript, TypeScript, Python, Java, Groovy, XML, JSON, YAML, environment configuration or another structured source.
+- repository directory/file inventory
+- artifact-type-aware exposure
+- source parsing and function signatures
+- function bodies on demand
+- call/reference graph
+- visited state
+- file/function coverage
+- cycle detection
+- semantic threads
+- DFS stacks and pending branches
+- cached interpretations
+- bounded neighborhoods
+- backtracking
 
-A canonical semantic function contains, as available:
+The browsing/evidence operations are:
 
-- identity and kind
-- inputs / parameters
-- outputs / returned values
-- normalized operations
-- conditions
-- effects
-- outgoing semantic references and their relation types
-- source provenance
+- `listDirectory(path)` — list one repository directory;
+- `getArtifact(id)` — inspect one file or already-known artifact;
+- `getFunction(id)` — inspect one selected function/XML/config semantic unit;
+- `getNeighbors(id, depth=1..4)` — inspect a lightweight bounded call/reference neighborhood;
+- `searchSemantic(query)` — find semantic functions relevant to a semantic question;
+- `advance` — after neighborhood scoring, let DataSong choose the strongest admissible path;
+- `backtrack` — local semantic signal has flattened or drifted;
+- `stop` — no useful evidence request remains.
 
-Examples include ordinary functions and methods, `$module_init.*`, event triggers, callback handlers, service calls, entity reads/writes, routes, `$config.*`, `$env.*`, `$constant.*`, JSON objects and external black-box functions.
+## Artifact-specific exposure
 
-Raw XML/JSON/source syntax stays inside the deterministic parser and provenance layer. It is not duplicated into model prompts when the parser can express the same information canonically.
+The browsing boundary is deliberately not universal.
 
-## Structured containers and repeated elements
+### Directories
 
-Structured sources are harvested into independently addressable semantic units.
+DataSong returns only the directory listing: child directories and files with stable IDs/paths.
 
-- XML elements that carry behavior or meaning (service calls, entity operations, transitions, sections, conditions, iterations, sets, etc.) are semantic units.
-- JSON/YAML/config values are value-returning semantic functions.
-- Objects within repeated arrays are harvested as separate addressable units when they carry distinct values/meaning.
-- Repetition does not imply that every homogeneous data row is a separate semantic function; the parser preserves meaningful addressability without exploding mechanically repetitive data.
+The model chooses where to zoom in.
 
-These units are presented to the model when topology, references or explicit model requests make them relevant, never by dumping the containing file.
+### Source files
 
-## File coverage is independent of exploration policy
+When the model asks for a source file (`.js`, `.ts`, `.py`, `.java`, etc.), DataSong initially returns function/method signatures only:
 
-DataSong tracks source coverage independently from semantic-flow exploration.
+```text
+placeOrder(cart, user)
+validateCart(cart)
+calculateTotal(cart)
+persistOrder(order)
+```
 
-For each source file, it records the semantic units known in that file and whether each unit has been observed/semantically harvested at least once. Coverage is bookkeeping, not a requirement to traverse every unit immediately.
+It does not send the whole source file merely because the file was selected.
 
-This allows DataSong to answer both:
+When the model asks for one function with `getFunction`, DataSong returns:
 
-1. Which evidence is most useful to explore next for the active semantic narratives?
-2. Which semantic units in each source have never been inspected?
+- function identity/signature
+- function body
+- provenance
+- lightweight signatures/relations of called or referenced functions
 
-A coherent flow may be completed while other units in the same file remain uncovered. Those units remain visible as coverage gaps/frontiers for later exploration.
+Called function bodies are not recursively dumped. The model chooses which one to inspect next.
+
+### XML
+
+For now XML may be returned directly when the file is selected, provided the transport remains reasonable. DataSong may additionally expose addressable structured XML units so the model can subsequently select a specific transition/service call/action/etc.
+
+This is intentionally simpler than inventing parser-facing identities such as `$xml.screen.screen-1@15` as repository entrypoints before the model has chosen the file.
+
+### Configuration
+
+JSON/YAML/env/properties/config artifacts are exposed as keys/items/values or addressable objects. Repeated array objects may become addressable items when they carry distinct meaning.
+
+Configuration is not treated as executable code merely for uniformity.
+
+### Documents and other text artifacts
+
+Markdown/text/SQL/other meaningful text is exposed as the document/artifact it actually is. It may contribute to a flow when semantic continuity/coherence supports that interpretation.
+
+## Hierarchical coverage
+
+Coverage is bookkeeping, not exploration policy.
+
+DataSong tracks:
+
+```text
+repository
+  directory opened / unopened
+  file opened / unopened
+  source file
+    function inspected / uninspected
+  XML/config file
+    semantic unit inspected / uninspected
+```
+
+A coherent flow may close while many unrelated files/functions remain uncovered. Coverage remains available for later exploration and for answering whether the evidence world has been comprehensively inspected.
+
+## Transition into semantic traversal
+
+Once a source function or meaningful structured unit is selected, it becomes a semantic exploration unit.
+
+A `getFunction` response contains the body plus lightweight called-function signatures, for example:
+
+```text
+placeOrder(cart, user)
+
+body: ...
+
+calls:
+- validateCart(cart) -> ValidationResult
+- calculateTotal(cart) -> Money
+- persistOrder(order) -> orderId
+```
+
+The model can then:
+
+- inspect a clearly promising callee directly;
+- request `getNeighbors(..., depth=2..4)` when several trajectories are plausible;
+- ask `searchSemantic(...)` if the required continuation is not represented locally;
+- backtrack when continuity/coherence flatten.
 
 ## Emergent semantic threads
 
-The explorer may maintain multiple candidate semantic threads. A newly observed semantic function is evaluated against all viable threads.
+The explorer may maintain multiple semantic threads.
 
-For each thread the model returns:
+For evidence that is semantically interpreted, the model evaluates fit against every viable thread:
 
-- continuity: how naturally the function continues the thread from the current evidence frontier;
-- coherence: how well the function fits the overall story represented by that thread;
-- bridge: the semantic reason it belongs there.
+- `continuity` — how naturally this evidence continues the current frontier of the thread;
+- `coherence` — how well the evidence fits the overall story represented by the thread;
+- `bridge` — why it belongs or does not belong.
 
-If no existing thread fits, the evidence may remain unattached or seed a new thread. If multiple threads fit well, secondary policy signals such as expected information gain and closure pressure may influence which path is explored. Closure pressure must never override poor semantic fit.
+If no existing thread fits, the evidence may remain unattached or seed a new thread.
+
+Completion/closure pressure must never override poor semantic fit.
 
 ## Flows are emergent, not declared
 
-A flow is the durable narrative that crystallizes when a sequence/subgraph of semantic functions keeps supporting one coherent concept.
+There is no hard structural definition of a flow.
 
-There is no required structural start type and no fixed structural end type. Trigger, state change and outcome evidence may strengthen confidence and closure, but they are observations rather than ontology requirements.
+A flow is the durable narrative that crystallizes when accumulated evidence keeps supporting one coherent concept.
 
-Flows may naturally nest or overlap. A coherent sub-process can be both part of a larger story and independently meaningful when explored as its own thread.
+A flow may begin from a UI action, service, calculation, event, batch process, configuration-driven action, data operation, document rule or anything else. It sustains only if continuity and coherence remain strong as evidence is explored.
 
-## Topology versus semantics
-
-The topology answers: `What evidence is actually reachable from here?`
-
-The model answers: `What semantic direction or question should I pursue?`
-
-DataSong answers: `Given that semantic intent, which real graph evidence should be returned or traversed?`
-
-Mechanical adjacency never forces semantic membership.
-
-## Model-directed browsing loop
-
-The normal loop is:
-
-1. DataSong presents the current canonical artifact plus accumulated semantic threads.
-2. The model interprets that artifact and scores its continuity/coherence against every viable thread.
-3. The model requests more evidence with `getArtifact`, `getNeighbors`, or `searchSemantic`.
-4. DataSong resolves the request deterministically against the canonical topology.
-5. If `getNeighbors` was requested, DataSong returns a bounded lightweight neighborhood rather than full bodies.
-6. The model scores promising neighborhood candidates for continuity, coherence and expected information gain.
-7. On `advance`, DataSong calculates the strongest admissible candidate and traverses it.
-8. When the trajectory signal flattens, the model may request `backtrack`; DataSong resumes another stored DFS branch.
-9. Previously interpreted semantic functions are reused from cache rather than re-sent for semantic interpretation.
-
-This preserves model agency over meaning while preventing repository-navigation mechanics from becoming an LLM responsibility.
+Flows may naturally nest, overlap or branch.
 
 ## Neighborhood rollouts
 
-Immediate adjacency is often insufficient to identify the semantically promising branch. A call graph can expose validation, metrics, persistence, error handling and side effects at the same structural level even though only one trajectory carries the main semantic story.
+Immediate callees are often insufficient to tell which trajectory carries the main semantic story.
 
-The model may therefore request `getNeighbors(id, depth=1..4)`.
+The model may request:
 
-DataSong returns canonical essence only:
+```text
+getNeighbors(functionId, depth=2..4)
+```
 
-- artifact id
-- relation
-- function/config identity
-- canonical kind
-- inputs/outputs
-- normalized operations
-- conditions
-- topology edges/depth
+DataSong returns lightweight topology only:
 
-It does not recursively dump full implementation bodies.
+- candidate IDs
+- relation types
+- function/config identities
+- signatures / canonical essence
+- depth and edges
 
-The model returns per-candidate:
+It does not recursively send all bodies.
 
-- thread id (or NEW/UNATTACHED)
+The model scores promising candidates with:
+
+- thread ID (or NEW/UNATTACHED)
 - continuity
 - coherence
 - expected information gain
 - short reason
 
-DataSong combines those signals to choose the path on `advance`. If all local trajectories have weak semantic fit, DataSong should not force structural adjacency; it backtracks to another stored branch/frontier.
+On `advance`, DataSong calculates the strongest admissible candidate and traverses it.
 
-A rollout is therefore actual evidence gathering over known topology, never model hallucination of unseen code.
+If all local candidate signals are weak, DataSong should not force adjacency; it backtracks.
 
-## DFS and branch management
+## DFS and signal flattening
 
-DataSong maintains deterministic traversal state:
+DataSong maintains DFS-like traversal state beneath the model:
 
-- visited semantic functions
-- visited edges
-- cycle/back-edge information
-- execution/DFS stacks
+- execution stack
 - pending sibling branches
+- visited functions/edges
+- cycles/back-edges
 - per-thread trajectory evidence
-- source coverage
-- canonical interpretation cache
 
-The model does not manually maintain these structures.
+As long as semantic signal remains strong, the current trajectory continues.
 
-When signal remains strong, traversal advances. When it flattens or the model explicitly asks to backtrack, DataSong returns to the nearest stored branch with unresolved evidence, then may eventually return to broader global frontiers.
+When continuity/coherence/information gain flatten, DataSong returns to another pending branch. The model need not manually maintain stack mechanics.
 
 ## Semantic path selection
 
-Path selection is ordered conceptually as:
+Path selection is conceptually ordered as:
 
-1. semantic admissibility to a thread (continuity/coherence)
-2. trajectory evidence / expected information gain
-3. closure/completion pressure only as a secondary preference among already plausible alternatives
+1. semantic admissibility (continuity/coherence)
+2. trajectory evidence and expected information gain
+3. closure pressure only as a secondary preference among already plausible alternatives
 
-Completion pressure is never allowed to make an unrelated artifact part of a nearly complete thread.
+An almost-complete thread must never absorb unrelated evidence merely because completion is attractive.
 
-## Model input contract
+## Normal interaction sequence
 
-The model receives structured canonical evidence, never a generic read/search dump.
+A typical source-code exploration becomes:
 
-For artifact interpretation, the prompt includes:
+```text
+DataSong: listDirectory("/")
+model: listDirectory("screen")
+DataSong: files/directories under screen/
+model: getArtifact("screen/.../OrderDetail.xml")
+DataSong: XML file
+model: follows meaningful service/action reference
 
-- current canonical semantic artifact
-- viable semantic threads and their accumulated narrative state
-- currently known local/inventory canonical artifacts
-- source coverage metadata where relevant
-- the evidence-operation contract
+or
 
-For neighborhood evaluation, the prompt includes:
+DataSong: listDirectory("src")
+model: getArtifact("src/order.js")
+DataSong: function signatures only
+model: getFunction(placeOrder)
+DataSong: body + called function signatures
+model: getNeighbors(placeOrder, 3)
+DataSong: bounded lightweight call graph
+model: continuity/coherence/gain scores + advance
+DataSong: chooses strongest admissible path
+```
 
-- anchor artifact
-- bounded canonical neighborhood
-- lightweight candidate essence
-- viable semantic threads
-- the candidate-scoring contract
-
-## Model return contract
-
-For an artifact, the model returns:
-
-- meaning
-- per-thread continuity/coherence/bridge
-- best matching thread, or NEW/UNATTACHED
-- relation to that thread
-- relative placement
-- semantic gain / unresolved gap
-- an evidence request (`getArtifact`, `getNeighbors`, `searchSemantic`, `backtrack`, `stop`)
-
-For a neighborhood, the model returns:
-
-- candidate scores (thread, continuity, coherence, expected gain, reason)
-- an evidence request (`advance`, `getArtifact`, `getNeighbors`, `searchSemantic`, `backtrack`, `stop`)
-
-The response contract defines expected semantics; DataSong does not impose an arbitrary semantic prompt-size budget.
+This preserves model agency while keeping payloads focused and repository mechanics deterministic.
 
 ## Cycle safety and reuse
 
-Semantic functions and traversed edges are tracked separately. A previously interpreted semantic function is cached and reused instead of being sent to the model again. Recursive/back edges are preserved as graph relationships without causing traversal cycles.
+Semantic functions and traversed edges are tracked separately. A previously interpreted semantic function can be reused from cache instead of being semantically reinterpreted. Recursive/back edges are preserved as graph relationships without causing infinite traversal.
