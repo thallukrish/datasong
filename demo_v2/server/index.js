@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CanonicalSemanticTopologyV4 } from './canonicalSemanticTopologyV4.js';
-import { ModelDirectedExplorer } from './modelDirectedExplorer.js';
+import { ModelDirectedExplorerV2 } from './modelDirectedExplorerV2.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new CanonicalSemanticTopologyV4({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ModelDirectedExplorer({
+const explorer = new ModelDirectedExplorerV2({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
