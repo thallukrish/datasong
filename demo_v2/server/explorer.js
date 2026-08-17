@@ -7,6 +7,7 @@ const MAX_FRONTIERS_IN_PROMPT = 16;
 const MAX_STEPS = Number(process.env.MAX_EXPLORATION_STEPS || 60);
 const MODEL_TIMEOUT_MS = 60_000;
 const MAX_MODEL_TOKENS = Number(process.env.MAX_MODEL_TOKENS || 1800);
+const RETRY_MODEL_TOKENS = Number(process.env.RETRY_MODEL_TOKENS || Math.max(3200, MAX_MODEL_TOKENS * 2));
 
 const SYSTEM_PROMPT = `You are the semantic exploration policy for DataSong.
 
@@ -53,6 +54,7 @@ export class SemanticExplorer {
       : null;
     this.state = this.emptyState();
     this.runLogPath = null;
+    this.modelCallCount = 0;
   }
 
   emptyState() {
@@ -76,6 +78,7 @@ export class SemanticExplorer {
   async run(repoUrl) {
     if (!this.client) throw new Error('DEEPSEEK_API_KEY is not configured');
     this.state = this.emptyState();
+    this.modelCallCount = 0;
     this.state.status = 'preparing';
     this.state.repoUrl = repoUrl;
     this.emit();
@@ -98,15 +101,20 @@ export class SemanticExplorer {
       const candidates = this.activeCandidates().slice(0, MAX_FRONTIERS_IN_PROMPT);
       const before = this.snapshot();
       const prompt = this.buildPrompt(observation, candidates);
-      const response = await this.callModel(prompt);
-      const raw = response.choices?.[0]?.message?.content || '{}';
-      const parsed = this.parseModelOutput(raw);
+      const { parsed, raw, usage, finishReason, callNumber, retry } = await this.getSemanticUpdate({
+        prompt,
+        observation,
+        candidates,
+        before
+      });
+
       this.applyUpdate(parsed, observation);
-      const usage = this.accountUsage(response.usage || {});
 
       await this.appendRunLog({
-        type: 'llm_call',
-        call: this.state.step,
+        type: 'llm_call_applied',
+        call: callNumber,
+        explorationStep: this.state.step,
+        retry,
         timestamp: new Date().toISOString(),
         observedArtifact: observation,
         candidates,
@@ -114,11 +122,13 @@ export class SemanticExplorer {
         prompt,
         rawResponse: raw,
         parsedResponse: parsed,
+        finishReason,
         usage,
-        cumulativeUsage: this.state.tokenUsage
+        cumulativeUsage: { ...this.state.tokenUsage },
+        semanticBoardAfter: this.snapshot()
       });
 
-      this.printCallSummary(usage);
+      this.printCallSummary(usage, callNumber, retry ? 'retry applied' : 'applied');
       this.emit();
 
       const closed = this.state.stories.find((s) => s.progress >= 100 && s.status === 'closed');
@@ -183,25 +193,111 @@ export class SemanticExplorer {
       progressMessage: 'one short description of what was learned and what is being followed next'
     };
 
-    return `${SYSTEM_PROMPT}\n\nCURRENT SEMANTIC BOARD\n${JSON.stringify(board)}\n\nOBSERVED ARTIFACT\n${JSON.stringify({ id: observation.id, path: observation.path, kind: observation.kind, summary: observation.summary, excerpt: observation.excerpt || '' })}\n\nAVAILABLE FRONTIERS\n${JSON.stringify(candidates)}\n\nVisited artifact ids (avoid revisiting):\n${JSON.stringify(this.state.visited.slice(-80))}\n\nReturn this JSON shape:\n${JSON.stringify(shape)}\n\nRules for nextAction:\n- Prefer an available local artifact when it can resolve the current semantic gap.\n- Use search only when the needed local evidence is not among available frontiers.\n- Do not ask to inspect external library source; capture a black-box contract instead.\n- Use stop only when no candidate/search is expected to materially improve any unfinished story.\n- frontierScores should score only candidates actually shown above.\n- Keep the total response concise.`;
+    return `${SYSTEM_PROMPT}\n\nCURRENT SEMANTIC BOARD\n${JSON.stringify(board)}\n\nOBSERVED ARTIFACT\n${JSON.stringify({ id: observation.id, path: observation.path, kind: observation.kind, summary: observation.summary, excerpt: observation.excerpt || '' })}\n\nAVAILABLE FRONTIERS\n${JSON.stringify(candidates)}\n\nVisited artifact ids (avoid revisiting):\n${JSON.stringify(this.state.visited.slice(-80))}\n\nReturn this JSON shape:\n${JSON.stringify(shape)}\n\nRules for nextAction:\n- Prefer an available local artifact when it can resolve the current semantic gap.\n- Use search only when the needed local evidence is not among available frontiers.\n- Do not ask to inspect external library source; capture a black-box contract instead.\n- Use stop only when no candidate/search is expected to materially improve any unfinished story.\n- frontierScores should score only candidates actually shown above.\n- Keep the total response concise. Avoid repeating unchanged story detail.`;
   }
 
-  async callModel(prompt) {
+  async getSemanticUpdate({ prompt, observation, candidates, before }) {
+    const first = await this.callAndRecordAttempt({
+      prompt,
+      observation,
+      candidates,
+      before,
+      maxTokens: MAX_MODEL_TOKENS,
+      retry: false
+    });
+
+    try {
+      return { ...first, parsed: this.parseModelOutput(first.raw) };
+    } catch (error) {
+      await this.appendRunLog({
+        type: 'llm_parse_error',
+        call: first.callNumber,
+        explorationStep: this.state.step,
+        timestamp: new Date().toISOString(),
+        error: error.message,
+        finishReason: first.finishReason,
+        rawResponse: first.raw,
+        usage: first.usage,
+        cumulativeUsage: { ...this.state.tokenUsage }
+      });
+      this.printCallSummary(first.usage, first.callNumber, `invalid JSON${first.finishReason ? `/${first.finishReason}` : ''}`);
+
+      const retryPrompt = `${prompt}\n\nRETRY REQUIREMENT\nYour previous response was invalid or truncated JSON. Return the same semantic decision again as COMPLETE VALID JSON. Be much shorter: concise narrative, at most 8 branches, 8 dependencies, 6 unresolved gaps, and 8 frontier scores. Do not include markdown or commentary.`;
+      const second = await this.callAndRecordAttempt({
+        prompt: retryPrompt,
+        observation,
+        candidates,
+        before,
+        maxTokens: RETRY_MODEL_TOKENS,
+        retry: true
+      });
+
+      try {
+        return { ...second, parsed: this.parseModelOutput(second.raw) };
+      } catch (retryError) {
+        await this.appendRunLog({
+          type: 'llm_parse_error',
+          call: second.callNumber,
+          explorationStep: this.state.step,
+          timestamp: new Date().toISOString(),
+          error: retryError.message,
+          finishReason: second.finishReason,
+          rawResponse: second.raw,
+          usage: second.usage,
+          cumulativeUsage: { ...this.state.tokenUsage },
+          terminalForStep: true
+        });
+        this.printCallSummary(second.usage, second.callNumber, `invalid JSON${second.finishReason ? `/${second.finishReason}` : ''}`);
+        throw new Error(`Model returned invalid JSON twice at exploration step ${this.state.step}. See ${this.runLogPath || 'data/runs/*.jsonl'} for the raw responses.`);
+      }
+    }
+  }
+
+  async callAndRecordAttempt({ prompt, observation, candidates, before, maxTokens, retry }) {
+    const response = await this.callModel(prompt, maxTokens);
+    const raw = response.choices?.[0]?.message?.content || '{}';
+    const finishReason = response.choices?.[0]?.finish_reason || '';
+    const usage = this.accountUsage(response.usage || {});
+    const callNumber = ++this.modelCallCount;
+
+    await this.appendRunLog({
+      type: 'llm_attempt',
+      call: callNumber,
+      explorationStep: this.state.step,
+      retry,
+      timestamp: new Date().toISOString(),
+      observedArtifact: observation,
+      candidates,
+      semanticBoardBefore: before,
+      prompt,
+      rawResponse: raw,
+      finishReason,
+      usage,
+      cumulativeUsage: { ...this.state.tokenUsage }
+    });
+
+    return { raw, usage, finishReason, callNumber, retry };
+  }
+
+  async callModel(prompt, maxTokens = MAX_MODEL_TOKENS) {
     return this.client.chat.completions.create({
       model: this.modelName,
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
-      max_tokens: MAX_MODEL_TOKENS
+      max_tokens: maxTokens
     });
   }
 
   parseModelOutput(raw) {
     try { return JSON.parse(raw); }
-    catch {
+    catch (originalError) {
       const first = raw.indexOf('{');
       const last = raw.lastIndexOf('}');
-      if (first >= 0 && last > first) return JSON.parse(raw.slice(first, last + 1));
-      throw new Error('Model returned invalid JSON');
+      if (first >= 0 && last > first) {
+        try { return JSON.parse(raw.slice(first, last + 1)); }
+        catch { /* preserve original context below */ }
+      }
+      throw new Error(`Invalid JSON: ${originalError.message}`);
     }
   }
 
@@ -309,11 +405,12 @@ export class SemanticExplorer {
     return { prompt, completion, total, cacheHit, cacheMiss };
   }
 
-  printCallSummary(usage) {
+  printCallSummary(usage, callNumber = this.modelCallCount, note = '') {
     const stories = this.state.stories.length
       ? this.state.stories.slice(0, 6).map((s) => `${s.title} ${s.progress}%`).join(' | ')
       : 'no story crystallized yet';
-    console.log(`[LLM #${this.state.step}] stories: ${stories} | tokens +${usage.total} (prompt ${usage.prompt}, completion ${usage.completion}) | cumulative ${this.state.tokenUsage.total}`);
+    const suffix = note ? ` | ${note}` : '';
+    console.log(`[LLM #${callNumber}] stories: ${stories} | tokens +${usage.total} (prompt ${usage.prompt}, completion ${usage.completion}) | cumulative ${this.state.tokenUsage.total}${suffix}`);
   }
 
   async startRunLog(prep) {
