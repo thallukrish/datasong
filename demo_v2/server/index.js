@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CodeTopology } from './topology.js';
+import { ResolvedSymbolTopology } from './resolvedSymbolTopology.js';
 import { VerticalSliceExplorer } from './verticalSliceExplorer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,7 +11,7 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new CodeTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const topology = new ResolvedSymbolTopology({ cacheRoot: path.join(dataRoot, 'repo-cache') });
 const explorer = new VerticalSliceExplorer({
   topology,
   dataRoot,
