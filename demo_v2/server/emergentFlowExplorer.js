@@ -1,5 +1,9 @@
+import readline from 'node:readline/promises';
+import process from 'node:process';
 import { SemanticExplorer } from './explorer.js';
 import { StackGuidedExplorer } from './stackGuidedExplorer.js';
+
+const SINGLE_STEP = !['0', 'false', 'off', 'no'].includes(String(process.env.SINGLE_STEP || '1').trim().toLowerCase());
 
 const SYSTEM_PROMPT = `You are DataSong's semantic interpretation and exploration policy.
 
@@ -25,6 +29,42 @@ Return strict JSON matching the requested contract. Do not regenerate the full s
 function text(value, max = 600) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 function arr(value) { return Array.isArray(value) ? value : []; }
 function number(value, fallback = 0) { const n = Number(value); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback; }
+
+async function waitForEnter(message) {
+  if (!SINGLE_STEP || !process.stdin.isTTY || !process.stdout.isTTY) return;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try { await rl.question(message); }
+  finally { rl.close(); }
+}
+
+function printModelRequest(dynamicPrompt, modelName) {
+  if (!SINGLE_STEP) return;
+  console.log('\n============================================================');
+  console.log('DATASONG SINGLE STEP — REQUEST');
+  console.log('============================================================');
+  console.log(`MODEL: ${modelName}`);
+  console.log('\n[SYSTEM]\n');
+  console.log(SYSTEM_PROMPT);
+  console.log('\n[USER]\n');
+  console.log(dynamicPrompt);
+  console.log('============================================================');
+}
+
+function printModelResponse(response) {
+  if (!SINGLE_STEP) return;
+  const choice = response?.choices?.[0] || {};
+  console.log('\n============================================================');
+  console.log('DATASONG SINGLE STEP — RESPONSE');
+  console.log('============================================================');
+  console.log(`FINISH: ${choice.finish_reason || ''}`);
+  console.log('\n[ASSISTANT]\n');
+  console.log(choice.message?.content || '{}');
+  if (response?.usage) {
+    console.log('\n[USAGE]');
+    console.log(JSON.stringify(response.usage, null, 2));
+  }
+  console.log('============================================================');
+}
 
 export class EmergentFlowExplorer extends StackGuidedExplorer {
   emptyState() {
@@ -87,12 +127,19 @@ export class EmergentFlowExplorer extends StackGuidedExplorer {
   }
 
   async callModel(dynamicPrompt) {
-    return this.client.chat.completions.create({
+    printModelRequest(dynamicPrompt, this.modelName);
+    await waitForEnter('\nPress ENTER to send this request to the model... ');
+
+    const response = await this.client.chat.completions.create({
       model: this.modelName,
       messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: dynamicPrompt }],
       response_format: { type: 'json_object' },
       thinking: { type: 'disabled' }
     });
+
+    printModelResponse(response);
+    await waitForEnter('\nPress ENTER to validate/apply this response and continue... ');
+    return response;
   }
 
   validateEmergent(parsed, candidates) {
