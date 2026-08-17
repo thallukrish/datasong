@@ -9,6 +9,41 @@ function externalId(ref) {
   return `external:${encodeURIComponent(ref.relation || 'reference')}:${encodeURIComponent(ref.name || '')}`;
 }
 
+const JS_RUNTIME_CALLS = new Set([
+  'Array', 'Boolean', 'BigInt', 'Date', 'Error', 'EvalError', 'Function', 'JSON', 'Map', 'Math', 'Number', 'Object',
+  'Promise', 'RangeError', 'ReferenceError', 'RegExp', 'Set', 'String', 'Symbol', 'SyntaxError', 'TypeError', 'URIError',
+  'WeakMap', 'WeakSet', 'console', 'decodeURI', 'decodeURIComponent', 'encodeURI', 'encodeURIComponent', 'eval', 'fetch',
+  'isFinite', 'isNaN', 'parseFloat', 'parseInt', 'queueMicrotask', 'setImmediate', 'setInterval', 'setTimeout',
+  'clearImmediate', 'clearInterval', 'clearTimeout', 'structuredClone',
+  // Common prototype/member calls. The base regex sees the leaf in obj.map(...), value.toString(...), etc.
+  'at', 'concat', 'entries', 'every', 'filter', 'find', 'findIndex', 'flat', 'flatMap', 'forEach', 'from', 'has',
+  'includes', 'indexOf', 'join', 'keys', 'lastIndexOf', 'map', 'match', 'pop', 'push', 'reduce', 'reduceRight',
+  'replace', 'reverse', 'set', 'shift', 'slice', 'some', 'sort', 'splice', 'split', 'startsWith', 'substring',
+  'substr', 'toFixed', 'toISOString', 'toLowerCase', 'toString', 'toUpperCase', 'trim', 'unshift', 'values'
+]);
+
+const PY_RUNTIME_CALLS = new Set([
+  'abs', 'all', 'any', 'bool', 'dict', 'enumerate', 'filter', 'float', 'int', 'len', 'list', 'map', 'max', 'min',
+  'next', 'open', 'print', 'range', 'reversed', 'round', 'set', 'sorted', 'str', 'sum', 'tuple', 'type', 'zip'
+]);
+
+function explicitXmlReferences(body) {
+  const refs = [];
+  const addMatches = (relation, regex) => {
+    let match;
+    while ((match = regex.exec(body)) && refs.length < 100) {
+      const name = normalize(match[1]);
+      if (name) refs.push({ name, simpleName: name.split(/[.#:/]/).filter(Boolean).at(-1) || name, relation, explicit: true });
+    }
+  };
+
+  addMatches('calls', /<service-call\b[^>]*\bname=["']([^"']+)["']/g);
+  addMatches('routes_to', /<transition\b[^>]*\bname=["']([^"']+)["']/g);
+  addMatches('reads', /<(?:entity-find|entity-one)\b[^>]*\bentity-name=["']([^"']+)["']/g);
+  addMatches('writes', /<(?:create|update|delete|store|entity-make)\b[^>]*\bentity-name=["']([^"']+)["']/g);
+  return refs;
+}
+
 export class ResolvedSymbolTopology extends CodeTopology {
   constructor(options) {
     super(options);
@@ -18,6 +53,58 @@ export class ResolvedSymbolTopology extends CodeTopology {
   async buildSymbolGraph() {
     this.externalById.clear();
     await super.buildSymbolGraph();
+
+    // Normalize references after all symbols are known. Definitions remain graph nodes;
+    // language/runtime mechanics are not promoted to semantic graph edges.
+    for (const symbol of this.symbols) {
+      symbol.references = this.filteredReferences(symbol);
+    }
+
+    // super.buildSymbolGraph built callers before filtering, so rebuild reverse edges from the cleaned references.
+    this.callers.clear();
+    for (const symbol of this.symbols) {
+      for (const ref of symbol.references || []) {
+        for (const target of this.resolveReference(ref).slice(0, 4)) {
+          if (!this.callers.has(target.id)) this.callers.set(target.id, []);
+          this.callers.get(target.id).push({ sourceId: symbol.id, relation: ref.relation });
+        }
+      }
+    }
+  }
+
+  filteredReferences(symbol) {
+    const ext = path.extname(symbol.sourcePath || '').toLowerCase();
+
+    // XML has its own structural vocabulary. Do not run the generic foo(...) call interpretation over XML bodies:
+    // it turns expression helpers such as remove(...) into fake enterprise dependencies.
+    if (ext === '.xml') return explicitXmlReferences(symbol.body || '');
+
+    const seen = new Set();
+    const out = [];
+    for (const ref of symbol.references || []) {
+      const key = `${ref.relation}:${ref.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      // Always preserve a reference that resolves to a definition in this repository, even if its name resembles a builtin.
+      if (this.resolveReference(ref).length) {
+        out.push(ref);
+        continue;
+      }
+
+      if (this.isRuntimeBuiltin(ref, ext)) continue;
+      out.push(ref);
+    }
+    return out;
+  }
+
+  isRuntimeBuiltin(ref, ext) {
+    if (ref?.relation !== 'calls') return false;
+    const name = normalize(ref?.name);
+    if (!name) return true;
+    if (['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.vue', '.svelte'].includes(ext)) return JS_RUNTIME_CALLS.has(name);
+    if (ext === '.py') return PY_RUNTIME_CALLS.has(name);
+    return false;
   }
 
   resolveReference(ref) {
@@ -96,6 +183,7 @@ export class ResolvedSymbolTopology extends CodeTopology {
     for (const ref of symbol.references || []) {
       if (this.resolveReference(ref).length) continue;
       if (!['calls', 'routes_to', 'reads', 'writes'].includes(ref.relation)) continue;
+      if (!this.isStrongExternalReference(ref, symbol)) continue;
       const candidate = this.describeExternal(ref, symbol);
       this.externalById.set(candidate.id, candidate);
       if (!byId.has(candidate.id)) byId.set(candidate.id, candidate);
@@ -104,6 +192,16 @@ export class ResolvedSymbolTopology extends CodeTopology {
     return [...byId.values()]
       .sort((a, b) => this.relationPriority(b.relation) - this.relationPriority(a.relation))
       .slice(0, 18);
+  }
+
+  isStrongExternalReference(ref, symbol) {
+    // Explicit XML service/entity/route references are architectural evidence and may legitimately cross repository boundaries.
+    if (ref?.explicit) return true;
+    if (['routes_to', 'reads', 'writes'].includes(ref?.relation)) return true;
+
+    // A plain unresolved foo(...) is not enough evidence to declare an enterprise dependency.
+    // Qualified names are strong enough; imported-symbol resolution can be added later as another deterministic signal.
+    return ref?.relation === 'calls' && this.looksQualified(ref?.name);
   }
 
   describeExternal(ref, sourceSymbol) {
