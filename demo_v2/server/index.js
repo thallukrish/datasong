@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ProgressiveRepositoryTopologyV6 } from './progressiveRepositoryTopologyV6.js';
-import { ProgressiveRepositoryExplorerV15 } from './progressiveRepositoryExplorerV15.js';
+import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
+import { ProgressiveRepositoryExplorerV16 } from './progressiveRepositoryExplorerV16.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,8 +11,8 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new ProgressiveRepositoryTopologyV6({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV15({
+const topology = new ProgressiveRepositoryTopologyV7({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new ProgressiveRepositoryExplorerV16({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] PASS 1 broad business-arc discovery → lazy XML/JMX hierarchy → ordered word-level search → alternate-keyword recovery → deterministic directory-choice recovery → multi-arc switching; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] PASS 1 broad business-arc discovery → detailed-current/signature-only-candidates → lazy XML/JMX hierarchy → ordered word-level search → alternate-keyword recovery → deterministic directory-choice recovery → multi-arc switching; detailed traces go to data/runs/*.jsonl');
 });
