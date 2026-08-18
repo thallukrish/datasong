@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
-import { ProgressiveRepositoryExplorerV23 } from './progressiveRepositoryExplorerV23.js';
+import { ProgressiveRepositoryExplorerV24 } from './progressiveRepositoryExplorerV24.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV7({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV23({
+const explorer = new ProgressiveRepositoryExplorerV24({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] PASS 1 business-use-case admission + global scheduler → pre-admission evidence explorer → hypotheses/orientation are not schedulable → PASS 2 per-admitted-arc DFS explorer → compact evidence prompts → typed artifact normalization → lazy XML/JMX hierarchy → ordered word-level semantic search; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] PASS 1 business-use-case admission + global scheduler → goal-directed pre-admission qualification drift control → hypotheses/orientation are not schedulable → PASS 2 per-admitted-arc DFS explorer → compact evidence prompts → typed artifact normalization → lazy XML/JMX hierarchy → ordered word-level semantic search; detailed traces go to data/runs/*.jsonl');
 });
