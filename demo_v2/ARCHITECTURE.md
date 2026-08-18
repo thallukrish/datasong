@@ -1,151 +1,257 @@
 # DataSong v2 semantic exploration architecture
 
-## Primary objective: discover business-use-case vertical slices
+## Primary objective
 
-DataSong explores enterprise evidence to discover **end-to-end vertical slices of business use cases implemented by the application**.
+DataSong reconstructs **end-to-end vertical slices of business use cases** from heterogeneous enterprise evidence.
 
-The primary point of view is the application's end user or business actor: what are they trying to accomplish, and how does the system support that intent end to end?
+The governing question is not “what code exists?” but “what business actor is trying to accomplish, and how does the enterprise system support that intent end to end?”
 
-Illustrative examples include customer product search, cart update, checkout, order placement, profile update, employee approval, shipment scheduling, invoice creation, or an external business system submitting an order. These examples are not a closed ontology.
+Evidence may come from source, XML/JMX, configuration, schemas, documents, tests, workflows, logs, tickets, agreements or other enterprise artifacts. Technical artifacts are evidence; they are not automatically business flows.
 
-A business actor does not have to be a human using a UI. It may be an external system, scheduler, operator, batch process or other participant when the vertical slice represents a genuine enterprise/business capability.
+A flow is not a predefined structural type. It emerges when accumulated evidence sustains continuity and coherence around one business concept.
 
-Repository artifacts are **evidence, not the objective**. Tests, test suites, setup/cleanup code, configuration, framework wiring, utilities, shared services, logs and infrastructure may be extremely useful because they reveal, exercise or connect pieces of business use cases. They should be followed when they help reconstruct a business vertical slice, but technical coherence alone must not crystallize into a durable business thread.
+---
 
-For example, a screen test suite may reveal scenarios such as Search, Cart, Checkout and Order History. The suite is useful orientation evidence; the discovered business threads are the underlying user/business use cases, not the test harness lifecycle itself.
+# Two-layer exploration model
 
-## Core principle
+The exploration algorithm is deliberately split into two independent responsibilities:
 
-DataSong does not hard-code a closed structural definition of a flow.
+```text
+MODEL
+  ↓
+PASS 1 — GLOBAL ARC SCHEDULER
+  ↓ arcId
+PASS 2 — PER-ARC DFS EXPLORER
+  ↓ current artifact + candidate signatures
+MODEL
+```
 
-A flow emerges when evidence sustains a coherent end-to-end business-use-case story. Structural type does not make something a flow; sustained semantic continuity and coherence around a business intent/capability do.
+The model never directly owns DFS mechanics or global scheduling. Every semantic response is consumed by Pass 1 first.
 
-## Pass 1: broad business-arc discovery
+## Pass 1 — global arc scheduler
 
-Pass 1 deliberately operates at business-stage resolution rather than implementation resolution.
+Pass 1 owns the global board of discovered business-use-case arcs.
 
-For each visible business use case it tries to identify:
+For every substantive artifact, the model returns semantic fit against the known arcs:
 
-- trigger / actor / business intent;
-- broad major stages;
-- important decisions or branches;
-- major data effects;
-- major persistent/business entities and their relationships;
-- end state, persistence effect, external handoff, or user-visible outcome.
+```text
+continuity
+coherence
+expectedGain
+```
 
-Implementation detail is trivial for Pass 1 when omitting it does not materially change that business explanation. Such detail may be collapsed into a short business-level statement or skipped and revisited in a later pass.
+The model may also surface one or more genuinely distinct new business arcs supported by the current evidence.
 
-Several business-use-case arcs may coexist. Pass 1 may pursue multiple promising arcs, favoring completion of a nearly coherent broad arc without locking exploration onto one implementation path indefinitely.
+Pass 1 then:
 
-## Progressive repository browsing first, semantic traversal second
+1. updates semantic fit/opportunity state for every known arc;
+2. creates newly supported arcs;
+3. assigns the current evidence to the strongest semantically admissible arc;
+4. updates that arc's broad business-stage understanding;
+5. chooses which arc receives the next exploration turn;
+6. hands only the selected `arcId` to Pass 2.
 
-DataSong should not force every repository artifact into a semantic-function abstraction before the model has decided that the artifact matters.
+Pass 1 therefore acts as a scheduler **across arcs**, not as a DFS walker within one arc.
 
-The model begins by browsing the repository at its natural structure:
+Several arcs may develop simultaneously. A newly discovered arc is not discarded merely because another arc is currently active.
 
-1. DataSong lists the current directory.
-2. The model chooses a directory or file likely to reveal business-use-case evidence.
-3. DataSong exposes that artifact at the appropriate granularity for its type.
-4. Once the model selects a meaningful function/config/XML unit, DataSong switches to semantic graph traversal around that unit.
-5. Continuity/coherence scoring, neighborhood rollouts, DFS/backtracking and flow construction operate from there.
+### Pass-1 arc state
 
-Repository orientation and semantic execution traversal are separate concerns, although the model may move between them when needed.
+Each arc maintains stable identity and accumulated business-level state, for example:
 
-Repository orientation uses a deliberately small LLM prompt. Semantic-thread, proto-thread and DFS instructions are not sent while the model is merely choosing folders/files.
+```text
+arcId
+title
+trigger / actor / intent
+major stages
+outcome
+major entities
+major relationships
+status
+progress
+opportunity score
+evidence
+```
 
-## Model is navigator; DataSong is the evidence environment
+Arc progress is monotonic. Switching exploration from one arc to another changes only the active pointer; it does not reduce accumulated progress on the paused arc.
 
-The model decides what evidence it wants to inspect and supplies semantic interpretation and continuity/coherence/information-gain scores aligned to the business-use-case objective.
+The UI/story mirror should therefore look conceptually like:
 
-DataSong owns deterministic mechanics:
+```text
+ACTIVE NOW
+Order review and submission      41%
 
-- repository directory/file inventory
-- artifact-type-aware exposure
-- source parsing and function signatures
-- function bodies on demand
-- call/reference graph
-- visited state
-- file/function coverage
-- cycle detection
-- semantic and proto threads
-- DFS pending alternatives
-- signal-history tracking
-- branch flattening and backtracking
-- cached interpretations
-- bounded neighborhoods
-- score-driven DFS pruning
-- goal-directed semantic escape when local topology is exhausted
-- deterministic ordered word-level semantic search
-- alternate-keyword search-plan state
+OTHER DISCOVERED ARCS
+Customer profile management      33%
+Order history                    27%
+Fulfillment tracking             18%
+Product search                   12%
+```
 
-The browsing/evidence operations are:
+## Pass 2 — per-arc DFS explorer
 
-- `listDirectory(path)` — list one repository directory;
-- `getArtifact(id)` — inspect one file or already-known artifact;
-- `getFunction(id)` — inspect one selected function/XML/config semantic unit;
-- `getNeighbors(id, depth=1..4)` — inspect a lightweight bounded call/reference neighborhood;
-- `searchSemantic(query)` — find canonical evidence using deterministic ordered word-level matching;
-- `advance` — score a neighborhood and let DataSong choose the strongest admissible path;
-- `backtrack` — leave the current trajectory and resume a preserved semantically admissible alternative;
-- `stop` — no useful evidence request remains.
+Pass 2 owns local semantic traversal **inside one arc**.
 
-## Artifact-specific exposure
+Its input is:
 
-### Directories
+```text
+arcId
+currentArtifactId
+```
 
-DataSong returns the directory listing plus deterministic structural previews for child directories. A preview may contain descendant counts, extension distribution, sample paths, a shallow subtree and a `drillTarget` for single-child directory chains.
+For every arc, Pass 2 preserves an independent DFS state containing the local execution stack and semantically admissible pending alternatives.
 
-These previews contain no file contents and no semantic ranking. They reduce mechanical `cd`-style model calls while leaving semantic choice to the model. During orientation, the model prefers locations likely to reveal end-user/business-actor behavior; tests may be selected as maps of such behavior, but not because test lifecycle itself is the target flow.
+Conceptually:
 
-### Source files
+```text
+dfsStateByArc = {
+  arc-1: { stack, frontier, visited, score trail, pending branches, ... },
+  arc-2: { stack, frontier, visited, score trail, pending branches, ... },
+  arc-3: { stack, frontier, visited, score trail, pending branches, ... }
+}
+```
 
-When the model asks for a source file, DataSong initially returns function/method signatures only. It does not send the whole source file merely because the file was selected.
+When Pass 1 switches from one arc to another:
 
-When the model asks for one function with `getFunction`, DataSong returns function identity/signature, body, provenance, and lightweight signatures/relations of called or referenced functions. Called function bodies are not recursively dumped.
+```text
+save DFS state of current arc
+restore DFS state of selected arc
+resume that arc from its strongest pending semantic branch
+```
 
-### XML and XML-derived test plans
+Nothing is thrown away merely because another arc gets the next turn.
 
-XML may be returned directly when selected, provided transport remains reasonable. XML-like structured test plans such as `.jmx` are treated as readable structured evidence rather than opaque files, because they may reveal broad end-to-end business scenarios.
+If the selected arc has no useful local pending branch, Pass 2 may perform a semantic search anchored to that arc's accumulated business meaning.
 
-### Configuration
+---
 
-JSON/YAML/env/properties/config artifacts are exposed as keys/items/values or addressable objects. Configuration is not treated as executable code merely for uniformity.
+# Model response contract
 
-### Documents and other text artifacts
+For substantive evidence, the model sees:
 
-Markdown/text/SQL/other meaningful text is exposed as the document/artifact it actually is. It may contribute to a business flow when semantic continuity/coherence supports that interpretation.
+```text
+ACTIVE ARC
+ARC BOARD
+CURRENT DETAILED ARTIFACT
+CANDIDATE SIGNATURES ONLY
+```
 
-## Hierarchical coverage
+It returns a compact semantic delta containing:
 
-Coverage is bookkeeping, not exploration policy. A coherent flow may close while many unrelated files/functions remain uncovered.
+```json
+{
+  "meaning": "business meaning of current evidence",
+  "arcFits": [
+    {
+      "arcId": "arc-1",
+      "continuity": 0.8,
+      "coherence": 0.9,
+      "expectedGain": 0.6
+    }
+  ],
+  "bestArc": "arc-1 | NEW | UNATTACHED",
+  "newArcs": [],
+  "arcUpdate": {
+    "trigger": "...",
+    "majorStages": [],
+    "outcome": "...",
+    "entities": [],
+    "relationships": [],
+    "status": "forming|broadly_complete|unresolved"
+  },
+  "candidateScores": [
+    {
+      "artifactId": "exact candidate id",
+      "arcId": "arc-1",
+      "continuity": 0.8,
+      "coherence": 0.9,
+      "expectedGain": 0.7
+    }
+  ],
+  "evidenceRequest": {
+    "type": "advance|getArtifact|getFunction|getNeighbors|searchSemantic|backtrack|stop"
+  }
+}
+```
 
-## Transition into semantic traversal
+Candidate scores are local Pass-2 possibilities. Pass 1 still decides which arc gets the next turn.
 
-Once a source function or meaningful structured unit is selected, it becomes a semantic exploration unit.
+---
 
-A `getFunction` response contains the body plus lightweight called-function signatures. The model can then inspect a clearly promising callee directly, request a depth-2..4 neighborhood when several trajectories are plausible, search semantically when the needed continuation is absent locally, or backtrack when signal flattens.
+# Current artifact vs candidate evidence
 
-Technical evidence is followed when it helps answer the business-use-case question: what business intent/capability is being implemented, what stages carry it through the system, what decisions/data effects occur, and what outcome or branch results?
+A core invariant is:
 
-## Emergent semantic threads and proto threads
+> **Current artifact = detailed evidence. Candidate artifacts = identity + signature only.**
 
-A durable semantic thread represents a business capability or end-user/business-actor use case whose accumulated evidence sustains one coherent vertical slice.
+For source traversal:
 
-The model evaluates evidence against every viable semantic thread using continuity, coherence and bridge. Supporting technical evidence may remain proto/orientation evidence until a business-use-case narrative crystallizes.
+```text
+f1 body
+→ model interprets f1
+→ f2/f3/f4 signatures only
+→ model scores candidates
+→ DataSong chooses one
+→ only then send that candidate's body
+```
 
-Completion pressure must never override poor semantic fit or the business-use-case objective.
+The same principle applies to XML hierarchy nodes, config objects and semantic-search results.
 
-## Neighborhood rollouts and scoring
+This avoids transporting several candidate bodies when only one will be inspected.
 
-Immediate neighbors are often insufficient to tell which trajectory carries the main business story. The model may request `getNeighbors(functionId, depth=2..4)`.
+---
 
-The scoring meanings are objective-aligned:
+# Progressive artifact exposure
 
-- `continuity`: next-step fit for the same business use case;
-- `coherence`: overall fit with that same end-to-end business use case;
-- `expectedGain`: likelihood of revealing a missing business stage, decision, data effect, outcome, branch or actor interaction.
+## Repository orientation
 
-The base semantic score is:
+Directory navigation is structural and lightweight. DataSong returns deterministic previews such as descendant counts, extension distributions, shallow subtrees and drill targets.
+
+Orientation is not semantic-thread construction.
+
+## Source files
+
+Selecting a source file initially returns function/method signatures only.
+
+Selecting one function returns:
+
+```text
+identity/signature
+body
+provenance
+called/referenced function signatures
+```
+
+Referenced function bodies are not recursively transported.
+
+## XML and JMX
+
+XML/JMX is exposed lazily as a hierarchy rather than as the complete document.
+
+```text
+file
+→ root/top-level nodes
+→ immediate children
+→ selected child
+→ its immediate children
+→ deeper only when requested
+```
+
+Each `xmlnode:*` is an addressable artifact. Immediate children are represented once as candidate signatures, not duplicated inside the current artifact and candidate list.
+
+## JSON/YAML/config
+
+Structured configuration should follow the same progressive principle: top-level objects/keys first, then selected children when needed.
+
+## Documents/text
+
+Documents are interpreted as the artifact type they actually are rather than being forced into an executable-code ontology.
+
+---
+
+# Semantic scoring
+
+The common semantic score remains:
 
 ```text
 semanticFit = 0.45 * continuity
@@ -153,113 +259,108 @@ semanticFit = 0.45 * continuity
             + 0.10 * expectedGain
 ```
 
-`next_in_source` is weak structural adjacency, not causal/business continuity, so it is discounted before path selection.
+The hard admissibility floor is `0.25`.
 
-## DFS frontier and drift control
+Meanings:
 
-The DFS stack stores admissible unexplored semantic alternatives, not a history of all structurally reachable nodes.
+- `continuity` — how naturally evidence continues the local frontier of the business arc;
+- `coherence` — how well it belongs to the overall business story;
+- `expectedGain` — how likely inspection is to reveal a missing stage, branch, decision, entity relationship or outcome.
 
-Neighborhood scoring prunes the frame on both `advance` and `backtrack`. A candidate below the hard semantic-fit floor of `0.25` is rejected.
+Structural reachability alone never creates semantic membership.
 
-A branch is also considered flattening when its last three selected semantic scores strictly decline while staying above the floor and the total decline is at least `0.10`:
+---
 
-```text
-s1 > s2 > s3
-s3 >= 0.25
-s1 - s3 >= 0.10
-```
+# Pass-1 scheduling behavior
 
-When flattening occurs, DataSong backtracks to the nearest preserved admissible alternative.
+Pass 1 maintains an opportunity score for each arc instead of replacing an older promising opportunity with every weak later observation.
 
-## Ordered word-level semantic search
+New evidence may strengthen several arcs at once. Old opportunities decay gently rather than disappearing immediately.
 
-Semantic search is deterministic lexical search over canonical semantic evidence, not embedding similarity.
+Scheduling also includes a small fairness/age effect so a viable arc is not starved indefinitely simply because another arc remains marginally stronger on every local step.
 
-Queries are tokenized at word level, including camelCase splitting. For example:
+The scheduler therefore behaves more like best-first multi-arc exploration than a globally locked single-thread DFS.
 
-```text
-OrderDetail -> order detail
-```
+---
 
-For a multi-word query such as `order detail`, candidate evidence is ranked by the best matching target field using these tiers:
+# Pass-2 DFS behavior
+
+Within the currently selected arc, Pass 2 maintains the normal DFS semantics:
 
 ```text
-5  exact target phrase
-4  all query words contiguous from the beginning of the target
-3  all query words contiguous later in the target
-2  all query words present in order with intervening target words
-1  only part of the query words present in order
+current artifact
+→ candidate signatures
+→ semantic scores
+→ preserve admissible alternatives
+→ follow strongest candidate
+→ branch signal flattens / no candidate
+→ resume nearest admissible pending branch
+→ local state exhausted
+→ semantic search anchored to this arc
 ```
 
-Within the partial-match tier, candidates matching the greater number of query words rank higher. Earlier contiguous matches break ties before stable name ordering.
+The important difference from the older architecture is that this DFS state is **per arc**, not global.
 
-The search is applied to canonical names/signatures/source paths and compact semantic packet fields such as operations, conditions, inputs and outputs. It does not award independent substring points merely because query terms occur somewhere in a large serialized artifact.
+Switching arcs does not walk an old global stack and does not destroy the paused arc's pending alternatives.
 
-This means `order detail` strongly favors evidence that actually expresses `order` followed by `detail`, rather than unrelated evidence that happens to contain either word.
+---
 
-## Alternate-keyword recovery
+# Ordered semantic search
 
-A semantic-search request may include alternate keyword phrases with the first request:
+Semantic search remains deterministic ordered word-level retrieval over canonical evidence.
 
-```json
-{
-  "type": "searchSemantic",
-  "query": "order detail",
-  "alternateQueries": [
-    "view order",
-    "order display",
-    "customer order detail"
-  ]
-}
-```
-
-DataSong always tries the primary query first. The model then scores the returned candidates using the normal continuity/coherence/expected-gain rubric.
-
-If the strongest returned candidate is below the semantic floor, the results are considered weak for the active business arc. DataSong then tries the next supplied alternate query **without switching arcs**.
-
-Conceptually:
+Queries are camelCase/word-token aware. Matching priority is:
 
 ```text
-primary query
--> ranked lexical candidates
--> model semantic scoring
--> admissible result? continue current arc
--> all weak? next alternate query
--> all alternates weak? suspend/mark current arc unresolved
--> switch to another promising business-use-case thread
+5  exact phrase
+4  contiguous from beginning
+3  contiguous later
+2  all words present in order
+1  partial words present in order
 ```
 
-The model may also issue a new `searchSemantic` request with improved keywords after seeing weak results. That new request replaces the current search plan.
+Search retrieves candidate signatures. The model judges semantic usefulness; DataSong handles deterministic retrieval and ranking.
 
-This keeps responsibilities separated:
+If local DFS state for an arc is exhausted, semantic search is anchored to that arc's accumulated business meaning rather than a generic global frontier.
+
+---
+
+# Responsibility split
 
 ```text
-DataSong = deterministic word-level retrieval + ranking + retry state
-Model    = semantic usefulness judgment + optional alternate keywords
+MODEL
+- interpret current evidence
+- score evidence against arcs
+- surface new business arcs
+- score candidate signatures
+- suggest semantic search terms when needed
+
+PASS 1 / DataSong
+- maintain global arc board
+- assign evidence to arcs
+- preserve all arc developments
+- schedule the next arc
+- keep arc progress monotonic
+
+PASS 2 / DataSong
+- maintain DFS state separately for every arc
+- preserve pending branches
+- restore paused arcs
+- choose/resume local candidates
+- backtrack within one arc
+- perform arc-anchored semantic escape/search
+
+TOPOLOGY / DataSong
+- repository inventory
+- canonical IDs
+- parsing/canonicalization
+- artifact-aware exposure
+- call/reference graph
+- XML/config hierarchy
+- deterministic semantic search
+- coverage/caching/cycle safety
 ```
 
-Search plans and their outcomes are retained in `pass1SearchPlans` for auditability.
+This separation is the governing architecture going forward:
 
-## Business-thread semantic escape
-
-Topology depth and semantic search solve different problems.
-
-`getNeighbors(depth=1..4)` explores farther along known graph edges. Increasing depth cannot discover a continuation absent from the current canonical topology.
-
-When the current scored neighborhood has no admissible continuation, DataSong first prunes the frame, then resumes a semantically admissible pending DFS branch. If none exists, it performs goal-directed search anchored to the active business-use-case thread rather than falling back to generic mechanically-unvisited nodes.
-
-## Semantic path selection
-
-Path selection is ordered conceptually as:
-
-1. alignment with the end-user/business-use-case objective
-2. semantic admissibility
-3. continuity/coherence/information-gain score
-4. trajectory trend across the current branch
-5. closure pressure only as a secondary preference among already plausible alternatives
-
-An almost-complete thread must never absorb unrelated evidence merely because completion is attractive.
-
-## Cycle safety and reuse
-
-Semantic functions and traversed edges are tracked separately. A previously interpreted semantic function can be reused from cache instead of being semantically reinterpreted. Recursive/back edges are preserved as graph relationships without causing infinite traversal.
+> **Pass 1 schedules across business arcs. Pass 2 explores within one arc.**
