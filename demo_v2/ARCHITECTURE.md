@@ -1,10 +1,24 @@
 # DataSong v2 semantic exploration architecture
 
+## Primary objective: discover business-use-case vertical slices
+
+DataSong explores enterprise evidence to discover **end-to-end vertical slices of business use cases implemented by the application**.
+
+The primary point of view is the application's end user or business actor: what are they trying to accomplish, and how does the system support that intent end to end?
+
+Illustrative examples include customer product search, cart update, checkout, order placement, profile update, employee approval, shipment scheduling, invoice creation, or an external business system submitting an order. These examples are not a closed ontology.
+
+A business actor does not have to be a human using a UI. It may be an external system, scheduler, operator, batch process or other participant when the vertical slice represents a genuine enterprise/business capability.
+
+Repository artifacts are **evidence, not the objective**. Tests, test suites, setup/cleanup code, configuration, framework wiring, utilities, shared services, logs and infrastructure may be extremely useful because they reveal, exercise or connect pieces of business use cases. They should be followed when they help reconstruct a business vertical slice, but technical coherence alone must not crystallize into a durable business thread.
+
+For example, a screen test suite may reveal scenarios such as Search, Cart, Checkout and Order History. The suite is useful orientation evidence; the discovered business threads are the underlying user/business use cases, not the test harness lifecycle itself.
+
 ## Core principle
 
-DataSong does not hard-code a closed definition of a flow.
+DataSong does not hard-code a closed structural definition of a flow.
 
-A flow emerges when evidence sustains a coherent story around one concept. The concept may be small or large and may begin anywhere. Structural type does not make something a flow; sustained semantic continuity and coherence do.
+A flow emerges when evidence sustains a coherent end-to-end business-use-case story. Structural type does not make something a flow; sustained semantic continuity and coherence around a business intent/capability do.
 
 ## Progressive repository browsing first, semantic traversal second
 
@@ -13,7 +27,7 @@ DataSong should not force every repository artifact into a semantic-function abs
 The model begins by browsing the repository at its natural structure:
 
 1. DataSong lists the current directory.
-2. The model chooses a directory or file to inspect.
+2. The model chooses a directory or file likely to reveal business-use-case evidence.
 3. DataSong exposes that artifact at the appropriate granularity for its type.
 4. Once the model selects a meaningful function/config/XML unit, DataSong switches to semantic graph traversal around that unit.
 5. Continuity/coherence scoring, neighborhood rollouts, DFS/backtracking and flow construction operate from there.
@@ -24,7 +38,7 @@ Repository orientation uses a deliberately small LLM prompt. Semantic-thread, pr
 
 ## Model is navigator; DataSong is the evidence environment
 
-The model decides what evidence it wants to inspect and supplies semantic interpretation and continuity/coherence/information-gain scores.
+The model decides what evidence it wants to inspect and supplies semantic interpretation and continuity/coherence/information-gain scores aligned to the business-use-case objective.
 
 DataSong owns deterministic mechanics:
 
@@ -60,7 +74,7 @@ The browsing/evidence operations are:
 
 DataSong returns the directory listing plus deterministic structural previews for child directories. A preview may contain descendant counts, extension distribution, sample paths, a shallow subtree and a `drillTarget` for single-child directory chains.
 
-These previews contain no file contents and no semantic ranking. They reduce mechanical `cd`-style model calls while leaving semantic choice to the model.
+These previews contain no file contents and no semantic ranking. They reduce mechanical `cd`-style model calls while leaving semantic choice to the model. During orientation, the model prefers locations likely to reveal end-user/business-actor behavior; tests may be selected as maps of such behavior, but not because test lifecycle itself is the target flow.
 
 ### Source files
 
@@ -87,7 +101,7 @@ JSON/YAML/env/properties/config artifacts are exposed as keys/items/values or ad
 
 ### Documents and other text artifacts
 
-Markdown/text/SQL/other meaningful text is exposed as the document/artifact it actually is. It may contribute to a flow when semantic continuity/coherence supports that interpretation.
+Markdown/text/SQL/other meaningful text is exposed as the document/artifact it actually is. It may contribute to a business flow when semantic continuity/coherence supports that interpretation.
 
 ## Hierarchical coverage
 
@@ -111,31 +125,41 @@ Once a source function or meaningful structured unit is selected, it becomes a s
 
 A `getFunction` response contains the body plus lightweight called-function signatures. The model can then inspect a clearly promising callee directly, request a depth-2..4 neighborhood when several trajectories are plausible, search semantically when the needed continuation is absent locally, or backtrack when signal flattens.
 
+Technical evidence is followed when it helps answer the business-use-case question: what business intent/capability is being implemented, what stages carry it through the system, what decisions/data effects occur, and what outcome or branch results?
+
 ## Emergent semantic threads and proto threads
 
-A semantic thread is a durable narrative whose accumulated evidence sustains one coherent concept.
+A durable semantic thread represents a business capability or end-user/business-actor use case whose accumulated evidence sustains one coherent vertical slice.
 
 The model evaluates evidence against every viable semantic thread using:
 
-- `continuity` — how naturally this evidence continues the current frontier;
-- `coherence` — how well the evidence fits the overall story;
+- `continuity` — how naturally this evidence continues understanding of the same end-user/business use case;
+- `coherence` — how strongly the evidence belongs to the same end-to-end business use case rather than merely the same technical subsystem;
 - `bridge` — why it belongs or does not belong.
 
-The first useful artifact does not have to define an entire workflow by itself. DataSong therefore also keeps **proto threads**: candidate narratives supported by promising evidence but not yet coherent enough to become durable threads.
+The first useful artifact does not have to define an entire workflow by itself. DataSong therefore also keeps **proto threads**: candidate business-use-case narratives supported by promising evidence but not yet coherent enough to become durable threads.
 
-A proto thread can be created, extended and then promoted when accumulated evidence sustains a coherent concept. This allows a sequence such as `Cart.xml -> updateCartItems -> totals` to crystallize into a shopping-cart thread even when `Cart.xml` alone was initially insufficient.
+Supporting technical evidence may remain proto/orientation evidence until a business-use-case narrative crystallizes. A technically coherent sequence such as test setup -> helper -> cleanup must not become a durable thread unless the actual enterprise capability being reconstructed is genuinely about that operational behavior.
 
-Completion pressure must never override poor semantic fit.
+Completion pressure must never override poor semantic fit or the business-use-case objective.
 
 ## Neighborhood rollouts
 
-Immediate neighbors are often insufficient to tell which trajectory carries the main semantic story. The model may request:
+Immediate neighbors are often insufficient to tell which trajectory carries the main business story. The model may request:
 
 ```text
 getNeighbors(functionId, depth=2..4)
 ```
 
 DataSong returns lightweight outbound topology only. The model scores promising candidates with continuity, coherence and expected information gain.
+
+The scoring meanings are objective-aligned:
+
+- `continuity`: next-step fit for the same business use case;
+- `coherence`: overall fit with that same end-to-end business use case;
+- `expectedGain`: likelihood of revealing a missing business stage, decision, data effect, outcome, branch or actor interaction.
+
+Technical adjacency, framework lifecycle, setup/cleanup and shared helpers do not receive high scores merely because they are connected. They may score highly only when they materially advance understanding of the business vertical slice.
 
 The base semantic score is:
 
@@ -206,10 +230,11 @@ This keeps semantic scoring with the model while keeping branch-history interpre
 
 Path selection is ordered conceptually as:
 
-1. semantic admissibility
-2. continuity/coherence/information-gain score
-3. trajectory trend across the current branch
-4. closure pressure only as a secondary preference among already plausible alternatives
+1. alignment with the end-user/business-use-case objective
+2. semantic admissibility
+3. continuity/coherence/information-gain score
+4. trajectory trend across the current branch
+5. closure pressure only as a secondary preference among already plausible alternatives
 
 An almost-complete thread must never absorb unrelated evidence merely because completion is attractive.
 
