@@ -12,15 +12,15 @@ function result(value) {
 }
 
 function buildServer() {
-  const server = new McpServer({ name: 'datasong-demo-v3', version: '0.1.0' });
+  const server = new McpServer({ name: 'datasong-demo-v3', version: '0.2.0' });
 
   server.registerTool('datasong.start_episode', {
-    description: 'Start an interactive DataSong v3 teacher/student episode. Until the v2 evidence adapter is wired, omitting packet starts the canonical plumbing fixture.',
-    inputSchema: z.object({ packet: z.unknown().optional() })
-  }, async ({ packet }) => result(await runtime.startEpisode({ packet })));
+    description: 'Start an interactive DataSong v3 teacher/student episode. Supply repoUrl for real repository evidence; packet remains available only for contract/plumbing tests.',
+    inputSchema: z.object({ repoUrl: z.string().optional(), packet: z.unknown().optional() })
+  }, async ({ repoUrl, packet }) => result(await runtime.startEpisode({ repoUrl, packet })));
 
   server.registerTool('datasong.get_state', {
-    description: 'Return the current DataSong v3 episode/navigation state.'
+    description: 'Return the current DataSong v3 episode/navigation state, including repository provenance when active.'
   }, async () => result(runtime.getState()));
 
   server.registerTool('datasong.get_evidence', {
@@ -33,24 +33,19 @@ function buildServer() {
   }, async ({ scores }) => result(await runtime.applyScores(scores)));
 
   server.registerTool('datasong.advance', {
-    description: 'Advance DataSong using the already-applied student semantic decision.'
+    description: 'Advance repository navigation using the already-applied student semantic decision and emit the next evidence packet.'
   }, async () => result(await runtime.advance()));
 
-  server.registerTool('datasong.get_run_log', {
-    description: 'Return the append-only log for the active episode.'
-  }, async () => result(await runtime.getRunLog()));
-
-  server.registerTool('datasong.reset_or_restore', {
-    description: 'Reset the in-memory demo_v3 episode scaffold. Checkpoint restoration will be added with the real student runtime.'
-  }, async () => result(await runtime.resetOrRestore()));
+  server.registerTool('datasong.get_run_log', { description: 'Return the append-only log for the active episode.' }, async () => result(await runtime.getRunLog()));
+  server.registerTool('datasong.reset_or_restore', { description: 'Reset the in-memory demo_v3 episode scaffold.' }, async () => result(await runtime.resetOrRestore()));
 
   server.registerTool('student.score', {
-    description: 'Score a canonical evidence packet with the student. The current implementation is an explicitly neutral/mock scorer for MCP plumbing validation.',
+    description: 'Score a canonical evidence packet with the student. Current implementation is neutral/mock until trained in the scaffold.',
     inputSchema: z.object({ packet: z.unknown().optional() })
   }, async ({ packet }) => result(runtime.studentScore(packet)));
 
   server.registerTool('student.train', {
-    description: 'Train/update the student on a target. The scaffold memorizes the exact target only to validate orchestration; UniXcoder will replace this implementation.',
+    description: 'Train/update the scaffold student on a target; UniXcoder will replace this implementation.',
     inputSchema: z.object({ packet: z.unknown().optional(), target: z.unknown() })
   }, async ({ packet, target }) => result(await runtime.studentTrain({ packet, target })));
 
@@ -59,14 +54,8 @@ function buildServer() {
     inputSchema: z.object({ packet: z.unknown().optional() })
   }, async ({ packet }) => result(runtime.studentEvaluate(packet)));
 
-  server.registerTool('student.get_metrics', {
-    description: 'Return student runtime metrics.'
-  }, async () => result(runtime.getMetrics()));
-
-  server.registerTool('student.save_checkpoint', {
-    description: 'Checkpoint hook reserved for the real UniXcoder runtime.'
-  }, async () => result({ implemented: false, reason: 'UniXcoder runtime not wired yet' }));
-
+  server.registerTool('student.get_metrics', { description: 'Return student runtime metrics.' }, async () => result(runtime.getMetrics()));
+  server.registerTool('student.save_checkpoint', { description: 'Checkpoint hook reserved for the real UniXcoder runtime.' }, async () => result({ implemented: false, reason: 'UniXcoder runtime not wired yet' }));
   server.registerTool('student.restore_checkpoint', {
     description: 'Checkpoint restore hook reserved for the real UniXcoder runtime.',
     inputSchema: z.object({ checkpoint: z.string() })
@@ -74,18 +63,8 @@ function buildServer() {
 
   server.registerTool('training.add_teacher_sample', {
     description: 'Persist ChatGPT teacher supervision for the active real evidence state.',
-    inputSchema: z.object({
-      packet: z.unknown().optional(),
-      target: z.unknown(),
-      weaknesses: z.array(z.string()).optional(),
-      explanation: z.string().optional()
-    })
-  }, async ({ packet, target, weaknesses, explanation }) => result(await runtime.addTeacherSample({
-    packet,
-    target,
-    weaknesses: weaknesses || [],
-    explanation: explanation || ''
-  })));
+    inputSchema: z.object({ packet: z.unknown().optional(), target: z.unknown(), weaknesses: z.array(z.string()).optional(), explanation: z.string().optional() })
+  }, async ({ packet, target, weaknesses, explanation }) => result(await runtime.addTeacherSample({ packet, target, weaknesses: weaknesses || [], explanation: explanation || '' })));
 
   server.registerTool('training.add_synthetic_batch', {
     description: 'Persist teacher-generated targeted synthetic evidence packets for the active episode.',
@@ -102,13 +81,8 @@ function buildServer() {
     inputSchema: z.object({ episodeId: z.number().int().positive().optional() })
   }, async ({ episodeId }) => result(await runtime.getLossHistory(episodeId)));
 
-  server.registerTool('training.get_skill_metrics', {
-    description: 'Return per-semantic-skill metrics. Placeholder until real evaluation is wired.'
-  }, async () => result(runtime.getSkillMetrics()));
-
-  server.registerTool('training.list_checkpoints', {
-    description: 'List locally persisted student checkpoints.'
-  }, async () => result(await runtime.listCheckpoints()));
+  server.registerTool('training.get_skill_metrics', { description: 'Return per-semantic-skill metrics. Placeholder until real evaluation is wired.' }, async () => result(runtime.getSkillMetrics()));
+  server.registerTool('training.list_checkpoints', { description: 'List locally persisted student checkpoints.' }, async () => result(await runtime.listCheckpoints()));
 
   return server;
 }
@@ -125,5 +99,5 @@ createServer((req, res) => {
   void nodeHandler(req, res);
 }).listen(port, host, () => {
   console.error(`[DataSong demo_v3 MCP] http://${host}:${port}/mcp`);
-  console.error('[DataSong demo_v3 MCP] teacher/student plumbing scaffold; production navigation must advance only from student scores');
+  console.error('[DataSong demo_v3 MCP] self-contained repository evidence + teacher/student control loop');
 });
