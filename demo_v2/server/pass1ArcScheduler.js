@@ -20,10 +20,14 @@ export class Pass1ArcScheduler {
       state.pass1Scheduler = {
         activeArcId: '',
         nextArcNumber: 1,
+        nextHypothesisNumber: 1,
         decisions: [],
-        fitHistory: []
+        fitHistory: [],
+        hypotheses: []
       };
     }
+    if (!Array.isArray(state.pass1Scheduler.hypotheses)) state.pass1Scheduler.hypotheses = [];
+    if (!Number.isFinite(Number(state.pass1Scheduler.nextHypothesisNumber))) state.pass1Scheduler.nextHypothesisNumber = 1;
     if (!Array.isArray(state.pass1Arcs)) state.pass1Arcs = [];
     for (const arc of state.pass1Arcs) this.ensureArcIdentity(arc);
     return state.pass1Scheduler;
@@ -32,6 +36,7 @@ export class Pass1ArcScheduler {
   ensureArcIdentity(arc) {
     const scheduler = this.state().pass1Scheduler || this.ensureState();
     if (!arc.id) arc.id = `arc-${scheduler.nextArcNumber++}`;
+    arc.qualification = 'business_use_case';
     if (!Number.isFinite(Number(arc.progress))) arc.progress = 0;
     if (!Number.isFinite(Number(arc.opportunityScore))) arc.opportunityScore = 0;
     if (!Number.isFinite(Number(arc.lastScheduledStep))) arc.lastScheduledStep = 0;
@@ -46,6 +51,11 @@ export class Pass1ArcScheduler {
   arcs() {
     this.ensureState();
     return this.state().pass1Arcs;
+  }
+
+  hypotheses() {
+    this.ensureState();
+    return this.state().pass1Scheduler.hypotheses;
   }
 
   activeArcId() { return this.ensureState().activeArcId || ''; }
@@ -64,6 +74,20 @@ export class Pass1ArcScheduler {
     }));
   }
 
+  hypothesisBoard() {
+    return this.hypotheses()
+      .filter((item) => item.status === 'hypothesis')
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        concept: item.concept || '',
+        actor: item.actor || '',
+        intent: item.intent || '',
+        confidence: Number(item.confidence || 0).toFixed(2),
+        reason: item.reason || ''
+      }));
+  }
+
   scoreFit(fit) {
     return 0.45 * clamp01(fit?.continuity)
       + 0.45 * clamp01(fit?.coherence)
@@ -76,7 +100,52 @@ export class Pass1ArcScheduler {
     return this.arcs().find((arc) => arc.id.toLowerCase() === key || String(arc.title || '').trim().toLowerCase() === key) || null;
   }
 
+  hypothesisByReference(value) {
+    const key = String(value || '').trim().toLowerCase();
+    if (!key) return null;
+    return this.hypotheses().find((item) => item.id.toLowerCase() === key || String(item.title || '').trim().toLowerCase() === key) || null;
+  }
+
+  createHypothesis(seed, observation) {
+    const title = text(seed?.title, 180);
+    if (!title) return null;
+    const existingArc = this.arcs().find((arc) => String(arc.title || '').toLowerCase() === title.toLowerCase());
+    if (existingArc) return existingArc;
+    let item = this.hypotheses().find((h) => String(h.title || '').toLowerCase() === title.toLowerCase());
+    if (!item) {
+      item = {
+        id: `hyp-${this.ensureState().nextHypothesisNumber++}`,
+        title,
+        concept: text(seed?.concept || seed?.reason, 320),
+        actor: text(seed?.businessActor || seed?.actor || seed?.trigger, 260),
+        intent: text(seed?.businessIntent || seed?.intent, 300),
+        reason: text(seed?.reason, 300),
+        confidence: clamp01(seed?.confidence),
+        status: 'hypothesis',
+        createdStep: this.state().step,
+        updatedStep: this.state().step,
+        evidence: []
+      };
+      this.hypotheses().push(item);
+    } else {
+      item.confidence = Math.max(Number(item.confidence || 0), clamp01(seed?.confidence));
+      item.concept = text(seed?.concept, 320) || item.concept;
+      item.actor = text(seed?.businessActor || seed?.actor || seed?.trigger, 260) || item.actor;
+      item.intent = text(seed?.businessIntent || seed?.intent, 300) || item.intent;
+      item.reason = text(seed?.reason, 300) || item.reason;
+      item.updatedStep = this.state().step;
+    }
+    if (observation?.id && !item.evidence.some((e) => e.artifactId === observation.id)) {
+      item.evidence.push({ step: this.state().step, artifactId: observation.id, meaning: text(seed?.reason || seed?.concept, 300) });
+      item.evidence = item.evidence.slice(-40);
+    }
+    return item;
+  }
+
   createArc(seed, observation) {
+    const qualifies = seed?.qualifiesAsBusinessUseCase === true || seed?.qualification === 'business_use_case' || seed?._admittedFromHypothesis === true;
+    if (!qualifies) return this.createHypothesis(seed, observation);
+
     const title = text(seed?.title, 180);
     if (!title) return null;
     const existing = this.arcs().find((arc) => String(arc.title || '').toLowerCase() === title.toLowerCase());
@@ -87,7 +156,8 @@ export class Pass1ArcScheduler {
     const arc = this.ensureArcIdentity({
       title,
       concept: text(seed?.concept || seed?.reason, 320),
-      trigger: text(seed?.trigger, 300),
+      trigger: text(seed?.businessActor || seed?.trigger, 300),
+      businessIntent: text(seed?.businessIntent || seed?.intent, 320),
       majorStages: uniq(seed?.majorStages),
       outcome: text(seed?.outcome, 320),
       entities: uniq(seed?.entities),
@@ -101,7 +171,39 @@ export class Pass1ArcScheduler {
       evidence: observation?.id ? [{ step: this.state().step, artifactId: observation.id, meaning: text(seed?.reason || seed?.concept, 300), role: 'seed' }] : []
     });
     this.state().pass1Arcs.push(arc);
+    const hypothesis = this.hypothesisByReference(title);
+    if (hypothesis) hypothesis.status = 'admitted';
     return arc;
+  }
+
+  applyHypothesisJudgments(parsed, observation) {
+    for (const judgment of arr(parsed?.hypothesisJudgments)) {
+      const hypothesis = this.hypothesisByReference(judgment?.hypothesisId);
+      if (!hypothesis || hypothesis.status !== 'hypothesis') continue;
+      hypothesis.confidence = clamp01(judgment?.confidence ?? hypothesis.confidence);
+      hypothesis.reason = text(judgment?.reason, 300) || hypothesis.reason;
+      hypothesis.actor = text(judgment?.businessActor, 260) || hypothesis.actor;
+      hypothesis.intent = text(judgment?.businessIntent, 300) || hypothesis.intent;
+      hypothesis.updatedStep = this.state().step;
+      if (judgment?.decision === 'reject') {
+        hypothesis.status = 'rejected';
+        continue;
+      }
+      if (judgment?.decision === 'admit' && judgment?.qualifiesAsBusinessUseCase === true) {
+        hypothesis.status = 'admitted';
+        this.createArc({
+          ...hypothesis,
+          title: hypothesis.title,
+          concept: hypothesis.concept,
+          businessActor: hypothesis.actor,
+          businessIntent: hypothesis.intent,
+          reason: hypothesis.reason,
+          confidence: hypothesis.confidence,
+          qualifiesAsBusinessUseCase: true,
+          _admittedFromHypothesis: true
+        }, observation);
+      }
+    }
   }
 
   updateFitState(parsed) {
@@ -119,8 +221,6 @@ export class Pass1ArcScheduler {
         expectedGain: clamp01(fit?.expectedGain),
         score
       };
-      // Preserve promising opportunities instead of replacing them with a later
-      // weak fit from unrelated evidence. Old opportunities decay gently.
       arc.opportunityScore = Math.max(Number(arc.opportunityScore || 0) * 0.96, score);
       scheduler.fitHistory.push({ step: this.state().step, arcId: arc.id, ...arc.lastFit });
     }
@@ -129,8 +229,12 @@ export class Pass1ArcScheduler {
     }
     scheduler.fitHistory = scheduler.fitHistory.slice(-300);
 
+    this.applyHypothesisJudgments(parsed, this.explorer._schedulerObservation);
+
     for (const seed of arr(parsed?.newArcs)) {
-      if (clamp01(seed?.confidence) >= 0.25 || text(seed?.title)) this.createArc(seed, this.explorer._schedulerObservation);
+      if (seed?.qualifiesAsBusinessUseCase === true || seed?.qualification === 'business_use_case') this.createArc(seed, this.explorer._schedulerObservation);
+      else if (seed?.qualification === 'hypothesis' || seed?.qualifiesAsBusinessUseCase === false) this.createHypothesis(seed, this.explorer._schedulerObservation);
+      // qualification=orientation/technical is deliberately not schedulable state.
     }
   }
 
@@ -145,8 +249,8 @@ export class Pass1ArcScheduler {
     if (ranked[0]?.score >= 0.25) return ranked[0].arc;
 
     if (String(parsed?.bestArc || '').toUpperCase() === 'NEW') {
-      const seed = arr(parsed?.newArcs)[0] || parsed?.newArc;
-      return this.createArc(seed, this.explorer._schedulerObservation);
+      const seed = arr(parsed?.newArcs).find((item) => item?.qualifiesAsBusinessUseCase === true || item?.qualification === 'business_use_case');
+      if (seed) return this.createArc(seed, this.explorer._schedulerObservation);
     }
     return null;
   }
@@ -204,6 +308,7 @@ export class Pass1ArcScheduler {
     const scheduler = this.ensureState();
     const step = Number(this.state().step || 0);
     const ranked = this.arcs()
+      .filter((arc) => arc.qualification === 'business_use_case')
       .filter((arc) => arc.status !== 'broadly_complete' || Number(arc.opportunityScore || 0) >= 0.45)
       .map((arc) => {
         const age = Math.max(0, step - Number(arc.lastScheduledStep || 0));
@@ -214,8 +319,11 @@ export class Pass1ArcScheduler {
       .filter((entry) => entry.priority >= 0.25 || entry.arc.id === preferredArcId)
       .sort((a, b) => b.priority - a.priority || a.arc.lastScheduledStep - b.arc.lastScheduledStep);
 
-    let chosen = ranked[0]?.arc || this.arcByReference(preferredArcId) || this.activeArc() || this.arcs()[0] || null;
-    if (!chosen) return null;
+    const chosen = ranked[0]?.arc || this.arcByReference(preferredArcId) || this.activeArc() || null;
+    if (!chosen) {
+      scheduler.activeArcId = '';
+      return null;
+    }
     chosen.lastScheduledStep = step;
     scheduler.decisions.push({
       step,
