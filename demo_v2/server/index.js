@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ProgressiveRepositoryTopologyV4 } from './progressiveRepositoryTopologyV4.js';
-import { ProgressiveRepositoryExplorerV12 } from './progressiveRepositoryExplorerV12.js';
+import { ProgressiveRepositoryTopologyV5 } from './progressiveRepositoryTopologyV5.js';
+import { ProgressiveRepositoryExplorerV13 } from './progressiveRepositoryExplorerV13.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,8 +11,8 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new ProgressiveRepositoryTopologyV4({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV12({
+const topology = new ProgressiveRepositoryTopologyV5({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new ProgressiveRepositoryExplorerV13({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] PASS 1 broad business-arc discovery → readable structured test evidence → no-repeat artifact guard → multi-arc switching; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] PASS 1 broad business-arc discovery → ordered word-level search → alternate-keyword recovery → multi-arc switching; detailed traces go to data/runs/*.jsonl');
 });
