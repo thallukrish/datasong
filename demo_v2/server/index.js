@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
-import { ProgressiveRepositoryExplorerV25 } from './progressiveRepositoryExplorerV25.js';
+import { ProgressiveRepositoryExplorerV26 } from './progressiveRepositoryExplorerV26.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV7({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV25({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV26({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
@@ -51,5 +51,5 @@ function broadcast(state) {
 }
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] DISCOVERY coarse-to-fine business-use-case entrances → PASS 1 qualified-arc scheduler → PASS 2 per-arc DFS explorer → compact evidence prompts → typed artifact normalization → lazy XML/JMX hierarchy → ordered word-level semantic search; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] SCOUT global business-use-case novelty → DISCOVERY coarse-to-fine entrances → PASS 1 qualified-arc scheduler → PASS 2 per-arc DFS explorer → Scout rechecks on semantic flattening/exhaustion/completion; detailed traces go to data/runs/*.jsonl');
 });
