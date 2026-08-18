@@ -9,6 +9,20 @@ function assertUnitScore(value, label) {
   return n;
 }
 
+function normalizeThreadChoice(parsed) {
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  if (parsed.bestThread === 'UNATTACHED') {
+    // UNATTACHED is authoritative: the model is explicitly saying the current
+    // evidence does not yet sustain a durable semantic thread. Any populated
+    // newThread object is therefore contradictory decoration from the response
+    // schema, not a reason to spend another model call. Discard it
+    // deterministically and keep the semantic judgement as UNATTACHED.
+    parsed.newThread = null;
+    if (parsed.relation === 'new_thread') parsed.relation = 'unattached';
+  }
+  return parsed;
+}
+
 export class ProgressiveRepositoryExplorerV3 extends ProgressiveRepositoryExplorerV2 {
   buildPrompt(observation, candidates) {
     const base = super.buildPrompt(observation, candidates);
@@ -16,7 +30,7 @@ export class ProgressiveRepositoryExplorerV3 extends ProgressiveRepositoryExplor
       return `${base}\n- Never request listDirectory for the directory already shown. Choose a child directory/file or a previewed deeper drillTarget instead.`;
     }
     if (['xml_file', 'config_file', 'text_file', 'semantic_function'].includes(observation?.kind)) {
-      return `${base}\n- NEW means this evidence itself establishes a coherent concept worth pursuing as a semantic thread. Use NEW when that is true, even if no previous thread exists.\n- UNATTACHED means the evidence is not yet sufficient to sustain a coherent semantic thread. Do not provide a newThread title/concept with UNATTACHED.\n- All continuity, coherence, semanticGain, expectedGain and placement confidence scores must be numbers from 0 through 1.`;
+      return `${base}\n- NEW means this evidence itself establishes a coherent concept worth pursuing as a semantic thread. Use NEW when that is true, even if no previous thread exists.\n- UNATTACHED means the evidence is not yet sufficient to sustain a coherent semantic thread. Any newThread payload is ignored when bestThread=UNATTACHED.\n- All continuity, coherence, semanticGain, expectedGain and placement confidence scores must be numbers from 0 through 1.`;
     }
     if (observation?.kind === 'semantic_neighborhood') {
       return `${base}\n- Every continuity, coherence and expectedGain score must be a number from 0 through 1.`;
@@ -34,6 +48,7 @@ export class ProgressiveRepositoryExplorerV3 extends ProgressiveRepositoryExplor
   }
 
   validateArtifactResponse(parsed, candidates) {
+    normalizeThreadChoice(parsed);
     super.validateArtifactResponse(parsed, candidates);
     for (const fit of arr(parsed.threadFits)) {
       assertUnitScore(fit.continuity, `threadFits.${fit.threadId}.continuity`);
@@ -41,9 +56,6 @@ export class ProgressiveRepositoryExplorerV3 extends ProgressiveRepositoryExplor
     }
     assertUnitScore(parsed.semanticGain, 'semanticGain');
     assertUnitScore(parsed.placement?.confidence, 'placement.confidence');
-    if (parsed.bestThread === 'UNATTACHED' && (text(parsed.newThread?.title, 160) || text(parsed.newThread?.concept, 240))) {
-      throw new Error('UNATTACHED cannot include newThread; use bestThread=NEW when the evidence establishes a coherent concept');
-    }
   }
 
   validateNeighborhoodResponse(parsed, candidates) {
@@ -57,7 +69,8 @@ export class ProgressiveRepositoryExplorerV3 extends ProgressiveRepositoryExplor
 
   async getSemanticUpdate(args) {
     // ProgressiveRepositoryExplorer handles direct XML/config/text validation
-    // itself, so add the same strict score/new-thread consistency checks there.
+    // itself, so add the same strict score checks there while normalizing
+    // contradictory schema decoration deterministically.
     const directFile = this.isDirectFileObservation(args.observation);
     if (!directFile) return super.getSemanticUpdate(args);
 
@@ -67,7 +80,7 @@ export class ProgressiveRepositoryExplorerV3 extends ProgressiveRepositoryExplor
       const prompt = retry ? `${args.dynamicPrompt}\n\nRETRY: Return complete valid JSON matching the contract exactly.` : args.dynamicPrompt;
       const result = await this.callAndRecordAttempt({ dynamicPrompt: prompt, observation: args.observation, candidates: args.candidates, before: args.before, maxTokens: undefined, retry });
       try {
-        const parsed = this.parseModelOutput(result.raw);
+        const parsed = normalizeThreadChoice(this.parseModelOutput(result.raw));
         if (!text(parsed.meaning)) throw new Error('meaning is required');
         if (!['NEW', 'UNATTACHED', ...this.state.stories.map((story) => story.id)].includes(parsed.bestThread)) throw new Error('bestThread is invalid');
         for (const story of this.state.stories) {
@@ -75,9 +88,6 @@ export class ProgressiveRepositoryExplorerV3 extends ProgressiveRepositoryExplor
           if (!fit) throw new Error(`threadFits missing ${story.id}`);
         }
         if (parsed.bestThread === 'NEW' && !text(parsed.newThread?.title, 160)) throw new Error('newThread.title is required for NEW');
-        if (parsed.bestThread === 'UNATTACHED' && (text(parsed.newThread?.title, 160) || text(parsed.newThread?.concept, 240))) {
-          throw new Error('UNATTACHED cannot include newThread; use bestThread=NEW when the evidence establishes a coherent concept');
-        }
         if (!['continue', 'branch', 'subflow', 'new_thread', 'unattached'].includes(parsed.relation)) throw new Error('relation is invalid');
         if (!parsed.placement) throw new Error('placement is required');
         for (const fit of arr(parsed.threadFits)) {
