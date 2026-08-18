@@ -8,15 +8,13 @@ The governing question is:
 
 > What is a business actor, end user, operator, external business participant, scheduler or system trying to accomplish, and how does the enterprise support that intent end to end?
 
-Technical artifacts are evidence. They are not automatically business flows.
+Technical artifacts are evidence. UI structure is evidence. Broad functional areas are evidence. None of those are automatically business flows.
 
-A flow is not a predefined structural type. It emerges when accumulated evidence sustains continuity and coherence around one business capability or use case.
+A business-use-case arc is one coherent actor goal with a recognizable completion condition and business/user effect. It is not merely a screen, menu, widget set, navigation hierarchy, application area, or generic management domain.
 
 ---
 
 # Four-layer exploration model
-
-The governing architecture is now:
 
 ```text
 SCOUT
@@ -38,30 +36,18 @@ Each layer has one question:
 
 ```text
 Scout:     are we missing an entirely different business-use-case direction?
-Discovery: does this promising direction really qualify as a business-use-case entrance?
+Discovery: does this direction expose one concrete actor goal that really qualifies?
 Pass 1:    which qualified business arc should be explored now?
 Pass 2:    how does this selected business use case work end to end?
 ```
 
-This separation exists to prevent two opposite failure modes:
-
-```text
-premature exploitation:
-find one early arc → keep deepening it → fail to notice other business use cases
-
-unfocused exploration:
-keep browsing/searching globally → never build a coherent end-to-end use case
-```
-
-Scout protects against the first. Pass 1 and Pass 2 protect against the second.
+Scout protects against premature exploitation. Discovery protects against promoting UI/technical structure into flows. Pass 1 and Pass 2 protect against unfocused global wandering.
 
 ---
 
 # Scout — global business-use-case novelty search
 
-Scout is independent of Pass 1 and Pass 2.
-
-It does **not** continue the active arc and does **not** reconstruct a use case. Its purpose is to challenge the current semantic board.
+Scout is independent of Pass 1 and Pass 2. It does not continue the active arc and does not reconstruct a use case. Its purpose is to challenge the current semantic board.
 
 Scout sees a compact global picture:
 
@@ -72,61 +58,24 @@ compact list of already explored evidence regions
 broad unexplored repository evidence
 ```
 
-Broad evidence should remain lightweight:
+It asks:
 
-```text
-directories
-file names
-source signatures when already exposed
-XML/JMX top-level hierarchy
-config/document identity
-```
+> Is there a materially different business-use-case direction here that is not already represented?
 
-Scout asks the model:
-
-> Is there a materially different business-use-case direction here that is not already represented by the known arcs or discovery starts?
-
-The model scores two separate things:
+The model scores:
 
 ```text
 novelty
 businessUseCaseLikelihood
 ```
 
-A repository region is useful to Scout only when it is both reasonably likely to expose business behavior **and** meaningfully different from what DataSong already knows.
+Framework/configuration novelty and UI-area novelty are not by themselves business-use-case novelty.
 
-Framework/configuration novelty is not business-use-case novelty.
-
-## Scout output
-
-Conceptually:
-
-```json
-{
-  "summary": "global novelty assessment",
-  "newDirections": [
-    {
-      "artifactId": "exact broad candidate id",
-      "novel": true,
-      "novelty": 0.9,
-      "businessUseCaseLikelihood": 0.82,
-      "suggestedArcTitle": "Customer manages profile",
-      "businessActor": "customer",
-      "businessIntent": "maintain account/profile information",
-      "pursue": true,
-      "reason": "distinct from checkout/order-history arcs"
-    }
-  ]
-}
-```
-
-Scout never directly creates a qualified Pass-1 arc. A novel direction reopens Discovery and becomes a candidate discovery start.
+Scout never directly creates a qualified Pass-1 arc. A novel direction becomes a candidate Discovery start.
 
 ## When Scout runs
 
-Scout is event-driven rather than an arbitrary fixed-call budget.
-
-It is triggered when the current exploitation path provides evidence that the global board should be challenged, for example:
+Scout is event-driven, for example when:
 
 ```text
 active arc reaches a broad completion milestone
@@ -136,25 +85,26 @@ no admissible local Pass-2 continuation remains
 current evidence becomes technical/orientation with weak business fit
 ```
 
-Scout uses a compact fingerprint of the current arc board, discovery starts and broad frontier so the same unchanged global state is not repeatedly rescanned.
+If Scout finds nothing new, DataSong resumes the existing Pass-1/Pass-2 path.
 
-If Scout finds nothing genuinely new, DataSong resumes the existing Pass-1/Pass-2 path.
-
-If Scout finds a new direction:
+If Scout finds new directions:
 
 ```text
 Scout
-→ seed candidate Discovery start
+→ seed candidate Discovery starts
 → reopen Discovery shallowly
-→ qualify/deprioritize it
-→ return qualified starts to Pass 1
+→ resolve each Scout seed as qualified or deprioritized
+→ automatically close Scout Discovery
+→ return to Pass 1 / Pass 2
 ```
+
+Scout-reopened Discovery does **not** remain active waiting for arbitrary repository browsing once all Scout seeds are resolved.
 
 ---
 
-# Discovery — coarse-to-fine business-use-case entrance qualification
+# Discovery — coarse-to-fine concrete business-use-case qualification
 
-Discovery does not reconstruct an end-to-end use case. Its job is to determine whether a promising entrance is genuinely business-oriented.
+Discovery does not reconstruct an end-to-end use case. Its job is to decide whether a promising entrance really exposes a concrete business actor goal.
 
 Discovery begins from coarse evidence:
 
@@ -171,7 +121,7 @@ The model scores visible items on:
 
 > Given the compact trail so far, how likely is this continuation to reveal a genuine business use case?
 
-A discovery start stores only entrance-level state:
+A discovery start stores:
 
 ```text
 discoveryStartId
@@ -179,26 +129,67 @@ starting artifact/path
 suggested business-use-case title
 model reason
 current business-use-case likelihood
-actor/intent if known
+business actor
+business intent
+completion condition
+business outcome/effect
 compact selected exploration trail
 status: candidate | qualified | deprioritized
 ```
 
-Several starts may coexist.
+## Concrete qualification gate
 
-A next-level candidate may either:
+The model still owns semantic qualification, but DataSong enforces the contract mechanically.
+
+A start may qualify only when the model explicitly says the evidence supports:
 
 ```text
-continue an existing discovery start
-or
-seed a distinct discovery start
+isConcreteBusinessUseCase = true
+businessActor
+businessIntent
+completionCondition
+businessOutcome
+qualifiesAsBusinessUseCase = true
 ```
 
-Confidence may rise or fall as evidence deepens.
+The completion condition is what observable event/state means the actor goal has completed. The business outcome is the user/business effect produced by that completion.
 
-Once a start clearly qualifies, Discovery freezes it. Detailed reconstruction belongs to Pass 2.
+Examples that do **not** qualify by themselves:
 
-When Scout reopens Discovery, already-qualified starts are treated as known. Discovery focuses on the newly Scout-seeded candidate directions before declaring the discovery exercise complete again.
+```text
+Storefront subscreens navigation
+Storefront main widgets
+Admin back-office management
+Order screen hierarchy
+Accounting menu
+```
+
+Examples that may qualify when evidenced:
+
+```text
+Customer searches for a product and sees matching results
+Customer submits checkout and an order is created
+Back-office operator releases an order for fulfillment
+Accounting clerk applies a payment to an invoice
+Customer reviews a completed order's details
+```
+
+A broad functional area such as `Order Management` remains a Discovery entrance until deeper evidence reveals one or more concrete actor goals.
+
+## Discovery state isolation
+
+Only an explicitly named `startId` may update a Discovery start. DataSong never falls back to “whichever start is active” when the model is assessing unrelated evidence.
+
+Once a start is qualified, it is frozen in Discovery. Unrelated later evidence cannot reduce its confidence or rewrite its trail. Detailed evolution happens in Pass 2.
+
+This prevents the failure mode:
+
+```text
+Order flow qualifies at 85%
+→ Discovery later inspects .gitignore / CI / README
+→ unrelated 0-confidence assessment accidentally updates Order flow
+→ UI shows Order flow at 0%
+```
 
 ---
 
@@ -218,9 +209,7 @@ qualified B + qualified C
 PASS 1 ARC BOARD
 ```
 
-The discovery-start artifact is preserved as the entrance for later Pass-2 exploration.
-
-Unqualified starts do not receive DFS state.
+The discovery-start artifact is preserved as the entrance for later Pass-2 exploration. Unqualified starts do not receive DFS state.
 
 ---
 
@@ -236,37 +225,15 @@ coherence
 expectedGain
 ```
 
-Pass 1 maintains:
+Pass 1 maintains stable arc identity, actor/intent, major stages, outcome, entities/relationships, status, monotonic progress, opportunity score and evidence.
 
-```text
-arcId
-title
-business actor / intent
-major stages
-outcome
-major entities and relationships
-status
-monotonic progress
-opportunity score
-evidence
-```
-
-Pass 1 is a scheduler across arcs, not a DFS walker.
-
-Switching arcs changes only the active pointer. A paused arc keeps its accumulated progress and its independent Pass-2 state.
+Pass 1 is a scheduler across arcs, not a DFS walker. Switching arcs changes only the active pointer; paused arcs retain accumulated progress and independent Pass-2 state.
 
 ---
 
 # Pass 2 — per-arc DFS reconstruction
 
 Pass 2 explores one selected business use case in detail.
-
-Its input is:
-
-```text
-arcId
-currentArtifactId
-```
 
 Every qualified arc has independent DFS state:
 
@@ -296,8 +263,6 @@ There is no single global DFS stack controlling all arcs.
 
 # Current artifact vs candidate evidence
 
-A core invariant is:
-
 > **Current artifact = detailed evidence. Candidate artifacts = identity + signature only.**
 
 For source traversal:
@@ -311,42 +276,13 @@ f1 body
 → only then send that candidate's body
 ```
 
-The same principle applies to XML hierarchy nodes, config objects and semantic-search results.
-
-Scout and Discovery are even coarser: they prefer names, signatures, top-level hierarchy and compact reasoning trails.
+Scout and Discovery are coarser and prefer names, signatures, top-level hierarchy and compact reasoning trails.
 
 ---
 
 # Progressive artifact exposure
 
-## Directories
-
-DataSong exposes structural names and deterministic previews rather than file contents.
-
-## Source files
-
-A selected source file initially exposes function/method signatures. A selected function exposes identity/signature, body, provenance and lightweight called/referenced signatures.
-
-## XML and JMX
-
-XML/JMX is lazy and hierarchical:
-
-```text
-file
-→ root/top-level nodes
-→ immediate children
-→ selected child
-→ its immediate children
-→ deeper only when requested
-```
-
-## JSON/YAML/config
-
-Structured configuration follows the same progressive principle: top-level objects/keys first, selected children later.
-
-## Documents/text
-
-Documents are interpreted according to their real artifact type rather than forced into executable-code semantics.
+Directories expose structural names and deterministic previews. Source files first expose signatures. Selected functions expose bodies plus lightweight referenced signatures. XML/JMX is lazy and hierarchical. Config is progressively exposed by keys/objects. Documents are interpreted according to their real artifact type.
 
 ---
 
@@ -362,14 +298,12 @@ semanticFit = 0.45 * continuity
 
 The hard semantic admissibility floor remains `0.25`.
 
-Discovery likelihood and Scout novelty are different quantities:
-
 ```text
 Scout novelty:
 Is this a materially different global business-use-case direction?
 
 Discovery likelihood:
-Does this trail look increasingly like a genuine business-use-case entrance?
+Does this trail increasingly expose one concrete actor goal with a completion condition?
 
 Pass-2 semantic fit:
 Does this candidate continue the already-qualified business use case coherently?
@@ -379,19 +313,7 @@ Does this candidate continue the already-qualified business use case coherently?
 
 # Ordered semantic search
 
-Semantic search remains deterministic ordered word-level retrieval over canonical evidence.
-
-Matching priority:
-
-```text
-5 exact phrase
-4 contiguous from beginning
-3 contiguous later
-2 all words present in order
-1 partial words present in order
-```
-
-Scout and Discovery normally prefer coarse structural evidence over repeated semantic-search reformulations. Semantic search is primarily a Pass-2 escape mechanism when an admitted arc's local topology is exhausted.
+Semantic search remains deterministic ordered word-level retrieval over canonical evidence. Scout and Discovery normally prefer coarse structural evidence over repeated search reformulations. Semantic search is primarily a Pass-2 escape mechanism when a qualified arc's local topology is exhausted.
 
 ---
 
@@ -400,22 +322,25 @@ Scout and Discovery normally prefer coarse structural evidence over repeated sem
 ```text
 MODEL — Scout
 - identify globally novel business-use-case directions
-- distinguish business novelty from technical novelty
+- distinguish business novelty from technical/UI novelty
 
 DATASONG — Scout
 - decide when global novelty should be rechecked
-- provide compact known-arcs/explored-regions/broad-frontier context
+- provide compact board/explored/frontier context
 - reopen Discovery when Scout finds something new
 
 MODEL — Discovery
 - score coarse-to-fine paths for business-use-case likelihood
-- refine confidence using compact prior trail reasoning
-- decide when a discovery start qualifies
+- identify one concrete actor goal
+- provide actor, intent, completion condition and business outcome
+- decide semantic qualification
 
 DATASONG — Discovery
-- maintain discovery starts and selected trails
+- maintain isolated discovery starts and selected trails
 - expose one next level at a time
+- enforce the concrete qualification contract
 - freeze qualified starts
+- auto-close Scout-reopened Discovery when its seeds resolve
 - promote qualified starts to Pass 1
 
 MODEL — Pass 1 / Pass 2
@@ -433,18 +358,8 @@ PASS 2 / DATASONG
 - preserve and restore pending branches
 - backtrack within one arc
 - perform arc-anchored semantic search
-
-TOPOLOGY / DATASONG
-- repository inventory
-- canonical IDs
-- parsing/canonicalization
-- progressive artifact exposure
-- call/reference graph
-- XML/config hierarchy
-- deterministic semantic search
-- coverage/caching/cycle safety
 ```
 
 The governing architecture is:
 
-> **Scout looks for what DataSong may be missing. Discovery qualifies promising entrances. Pass 1 schedules the qualified arcs. Pass 2 reconstructs each selected arc end to end.**
+> **Scout looks for what DataSong may be missing. Discovery qualifies concrete actor goals, not UI areas. Pass 1 schedules the qualified arcs. Pass 2 reconstructs each selected arc end to end.**
