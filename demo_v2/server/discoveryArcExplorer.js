@@ -95,13 +95,19 @@ export class DiscoveryArcExplorer {
     start.businessIntent = text(update.businessIntent, 280) || start.businessIntent;
     if (artifactId) {
       start.currentArtifactId = artifactId;
-      start.trail.push({
-        step: this.state().step,
-        artifactId,
-        confidence: start.confidence,
-        reason: text(update.reason, 260)
-      });
-      start.trail = start.trail.slice(-20);
+      const last = arr(start.trail).at(-1);
+      if (!last || last.artifactId !== artifactId) {
+        start.trail.push({
+          step: this.state().step,
+          artifactId,
+          confidence: start.confidence,
+          reason: text(update.reason, 260)
+        });
+        start.trail = start.trail.slice(-20);
+      } else {
+        last.confidence = start.confidence;
+        last.reason = text(update.reason, 260) || last.reason;
+      }
     }
     if (update.qualifiesAsBusinessUseCase === true) {
       start.status = 'qualified';
@@ -126,16 +132,23 @@ export class DiscoveryArcExplorer {
     for (const score of arr(parsed?.candidateDiscoveryScores)) {
       if (!byCandidateId.has(score?.artifactId)) continue;
       let start = this.startByReference(score?.startId);
+      // A score without startId represents a distinct possible entrance. Creating
+      // that start is useful bookkeeping even before DataSong chooses to inspect it.
       if (!start && score?.pursue !== false) start = this.createStart(score);
-      if (start) this.updateStart(start, score, score.artifactId);
       scored.push({ score, start, candidate: byCandidateId.get(score.artifactId) });
     }
 
     const ranked = scored
-      .filter((x) => x.score?.pursue !== false && x.candidate)
+      .filter((x) => x.score?.pursue !== false && x.candidate && x.start?.status !== 'qualified')
       .sort((a, b) => clamp01(b.score.businessUseCaseLikelihood) - clamp01(a.score.businessUseCaseLikelihood));
     const chosen = ranked[0] || null;
-    if (chosen?.start) d.activeStartId = chosen.start.id;
+    if (chosen?.start) {
+      // Only the selected continuation advances an existing discovery trail.
+      // Merely scoring sibling candidates must not make it look as though all
+      // of them were explored.
+      this.updateStart(chosen.start, chosen.score, chosen.candidate.id);
+      d.activeStartId = chosen.start.id;
+    }
 
     const qualified = this.starts().filter((s) => s.status === 'qualified');
     const canComplete = parsed?.discoveryComplete === true && qualified.length > 0;
