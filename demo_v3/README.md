@@ -24,7 +24,7 @@ DataSong advances using student scores
 
 See [TEACHER_STUDENT_ARCHITECTURE.md](./TEACHER_STUDENT_ARCHITECTURE.md) for the design.
 
-`demo_v2` remains the reference implementation for the current LLM-driven Scout / Discovery / Pass 1 / Pass 2 exploration system. `demo_v3` should reuse its canonical evidence/topology machinery where useful, but the semantic policy is now a learned-model problem.
+`demo_v2` is now reference material only. Any deterministic machinery reused from it is copied into `demo_v3` and evolves independently there. The `demo_v3` runtime must never import source from `demo_v2`.
 
 ## Implementation status
 
@@ -47,11 +47,9 @@ server/trainingStore.js
 
 ### Slice 2 — MCP teacher/student plumbing
 
-The first ChatGPT-facing MCP surface is now implemented on the `demo_v3-mcp` branch.
-
 ```text
 mcp/server.js
-  MCP 2026-07-28 HTTP endpoint
+  ChatGPT-facing MCP endpoint
   datasong.* tools
   student.* tools
   training.* tools
@@ -65,6 +63,50 @@ server/runtime.js
 ```
 
 The mock student deliberately contains no semantic-navigation heuristics. Before training it emits neutral scores. Scaffold training memorizes an exact teacher target only so the complete ChatGPT → MCP → student → DataSong control loop can be tested before UniXcoder is introduced.
+
+### Slice 3 — self-contained repository evidence
+
+The deterministic repository topology needed from `demo_v2` has been copied into:
+
+```text
+server/topology/
+  topology.js
+  resolvedSymbolTopology.js
+  boundaryAwareTopology.js
+  semanticFunctionTopology.js
+  canonicalSemanticTopology*.js
+  progressiveRepositoryTopology*.js
+```
+
+`server/repositoryEvidence.js` adapts that v3-owned topology into the canonical student evidence packet.
+
+A real episode can now begin with:
+
+```text
+datasong.start_episode({ repoUrl })
+        ↓
+clone/update repository in demo_v3/data/repo-cache
+        ↓
+build deterministic topology
+        ↓
+emit canonical repository evidence packet
+        ↓
+student.score
+        ↓
+teacher supervision / training
+        ↓
+datasong.apply_scores(STUDENT scores)
+        ↓
+datasong.advance
+        ↓
+resolve next artifact through demo_v3 topology
+        ↓
+next evidence packet
+```
+
+The Scout decision now carries the student-ranked next `artifactId`, so repository navigation can advance without falling back to a hidden semantic heuristic.
+
+`test/self-contained.test.js` guards the architectural rule that v3 runtime code must not import `demo_v2`.
 
 Run locally with Node 20+:
 
@@ -109,19 +151,6 @@ training.list_checkpoints
 
 `student.save_checkpoint`, `student.restore_checkpoint`, and semantic skill metrics remain explicit placeholders until the real local student runtime is wired.
 
-Tests include the contract tests plus `test/mcp-runtime.test.js`, which exercises one full scaffold episode:
-
-```text
-start episode
-→ get evidence
-→ neutral student score
-→ add teacher target
-→ train scaffold student
-→ rescore
-→ apply STUDENT scores
-→ advance DataSong
-```
-
 ## Next seam
 
-The next implementation step is to replace the fixture evidence source with an adapter over the reusable deterministic `demo_v2` topology/evidence machinery. Once `datasong.get_evidence` returns a real PopNow packet through MCP, the UniXcoder student can replace the mock scorer behind the unchanged `student.*` tool contract.
+Run the first real repository episode through MCP and inspect the canonical packets produced by the self-contained v3 topology. Once that path is stable, replace the mock scorer behind the unchanged `student.*` contract with the local UniXcoder student.
