@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV4 } from './progressiveRepositoryTopologyV4.js';
-import { ProgressiveRepositoryExplorerV8 } from './progressiveRepositoryExplorerV8.js';
+import { ProgressiveRepositoryExplorerV9 } from './progressiveRepositoryExplorerV9.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV4({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV8({
+const explorer = new ProgressiveRepositoryExplorerV9({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] business-use-case orientation → proto threads → calibrated scored DFS with signal flattening; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] business-use-case orientation → normalized repository evidence → proto threads → calibrated scored DFS with signal flattening; detailed traces go to data/runs/*.jsonl');
 });
