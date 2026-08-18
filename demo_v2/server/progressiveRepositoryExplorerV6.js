@@ -86,9 +86,13 @@ export class ProgressiveRepositoryExplorerV6 extends ProgressiveRepositoryExplor
     return selectedEntry?.candidate || null;
   }
 
+  signalValues() {
+    return arr(this.state.branchSignalTrail).map((entry) => Number(entry.score)).filter(Number.isFinite);
+  }
+
   isFlatteningAfter(score) {
     if (!Number.isFinite(score) || score < MIN_SEMANTIC_FIT) return false;
-    const trail = [...arr(this.state.branchSignalTrail), score].slice(-FLATTENING_WINDOW);
+    const trail = [...this.signalValues(), score].slice(-FLATTENING_WINDOW);
     if (trail.length < FLATTENING_WINDOW) return false;
     const strictlyDeclining = trail.every((value, index) => index === 0 || trail[index - 1] > value);
     const totalDecline = trail[0] - trail.at(-1);
@@ -102,10 +106,6 @@ export class ProgressiveRepositoryExplorerV6 extends ProgressiveRepositoryExplor
       score
     });
     this.state.branchSignalTrail = this.state.branchSignalTrail.slice(-FLATTENING_WINDOW);
-  }
-
-  signalValues() {
-    return arr(this.state.branchSignalTrail).map((entry) => Number(entry.score)).filter(Number.isFinite);
   }
 
   async backtrackFrom(currentId) {
