@@ -56,6 +56,8 @@ DataSong owns deterministic mechanics:
 - branch flattening and backtracking
 - cached interpretations
 - bounded neighborhoods
+- score-driven DFS pruning
+- goal-directed semantic escape when local topology is exhausted
 
 The browsing/evidence operations are:
 
@@ -65,7 +67,7 @@ The browsing/evidence operations are:
 - `getNeighbors(id, depth=1..4)` — inspect a lightweight bounded call/reference neighborhood;
 - `searchSemantic(query)` — find semantic functions relevant to a semantic question;
 - `advance` — score a neighborhood and let DataSong choose the strongest admissible path;
-- `backtrack` — leave the current trajectory and resume a preserved pending alternative;
+- `backtrack` — leave the current trajectory and resume a preserved semantically admissible alternative;
 - `stop` — no useful evidence request remains.
 
 ## Artifact-specific exposure
@@ -188,6 +190,30 @@ A
 
 If branch 1 later flattens, DataSong marks that trajectory exhausted and resumes the nearest pending alternative, normally branch 2. A flattened/traversed branch is not put back on the pending stack.
 
+### Scoring prunes the frame on both advance and backtrack
+
+Neighborhood scores are authoritative traversal evidence even when the model chooses `backtrack` instead of `advance`.
+
+This matters when the model correctly concludes that every local structural neighbor is irrelevant to the active business use case. For example:
+
+```text
+purchase-flow test evidence
+|- cleanupSpec  0.00
+`- cleanup      0.00
+```
+
+A `backtrack` response must first remove those sub-threshold paths from that DFS frame. They must not remain available merely because they are structurally adjacent and unvisited.
+
+Therefore the rule is:
+
+```text
+score neighborhood
+-> retain only admissible unvisited alternatives
+-> then execute advance/backtrack/search decision
+```
+
+The model's decision verb does not determine whether scoring is remembered; scoring always updates the semantic frontier.
+
 ## Deterministic signal weakening / flattening
 
 DataSong uses two deterministic controls.
@@ -225,6 +251,33 @@ When flattening is detected, DataSong does not traverse the newly selected weak 
 When DataSong resumes a pending branch, that branch starts a new signal trajectory seeded by the score it had when it was originally preserved.
 
 This keeps semantic scoring with the model while keeping branch-history interpretation and DFS mechanics deterministic inside DataSong.
+
+## Business-thread semantic escape
+
+Topology depth and semantic search solve different problems.
+
+`getNeighbors(depth=1..4)` explores farther along **known graph edges**. Increasing depth cannot discover a continuation that is absent from the current canonical topology—for example when a test suite names a screen/business scenario but the parser has no explicit edge from the test method to that screen/service implementation.
+
+When the current scored neighborhood has no admissible continuation, DataSong now follows this order:
+
+```text
+1. prune the scored current frame
+2. resume the nearest earlier semantically admissible pending DFS branch
+3. if no such branch exists, perform a goal-directed semantic search
+   anchored to the active business-use-case thread
+4. do not fall back to generic mechanically-unvisited repository nodes
+```
+
+The semantic escape query is derived from the active business thread title and its recent semantic evidence. For example, after a test suite crystallizes an `End-to-End Commerce Purchase Flow` but its local neighbors are only test cleanup helpers, the escape search remains about the purchase/cart/checkout implementation rather than becoming generic repository exploration.
+
+This creates a deliberate distinction:
+
+```text
+rollout depth     = follow known topology farther
+semantic escape   = recover the business-flow continuation when topology is exhausted
+```
+
+Goal-directed escape is recorded in state as `semanticEscapes` so runs can be audited for when and why local topology was abandoned.
 
 ## Semantic path selection
 
