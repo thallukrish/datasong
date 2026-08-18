@@ -20,6 +20,23 @@ DataSong does not hard-code a closed structural definition of a flow.
 
 A flow emerges when evidence sustains a coherent end-to-end business-use-case story. Structural type does not make something a flow; sustained semantic continuity and coherence around a business intent/capability do.
 
+## Pass 1: broad business-arc discovery
+
+Pass 1 deliberately operates at business-stage resolution rather than implementation resolution.
+
+For each visible business use case it tries to identify:
+
+- trigger / actor / business intent;
+- broad major stages;
+- important decisions or branches;
+- major data effects;
+- major persistent/business entities and their relationships;
+- end state, persistence effect, external handoff, or user-visible outcome.
+
+Implementation detail is trivial for Pass 1 when omitting it does not materially change that business explanation. Such detail may be collapsed into a short business-level statement or skipped and revisited in a later pass.
+
+Several business-use-case arcs may coexist. Pass 1 may pursue multiple promising arcs, favoring completion of a nearly coherent broad arc without locking exploration onto one implementation path indefinitely.
+
 ## Progressive repository browsing first, semantic traversal second
 
 DataSong should not force every repository artifact into a semantic-function abstraction before the model has decided that the artifact matters.
@@ -58,6 +75,8 @@ DataSong owns deterministic mechanics:
 - bounded neighborhoods
 - score-driven DFS pruning
 - goal-directed semantic escape when local topology is exhausted
+- deterministic ordered word-level semantic search
+- alternate-keyword search-plan state
 
 The browsing/evidence operations are:
 
@@ -65,7 +84,7 @@ The browsing/evidence operations are:
 - `getArtifact(id)` — inspect one file or already-known artifact;
 - `getFunction(id)` — inspect one selected function/XML/config semantic unit;
 - `getNeighbors(id, depth=1..4)` — inspect a lightweight bounded call/reference neighborhood;
-- `searchSemantic(query)` — find semantic functions relevant to a semantic question;
+- `searchSemantic(query)` — find canonical evidence using deterministic ordered word-level matching;
 - `advance` — score a neighborhood and let DataSong choose the strongest admissible path;
 - `backtrack` — leave the current trajectory and resume a preserved semantically admissible alternative;
 - `stop` — no useful evidence request remains.
@@ -82,20 +101,11 @@ These previews contain no file contents and no semantic ranking. They reduce mec
 
 When the model asks for a source file, DataSong initially returns function/method signatures only. It does not send the whole source file merely because the file was selected.
 
-When the model asks for one function with `getFunction`, DataSong returns:
+When the model asks for one function with `getFunction`, DataSong returns function identity/signature, body, provenance, and lightweight signatures/relations of called or referenced functions. Called function bodies are not recursively dumped.
 
-- function identity/signature
-- function body
-- provenance
-- lightweight signatures/relations of called or referenced functions
+### XML and XML-derived test plans
 
-Called function bodies are not recursively dumped. The model chooses which one to inspect next.
-
-### XML
-
-For now XML may be returned directly when selected, provided transport remains reasonable. DataSong may additionally expose addressable structured XML units so the model can subsequently select a specific transition/service call/action/etc.
-
-This avoids inventing parser-facing semantic nodes as repository entrypoints before the model has chosen the file.
+XML may be returned directly when selected, provided transport remains reasonable. XML-like structured test plans such as `.jmx` are treated as readable structured evidence rather than opaque files, because they may reveal broad end-to-end business scenarios.
 
 ### Configuration
 
@@ -107,19 +117,7 @@ Markdown/text/SQL/other meaningful text is exposed as the document/artifact it a
 
 ## Hierarchical coverage
 
-Coverage is bookkeeping, not exploration policy.
-
-```text
-repository
-  directory opened / unopened
-  file opened / unopened
-  source file
-    function inspected / uninspected
-  XML/config file
-    semantic unit inspected / uninspected
-```
-
-A coherent flow may close while many unrelated files/functions remain uncovered.
+Coverage is bookkeeping, not exploration policy. A coherent flow may close while many unrelated files/functions remain uncovered.
 
 ## Transition into semantic traversal
 
@@ -133,35 +131,19 @@ Technical evidence is followed when it helps answer the business-use-case questi
 
 A durable semantic thread represents a business capability or end-user/business-actor use case whose accumulated evidence sustains one coherent vertical slice.
 
-The model evaluates evidence against every viable semantic thread using:
-
-- `continuity` — how naturally this evidence continues understanding of the same end-user/business use case;
-- `coherence` — how strongly the evidence belongs to the same end-to-end business use case rather than merely the same technical subsystem;
-- `bridge` — why it belongs or does not belong.
-
-The first useful artifact does not have to define an entire workflow by itself. DataSong therefore also keeps **proto threads**: candidate business-use-case narratives supported by promising evidence but not yet coherent enough to become durable threads.
-
-Supporting technical evidence may remain proto/orientation evidence until a business-use-case narrative crystallizes. A technically coherent sequence such as test setup -> helper -> cleanup must not become a durable thread unless the actual enterprise capability being reconstructed is genuinely about that operational behavior.
+The model evaluates evidence against every viable semantic thread using continuity, coherence and bridge. Supporting technical evidence may remain proto/orientation evidence until a business-use-case narrative crystallizes.
 
 Completion pressure must never override poor semantic fit or the business-use-case objective.
 
-## Neighborhood rollouts
+## Neighborhood rollouts and scoring
 
-Immediate neighbors are often insufficient to tell which trajectory carries the main business story. The model may request:
-
-```text
-getNeighbors(functionId, depth=2..4)
-```
-
-DataSong returns lightweight outbound topology only. The model scores promising candidates with continuity, coherence and expected information gain.
+Immediate neighbors are often insufficient to tell which trajectory carries the main business story. The model may request `getNeighbors(functionId, depth=2..4)`.
 
 The scoring meanings are objective-aligned:
 
 - `continuity`: next-step fit for the same business use case;
 - `coherence`: overall fit with that same end-to-end business use case;
 - `expectedGain`: likelihood of revealing a missing business stage, decision, data effect, outcome, branch or actor interaction.
-
-Technical adjacency, framework lifecycle, setup/cleanup and shared helpers do not receive high scores merely because they are connected. They may score highly only when they materially advance understanding of the business vertical slice.
 
 The base semantic score is:
 
@@ -171,66 +153,15 @@ semanticFit = 0.45 * continuity
             + 0.10 * expectedGain
 ```
 
-`next_in_source` is only weak structural adjacency, not causal/business continuity, so it is discounted before path selection.
+`next_in_source` is weak structural adjacency, not causal/business continuity, so it is discounted before path selection.
 
-## DFS frontier: pending alternatives, not traversal history
+## DFS frontier and drift control
 
-The DFS stack is not a history of everything DataSong has explored.
+The DFS stack stores admissible unexplored semantic alternatives, not a history of all structurally reachable nodes.
 
-For a scored neighborhood, DataSong chooses the strongest admissible candidate and preserves the other **admissible, unvisited** candidates as pending alternatives on that frame. Candidates already below the admissibility floor are not retained simply because they are mechanically reachable.
+Neighborhood scoring prunes the frame on both `advance` and `backtrack`. A candidate below the hard semantic-fit floor of `0.25` is rejected.
 
-Conceptually:
-
-```text
-A
-|- branch 1  0.90  <- chosen
-|- branch 2  0.76  <- pending
-`- branch 3  0.58  <- pending
-```
-
-If branch 1 later flattens, DataSong marks that trajectory exhausted and resumes the nearest pending alternative, normally branch 2. A flattened/traversed branch is not put back on the pending stack.
-
-### Scoring prunes the frame on both advance and backtrack
-
-Neighborhood scores are authoritative traversal evidence even when the model chooses `backtrack` instead of `advance`.
-
-This matters when the model correctly concludes that every local structural neighbor is irrelevant to the active business use case. For example:
-
-```text
-purchase-flow test evidence
-|- cleanupSpec  0.00
-`- cleanup      0.00
-```
-
-A `backtrack` response must first remove those sub-threshold paths from that DFS frame. They must not remain available merely because they are structurally adjacent and unvisited.
-
-Therefore the rule is:
-
-```text
-score neighborhood
--> retain only admissible unvisited alternatives
--> then execute advance/backtrack/search decision
-```
-
-The model's decision verb does not determine whether scoring is remembered; scoring always updates the semantic frontier.
-
-## Deterministic signal weakening / flattening
-
-DataSong uses two deterministic controls.
-
-### Hard admissibility floor
-
-If the strongest effective semantic score is below `0.25`, the branch is rejected immediately and DataSong backtracks.
-
-```text
-semanticFit < 0.25 -> reject/backtrack
-```
-
-### Declining three-roll window
-
-A branch may still be above `0.25` while clearly losing semantic signal. DataSong tracks the selected semantic score across the current branch's last three rollout decisions.
-
-The branch is considered **flattening** when all of the following hold:
+A branch is also considered flattening when its last three selected semantic scores strictly decline while staying above the floor and the total decline is at least `0.10`:
 
 ```text
 s1 > s2 > s3
@@ -238,46 +169,84 @@ s3 >= 0.25
 s1 - s3 >= 0.10
 ```
 
-Examples:
+When flattening occurs, DataSong backtracks to the nearest preserved admissible alternative.
+
+## Ordered word-level semantic search
+
+Semantic search is deterministic lexical search over canonical semantic evidence, not embedding similarity.
+
+Queries are tokenized at word level, including camelCase splitting. For example:
 
 ```text
-0.91 -> 0.78 -> 0.64   flatten
-0.55 -> 0.54 -> 0.53   continue; decline is too small
-0.91 -> 0.78 -> 0.82   continue; signal recovered
+OrderDetail -> order detail
 ```
 
-When flattening is detected, DataSong does not traverse the newly selected weak continuation. It marks the current branch flattened, discards that continuation from the current frame, and backtracks to the nearest preserved pending alternative.
+For a multi-word query such as `order detail`, candidate evidence is ranked by the best matching target field using these tiers:
 
-When DataSong resumes a pending branch, that branch starts a new signal trajectory seeded by the score it had when it was originally preserved.
+```text
+5  exact target phrase
+4  all query words contiguous from the beginning of the target
+3  all query words contiguous later in the target
+2  all query words present in order with intervening target words
+1  only part of the query words present in order
+```
 
-This keeps semantic scoring with the model while keeping branch-history interpretation and DFS mechanics deterministic inside DataSong.
+Within the partial-match tier, candidates matching the greater number of query words rank higher. Earlier contiguous matches break ties before stable name ordering.
+
+The search is applied to canonical names/signatures/source paths and compact semantic packet fields such as operations, conditions, inputs and outputs. It does not award independent substring points merely because query terms occur somewhere in a large serialized artifact.
+
+This means `order detail` strongly favors evidence that actually expresses `order` followed by `detail`, rather than unrelated evidence that happens to contain either word.
+
+## Alternate-keyword recovery
+
+A semantic-search request may include alternate keyword phrases with the first request:
+
+```json
+{
+  "type": "searchSemantic",
+  "query": "order detail",
+  "alternateQueries": [
+    "view order",
+    "order display",
+    "customer order detail"
+  ]
+}
+```
+
+DataSong always tries the primary query first. The model then scores the returned candidates using the normal continuity/coherence/expected-gain rubric.
+
+If the strongest returned candidate is below the semantic floor, the results are considered weak for the active business arc. DataSong then tries the next supplied alternate query **without switching arcs**.
+
+Conceptually:
+
+```text
+primary query
+-> ranked lexical candidates
+-> model semantic scoring
+-> admissible result? continue current arc
+-> all weak? next alternate query
+-> all alternates weak? suspend/mark current arc unresolved
+-> switch to another promising business-use-case thread
+```
+
+The model may also issue a new `searchSemantic` request with improved keywords after seeing weak results. That new request replaces the current search plan.
+
+This keeps responsibilities separated:
+
+```text
+DataSong = deterministic word-level retrieval + ranking + retry state
+Model    = semantic usefulness judgment + optional alternate keywords
+```
+
+Search plans and their outcomes are retained in `pass1SearchPlans` for auditability.
 
 ## Business-thread semantic escape
 
 Topology depth and semantic search solve different problems.
 
-`getNeighbors(depth=1..4)` explores farther along **known graph edges**. Increasing depth cannot discover a continuation that is absent from the current canonical topology—for example when a test suite names a screen/business scenario but the parser has no explicit edge from the test method to that screen/service implementation.
+`getNeighbors(depth=1..4)` explores farther along known graph edges. Increasing depth cannot discover a continuation absent from the current canonical topology.
 
-When the current scored neighborhood has no admissible continuation, DataSong now follows this order:
-
-```text
-1. prune the scored current frame
-2. resume the nearest earlier semantically admissible pending DFS branch
-3. if no such branch exists, perform a goal-directed semantic search
-   anchored to the active business-use-case thread
-4. do not fall back to generic mechanically-unvisited repository nodes
-```
-
-The semantic escape query is derived from the active business thread title and its recent semantic evidence. For example, after a test suite crystallizes an `End-to-End Commerce Purchase Flow` but its local neighbors are only test cleanup helpers, the escape search remains about the purchase/cart/checkout implementation rather than becoming generic repository exploration.
-
-This creates a deliberate distinction:
-
-```text
-rollout depth     = follow known topology farther
-semantic escape   = recover the business-flow continuation when topology is exhausted
-```
-
-Goal-directed escape is recorded in state as `semanticEscapes` so runs can be audited for when and why local topology was abandoned.
+When the current scored neighborhood has no admissible continuation, DataSong first prunes the frame, then resumes a semantically admissible pending DFS branch. If none exists, it performs goal-directed search anchored to the active business-use-case thread rather than falling back to generic mechanically-unvisited nodes.
 
 ## Semantic path selection
 
