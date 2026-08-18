@@ -1,12 +1,9 @@
 import { ProgressiveRepositoryExplorerV11 } from './progressiveRepositoryExplorerV11.js';
 
-function sameArtifactRequest(request, currentId, currentPath) {
+function sameArtifactRequest(request, currentId) {
   if (request?.type !== 'getArtifact') return false;
   const requested = String(request.artifactId || '').trim();
-  if (!requested) return false;
-  if (requested === currentId) return true;
-  if (currentPath && (requested === currentPath || requested === `file:${currentPath}`)) return true;
-  return false;
+  return Boolean(requested && requested === currentId);
 }
 
 const PASS1_OVERRIDE = `PASS-1 CONTROL OVERRIDE
@@ -21,14 +18,14 @@ export class ProgressiveRepositoryExplorerV12 extends ProgressiveRepositoryExplo
 
   async resolveNextAction(action, candidates) {
     const request = action || { type: 'stop' };
+    this.normalizeRepositoryRequest(request, candidates);
     const currentId = this._currentObservationId || '';
-    const currentPath = String(this._currentObservationPath || '').trim();
 
     // Reopening the exact artifact that produced the current observation cannot
     // reveal new evidence. Treat it as an exhausted local move instead of
     // spending another LLM call on the same payload. This is especially
     // important for unknown/opaque artifacts and for large direct-text files.
-    if (sameArtifactRequest(request, currentId, currentPath)) {
+    if (sameArtifactRequest(request, currentId)) {
       this.state.pass1CollapsedEvidence.push({
         step: this.state.step,
         artifactId: currentId,
