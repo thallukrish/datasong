@@ -5,7 +5,7 @@ import { CanonicalSemanticTopologyV4 } from './canonicalSemanticTopologyV4.js';
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.java', '.kt', '.kts', '.groovy', '.go', '.rs', '.cs', '.rb', '.php', '.scala', '.vue', '.svelte']);
 const CONFIG_EXTENSIONS = new Set(['.json', '.yaml', '.yml', '.env', '.properties', '.ini', '.conf']);
-const DIRECT_TEXT_EXTENSIONS = new Set(['.xml', '.md', '.txt', '.sql', '.gradle']);
+const DIRECT_TEXT_EXTENSIONS = new Set(['.xml', '.jmx', '.md', '.txt', '.sql', '.gradle']);
 const MAX_DIRECT_TEXT = 40000;
 
 function cleanRepoPath(value = '') {
@@ -133,16 +133,17 @@ export class ProgressiveRepositoryTopology extends CanonicalSemanticTopologyV4 {
       };
     }
 
-    if (ext === '.xml') {
+    if (ext === '.xml' || ext === '.jmx') {
       const units = this.structuredUnitsForFile(rel);
       const clipped = text.length > MAX_DIRECT_TEXT;
+      const label = ext === '.jmx' ? 'JMeter XML test plan' : 'XML file';
       return {
         id: fileId(rel),
         path: rel,
         kind: 'xml_file',
-        summary: `${rel}: XML file${clipped ? ' (content clipped for transport)' : ''}`,
+        summary: `${rel}: ${label}${clipped ? ' (content clipped for transport)' : ''}`,
         canonical: {
-          kind: 'xml_file',
+          kind: ext === '.jmx' ? 'jmeter_xml_file' : 'xml_file',
           path: rel,
           content: clipped ? `${text.slice(0, MAX_DIRECT_TEXT)}\n…[clipped]` : text,
           structuredUnits: units.map((s) => this.functionDescriptor(s))
