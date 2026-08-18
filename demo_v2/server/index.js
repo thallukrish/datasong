@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV4 } from './progressiveRepositoryTopologyV4.js';
-import { ProgressiveRepositoryExplorerV10 } from './progressiveRepositoryExplorerV10.js';
+import { ProgressiveRepositoryExplorerV11 } from './progressiveRepositoryExplorerV11.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV4({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV10({
+const explorer = new ProgressiveRepositoryExplorerV11({
   topology,
   dataRoot,
   onState: (state) => broadcast(state)
@@ -64,5 +64,5 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] business-use-case orientation → scored DFS pruning on advance/backtrack → business-thread semantic escape; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] PASS 1 broad business-arc discovery → major stages/entities/outcomes → multi-arc switching; detailed traces go to data/runs/*.jsonl');
 });
