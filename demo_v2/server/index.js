@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
-import { ProgressiveRepositoryExplorerV24 } from './progressiveRepositoryExplorerV24.js';
+import { ProgressiveRepositoryExplorerV25 } from './progressiveRepositoryExplorerV25.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,19 +12,12 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV7({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV24({
-  topology,
-  dataRoot,
-  onState: (state) => broadcast(state)
-});
-
+const explorer = new ProgressiveRepositoryExplorerV25({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'public')));
-
 app.get('/api/state', (_req, res) => res.json(explorer.snapshot()));
-
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -34,18 +27,14 @@ app.get('/api/events', (req, res) => {
   res.write(`data: ${JSON.stringify(explorer.snapshot())}\n\n`);
   req.on('close', () => clients.delete(res));
 });
-
 app.post('/api/explore', async (req, res) => {
   const repoUrl = String(req.body?.repoUrl || '').trim();
   if (!repoUrl) return res.status(400).json({ error: 'repoUrl is required' });
   if (running) return res.status(409).json({ error: 'An exploration is already running' });
-
   running = true;
   res.status(202).json({ ok: true });
   explorer.run(repoUrl)
-    .then((state) => {
-      console.log(`[DataSong v2] ${state.status} — ${state.lastMessage || 'exploration finished'}`);
-    })
+    .then((state) => console.log(`[DataSong v2] ${state.status} — ${state.lastMessage || 'exploration finished'}`))
     .catch((error) => {
       const state = explorer.snapshot();
       state.status = 'error';
@@ -56,13 +45,11 @@ app.post('/api/explore', async (req, res) => {
     })
     .finally(() => { running = false; });
 });
-
 function broadcast(state) {
   const payload = `data: ${JSON.stringify(state)}\n\n`;
   for (const client of clients) client.write(payload);
 }
-
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] PASS 1 business-use-case admission + global scheduler → goal-directed pre-admission qualification drift control → hypotheses/orientation are not schedulable → PASS 2 per-admitted-arc DFS explorer → compact evidence prompts → typed artifact normalization → lazy XML/JMX hierarchy → ordered word-level semantic search; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] DISCOVERY coarse-to-fine business-use-case entrances → PASS 1 qualified-arc scheduler → PASS 2 per-arc DFS explorer → compact evidence prompts → typed artifact normalization → lazy XML/JMX hierarchy → ordered word-level semantic search; detailed traces go to data/runs/*.jsonl');
 });
