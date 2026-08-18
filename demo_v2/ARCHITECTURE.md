@@ -4,143 +4,150 @@
 
 DataSong reconstructs **end-to-end vertical slices of business use cases** from heterogeneous enterprise evidence.
 
-The governing question is not “what code exists?” but “what business actor is trying to accomplish, and how does the enterprise system support that intent end to end?”
+The governing question is:
 
-Evidence may come from source, XML/JMX, configuration, schemas, documents, tests, workflows, logs, tickets, agreements or other enterprise artifacts. Technical artifacts are evidence; they are not automatically business flows.
+> What business actor, end user, operator, external business participant, scheduler or system is trying to accomplish, and how does the enterprise system support that intent end to end?
 
-A flow is not a predefined structural type. It emerges when accumulated evidence sustains continuity and coherence around one business concept.
+Technical artifacts are evidence. They are not automatically business flows.
+
+Examples of useful but non-business evidence include framework setup, dependency registration, screen registration, test harnesses, authentication wiring, configuration and infrastructure. They may reveal where a business use case lives, but technical coherence alone must not become a schedulable business arc.
+
+A flow is not a predefined structural type. It emerges when accumulated evidence sustains continuity and coherence around one business capability/use case.
 
 ---
 
-# Two-layer exploration model
+# Three semantic states before scheduling
 
-The exploration algorithm is deliberately split into two independent responsibilities:
+Before an exploration path becomes a Pass-1 arc, it must pass an explicit semantic admission boundary.
+
+```text
+ORIENTATION / TECHNICAL EVIDENCE
+        ↓
+BUSINESS-USE-CASE HYPOTHESIS
+        ↓
+MODEL QUALIFICATION
+   admit | retain | reject
+        ↓
+ADMITTED BUSINESS ARC
+        ↓
+PASS 1 SCHEDULER
+        ↓
+PASS 2 PER-ARC DFS
+```
+
+## Orientation / technical evidence
+
+Evidence may help the model understand and navigate the application without representing a business use case itself.
+
+Examples:
+
+```text
+component dependencies
+screen registration
+framework configuration
+test setup
+routing infrastructure
+authentication wiring
+```
+
+Such evidence remains orientation/supporting evidence unless it reveals a genuine business capability.
+
+## Business-use-case hypothesis
+
+When evidence suggests a possible business use case but is not yet sufficient to establish one, the model may create or retain a hypothesis.
+
+A hypothesis is **not schedulable** and does not receive Pass-2 DFS state.
+
+It exists so that promising business possibilities are not lost while preventing weak technical narratives from becoming self-reinforcing exploration threads.
+
+## Model qualification
+
+The model performs the semantic judgment of whether a hypothesis or newly visible concept qualifies as a business use case.
+
+A qualifying arc should express, as supported by the evidence:
+
+```text
+business actor / participant
+business intent or capability being accomplished
+business behavior/stages beyond application assembly
+```
+
+This is deliberately not a closed ontology. DataSong does not hard-code specific acceptable actors, trigger types, UI patterns or outcomes.
+
+The model returns one of three outcomes for an existing hypothesis:
+
+```text
+ADMIT   — evidence now supports a genuine business use case
+RETAIN  — plausible business use case, but evidence is still insufficient
+REJECT  — technical/orientation narrative rather than a business use case
+```
+
+For a newly proposed arc the model explicitly returns whether it qualifies as a business use case. Only an explicit positive qualification permits admission.
+
+DataSong owns the deterministic state transition; the model owns the semantic qualification.
+
+---
+
+# Two-layer exploration model after admission
+
+Once an arc is admitted, exploration is split into two independent responsibilities:
 
 ```text
 MODEL
   ↓
-PASS 1 — GLOBAL ARC SCHEDULER
+PASS 1 — GLOBAL ADMITTED-ARC SCHEDULER
   ↓ arcId
 PASS 2 — PER-ARC DFS EXPLORER
   ↓ current artifact + candidate signatures
 MODEL
 ```
 
-The model never directly owns DFS mechanics or global scheduling. Every semantic response is consumed by Pass 1 first.
+Every semantic model response flows through Pass 1 first.
 
-## Pass 1 — global arc scheduler
+## Pass 1 — business-use-case admission and global scheduling
 
-Pass 1 owns the global board of discovered business-use-case arcs.
-
-For every substantive artifact, the model returns semantic fit against the known arcs:
+Pass 1 owns:
 
 ```text
-continuity
-coherence
-expectedGain
+orientation state
+hypothesis board
+admitted business-arc board
+arc opportunity scores
+arc progress
+arc scheduling
 ```
 
-The model may also surface one or more genuinely distinct new business arcs supported by the current evidence.
+For every substantive artifact the model returns:
+
+- evidence classification;
+- semantic fit against every admitted arc;
+- qualification judgments for existing hypotheses;
+- zero or more newly visible arc candidates, each explicitly classified as business use case, hypothesis, orientation or technical;
+- candidate-signature scores for admitted arcs;
+- a compact evidence request.
+
+Only admitted business-use-case arcs participate in scheduling.
 
 Pass 1 then:
 
-1. updates semantic fit/opportunity state for every known arc;
-2. creates newly supported arcs;
-3. assigns the current evidence to the strongest semantically admissible arc;
-4. updates that arc's broad business-stage understanding;
-5. chooses which arc receives the next exploration turn;
-6. hands only the selected `arcId` to Pass 2.
+1. updates semantic fit/opportunity state for every admitted arc;
+2. updates, admits or rejects hypotheses according to the model's qualification;
+3. admits newly proposed arcs only when the model explicitly says they qualify as a business use case;
+4. assigns current evidence to the strongest semantically admissible admitted arc, if any;
+5. updates that arc's broad business-stage understanding;
+6. chooses which admitted arc receives the next exploration turn;
+7. hands the selected `arcId` to Pass 2.
 
-Pass 1 therefore acts as a scheduler **across arcs**, not as a DFS walker within one arc.
+If no business arc has yet been admitted, exploration remains in orientation/hypothesis discovery rather than inventing a technical arc merely so DFS can start.
 
-Several arcs may develop simultaneously. A newly discovered arc is not discarded merely because another arc is currently active.
-
-### Pass-1 arc state
-
-Each arc maintains stable identity and accumulated business-level state, for example:
-
-```text
-arcId
-title
-trigger / actor / intent
-major stages
-outcome
-major entities
-major relationships
-status
-progress
-opportunity score
-evidence
-```
-
-Arc progress is monotonic. Switching exploration from one arc to another changes only the active pointer; it does not reduce accumulated progress on the paused arc.
-
-The UI/story mirror should therefore look conceptually like:
-
-```text
-ACTIVE NOW
-Order review and submission      41%
-
-OTHER DISCOVERED ARCS
-Customer profile management      33%
-Order history                    27%
-Fulfillment tracking             18%
-Product search                   12%
-```
-
-## Pass 2 — per-arc DFS explorer
-
-Pass 2 owns local semantic traversal **inside one arc**.
-
-Its input is:
-
-```text
-arcId
-currentArtifactId
-```
-
-For every arc, Pass 2 preserves an independent DFS state containing the local execution stack and semantically admissible pending alternatives.
+### Pass-1 model contract
 
 Conceptually:
 
-```text
-dfsStateByArc = {
-  arc-1: { stack, frontier, visited, score trail, pending branches, ... },
-  arc-2: { stack, frontier, visited, score trail, pending branches, ... },
-  arc-3: { stack, frontier, visited, score trail, pending branches, ... }
-}
-```
-
-When Pass 1 switches from one arc to another:
-
-```text
-save DFS state of current arc
-restore DFS state of selected arc
-resume that arc from its strongest pending semantic branch
-```
-
-Nothing is thrown away merely because another arc gets the next turn.
-
-If the selected arc has no useful local pending branch, Pass 2 may perform a semantic search anchored to that arc's accumulated business meaning.
-
----
-
-# Model response contract
-
-For substantive evidence, the model sees:
-
-```text
-ACTIVE ARC
-ARC BOARD
-CURRENT DETAILED ARTIFACT
-CANDIDATE SIGNATURES ONLY
-```
-
-It returns a compact semantic delta containing:
-
 ```json
 {
-  "meaning": "business meaning of current evidence",
+  "meaning": "brief semantic meaning",
+  "evidenceClassification": "business_use_case|business_supporting|hypothesis|orientation|technical",
   "arcFits": [
     {
       "arcId": "arc-1",
@@ -149,16 +156,28 @@ It returns a compact semantic delta containing:
       "expectedGain": 0.6
     }
   ],
-  "bestArc": "arc-1 | NEW | UNATTACHED",
-  "newArcs": [],
-  "arcUpdate": {
-    "trigger": "...",
-    "majorStages": [],
-    "outcome": "...",
-    "entities": [],
-    "relationships": [],
-    "status": "forming|broadly_complete|unresolved"
-  },
+  "hypothesisJudgments": [
+    {
+      "hypothesisId": "hyp-1",
+      "decision": "admit|retain|reject",
+      "qualifiesAsBusinessUseCase": true,
+      "businessActor": "customer",
+      "businessIntent": "update account profile",
+      "confidence": 0.85,
+      "reason": "..."
+    }
+  ],
+  "newArcs": [
+    {
+      "title": "Customer updates profile",
+      "qualification": "business_use_case|hypothesis|orientation|technical",
+      "qualifiesAsBusinessUseCase": true,
+      "businessActor": "customer",
+      "businessIntent": "maintain profile details",
+      "confidence": 0.9,
+      "reason": "..."
+    }
+  ],
   "candidateScores": [
     {
       "artifactId": "exact candidate id",
@@ -174,7 +193,61 @@ It returns a compact semantic delta containing:
 }
 ```
 
-Candidate scores are local Pass-2 possibilities. Pass 1 still decides which arc gets the next turn.
+### Pass-1 arc state
+
+Each admitted arc maintains stable identity and accumulated business-level state:
+
+```text
+arcId
+title
+business actor / trigger / intent
+major stages
+outcome
+major entities
+major relationships
+status
+progress
+opportunity score
+evidence
+```
+
+Arc progress is monotonic. Switching active exploration changes only the active pointer.
+
+Hypotheses are stored separately and do not appear as active business slices until admitted.
+
+---
+
+# Pass 2 — per-admitted-arc DFS explorer
+
+Pass 2 owns local semantic traversal **inside one admitted arc**.
+
+Its input is:
+
+```text
+arcId
+currentArtifactId
+```
+
+Every admitted arc has independent DFS state:
+
+```text
+dfsStateByArc = {
+  arc-1: { stack, frontier, visited, score trail, pending branches, ... },
+  arc-2: { stack, frontier, visited, score trail, pending branches, ... }
+}
+```
+
+Hypotheses and orientation narratives do not receive DFS state.
+
+When Pass 1 switches arcs:
+
+```text
+save current arc DFS
+restore selected arc DFS
+resume strongest admissible pending semantic branch
+```
+
+If the selected arc has no useful local branch, Pass 2 may perform semantic search anchored to that arc's accumulated business meaning.
 
 ---
 
@@ -197,8 +270,6 @@ f1 body
 
 The same principle applies to XML hierarchy nodes, config objects and semantic-search results.
 
-This avoids transporting several candidate bodies when only one will be inspected.
-
 ---
 
 # Progressive artifact exposure
@@ -207,7 +278,7 @@ This avoids transporting several candidate bodies when only one will be inspecte
 
 Directory navigation is structural and lightweight. DataSong returns deterministic previews such as descendant counts, extension distributions, shallow subtrees and drill targets.
 
-Orientation is not semantic-thread construction.
+Orientation does not create a business arc by itself.
 
 ## Source files
 
@@ -226,7 +297,7 @@ Referenced function bodies are not recursively transported.
 
 ## XML and JMX
 
-XML/JMX is exposed lazily as a hierarchy rather than as the complete document.
+XML/JMX is exposed lazily:
 
 ```text
 file
@@ -237,21 +308,21 @@ file
 → deeper only when requested
 ```
 
-Each `xmlnode:*` is an addressable artifact. Immediate children are represented once as candidate signatures, not duplicated inside the current artifact and candidate list.
+Each `xmlnode:*` is addressable. Immediate children appear once as candidate signatures.
 
 ## JSON/YAML/config
 
-Structured configuration should follow the same progressive principle: top-level objects/keys first, then selected children when needed.
+Structured configuration follows the same progressive principle: top-level objects/keys first, selected children later.
 
 ## Documents/text
 
-Documents are interpreted as the artifact type they actually are rather than being forced into an executable-code ontology.
+Documents are interpreted as the artifact type they actually are rather than being forced into executable-code semantics.
 
 ---
 
 # Semantic scoring
 
-The common semantic score remains:
+The common semantic score is:
 
 ```text
 semanticFit = 0.45 * continuity
@@ -261,36 +332,56 @@ semanticFit = 0.45 * continuity
 
 The hard admissibility floor is `0.25`.
 
-Meanings:
-
-- `continuity` — how naturally evidence continues the local frontier of the business arc;
-- `coherence` — how well it belongs to the overall business story;
-- `expectedGain` — how likely inspection is to reveal a missing stage, branch, decision, entity relationship or outcome.
+- `continuity` — next-step fit for the same admitted business use case;
+- `coherence` — overall fit with that business story;
+- `expectedGain` — likelihood of revealing a missing business stage, branch, decision, entity relationship or outcome.
 
 Structural reachability alone never creates semantic membership.
+
+Crucially, high continuity/coherence with a **technical narrative** is not enough to admit that narrative as a business arc. Business-use-case qualification happens first.
 
 ---
 
 # Pass-1 scheduling behavior
 
-Pass 1 maintains an opportunity score for each arc instead of replacing an older promising opportunity with every weak later observation.
+Pass 1 schedules only admitted business arcs.
 
-New evidence may strengthen several arcs at once. Old opportunities decay gently rather than disappearing immediately.
+It maintains an opportunity score for each admitted arc and includes a small fairness/age effect so viable arcs are not starved indefinitely.
 
-Scheduling also includes a small fairness/age effect so a viable arc is not starved indefinitely simply because another arc remains marginally stronger on every local step.
+Hypotheses can accumulate evidence over multiple observations, but they do not compete for scheduling until admitted.
 
-The scheduler therefore behaves more like best-first multi-arc exploration than a globally locked single-thread DFS.
+This prevents the failure mode:
+
+```text
+technical setup
+→ coherent technical arc
+→ scheduler selects it
+→ Pass 2 explores more setup
+→ coherence rises
+→ technical arc self-reinforces
+```
+
+Instead:
+
+```text
+technical setup
+→ orientation/hypothesis evidence
+→ continue looking for business capability
+→ model establishes actor + intent + business behavior
+→ admit business arc
+→ schedule it
+```
 
 ---
 
 # Pass-2 DFS behavior
 
-Within the currently selected arc, Pass 2 maintains the normal DFS semantics:
+Within the selected admitted arc:
 
 ```text
 current artifact
 → candidate signatures
-→ semantic scores
+→ semantic scores for current arc
 → preserve admissible alternatives
 → follow strongest candidate
 → branch signal flattens / no candidate
@@ -299,9 +390,7 @@ current artifact
 → semantic search anchored to this arc
 ```
 
-The important difference from the older architecture is that this DFS state is **per arc**, not global.
-
-Switching arcs does not walk an old global stack and does not destroy the paused arc's pending alternatives.
+DFS state is per arc, never global.
 
 ---
 
@@ -309,19 +398,17 @@ Switching arcs does not walk an old global stack and does not destroy the paused
 
 Semantic search remains deterministic ordered word-level retrieval over canonical evidence.
 
-Queries are camelCase/word-token aware. Matching priority is:
+Matching priority:
 
 ```text
-5  exact phrase
-4  contiguous from beginning
-3  contiguous later
-2  all words present in order
-1  partial words present in order
+5 exact phrase
+4 contiguous from beginning
+3 contiguous later
+2 all words present in order
+1 partial words present in order
 ```
 
 Search retrieves candidate signatures. The model judges semantic usefulness; DataSong handles deterministic retrieval and ranking.
-
-If local DFS state for an arc is exhausted, semantic search is anchored to that arc's accumulated business meaning rather than a generic global frontier.
 
 ---
 
@@ -330,25 +417,29 @@ If local DFS state for an arc is exhausted, semantic search is anchored to that 
 ```text
 MODEL
 - interpret current evidence
-- score evidence against arcs
-- surface new business arcs
-- score candidate signatures
-- suggest semantic search terms when needed
+- classify it as business-use-case/supporting/hypothesis/orientation/technical evidence
+- decide whether a proposed concept qualifies as a business use case
+- admit/retain/reject hypotheses semantically
+- score evidence against admitted arcs
+- score candidate signatures for admitted arcs
+- suggest semantic search terms
 
 PASS 1 / DataSong
-- maintain global arc board
-- assign evidence to arcs
-- preserve all arc developments
-- schedule the next arc
+- maintain orientation state
+- maintain hypothesis board
+- enforce explicit business-use-case admission
+- maintain admitted arc board
+- preserve all admitted arc developments
+- schedule only admitted arcs
 - keep arc progress monotonic
 
 PASS 2 / DataSong
-- maintain DFS state separately for every arc
+- create DFS state only for admitted arcs
+- maintain DFS separately for every admitted arc
 - preserve pending branches
 - restore paused arcs
-- choose/resume local candidates
 - backtrack within one arc
-- perform arc-anchored semantic escape/search
+- perform arc-anchored semantic search
 
 TOPOLOGY / DataSong
 - repository inventory
@@ -361,6 +452,6 @@ TOPOLOGY / DataSong
 - coverage/caching/cycle safety
 ```
 
-This separation is the governing architecture going forward:
+The governing architecture is:
 
-> **Pass 1 schedules across business arcs. Pass 2 explores within one arc.**
+> **The model qualifies business use cases. Pass 1 admits and schedules them. Pass 2 explores inside admitted arcs.**
