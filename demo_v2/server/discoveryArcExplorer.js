@@ -49,6 +49,8 @@ export class DiscoveryArcExplorer {
       status: s.status,
       actor: s.businessActor || '',
       intent: s.businessIntent || '',
+      completionCondition: s.completionCondition || '',
+      businessOutcome: s.businessOutcome || '',
       currentArtifactId: s.currentArtifactId || '',
       trail: arr(s.trail).slice(-4).map((t) => ({ artifactId: t.artifactId, confidence: t.confidence, reason: t.reason }))
     }));
@@ -69,6 +71,8 @@ export class DiscoveryArcExplorer {
       status: seed.qualifiesAsBusinessUseCase === true ? 'qualified' : 'candidate',
       businessActor: text(seed.businessActor, 220),
       businessIntent: text(seed.businessIntent, 280),
+      completionCondition: text(seed.completionCondition, 280),
+      businessOutcome: text(seed.businessOutcome, 300),
       startArtifactId: artifactId,
       currentArtifactId: artifactId,
       createdStep: this.state().step,
@@ -88,11 +92,20 @@ export class DiscoveryArcExplorer {
   updateStart(start, update = {}, artifactId = '') {
     if (!start) return null;
     const d = this.ensureState();
+
+    // Qualification freezes Discovery state. Once a start is accepted as a
+    // business-use-case entrance, unrelated later orientation evidence must not
+    // rewrite its title, confidence or trail. Deeper reconstruction belongs to
+    // Pass 2, not Discovery.
+    if (start.status === 'qualified' && update.qualifiesAsBusinessUseCase !== true) return start;
+
     if (text(update.suggestedArcTitle || update.title, 180)) start.title = text(update.suggestedArcTitle || update.title, 180);
     if (text(update.reason, 300)) start.reason = text(update.reason, 300);
     start.confidence = clamp01(update.businessUseCaseLikelihood ?? update.confidence ?? start.confidence);
     start.businessActor = text(update.businessActor, 220) || start.businessActor;
     start.businessIntent = text(update.businessIntent, 280) || start.businessIntent;
+    start.completionCondition = text(update.completionCondition, 280) || start.completionCondition;
+    start.businessOutcome = text(update.businessOutcome, 300) || start.businessOutcome;
     if (artifactId) {
       start.currentArtifactId = artifactId;
       const last = arr(start.trail).at(-1);
@@ -124,16 +137,19 @@ export class DiscoveryArcExplorer {
   consume(parsed, observation, candidates) {
     const d = this.ensureState();
     const currentAssessment = parsed?.currentPathAssessment || {};
-    const active = this.startByReference(currentAssessment.startId) || this.activeStart();
-    if (active) this.updateStart(active, currentAssessment, observation?.id || active.currentArtifactId);
+
+    // IMPORTANT: only mutate a Discovery start when the model explicitly names
+    // that start. Falling back to activeStart here previously caused unrelated
+    // files such as .gitignore/.travis.yml to overwrite a qualified arc's
+    // confidence and make it appear to collapse to 0%.
+    const assessed = currentAssessment.startId ? this.startByReference(currentAssessment.startId) : null;
+    if (assessed) this.updateStart(assessed, currentAssessment, observation?.id || assessed.currentArtifactId);
 
     const byCandidateId = new Map(arr(candidates).map((c) => [c.id, c]));
     const scored = [];
     for (const score of arr(parsed?.candidateDiscoveryScores)) {
       if (!byCandidateId.has(score?.artifactId)) continue;
       let start = this.startByReference(score?.startId);
-      // A score without startId represents a distinct possible entrance. Creating
-      // that start is useful bookkeeping even before DataSong chooses to inspect it.
       if (!start && score?.pursue !== false) start = this.createStart(score);
       scored.push({ score, start, candidate: byCandidateId.get(score.artifactId) });
     }
@@ -143,9 +159,6 @@ export class DiscoveryArcExplorer {
       .sort((a, b) => clamp01(b.score.businessUseCaseLikelihood) - clamp01(a.score.businessUseCaseLikelihood));
     const chosen = ranked[0] || null;
     if (chosen?.start) {
-      // Only the selected continuation advances an existing discovery trail.
-      // Merely scoring sibling candidates must not make it look as though all
-      // of them were explored.
       this.updateStart(chosen.start, chosen.score, chosen.candidate.id);
       d.activeStartId = chosen.start.id;
     }
