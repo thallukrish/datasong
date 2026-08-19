@@ -1,149 +1,71 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DataSong.app</title>
-  <meta name="description" content="DataSong is exploring a simpler way to discover the business meaning and relationships hidden across enterprise data systems. We are looking for a small number of friendly pilot partners." />
-  <style>
-    :root{
-      --ink:#17152b;--muted:#625f77;--purple:#6c4cff;--blue:#3f8cff;--mint:#dff8ea;--lav:#eee8ff;--peach:#fff0df;--sky:#e9f5ff;--paper:#fffdf9;--line:#ded9f2;--max:1080px;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--paper);color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;line-height:1.6}
-    .page{max-width:var(--max);margin:0 auto;padding:0 28px}
-    header{display:flex;align-items:center;justify-content:space-between;min-height:76px;border-bottom:2px solid var(--line)}
-    .brand{font-size:1.42rem;font-weight:900;letter-spacing:-.04em;color:var(--purple);transform:rotate(-1deg)}
-    header a,.contact a{color:var(--ink);text-decoration:none;border-bottom:2px solid var(--purple)}
-    .hero{padding:82px 0 72px;display:grid;grid-template-columns:1.15fr .85fr;gap:48px;align-items:center}
-    .eyebrow{display:inline-block;background:var(--mint);padding:7px 13px;border:2px solid var(--ink);border-radius:999px;font-weight:800;font-size:.9rem;transform:rotate(-1deg);box-shadow:3px 3px 0 var(--ink)}
-    h1,h2,.big-line{font-family:"Comic Sans MS","Trebuchet MS","Segoe UI",sans-serif}
-    h1{margin:20px 0 18px;font-size:clamp(3rem,6.4vw,5.6rem);line-height:1;letter-spacing:-.055em;font-weight:900}
-    .hero-subtitle{font-size:clamp(1.3rem,2.7vw,2.05rem);line-height:1.25;font-weight:800;color:var(--purple);margin:0 0 24px}
-    .intro{font-size:1.14rem;color:var(--muted);max-width:760px}
-    .hero-note{display:inline-block;margin-top:18px;padding:11px 15px;background:var(--peach);border:2px solid var(--ink);border-radius:14px;font-weight:900;box-shadow:4px 4px 0 var(--ink);transform:rotate(.5deg)}
-    .doodle{position:relative;min-height:350px;background:var(--lav);border:2px solid var(--ink);border-radius:30px;box-shadow:8px 8px 0 var(--ink);padding:26px;overflow:hidden}
-    .bubble{position:absolute;border:2px solid var(--ink);border-radius:18px;padding:10px 13px;background:white;font-weight:800;box-shadow:3px 3px 0 var(--ink)}
-    .b1{top:28px;left:24px}.b2{top:112px;right:24px}.b3{bottom:28px;left:34px}.arrow{position:absolute;font-size:2.2rem;font-weight:900}.a1{top:72px;left:48%}.a2{top:174px;left:45%}
-    .ds{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-2deg);width:142px;height:142px;border:3px solid var(--ink);border-radius:50%;background:linear-gradient(135deg,var(--purple),var(--blue));color:white;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:900;font-size:1.25rem;box-shadow:6px 6px 0 var(--ink)}
-    section{padding:64px 0;border-top:2px solid var(--line)}
-    h2{margin:0 0 18px;font-size:clamp(2rem,4vw,3rem);line-height:1.1;letter-spacing:-.04em}
-    .section-kicker{color:var(--purple);font-weight:900;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;font-size:.78rem}
-    p{max-width:840px;margin:0 0 18px;color:var(--muted);font-size:1.05rem}
-    .big-line{font-size:clamp(1.5rem,3.3vw,2.35rem);line-height:1.2;font-weight:900;color:var(--ink);max-width:900px}
-    .tech-line{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px;max-width:900px}
-    .tech-line span{background:white;border:2px solid var(--ink);border-radius:999px;padding:7px 12px;font-weight:800;font-size:.9rem;box-shadow:2px 2px 0 var(--ink)}
-    .evidence{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:30px}
-    .card{border:2px solid var(--ink);border-radius:22px;padding:22px;box-shadow:5px 5px 0 var(--ink);background:white}
-    .card:nth-child(1){background:var(--sky);transform:rotate(-.35deg)}.card:nth-child(2){background:var(--mint)}.card:nth-child(3){background:var(--lav);transform:rotate(.35deg)}
-    .card h3{margin:0 0 10px;font-size:1.14rem}.card p{margin:0;font-size:.98rem;color:var(--ink)}
-    .pilot{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:28px}
-    .pilot-box{border:2px solid var(--ink);border-radius:22px;padding:24px;background:white;box-shadow:5px 5px 0 var(--ink)}
-    .pilot-box:nth-child(2){background:var(--peach)}
-    .pilot-box h3{margin:0 0 12px}.pilot-box ul{margin:0;padding-left:20px;color:var(--ink)}
-    .pilot-box li{margin:8px 0}
-    .trust-note{margin-top:24px;padding:22px 24px;border:2px solid var(--ink);border-radius:22px;background:var(--mint);box-shadow:5px 5px 0 var(--ink)}
-    .trust-note p{margin:0;color:var(--ink);font-weight:800}
-    .contact{margin:64px 0 86px;padding:36px;background:var(--ink);border-radius:28px;color:white;box-shadow:8px 8px 0 var(--purple)}
-    .contact h2,.contact p{color:white}.contact a{color:white;border-bottom-color:#b8a8ff}.contact .email{font-size:1.16rem;margin-top:20px}
-    footer{padding:24px 0 34px;border-top:2px solid var(--line);color:#918ba7;font-size:.85rem}
-    @media(max-width:820px){.hero{grid-template-columns:1fr}.doodle{min-height:310px}.evidence,.pilot{grid-template-columns:1fr}}
-    @media(max-width:560px){.page{padding:0 19px}header{min-height:68px}.hero{padding-top:54px}.doodle{min-height:300px}.bubble{font-size:.86rem}.ds{width:122px;height:122px;font-size:1.05rem}}
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>lemap — the learning enterprise map</title>
+<meta name="description" content="lemap continuously learns from enterprise data, applications, code, workflows, documents, emails and conversations to build a living semantic map of how the business works.">
+<style>
+:root{--black:#111;--text:#292929;--muted:#6e6e73;--line:#d2d2d7;--soft:#f5f5f7;--max:980px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#fff;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}.page{max-width:var(--max);margin:auto;padding:0 32px}header{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.brand{font-size:20px;font-weight:600;letter-spacing:-.03em;color:var(--black)}a{color:inherit}.contact{text-decoration:none;color:var(--muted);font-size:14px}.intro{padding:92px 0 100px;max-width:800px}.intro h1{font-size:18px;font-weight:500;margin:0 0 28px;color:var(--black)}.intro .lead{font-size:clamp(32px,5vw,54px);line-height:1.08;letter-spacing:-.045em;font-weight:600;color:var(--black);margin:0 0 30px}.intro p{font-size:20px;line-height:1.5;color:var(--muted);max-width:760px;margin:0}.section{padding:72px 0;border-top:1px solid var(--line)}.label{font-size:14px;font-weight:600;color:var(--muted);text-transform:lowercase;margin:0 0 30px}.section p{font-size:20px;line-height:1.55;max-width:800px;margin:0 0 20px}.section p:last-child{margin-bottom:0}.strong{font-size:28px!important;line-height:1.35!important;letter-spacing:-.025em;color:var(--black);font-weight:500}.mapline{margin:42px 0 8px;padding:30px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;gap:12px;color:var(--muted);font-size:15px}.mapline b{color:var(--black);font-weight:500}.arrow{color:#aaa}.uses{margin-top:34px;color:var(--muted);font-size:15px}.how{margin-top:40px;display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.how div{padding:22px 18px 22px 0;font-size:15px;color:var(--muted)}.how div+div{padding-left:18px;border-left:1px solid var(--line)}.how span{display:block;font-size:12px;color:#aaa;margin-bottom:8px}.demo{margin-top:36px;background:var(--soft);padding:34px 36px;border-radius:18px}.demo p{font-size:17px}.demo .flows{font-size:14px;color:var(--muted);margin-top:24px}.demo-link{display:inline-block;margin-top:12px;color:var(--black);font-weight:500;text-decoration:none;border-bottom:1px solid #777}.pilot{padding:72px 0 90px;border-top:1px solid var(--line)}.pilot p{font-size:20px;max-width:760px}.email{display:inline-block;margin-top:16px;text-decoration:none;border-bottom:1px solid #777}footer{padding:24px 0 34px;border-top:1px solid var(--line);display:flex;justify-content:space-between;color:#999;font-size:12px}@media(max-width:760px){.page{padding:0 20px}.intro{padding:68px 0 74px}.section{padding:56px 0}.section p{font-size:18px}.strong{font-size:24px!important}.how{grid-template-columns:1fr}.how div,.how div+div{padding:17px 0;border-left:0;border-top:1px solid var(--line)}.how div:first-child{border-top:0}.demo{padding:26px 22px}footer{display:block}footer span{display:block;margin-top:5px}}
+</style>
 </head>
-<body>
-<div class="page">
-<header><div class="brand">DataSong.app ♪</div><a href="mailto:hello@datasong.app?subject=DataSong">hello@datasong.app</a></header>
+<body><div class="page">
+<header><div class="brand">lemap</div><a class="contact" href="mailto:hello@datasong.app">contact</a></header>
 
-<main class="hero">
-  <div>
-    <span class="eyebrow">An enterprise data experiment.</span>
-    <h1>What if your data could explain itself?</h1>
-    <div class="hero-subtitle">We are exploring a simpler way to discover the business meaning hidden across enterprise systems.</div>
-    <p class="intro">Large organisations already have years of knowledge embedded in their data estate. The hard part is understanding what exists, what it means, and how the pieces relate across systems.</p>
-    <p class="intro">DataSong is an attempt to reconstruct that picture and turn it into a usable semantic layer — without asking teams to model everything from scratch.</p>
-    <div class="hero-note">We are looking for a friendly enterprise pilot.</div>
-  </div>
-  <div class="doodle" aria-label="DataSong connects enterprise evidence into a semantic picture">
-    <div class="bubble b1">SQL / NoSQL<br>business data</div>
-    <div class="bubble b2">Delta / lake<br>time series</div>
-    <div class="bubble b3">Warehouse<br>analytics</div>
-    <div class="arrow a1">↘</div><div class="arrow a2">↗</div>
-    <div class="ds">DataSong<br>semantic<br>picture</div>
-  </div>
+<main>
+<section class="intro">
+<h1>the learning enterprise map</h1>
+<p class="lead">A living map of how the enterprise works.</p>
+<p>Enterprise knowledge is scattered across data, applications, code, workflows, documents, emails and conversations. lemap continuously learns what these pieces mean and how they relate, building a shared enterprise mind for ML, analytics, decision-making, operations, support and engineering teams.</p>
+</section>
+
+<section class="section">
+<div class="label">why</div>
+<p class="strong">Using enterprise information usually begins with rediscovering what it means and how the business fits together.</p>
+<p>Data relationships live in databases. Processes live in applications and workflows. Exceptions and operational knowledge live in documents, emails, conversations and people's heads.</p>
+<p>Enormous time goes into repeatedly reconstructing this meaning — building data pipelines and views for analytics and ML, combining data across systems for questions such as sales, shipments or customers, tracing the impact of process and application changes, understanding how business workflows actually operate, and rediscovering tribal knowledge buried in documents, emails, conversations and people's heads.</p>
+<p>Much of this work starts with the same problem: understanding what things mean and how they connect.</p>
+</section>
+
+<section class="section">
+<div class="label">what</div>
+<p>lemap learns that meaning, keeps it current, and makes it available as a shared enterprise mind.</p>
+<div class="mapline"><span>data</span><span class="arrow">+</span><span>workflows</span><span class="arrow">+</span><span>code</span><span class="arrow">+</span><span>documents</span><span class="arrow">+</span><span>conversations</span><span class="arrow">→</span><b>enterprise semantic map</b></div>
+<p>The map connects business concepts, entities, relationships, data, workflows, systems, persistent objects and operational knowledge.</p>
+<p class="uses">One shared map → data views for ML and analytics · business questions · operational tracing · support context · engineering understanding</p>
+</section>
+
+<section class="section">
+<div class="label">how</div>
+<p class="strong">It learns much like a new engineer joining the company.</p>
+<p>Inspect what is already there. Follow workflows and relationships. Form hypotheses about what the business is doing. Check them against more evidence. Keep updating the map.</p>
+<div class="how"><div><span>01</span>inspect evidence</div><div><span>02</span>follow relationships</div><div><span>03</span>form hypotheses</div><div><span>04</span>check evidence</div><div><span>05</span>update the map</div></div>
+<p style="margin-top:34px">New code, data or captured knowledge becomes new evidence. The map evolves instead of being manually remodelled.</p>
+</section>
+
+<section class="section" id="demo">
+<div class="label">see it learn</div>
+<p class="strong">We gave lemap an unfamiliar open-source ecommerce application repository.</p>
+<p>It reads the executable structure, works out candidate business flows, follows the evidence and progressively reconstructs the business map.</p>
+<div class="demo">
+<p>As it runs, lemap discovers business flows and connects their steps, entities, persistent objects, relationships and outcomes.</p>
+<p class="flows">checkout · product search and cart · orders · payments · customer profile · inventory · returns · shipping · accounting</p>
+<p><a class="demo-link" href="#">live demo coming here →</a></p>
+</div>
+</section>
+
+<section class="section">
+<div class="label">use</div>
+<p class="strong">Ask for the business view instead of first reconstructing the technology underneath it.</p>
+<p>An analyst can ask for a combined data view. An ML engineer can ask for the data needed for a model. A decision maker can ask a business question. Operations and support can trace a process, customer or transaction across systems.</p>
+</section>
+
+<section class="pilot">
+<div class="label">pilot</div>
+<p>Start with one bounded enterprise domain. Let lemap learn from the evidence already there and compare the resulting map with what your experts know.</p>
+<a class="email" href="mailto:hello@datasong.app?subject=lemap%20pilot">hello@datasong.app</a>
+</section>
 </main>
-
-<section>
-  <div class="section-kicker">The problem</div>
-  <h2>Enterprises have the data. Meaning is scattered.</h2>
-  <p class="big-line">The knowledge needed to use enterprise data is spread across systems, teams and years of implementation history.</p>
-  <p>Customer, order, product, inventory, support and operational data may live in different systems, use different identifiers, and have relationships that are obvious only to people who have worked with those systems for years.</p>
-  <p>The same estate may span transactional data, documents, events and high-volume time-series data across very different storage and processing technologies.</p>
-  <div class="tech-line" aria-label="Example enterprise data technologies">
-    <span>SQL</span><span>NoSQL</span><span>Data warehouses</span><span>Delta Lake</span><span>Object storage</span><span>Time-series data</span>
-  </div>
-</section>
-
-<section>
-  <div class="section-kicker">The idea</div>
-  <h2>Can we recover that meaning from the estate itself?</h2>
-  <p>DataSong is exploring whether the information an organisation already has — including data structures, metadata, system context and the workflows that move and use the data — can be used to reconstruct a first semantic model of a business domain: its entities, relationships and the physical data behind them.</p>
-  <p>The aim is not to replace domain experts. It is to give them a strong starting point that can be inspected, corrected and trusted.</p>
-  <div class="evidence">
-    <div class="card"><h3>Existing data</h3><p>The structures and patterns already present across enterprise datasets.</p></div>
-    <div class="card"><h3>System knowledge</h3><p>The metadata and context already embedded in the systems that use that data.</p></div>
-    <div class="card"><h3>Human review</h3><p>A semantic model that domain experts can verify rather than build from a blank page.</p></div>
-  </div>
-</section>
-
-<section>
-  <div class="section-kicker">Why we are doing this</div>
-  <h2>This comes from years spent inside large enterprise data estates.</h2>
-  <p>Our experience spans large enterprise datasets, data platforms, pipelines, workflows, analytics and machine-learning systems. We have repeatedly seen how much effort goes into finding the right data, understanding its context and reconnecting knowledge that already exists somewhere in the organisation.</p>
-  <p>That experience is why we think the problem is worth testing. The pilot itself is how we intend to earn trust: on a small domain, against your own experts, with results you can inspect.</p>
-</section>
-
-<section>
-  <div class="section-kicker">The pilot</div>
-  <h2>A small experiment with a clear exchange.</h2>
-  <p>We are looking for one or two organisations willing to explore a bounded business or operational domain with us. A pilot might connect customer, orders and inventory data with operational or machine time-series data — potentially spread across SQL or NoSQL systems, a warehouse, and Delta Lake or object storage.</p>
-  <div class="pilot">
-    <div class="pilot-box">
-      <h3>You provide</h3>
-      <ul>
-        <li>One bounded business or operational domain</li>
-        <li>Read-only access to a manageable set of datasets and systems</li>
-        <li>Relevant metadata, configuration or source context where available</li>
-        <li>A little time from someone who understands the domain to review the result</li>
-      </ul>
-    </div>
-    <div class="pilot-box">
-      <h3>You get</h3>
-      <ul>
-        <li>A reconstructed semantic map of that domain</li>
-        <li>The entities, relationships and supporting data sources we discover</li>
-        <li>Evidence and confidence behind the proposed relationships</li>
-        <li>A clear view of what was discovered automatically, what was ambiguous and what still needs human knowledge</li>
-      </ul>
-    </div>
-  </div>
-  <div class="trust-note"><p>The first pilots are free. We can work under NDA, run within your environment where required, keep access read-only, and make no production changes. You keep the findings and semantic model. The point is not to ask you to believe the claim — it is to test it together.</p></div>
-</section>
-
-<section>
-  <div class="section-kicker">What success looks like</div>
-  <h2>A useful semantic picture, not another technology project.</h2>
-  <p>If the experiment works, the result should be a browsable model of the business concepts in that domain, how they relate, and where the supporting data lives — with enough context for an expert to understand why those relationships were proposed.</p>
-  <p>From there, the longer-term question is whether analysts, data engineers and ML teams can work from that shared business meaning instead of repeatedly rebuilding the same understanding in pipelines and projects.</p>
-</section>
-
-<div class="contact">
-  <h2>Have a corner of your data estate that only a few people really understand?</h2>
-  <p>If you are willing to let us test the idea on one small domain, we will do the discovery work, show you exactly what we found and why, and leave you with the resulting semantic model. No charge for the first pilots.</p>
-  <div class="email"><a href="mailto:hello@datasong.app?subject=DataSong%20pilot">hello@datasong.app</a></div>
-</div>
-
-<footer>© 2026 DataSong</footer>
-</div>
-</body>
-</html>
+<footer><span>lemap · working name</span><span>datasong.app · 2026</span></footer>
+</div></body></html>
