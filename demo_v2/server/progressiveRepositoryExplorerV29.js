@@ -31,6 +31,16 @@ export class ProgressiveRepositoryExplorerV29 extends ProgressiveRepositoryExplo
     return state;
   }
 
+  // Discovery qualification is derived from the evidence fields. The model does
+  // not also have to remember to flip a redundant qualifiesAsBusinessUseCase flag.
+  concreteQualification(item) {
+    return item?.isConcreteBusinessUseCase === true
+      && !!text(item?.businessActor, 220)
+      && !!text(item?.businessIntent, 280)
+      && !!text(item?.completionCondition, 300)
+      && !!text(item?.businessOutcome, 320);
+  }
+
   callPathPending() {
     return this.state?.callPathPreprocess?.status === 'pending'
       && typeof this.topology?.topCallPaths === 'function'
