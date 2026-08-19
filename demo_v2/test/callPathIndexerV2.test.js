@@ -32,9 +32,16 @@ function makeTopology() {
   };
 }
 
-function topologyFor(edges) {
+function topologyFor(edges, signatures = {}) {
   const ids = [...new Set([...Object.keys(edges), ...Object.values(edges).flat()])];
-  const symbols = ids.map((id) => ({ id, name: id, simpleName: id, signature: `${id}()`, sourcePath: 'synthetic.js', references: [] }));
+  const symbols = ids.map((id) => ({
+    id,
+    name: id,
+    simpleName: id,
+    signature: signatures[id] || `${id}()`,
+    sourcePath: 'synthetic.js',
+    references: []
+  }));
   const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
   return {
     symbols,
@@ -68,7 +75,33 @@ test('groups a major common suffix with at most two differing prefix nodes as al
   assert.ok(family.alternatives.some((alt) => alt.familyRelation === 'alternate_entrance'));
 });
 
-test('does not merge paths when the differing entrance prefix is larger than two nodes', () => {
+test('normalizes generic XML wrappers so equivalent flows group before the LLM', () => {
+  const indexer = new CallPathIndexerV2(topologyFor({
+    A: ['B'], B: ['C'], C: ['D'], D: ['E'], E: ['F'], F: ['G'], G: [],
+    X: ['Y'], Y: ['Z'], Z: ['Q'], Q: ['R'], R: []
+  }, {
+    A: '<screen default-menu-title="Dashboard">',
+    B: '<actions>',
+    C: '<transition name="search">',
+    D: '<default-response url="/popc/Product/Search"/>',
+    E: '<screen default-menu-title="Search Results">',
+    F: '<transition name="addToCart">',
+    G: '<default-response url="../../Order/Cart"/>',
+    X: '<transition name="search">',
+    Y: '<default-response url="/popc/Product/Search"/>',
+    Z: '<actions>',
+    Q: '<transition name="addToCart">',
+    R: '<default-response url="../../Order/Cart"/>'
+  }));
+  indexer.build();
+  const grouped = indexer.top(10);
+  assert.equal(grouped.length, 1);
+  assert.deepEqual(grouped[0].normalizedFlowTokens, [
+    'transition:search', 'navigate:search', 'transition:addtocart', 'navigate:cart'
+  ]);
+});
+
+test('does not merge paths when the differing entrance prefix is larger than two normalized nodes', () => {
   const indexer = new CallPathIndexerV2(topologyFor({
     A: ['B'], B: ['C'], C: ['D'], D: ['E'],
     W: ['X'], X: ['Y'], Y: ['Z'], Z: ['D'],

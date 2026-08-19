@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV32 } from './progressiveRepositoryExplorerV32.js';
+import { ProgressiveRepositoryExplorerV33 } from './progressiveRepositoryExplorerV33.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV32({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV33({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
@@ -57,5 +57,5 @@ function broadcast(state) {
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
   console.log('[DataSong v2] SCOUT → DISCOVERY ─┐');
-  console.log('[DataSong v2] CALL-PATH PREPROCESSOR + XML adapters → pre-LLM branch/entrance dedupe → boundary classifier → deterministic containment ─┴→ PASS 1 → PASS 2; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] CALL-PATH PREPROCESSOR + XML adapters → normalized pre-LLM flow-family dedupe → boundary classifier → deterministic containment ─┴→ PASS 1 → PASS 2; detailed traces go to data/runs/*.jsonl');
 });
