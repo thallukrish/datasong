@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV43 } from './progressiveRepositoryExplorerV43.js';
+import { ProgressiveRepositoryExplorerV44 } from './progressiveRepositoryExplorerV44.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV43({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV44({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
@@ -69,6 +69,6 @@ function broadcast(state) {
 }
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] CALL-PATH PREPROCESSOR → PASS 1 → PASS 2');
-  console.log('[DataSong v2] Pass 2 interprets an entire compressed call-path family in one model call; completed arcs are retired and Pass 1 immediately schedules the next uninterpreted arc. Scout alone scans for missing directions. Discovery is disabled.');
+  console.log('[DataSong v2] CALL-PATH PREPROCESSOR → PASS 1 → PASS 2 → SCOUT');
+  console.log('[DataSong v2] Pass 2 interprets each compressed call-path family in one model call. After admitted arcs finish, Scout scans lower-ranked unseen call-path entrances directly, seeds novel directions into Pass 1, and Pass 2 interprets them. Discovery is disabled.');
 });
