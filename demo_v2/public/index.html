@@ -5,97 +5,79 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>DataSong v2 — Semantic Explorer</title>
   <style>
-    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#151515; background:#f5f6f7; }
+    :root { font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#171717; background:#f5f6f7; }
     * { box-sizing:border-box; }
     body { margin:0; }
-    main { max-width:1100px; margin:0 auto; padding:38px 22px 80px; }
-    h1 { margin:0; font-size:34px; letter-spacing:-1px; }
-    .subtitle { color:#666; margin:8px 0 28px; }
-    .panel { background:white; border:1px solid #e4e6e8; border-radius:18px; padding:20px; margin-bottom:18px; box-shadow:0 1px 2px rgba(0,0,0,.03); }
-    form { display:flex; gap:10px; }
-    input { flex:1; border:1px solid #d7dadd; border-radius:11px; padding:12px 14px; font-size:15px; }
-    button { border:0; border-radius:11px; background:#111; color:white; padding:12px 18px; font-weight:650; cursor:pointer; }
-    button:disabled { opacity:.45; cursor:default; }
-    .meta { display:flex; gap:18px; flex-wrap:wrap; color:#666; font-size:14px; }
-    .status { margin-top:14px; font-size:16px; }
-    .stories { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; }
-    .story { background:#fff; border:1px solid #e4e6e8; border-radius:16px; padding:18px; }
-    .story-head { display:flex; justify-content:space-between; gap:12px; align-items:start; }
-    .story-title { font-weight:750; font-size:18px; }
-    .nature { color:#777; font-size:13px; margin-top:3px; }
-    .pct { font-variant-numeric:tabular-nums; font-weight:750; }
-    .bar { height:8px; background:#eceeef; border-radius:99px; overflow:hidden; margin:13px 0; }
-    .fill { height:100%; background:#34a853; transition:width .3s ease; }
-    .narrative { line-height:1.45; color:#333; font-size:14px; }
-    .branch { display:grid; grid-template-columns:1fr auto; gap:8px; padding:7px 0; border-top:1px solid #f0f1f2; font-size:13px; }
-    .branch:first-child { margin-top:10px; }
-    .smallbar { height:5px; background:#eceeef; border-radius:99px; overflow:hidden; margin-top:4px; }
-    .smallfill { height:100%; background:#777; }
-    .deps, .gaps { margin-top:12px; font-size:13px; color:#555; }
-    .label { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:#999; margin-bottom:5px; }
-    .artifact { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; color:#555; overflow-wrap:anywhere; }
-    .empty { color:#8b8b8b; padding:24px 0; }
+    main { max-width:960px; margin:0 auto; padding:32px 20px 70px; }
+    h1 { margin:0; font-size:32px; letter-spacing:-1px; }
+    .subtitle { color:#666; margin:7px 0 24px; font-size:14px; }
+    .panel { background:#fff; border:1px solid #e2e5e7; border-radius:16px; padding:18px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,.025); }
+    form { display:flex; gap:9px; }
+    input { flex:1; min-width:0; border:1px solid #d5d8db; border-radius:10px; padding:11px 13px; font-size:14px; }
+    button { border:0; border-radius:10px; padding:11px 16px; font-weight:700; cursor:pointer; background:#161616; color:#fff; }
+    button.secondary { background:#e9ebed; color:#333; }
+    button:disabled { opacity:.42; cursor:default; }
+    .meta { display:flex; flex-wrap:wrap; gap:15px; margin-top:14px; color:#666; font-size:13px; }
     .token { font-variant-numeric:tabular-nums; }
-    .step-row { position:relative; padding:0 0 16px 20px; font-size:13px; }
-    .step-row:before { content:""; position:absolute; left:3px; top:6px; width:7px; height:7px; border-radius:50%; background:#8b8b8b; }
-    .step-row:after { content:""; position:absolute; left:6px; top:13px; bottom:0; width:1px; background:#ddd; }
-    .step-row:last-child:after { display:none; }
-    .step-bridge { color:#666; margin-top:3px; }
-    .scores { color:#999; font-size:11px; margin-top:4px; }
-    .cp-head { display:flex; justify-content:space-between; gap:16px; align-items:start; margin-bottom:12px; }
-    .cp-title { font-weight:750; font-size:17px; }
-    .cp-subtitle { color:#777; font-size:13px; margin-top:4px; }
-    .cp-list { border-top:1px solid #eef0f1; }
-    .cp-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; padding:11px 0; border-bottom:1px solid #eef0f1; }
-    .cp-name { font-weight:650; font-size:14px; }
-    .cp-detail { color:#666; font-size:12px; margin-top:3px; }
-    .cp-result { text-align:right; font-size:12px; color:#666; white-space:nowrap; }
-    .badge { display:inline-block; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:750; background:#f0f1f2; color:#555; }
-    .badge.business { background:#eaf6ee; color:#247a3d; }
-    .badge.technical { background:#f1f2f3; color:#666; }
-    .badge.uncertain { background:#fff4db; color:#8a6400; }
-    .seed { color:#247a3d; font-weight:700; }
+    .live { margin-top:12px; font-size:14px; line-height:1.45; }
+    .artifact { margin-top:3px; color:#777; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; overflow-wrap:anywhere; }
+    .loglink { color:#555; text-decoration:none; border-bottom:1px dotted #999; }
+    .section-head { display:flex; align-items:baseline; justify-content:space-between; gap:14px; margin-bottom:4px; }
+    .section-title { font-size:17px; font-weight:800; }
+    .summary { color:#777; font-size:12px; }
+    .flow-list { border-top:1px solid #eceeef; margin-top:12px; }
+    .flow { padding:14px 0 13px; border-bottom:1px solid #eceeef; }
+    .flow-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:14px; align-items:center; }
+    .flow-title { font-size:15px; font-weight:750; }
+    .flow-origin { color:#888; font-size:11px; margin-top:2px; }
+    .flow-pct { font-size:13px; font-weight:750; font-variant-numeric:tabular-nums; }
+    .bar { height:6px; margin:8px 0 6px; background:#e9ecee; border-radius:999px; overflow:hidden; }
+    .fill { height:100%; background:#34a853; transition:width .25s ease; }
+    .flow.active .bar { height:8px; }
+    .flow.active .flow-title:after { content:"ACTIVE"; margin-left:8px; font-size:9px; letter-spacing:.06em; border-radius:999px; padding:3px 6px; color:#176d32; background:#e7f5eb; vertical-align:2px; }
+    .flow-now { color:#555; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .flow.active .flow-now { color:#222; font-weight:600; }
+    .seedline { display:flex; flex-wrap:wrap; gap:10px 18px; color:#666; font-size:12px; margin-top:9px; }
+    .seedname { color:#247a3d; font-weight:700; }
+    .empty { color:#888; font-size:13px; padding:16px 0 5px; }
+    .mode { display:inline-block; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; background:#f0f1f2; color:#666; border-radius:999px; padding:3px 7px; }
   </style>
 </head>
 <body>
 <main>
   <h1>DataSong v2</h1>
-  <div class="subtitle">Semantic exploration over code topology — deterministic flow seeds and semantic discovery converge into the same business-story board.</div>
+  <div class="subtitle">Deterministic flow seeds and semantic discovery converge into Pass 1; Pass 2 traces the active business flow.</div>
 
   <div class="panel">
     <form id="form">
       <input id="repo" value="https://github.com/moqui/PopCommerce" aria-label="Repository URL" />
       <button id="go">Explore</button>
+      <button id="stop" type="button" class="secondary" disabled>Stop</button>
     </form>
-    <div class="meta" style="margin-top:16px">
+    <div class="meta">
       <span>Status: <b id="status">idle</b></span>
       <span>Step: <b id="step">0</b></span>
-      <span>Orientation: <b id="orientation">0</b></span>
-      <span class="token">Tokens: <b id="tokens">0</b></span>
+      <span class="token">Total tokens: <b id="tokens">0</b></span>
       <span class="token">Prompt: <b id="promptTokens">0</b></span>
       <span class="token">Completion: <b id="completionTokens">0</b></span>
+      <span id="logWrap" style="display:none"><a class="loglink" href="/api/run-log">download run log</a></span>
     </div>
-    <div id="message" class="status"></div>
-    <div style="margin-top:12px"><span class="label">Current artifact</span><div id="artifact" class="artifact">—</div></div>
+    <div class="live"><span id="mode" class="mode">idle</span> <span id="message"></span></div>
+    <div id="artifact" class="artifact">—</div>
   </div>
 
-  <div class="panel" id="callPathPanel">
-    <div class="cp-head">
-      <div>
-        <div class="cp-title">Deterministic call-path seeds</div>
-        <div class="cp-subtitle">One-shot structural preprocessing per repository; Scout can still reopen Discovery later when semantic signals weaken.</div>
-      </div>
-      <div id="callPathStatus" class="badge">pending</div>
+  <div class="panel">
+    <div class="section-head">
+      <div class="section-title">Business flows</div>
+      <div id="flowSummary" class="summary"></div>
     </div>
-    <div id="callPathMeta" class="meta"></div>
-    <div id="callPathList" class="cp-list"><div class="empty">Call-path preprocessing has not completed yet.</div></div>
+    <div id="seedSummary" class="seedline"></div>
+    <div id="flows" class="flow-list"><div class="empty">No Pass-1 business flow yet.</div></div>
   </div>
-
-  <div id="stories" class="stories"><div class="empty">No semantic story has crystallized yet.</div></div>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
-  const esc = (s='') => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  const esc = (s='') => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   let state = {};
 
   $('form').addEventListener('submit', async (e) => {
@@ -109,99 +91,85 @@
     }
   });
 
+  $('stop').addEventListener('click', async () => {
+    $('stop').disabled = true;
+    await fetch('/api/stop', { method:'POST' });
+  });
+
   const events = new EventSource('/api/events');
   events.onmessage = (event) => render(JSON.parse(event.data));
 
+  function currentMode(s) {
+    if (s.stopRequested) return 'stopping';
+    if ((s.callPathPreprocess?.status || '') !== 'complete') return 'call paths';
+    if (s.discoveryState?.status === 'active' || s.discovery?.status === 'active') return 'discovery';
+    if (s.pass1Scheduler?.activeArcId) return 'pass 2';
+    if (s.status === 'exploring') return 'pass 1';
+    return s.status || 'idle';
+  }
+
   function render(next) {
     state = next || {};
+    const running = ['preparing','exploring'].includes(state.status) && !state.stopRequested;
     $('status').textContent = state.status || 'idle';
     $('step').textContent = state.step || 0;
-    $('orientation').textContent = (state.orientation || []).length;
     $('tokens').textContent = state.tokenUsage?.total || 0;
     $('promptTokens').textContent = state.tokenUsage?.prompt || 0;
     $('completionTokens').textContent = state.tokenUsage?.completion || 0;
+    $('mode').textContent = currentMode(state);
     $('message').textContent = state.lastMessage || '';
-    $('artifact').textContent = state.currentArtifact?.path || '—';
-    $('go').disabled = ['preparing','exploring'].includes(state.status);
-
-    renderCallPaths(state.callPathPreprocess || {});
-
-    const stories = state.stories || [];
-    if (!stories.length) {
-      $('stories').innerHTML = '<div class="empty">Orienting in the evidence world; no coherent story has crystallized yet.</div>';
-      return;
-    }
-    $('stories').innerHTML = stories.map(renderStory).join('');
+    $('artifact').textContent = state.currentArtifact?.path || '';
+    $('go').disabled = running;
+    $('stop').disabled = !running;
+    $('logWrap').style.display = state.runLogFile ? '' : 'none';
+    renderFlows();
   }
 
-  function renderCallPaths(cp) {
-    const status = cp.status || 'pending';
-    $('callPathStatus').textContent = status;
-    $('callPathStatus').className = `badge ${status === 'complete' ? 'business' : ''}`;
-    const summary = cp.topologySummary || {};
+  function renderFlows() {
+    const arcs = state.pass1Arcs || [];
+    const activeId = state.pass1Scheduler?.activeArcId || '';
+    const cp = state.callPathPreprocess || {};
     const seeded = cp.seededArcs || [];
-    $('callPathMeta').innerHTML = [
-      `Top candidates: <b>${Number(summary.topCandidateCount || (cp.classifications || []).length)}</b>`,
-      `Grouped variants: <b>${Number(summary.groupedVariantCount || 0)}</b>`,
-      `Alternate entrances: <b>${Number(summary.alternateEntranceCount || 0)}</b>`,
-      `Pass-1 seeds: <b>${seeded.length}</b>`
-    ].map((x) => `<span>${x}</span>`).join('');
+    const seededByArc = new Map(seeded.map(x => [x.arcId, x]));
+    const cpBusiness = (cp.classifications || []).filter(x => x.classification === 'business_flow');
+    const topo = cp.topologySummary || {};
 
-    const classifications = cp.classifications || [];
-    if (!classifications.length) {
-      $('callPathList').innerHTML = `<div class="empty">${status === 'complete' ? 'No call-path business seed qualified.' : 'Call-path preprocessing has not completed yet.'}</div>`;
+    $('flowSummary').textContent = `${arcs.length} qualified · ${activeId ? '1 active' : 'none active'}`;
+    $('seedSummary').innerHTML = [
+      cp.status ? `Call paths: <b>${esc(cp.status)}</b>` : '',
+      topo.topCandidateCount ? `${Number(topo.topCandidateCount)} top candidates` : '',
+      topo.groupedVariantCount ? `${Number(topo.groupedVariantCount)} variants compressed` : '',
+      seeded.length ? `<span class="seedname">${seeded.length} deterministic seeds → Pass 1</span>` : (cp.status === 'complete' ? '0 deterministic seeds' : '')
+    ].filter(Boolean).map(x => `<span>${x}</span>`).join('');
+
+    if (!arcs.length) {
+      const discoveryText = state.lastMessage || 'Discovery is looking for a concrete actor goal.';
+      $('flows').innerHTML = `<div class="empty">${esc(discoveryText)}</div>`;
       return;
     }
-    const seedByPath = new Map(seeded.map((s) => [s.callPathId, s]));
-    $('callPathList').innerHTML = classifications.map((item) => {
-      const seed = seedByPath.get(item.pathId);
-      const confidence = Math.round((Number(item.confidence) || 0) * 100);
-      const kind = item.classification || 'uncertain';
-      return `<div class="cp-row">
-        <div>
-          <div class="cp-name">${esc(item.flowTitle || item.pathId)}</div>
-          <div class="cp-detail">${esc(item.pathId)}${item.businessActor ? ` · ${esc(item.businessActor)}` : ''}${item.businessIntent ? ` · ${esc(item.businessIntent)}` : ''}</div>
+
+    $('flows').innerHTML = arcs.map(arc => {
+      const active = arc.id === activeId;
+      const seed = seededByArc.get(arc.id);
+      const origin = seed ? `deterministic seed · ${seed.callPathId || arc.callPathId || ''}` : (arc.discoveryStartId ? 'Discovery seed' : (arc.seedSource === 'call_path_preprocessor' ? `deterministic seed · ${arc.callPathId || ''}` : 'Pass-1 flow'));
+      const pct = Math.max(0, Math.min(100, Number(arc.progress) || 0));
+      let now = '';
+      if (active) now = state.lastMessage || state.currentArtifact?.path || 'Exploring this flow…';
+      else if (arc.businessIntent) now = arc.businessIntent;
+      else if (arc.outcome) now = arc.outcome;
+      else now = arc.status || 'queued';
+      return `<div class="flow ${active ? 'active' : ''}">
+        <div class="flow-head">
+          <div><div class="flow-title">${esc(arc.title || arc.id)}</div><div class="flow-origin">${esc(origin)}</div></div>
+          <div class="flow-pct">${Math.round(pct)}%</div>
         </div>
-        <div class="cp-result">
-          <span class="badge ${esc(kind)}">${esc(kind)}</span> ${confidence}%
-          <div>${seed ? `<span class="seed">→ Pass 1: ${esc(seed.title)}</span>` : 'not seeded'}</div>
-        </div>
+        <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
+        <div class="flow-now">${esc(now)}</div>
       </div>`;
     }).join('');
   }
 
-  function renderStory(story) {
-    const steps = (story.steps || []).map((s) => `
-      <div class="step-row">
-        <div>${esc(s.meaning || s.artifactPath || '')}</div>
-        ${s.bridge ? `<div class="step-bridge">${esc(s.bridge)}</div>` : ''}
-        <div class="scores">continuity ${Math.round((Number(s.continuity)||0)*100)}% · placement ${Math.round((Number(s.placementConfidence)||0)*100)}% · coherence +${Math.round((Number(s.coherenceGain)||0)*100)}%</div>
-      </div>`).join('');
-    const branches = (story.branches || []).map((b) => `
-      <div class="branch">
-        <div>
-          <div>${esc(b.label || b.id)} ${b.status === 'closed' ? '✓' : b.status === 'bounded' ? '↳ bounded' : ''}</div>
-          <div class="smallbar"><div class="smallfill" style="width:${Number(b.progress)||0}%"></div></div>
-        </div>
-        <div>${Number(b.progress)||0}%</div>
-      </div>`).join('');
-    const deps = (story.dependencies || []).map((d) => `${esc(d.label)} <span style="color:#999">[${esc(d.scope)}]</span>${d.contract ? ` — ${esc(d.contract)}` : ''}`).join('<br>');
-    const gaps = (story.openQuestions || []).map((q) => `• ${esc(q?.text || q)}`).join('<br>');
-    return `
-      <article class="story">
-        <div class="story-head">
-          <div><div class="story-title">${esc(story.title)}</div><div class="nature">${esc(story.nature || story.status || '')}</div></div>
-          <div class="pct">${Number(story.progress)||0}%</div>
-        </div>
-        <div class="bar"><div class="fill" style="width:${Number(story.progress)||0}%"></div></div>
-        ${steps ? `<div><div class="label">Ordered semantic steps</div>${steps}</div>` : ''}
-        ${branches ? `<div style="margin-top:12px"><div class="label">Branches</div>${branches}</div>` : ''}
-        ${deps ? `<div class="deps"><div class="label">Dependencies / sub-flows</div>${deps}</div>` : ''}
-        ${gaps ? `<div class="gaps"><div class="label">Open semantic questions</div>${gaps}</div>` : ''}
-      </article>`;
-  }
-
-  fetch('/api/state').then((r) => r.json()).then(render);
+  fetch('/api/state').then(r => r.json()).then(render);
 </script>
 </body>
 </html>

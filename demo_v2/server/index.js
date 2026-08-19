@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV35 } from './progressiveRepositoryExplorerV35.js';
+import { ProgressiveRepositoryExplorerV36 } from './progressiveRepositoryExplorerV36.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV35({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV36({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
@@ -23,6 +23,10 @@ app.get('/api/call-paths', (_req, res) => res.json({
   xmlAdapter: topology.moquiXmlExecution,
   topPaths: topology.callPathIndex ? topology.topCallPaths(10) : []
 }));
+app.get('/api/run-log', (_req, res) => {
+  if (!explorer.runLogPath) return res.status(404).json({ error: 'No run log is available yet' });
+  return res.download(explorer.runLogPath, path.basename(explorer.runLogPath));
+});
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -49,6 +53,11 @@ app.post('/api/explore', async (req, res) => {
       console.error(`[DataSong v2] exploration failed: ${error.message}`);
     })
     .finally(() => { running = false; });
+});
+app.post('/api/stop', (_req, res) => {
+  if (!running) return res.status(409).json({ error: 'No exploration is running' });
+  explorer.requestStop();
+  return res.json({ ok: true });
 });
 function broadcast(state) {
   const payload = `data: ${JSON.stringify(state)}\n\n`;
