@@ -2,16 +2,18 @@ import { CallPathIndexer } from './callPathIndexer.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 
-function lcsLength(a, b) {
-  const rows = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-  for (let i = 1; i <= a.length; i += 1) {
-    for (let j = 1; j <= b.length; j += 1) {
-      rows[i][j] = a[i - 1] === b[j - 1]
-        ? rows[i - 1][j - 1] + 1
-        : Math.max(rows[i - 1][j], rows[i][j - 1]);
-    }
-  }
-  return rows[a.length][b.length];
+function commonPrefixLength(a, b) {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[i] === b[i]) i += 1;
+  return i;
+}
+
+function commonSuffixLength(a, b) {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[a.length - 1 - i] === b[b.length - 1 - i]) i += 1;
+  return i;
 }
 
 function edgeLabel(relation) {
@@ -81,11 +83,28 @@ export class CallPathIndexerV2 extends CallPathIndexer {
         || a.signatures.join('>').localeCompare(b.signatures.join('>')));
   }
 
-  sameStructuralFamily(a, b) {
+  sameBranchFamily(a, b) {
     const shorter = Math.min(a.symbolIds.length, b.symbolIds.length);
     if (shorter < 4) return false;
-    const shared = lcsLength(a.symbolIds, b.symbolIds);
-    return shared >= 4 && (shared / shorter) >= 0.72;
+    const sharedPrefix = commonPrefixLength(a.symbolIds, b.symbolIds);
+    // Same long execution prefix with a small divergent tail => branches of one flow.
+    return sharedPrefix >= 4 && (sharedPrefix / shorter) >= 0.72;
+  }
+
+  sameAlternateEntranceFamily(a, b) {
+    const shorter = Math.min(a.symbolIds.length, b.symbolIds.length);
+    if (shorter < 4) return false;
+    const sharedSuffix = commonSuffixLength(a.symbolIds, b.symbolIds);
+    if (sharedSuffix < 4 || (sharedSuffix / shorter) < 0.72) return false;
+
+    const aPrefix = a.symbolIds.length - sharedSuffix;
+    const bPrefix = b.symbolIds.length - sharedSuffix;
+    // Major common downstream flow, differing only by a tiny entrance prefix.
+    return aPrefix <= 2 && bPrefix <= 2;
+  }
+
+  sameStructuralFamily(a, b) {
+    return this.sameBranchFamily(a, b) || this.sameAlternateEntranceFamily(a, b);
   }
 
   top(limit = 10) {
@@ -104,11 +123,13 @@ export class CallPathIndexerV2 extends CallPathIndexer {
           functionCount: path.functionCount,
           signatures: path.signatures,
           relations: path.relations,
-          terminal: path.terminal
+          terminal: path.terminal,
+          familyRelation: this.sameAlternateEntranceFamily(representative, path) ? 'alternate_entrance' : 'branch'
         }));
         return {
           ...representative,
-          branchVariantCount: group.length,
+          branchVariantCount: 1 + alternatives.filter((path) => path.familyRelation === 'branch').length,
+          alternateEntranceCount: alternatives.filter((path) => path.familyRelation === 'alternate_entrance').length,
           alternatives
         };
       })
@@ -133,7 +154,7 @@ export class CallPathIndexerV2 extends CallPathIndexer {
 
   snapshot() {
     return {
-      version: 2,
+      version: 3,
       fragmentCount: this.fragments.length,
       rawPathCount: this.rawPaths.length,
       rankedPathCount: this.rankedPaths.length,
