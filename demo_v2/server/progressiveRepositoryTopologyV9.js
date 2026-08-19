@@ -1,11 +1,11 @@
 import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
-import { CallPathIndexer } from './callPathIndexer.js';
+import { CallPathIndexerV2 } from './callPathIndexerV2.js';
 import { MoquiXmlExecutionAdapter } from './moquiXmlExecutionAdapter.js';
 
 export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopologyV7 {
   constructor(options) {
     super(options);
-    this.callPathIndexer = new CallPathIndexer(this);
+    this.callPathIndexer = new CallPathIndexerV2(this);
     this.callPathIndex = null;
     this.moquiXmlAdapter = new MoquiXmlExecutionAdapter(this);
     this.moquiXmlExecution = null;
@@ -23,6 +23,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         fragmentCount: this.callPathIndex.fragmentCount,
         rawPathCount: this.callPathIndex.rawPathCount,
         rankedPathCount: this.callPathIndex.rankedPathCount,
+        groupedPathCount: this.callPathIndex.groupedPathCount,
         topPaths: this.callPathIndex.topPaths
       }
     };
