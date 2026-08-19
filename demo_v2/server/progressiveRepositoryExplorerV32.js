@@ -5,46 +5,46 @@ function arr(value) { return Array.isArray(value) ? value : []; }
 export class ProgressiveRepositoryExplorerV32 extends ProgressiveRepositoryExplorerV31 {
   emptyState() {
     const state = super.emptyState();
-    state.arcSchedulerVersion = 'parallel-callpath-prellm-entrance-dedupe-v12';
+    state.arcSchedulerVersion = 'parallel-callpath-overlap-shape-v14';
     return state;
   }
 
   compactCallPath(path) {
     const alternatives = arr(path?.alternatives);
-    const branches = alternatives.filter((alt) => alt.familyRelation !== 'alternate_entrance');
+    const branches = alternatives.filter((alt) => alt.familyRelation === 'branch');
     const entrances = alternatives.filter((alt) => alt.familyRelation === 'alternate_entrance');
+    const duplicates = alternatives.filter((alt) => alt.familyRelation === 'duplicate');
 
     return {
       pathId: path.id,
       functionCount: path.functionCount,
       branchVariantCount: Number(path.branchVariantCount || 1),
       alternateEntranceCount: Number(path.alternateEntranceCount || entrances.length || 0),
+      duplicateVariantCount: Number(path.duplicateVariantCount || duplicates.length || 0),
       rendered: path.rendered,
+      mergedStructure: path.mergedStructure || null,
       branchSummary: branches.slice(0, 8).map((alt) => ({
         pathId: alt.pathId,
-        functionCount: alt.functionCount,
-        terminal: alt.terminal?.type || 'end',
-        divergentTail: arr(alt.signatures).slice(-3)
+        overlapRatio: alt.overlapRatio,
+        branchMiddle: alt.overlapShape?.bMiddle || [],
+        commonSuffix: alt.overlapShape?.commonSuffix || [],
+        terminal: alt.terminal?.type || 'end'
       })),
-      alternateEntrances: entrances.slice(0, 6).map((alt) => {
-        const sharedSuffix = this.commonSignatureSuffixLength(arr(path.signatures), arr(alt.signatures));
-        return {
-          pathId: alt.pathId,
-          differingPrefix: arr(alt.signatures).slice(0, Math.max(0, arr(alt.signatures).length - sharedSuffix))
-        };
-      }),
+      alternateEntrances: entrances.slice(0, 6).map((alt) => ({
+        pathId: alt.pathId,
+        overlapRatio: alt.overlapRatio,
+        differingEntrance: alt.overlapShape?.bEntrance || []
+      })),
+      sharedSubflowRefs: arr(path.sharedSubflowRefs).slice(0, 6).map((ref) => ({
+        otherPathId: ref.from === path.id ? ref.to : ref.from,
+        overlapRatio: ref.overlapRatio,
+        sharedSuffix: ref.commonSuffix || []
+      })),
       terminal: path.terminal?.type === 'external'
         ? { type: 'external', calls: arr(path.terminal.calls).map((call) => ({ relation: call.relation, name: call.name })) }
         : path.terminal?.type === 'cycle'
           ? { type: 'cycle' }
           : { type: 'end' }
     };
-  }
-
-  commonSignatureSuffixLength(a, b) {
-    const max = Math.min(a.length, b.length);
-    let i = 0;
-    while (i < max && a[a.length - 1 - i] === b[b.length - 1 - i]) i += 1;
-    return i;
   }
 }
