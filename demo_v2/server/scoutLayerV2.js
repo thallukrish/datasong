@@ -1,26 +1,123 @@
 import { ScoutLayer } from './scoutLayer.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
+function clamp01(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+}
+function text(value, max = 320) {
+  const s = String(value || '').trim().replace(/\s+/g, ' ');
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
 
 export class ScoutLayerV2 extends ScoutLayer {
+  ensureState() {
+    const scout = super.ensureState();
+    if (!Array.isArray(scout.reviewedCallPathIds)) scout.reviewedCallPathIds = [];
+    return scout;
+  }
+
+  representedCallPathIds() {
+    const ids = new Set();
+    for (const arc of this.explorer.pass1().arcs()) {
+      if (arc.callPathId) ids.add(arc.callPathId);
+      for (const id of arr(arc.callPathVariantIds)) ids.add(id);
+      for (const id of arr(arc.containedCallPathIds)) ids.add(id);
+      for (const id of arr(arc.relatedCallPathIds)) ids.add(id);
+    }
+    for (const id of arr(this.ensureState().reviewedCallPathIds)) ids.add(id);
+    return ids;
+  }
+
   broadCandidates() {
-    const base = super.broadCandidates();
+    const represented = this.representedCallPathIds();
     const pathSeeds = typeof this.explorer.topology?.callPathScoutCandidates === 'function'
-      ? this.explorer.topology.callPathScoutCandidates(10)
+      ? this.explorer.topology.callPathScoutCandidates(60)
       : [];
-    const visited = new Set(arr(this.state().visited));
-    const byId = new Map();
 
-    // Prefer call-path evidence for the same concrete symbol because it carries
-    // a reconstructed execution signature rather than only a file/frontier hint.
-    for (const candidate of base) {
-      if (candidate?.id && !visited.has(candidate.id)) byId.set(candidate.id, candidate);
-    }
-    for (const candidate of pathSeeds) {
-      if (candidate?.id && !visited.has(candidate.id)) byId.set(candidate.id, candidate);
+    return arr(pathSeeds)
+      .map((candidate) => ({
+        ...candidate,
+        callPathIds: arr(candidate.callPathIds).filter((id) => !represented.has(id))
+      }))
+      .filter((candidate) => candidate.callPathIds.length > 0)
+      .slice(0, 12);
+  }
+
+  fingerprint(candidates) {
+    const arcs = this.explorer.pass1().arcBoard().map((a) => `${a.id}:${a.title}:${a.progress}`).sort();
+    const ids = arr(candidates).flatMap((candidate) => arr(candidate.callPathIds)).sort();
+    return JSON.stringify({ arcs, ids });
+  }
+
+  consumeScoutResult(parsed, candidates) {
+    const scout = this.ensureState();
+    const byId = new Map(arr(candidates).map((candidate) => [candidate.id, candidate]));
+    const directions = arr(parsed?.newDirections)
+      .filter((item) => byId.has(item?.artifactId) && item?.novel !== false && item?.pursue !== false)
+      .map((item) => ({
+        ...item,
+        businessUseCaseLikelihood: clamp01(item.businessUseCaseLikelihood),
+        novelty: clamp01(item.novelty),
+        candidate: byId.get(item.artifactId)
+      }))
+      .sort((a, b) => (b.novelty * b.businessUseCaseLikelihood) - (a.novelty * a.businessUseCaseLikelihood));
+
+    // Every supplied path is considered reviewed in this Scout turn. The next
+    // invocation therefore advances to lower-ranked unseen call-path entrances.
+    for (const candidate of arr(candidates)) {
+      for (const id of arr(candidate.callPathIds)) {
+        if (!scout.reviewedCallPathIds.includes(id)) scout.reviewedCallPathIds.push(id);
+      }
     }
 
-    return [...byId.values()]
-      .sort((a, b) => this.explorer.candidatePriority(b) - this.explorer.candidatePriority(a));
+    const created = [];
+    for (const direction of directions) {
+      if (direction.novelty < 0.5 || direction.businessUseCaseLikelihood < 0.55) continue;
+      const candidate = direction.candidate;
+      const callPathId = arr(candidate.callPathIds)[0] || '';
+      const grouped = callPathId
+        ? (this.explorer.rankedPathById?.(callPathId) || this.explorer.topology.topCallPaths?.(200)?.find((p) => p.id === callPathId))
+        : null;
+      const arc = this.explorer.pass1().createArc({
+        title: text(direction.suggestedArcTitle, 180),
+        concept: text(direction.reason, 300),
+        businessActor: text(direction.businessActor, 220),
+        businessIntent: text(direction.businessIntent, 280),
+        confidence: Math.max(direction.businessUseCaseLikelihood, direction.novelty),
+        qualifiesAsBusinessUseCase: true,
+        qualification: 'business_use_case'
+      }, { id: candidate.id, path: candidate.path || '' });
+      if (!arc) continue;
+      arc.seedSource = 'scout_call_path';
+      arc.scoutArtifactId = candidate.id;
+      arc.callPathId = callPathId;
+      arc.callPathVariantIds = arr(grouped?.alternatives).map((alt) => alt.pathId);
+      arc.seedArtifactId = grouped?.entrySymbolId || candidate.id;
+      arc.seedSourcePath = arr(grouped?.sourcePaths)[0] || candidate.path || '';
+      created.push({ arc, direction, candidate });
+    }
+
+    const chosen = created[0] || null;
+    if (chosen) {
+      const scheduler = this.explorer.pass1().ensureState();
+      scheduler.activeArcId = chosen.arc.id;
+      chosen.arc.lastScheduledStep = Number(this.state().step || 0);
+      this.explorer.pass1().syncStories();
+    }
+
+    scout.runs.push({
+      step: this.state().step,
+      reason: scout.pendingReason,
+      candidateCount: arr(candidates).length,
+      newDirectionCount: created.length,
+      chosenArcId: chosen?.arc?.id || '',
+      chosenArtifactId: chosen?.direction?.artifactId || '',
+      summary: text(parsed?.summary, 400)
+    });
+    scout.runs = scout.runs.slice(-120);
+    scout.lastFingerprint = this.fingerprint(candidates);
+    scout.pendingReason = '';
+    return chosen;
   }
 }
