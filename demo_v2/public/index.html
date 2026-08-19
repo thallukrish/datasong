@@ -1,245 +1,187 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>DataSong v2 — Semantic Explorer</title>
-  <style>
-    :root { font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#171717; background:#f5f6f7; }
-    * { box-sizing:border-box; }
-    body { margin:0; }
-    main { max-width:960px; margin:0 auto; padding:32px 20px 70px; }
-    h1 { margin:0; font-size:32px; letter-spacing:-1px; }
-    .subtitle { color:#666; margin:7px 0 24px; font-size:14px; }
-    .panel { background:#fff; border:1px solid #e2e5e7; border-radius:16px; padding:18px; margin-bottom:16px; }
-    form { display:flex; gap:9px; }
-    input { flex:1; min-width:0; border:1px solid #d5d8db; border-radius:10px; padding:11px 13px; font-size:14px; }
-    button { border:0; border-radius:10px; padding:11px 16px; font-weight:700; cursor:pointer; background:#161616; color:#fff; }
-    button.secondary { background:#e9ebed; color:#333; }
-    button:disabled { opacity:.42; cursor:default; }
-    .meta { display:flex; flex-wrap:wrap; gap:15px; margin-top:14px; color:#666; font-size:13px; }
-    .token { font-variant-numeric:tabular-nums; }
-    .live { margin-top:12px; font-size:14px; line-height:1.45; }
-    .artifact { margin-top:3px; color:#777; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; overflow-wrap:anywhere; }
-    .loglink { color:#555; text-decoration:none; border-bottom:1px dotted #999; }
-    .section-head { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-bottom:4px; }
-    .section-title { font-size:17px; font-weight:800; }
-    .summary { color:#777; font-size:12px; }
-    .flow-list { border-top:1px solid #eceeef; margin-top:12px; }
-    .flow { width:100%; text-align:left; color:inherit; background:transparent; border:0; border-radius:0; padding:14px 0 13px; border-bottom:1px solid #eceeef; display:block; }
-    .flow:hover { background:#fafafa; }
-    .flow-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:14px; align-items:center; }
-    .flow-title { font-size:15px; font-weight:750; }
-    .flow-origin { color:#888; font-size:11px; margin-top:2px; font-weight:400; }
-    .flow-pct { font-size:13px; font-weight:750; font-variant-numeric:tabular-nums; }
-    .bar { height:6px; margin:8px 0 6px; background:#e9ecee; border-radius:999px; overflow:hidden; }
-    .fill { height:100%; background:#34a853; transition:width .25s ease; }
-    .flow.active .bar { height:8px; }
-    .active-tag { display:inline-block; margin-left:8px; font-size:9px; letter-spacing:.06em; border-radius:999px; padding:3px 6px; color:#176d32; background:#e7f5eb; vertical-align:2px; }
-    .flow-now { color:#555; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:400; }
-    .flow.active .flow-now { color:#222; font-weight:600; }
-    .seedline { display:flex; flex-wrap:wrap; gap:10px 18px; color:#666; font-size:12px; margin-top:9px; }
-    .seedname { color:#247a3d; font-weight:700; }
-    .empty { color:#888; font-size:13px; padding:16px 0 5px; }
-    .mode { display:inline-block; font-size:10px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; background:#f0f1f2; color:#666; border-radius:999px; padding:3px 7px; }
-    dialog { width:min(900px,calc(100vw - 32px)); max-height:88vh; border:1px solid #dfe2e4; border-radius:16px; padding:0; box-shadow:0 18px 60px rgba(0,0,0,.22); }
-    dialog::backdrop { background:rgba(0,0,0,.32); }
-    .modal-head { display:flex; justify-content:space-between; gap:16px; align-items:start; padding:18px 20px 14px; border-bottom:1px solid #eceeef; position:sticky; top:0; background:#fff; z-index:2; }
-    .modal-title { font-size:20px; font-weight:800; }
-    .modal-sub { color:#777; font-size:12px; margin-top:4px; }
-    .close { padding:8px 11px; background:#eceeef; color:#333; }
-    .modal-body { padding:20px; overflow:auto; }
-    .map-arc { padding:0 0 24px; margin-bottom:24px; border-bottom:1px solid #e7e9ea; }
-    .map-arc:last-child { margin-bottom:0; border-bottom:0; }
-    .map-title { font-weight:800; font-size:17px; margin-bottom:4px; }
-    .map-intent { color:#555; font-size:13px; margin-bottom:16px; }
-    .map-label { text-transform:uppercase; letter-spacing:.06em; font-size:10px; color:#999; font-weight:800; margin:14px 0 7px; }
-    .stage-line { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
-    .stage { border:1px solid #dfe3e5; border-radius:9px; padding:7px 9px; font-size:12px; background:#fafbfb; }
-    .arrow { color:#aaa; font-size:13px; }
-    .chips { display:flex; flex-wrap:wrap; gap:6px; }
-    .chip { border-radius:999px; padding:5px 8px; background:#f1f3f4; color:#444; font-size:11px; }
-    .persist { background:#eaf6ee; color:#246d39; }
-    .external { background:#fff3df; color:#815b12; }
-    .relationship { padding:6px 0; font-size:12px; border-bottom:1px dotted #e6e6e6; }
-    .evidence { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; color:#777; padding:4px 0; overflow-wrap:anywhere; }
-    .map-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-    @media(max-width:650px) { form { flex-wrap:wrap; } input { flex-basis:100%; } .map-grid { grid-template-columns:1fr; } }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>lemap — live enterprise learning demo</title>
+<style>
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;color:#171717;background:#f5f5f5;--line:#dedede;--muted:#717171;--soft:#f7f7f7;--green:#267a46}
+*{box-sizing:border-box}body{margin:0;background:#f5f5f5}button,input,textarea{font:inherit}button{cursor:pointer}.hidden{display:none!important}
+.shell{height:100vh;display:flex;flex-direction:column}.topbar{height:54px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex:0 0 auto}.brand{font-size:17px;font-weight:650;letter-spacing:-.03em}.topmeta{display:flex;align-items:center;gap:18px;color:var(--muted);font-size:12px}.token{font-variant-numeric:tabular-nums}.link{color:#555;text-decoration:none;border-bottom:1px dotted #888}
+.start{max-width:860px;width:100%;margin:0 auto;padding:72px 26px 90px}.start .eyebrow{font-size:13px;color:var(--muted);margin-bottom:16px}.start h1{font-size:38px;line-height:1.12;letter-spacing:-.035em;margin:0 0 14px;font-weight:620}.start>p{color:var(--muted);font-size:17px;max-width:690px;margin:0 0 36px}.startcard{background:#fff;border:1px solid var(--line);border-radius:15px;padding:24px}.field{margin-bottom:20px}.field:last-of-type{margin-bottom:24px}.field label{display:block;font-size:12px;font-weight:650;color:#555;margin-bottom:8px}.field textarea,.field input{width:100%;border:1px solid #d6d6d6;border-radius:9px;padding:12px 13px;background:#fff;color:#222;outline:none}.field textarea{min-height:112px;resize:vertical;line-height:1.45}.field textarea:focus,.field input:focus{border-color:#999}.primary{border:0;border-radius:9px;padding:11px 17px;background:#171717;color:#fff;font-weight:650}.secondary{border:1px solid #d5d5d5;border-radius:8px;padding:8px 11px;background:#fff;color:#444}.primary:disabled,.secondary:disabled{opacity:.4;cursor:default}
+.workspace{min-height:0;flex:1;display:grid;grid-template-columns:290px minmax(0,1fr);overflow:hidden}.rail{background:#fafafa;border-right:1px solid var(--line);overflow:auto;padding:18px 16px 26px}.railhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.railtitle{font-size:12px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.05em}.count{font-size:11px;color:#999}.runstate{border-top:1px solid #e5e5e5;border-bottom:1px solid #e5e5e5;padding:11px 0;margin-bottom:7px}.mode{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#777}.message{font-size:12px;color:#3f3f3f;line-height:1.4;margin-top:5px}.artifact{font-size:10px;color:#999;line-height:1.35;margin-top:4px;overflow-wrap:anywhere}.flows{margin-top:4px}.flow{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #e7e7e7;background:transparent;color:inherit;padding:13px 0}.flow:hover{background:#f4f4f4}.flow.active{background:#f1f1f1;margin:0 -8px;padding:13px 8px;width:calc(100% + 16px);border-radius:8px}.flowtop{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start}.flowtitle{font-size:13px;font-weight:620;line-height:1.25}.pct{font-size:11px;font-weight:650;font-variant-numeric:tabular-nums;color:#555}.origin{font-size:10px;color:#999;margin-top:3px}.bar{height:4px;background:#e2e2e2;border-radius:999px;overflow:hidden;margin-top:8px}.fill{height:100%;background:#333;transition:width .25s ease}.flow.active .fill{background:var(--green)}.now{font-size:10px;color:#777;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.empty{font-size:12px;color:#999;padding:16px 0}
+.canvas{overflow:auto;background:#fff}.wiki{max-width:1020px;margin:0 auto;padding:38px 50px 80px}.wikihead{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:28px}.wikihead small{display:block;color:var(--muted);font-size:12px;margin-bottom:9px}.wikihead h1{font-size:34px;line-height:1.15;letter-spacing:-.035em;margin:0 0 9px;font-weight:620}.wikihead p{margin:0;color:var(--muted);font-size:15px;line-height:1.55;max-width:820px}.wiki-controls{display:flex;gap:8px;margin-top:18px}.wikisection{padding:26px 0;border-bottom:1px solid #e8e8e8}.wikisection:last-child{border-bottom:0}.wikisection h2{font-size:19px;letter-spacing:-.015em;margin:0 0 14px;font-weight:630}.wikisection h3{font-size:15px;margin:22px 0 9px}.muted{color:var(--muted)}.workflow{padding:18px 0;border-top:1px solid #eee}.workflow:first-of-type{border-top:0;padding-top:0}.workflow-title{font-size:16px;font-weight:650;margin-bottom:3px}.workflow-meta{font-size:11px;color:#8a8a8a;margin-bottom:10px}.intent{font-size:13px;color:#555;line-height:1.5;margin-bottom:12px}.stage-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.stage{border:1px solid #ddd;border-radius:7px;padding:6px 8px;font-size:11px;background:#fafafa}.arrow{color:#aaa;font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{border:1px solid #e2e2e2;background:#fafafa;border-radius:999px;padding:5px 8px;font-size:11px;color:#444}.persist{background:#f2f8f4;border-color:#dbeadd}.external{background:#faf7ef;border-color:#ede4cf}.relation{font-size:12px;padding:7px 0;border-bottom:1px dotted #e5e5e5;color:#444}.evidence{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#888;padding:4px 0;overflow-wrap:anywhere}.two{display:grid;grid-template-columns:1fr 1fr;gap:32px}.learning{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:#6c6c6c}.pulse{width:7px;height:7px;border-radius:50%;background:#34a853;box-shadow:0 0 0 0 rgba(52,168,83,.45);animation:pulse 1.7s infinite}@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,168,83,.35)}70%{box-shadow:0 0 0 8px rgba(52,168,83,0)}100%{box-shadow:0 0 0 0 rgba(52,168,83,0)}}
+.querybar{display:flex;gap:8px;margin-top:16px}.querybar input{flex:1;border:1px solid #d6d6d6;border-radius:8px;padding:10px 12px}.queryresult{margin-top:24px;padding:24px;background:#f7f7f7;border-radius:12px}.queryresult h2{font-size:20px;margin:0 0 6px}.queryresult .answer{font-size:13px;color:#555;line-height:1.55;margin-bottom:20px}.viewline{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:11px 0;border-top:1px solid #ddd;border-bottom:1px solid #ddd;color:#444;overflow-wrap:anywhere}.mapgrid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:20px}
+@media(max-width:800px){.workspace{grid-template-columns:220px minmax(0,1fr)}.wiki{padding:28px 26px 60px}.two,.mapgrid{grid-template-columns:1fr}}@media(max-width:620px){.workspace{display:block;overflow:auto}.rail{border-right:0;border-bottom:1px solid var(--line);max-height:300px}.canvas{overflow:visible}.topmeta{gap:8px}.hide-mobile{display:none}.wiki{padding:24px 20px 60px}}
+</style>
 </head>
 <body>
-<main>
-  <h1>DataSong v2</h1>
-  <div class="subtitle">Call paths seed Pass 1; Pass 2 traces and proves the active business flow; Scout only looks for missing directions.</div>
+<div class="shell">
+<header class="topbar">
+  <div class="brand">lemap</div>
+  <div class="topmeta">
+    <span id="status">idle</span>
+    <span class="token">tokens <b id="tokens">0</b></span>
+    <span class="token hide-mobile">prompt <b id="promptTokens">0</b></span>
+    <span class="token hide-mobile">completion <b id="completionTokens">0</b></span>
+    <a id="logLink" class="link hidden" href="/api/run-log">run log</a>
+    <button id="stop" class="secondary hidden" type="button">Stop</button>
+  </div>
+</header>
 
-  <div class="panel">
-    <form id="form">
-      <input id="repo" value="https://github.com/moqui/PopCommerce" aria-label="Repository URL" />
-      <button id="go">Explore</button>
-      <button id="stop" type="button" class="secondary" disabled>Stop</button>
-      <button id="map" type="button" class="secondary" disabled>Display map</button>
-    </form>
-    <div class="meta">
-      <span>Status: <b id="status">idle</b></span>
-      <span>Step: <b id="step">0</b></span>
-      <span class="token">Total tokens: <b id="tokens">0</b></span>
-      <span class="token">Prompt: <b id="promptTokens">0</b></span>
-      <span class="token">Completion: <b id="completionTokens">0</b></span>
-      <span id="logWrap" style="display:none"><a class="loglink" href="/api/run-log">download run log</a></span>
+<section id="start" class="start">
+  <div class="eyebrow">live learning experiment</div>
+  <h1>Give lemap an unfamiliar enterprise application.</h1>
+  <p>Describe the business briefly and point lemap at the repository. The map will form as it learns.</p>
+  <form id="form" class="startcard">
+    <div class="field">
+      <label for="business">What does this business do?</label>
+      <textarea id="business">An ecommerce company selling products online. Customers browse products, maintain carts, place orders and make payments. The business manages fulfilment, inventory, shipping, returns and accounting.</textarea>
     </div>
-    <div class="live"><span id="mode" class="mode">idle</span> <span id="message"></span></div>
-    <div id="artifact" class="artifact">—</div>
-  </div>
-
-  <div class="panel">
-    <div class="section-head">
-      <div class="section-title">Business flows</div>
-      <div id="flowSummary" class="summary"></div>
+    <div class="field">
+      <label for="repo">Git repository</label>
+      <input id="repo" value="https://github.com/moqui/PopCommerce" />
     </div>
-    <div id="seedSummary" class="seedline"></div>
-    <div id="flows" class="flow-list"><div class="empty">No Pass-1 business flow yet.</div></div>
-  </div>
-</main>
+    <button id="go" class="primary">Learn this enterprise →</button>
+  </form>
+</section>
 
-<dialog id="mapDialog">
-  <div class="modal-head">
-    <div><div id="mapTitle" class="modal-title">Business map</div><div id="mapSubtitle" class="modal-sub"></div></div>
-    <button id="closeMap" class="close" type="button">Close</button>
-  </div>
-  <div id="mapBody" class="modal-body"></div>
-</dialog>
+<section id="workspace" class="workspace hidden">
+  <aside class="rail">
+    <div class="railhead"><div class="railtitle">threads</div><div id="flowCount" class="count">0</div></div>
+    <div class="runstate">
+      <div id="mode" class="mode">idle</div>
+      <div id="message" class="message"></div>
+      <div id="artifact" class="artifact"></div>
+    </div>
+    <div id="flows" class="flows"><div class="empty">Waiting for business threads.</div></div>
+  </aside>
+
+  <main class="canvas">
+    <article class="wiki">
+      <div class="wikihead">
+        <small>enterprise map · continuously reconstructed</small>
+        <h1 id="wikiTitle">Understanding the business</h1>
+        <p id="wikiIntro">lemap is reading the application and accumulating what it learns. Existing knowledge stays visible as new workflows, entities and relationships are discovered.</p>
+        <div class="wiki-controls">
+          <span id="learningState" class="learning"><span class="pulse"></span> learning</span>
+          <button id="showAll" class="secondary" type="button">Show full map</button>
+        </div>
+      </div>
+
+      <section id="overviewSection" class="wikisection">
+        <h2>Overview</h2>
+        <p id="overview" class="muted">No business flow has been reconstructed yet.</p>
+      </section>
+
+      <section class="wikisection">
+        <h2>Workflows</h2>
+        <div id="workflowWiki"><p class="muted">Workflows will appear here as lemap learns them.</p></div>
+      </section>
+
+      <section class="wikisection two">
+        <div><h2>Entities</h2><div id="entityWiki" class="chips"><span class="muted">—</span></div></div>
+        <div><h2>Persistent objects</h2><div id="persistentWiki" class="chips"><span class="muted">—</span></div></div>
+      </section>
+
+      <section class="wikisection two">
+        <div><h2>Relationships</h2><div id="relationshipWiki"><span class="muted">—</span></div></div>
+        <div><h2>External effects</h2><div id="externalWiki" class="chips"><span class="muted">—</span></div></div>
+      </section>
+
+      <section id="useSection" class="wikisection">
+        <h2>Use the map</h2>
+        <p class="muted">Once meaning is connected, teams can ask for a business view without first reconstructing the underlying systems.</p>
+        <div class="querybar">
+          <input id="question" value="Why is sales dropping?" />
+          <button id="ask" class="primary" type="button">Use map</button>
+        </div>
+        <div id="queryResult" class="queryresult hidden"></div>
+      </section>
+    </article>
+  </main>
+</section>
+</div>
 
 <script>
-  const $ = (id) => document.getElementById(id);
-  const esc = (s='') => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-  let state = {};
+const $=id=>document.getElementById(id);
+const esc=(s='')=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+const uniq=xs=>[...new Set((xs||[]).filter(Boolean).map(x=>String(x)))];
+let state={};let businessDescription='';let selectedArcId='';
 
-  $('form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    $('go').disabled = true;
-    const res = await fetch('/api/explore', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ repoUrl:$('repo').value.trim() }) });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      alert(body.error || 'Could not start exploration');
-      $('go').disabled = false;
-    }
-  });
+$('form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  businessDescription=$('business').value.trim();
+  $('go').disabled=true;
+  const res=await fetch('/api/explore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repoUrl:$('repo').value.trim(),businessDescription})});
+  if(!res.ok){const b=await res.json().catch(()=>({}));alert(b.error||'Could not start exploration');$('go').disabled=false;return;}
+  $('start').classList.add('hidden');$('workspace').classList.remove('hidden');$('stop').classList.remove('hidden');
+  $('wikiIntro').textContent=businessDescription||$('wikiIntro').textContent;
+});
+$('stop').addEventListener('click',async()=>{ $('stop').disabled=true; await fetch('/api/stop',{method:'POST'}); });
+$('showAll').addEventListener('click',()=>{selectedArcId='';renderWiki();});
+$('ask').addEventListener('click',()=>renderQuestion());
+$('question').addEventListener('keydown',e=>{if(e.key==='Enter')renderQuestion();});
 
-  $('stop').addEventListener('click', async () => {
-    $('stop').disabled = true;
-    await fetch('/api/stop', { method:'POST' });
-  });
-  $('map').addEventListener('click', () => showMap());
-  $('closeMap').addEventListener('click', () => $('mapDialog').close());
-  $('mapDialog').addEventListener('click', (e) => { if (e.target === $('mapDialog')) $('mapDialog').close(); });
+const events=new EventSource('/api/events');events.onmessage=e=>render(JSON.parse(e.data));
 
-  const events = new EventSource('/api/events');
-  events.onmessage = (event) => render(JSON.parse(event.data));
-
-  function currentMode(s) {
-    if (s.stopRequested) return 'stopping';
-    if ((s.callPathPreprocess?.status || '') !== 'complete') return 'call paths';
-    if (String(s.lastMessage || '').startsWith('Scout')) return 'scout';
-    if (s.pass1Scheduler?.activeArcId) return 'pass 2';
-    if (s.status === 'exploring') return 'pass 1';
-    return s.status || 'idle';
-  }
-
-  function render(next) {
-    state = next || {};
-    const running = ['preparing','exploring'].includes(state.status) && !state.stopRequested;
-    $('status').textContent = state.status || 'idle';
-    $('step').textContent = state.step || 0;
-    $('tokens').textContent = state.tokenUsage?.total || 0;
-    $('promptTokens').textContent = state.tokenUsage?.prompt || 0;
-    $('completionTokens').textContent = state.tokenUsage?.completion || 0;
-    $('mode').textContent = currentMode(state);
-    $('message').textContent = state.lastMessage || '';
-    $('artifact').textContent = state.currentArtifact?.path || '';
-    $('go').disabled = running;
-    $('stop').disabled = !running;
-    $('map').disabled = !(state.pass1Arcs || []).length;
-    $('logWrap').style.display = state.runLogFile ? '' : 'none';
-    renderFlows();
-  }
-
-  function renderFlows() {
-    const arcs = state.pass1Arcs || [];
-    const activeId = state.pass1Scheduler?.activeArcId || '';
-    const cp = state.callPathPreprocess || {};
-    const seeded = cp.seededArcs || [];
-    const seededByArc = new Map(seeded.map(x => [x.arcId, x]));
-    const topo = cp.topologySummary || {};
-
-    $('flowSummary').textContent = `${arcs.length} qualified · ${activeId ? '1 active' : 'none active'}`;
-    $('seedSummary').innerHTML = [
-      cp.status ? `Call paths: <b>${esc(cp.status)}</b>` : '',
-      topo.topCandidateCount ? `${Number(topo.topCandidateCount)} top candidates` : '',
-      topo.groupedVariantCount ? `${Number(topo.groupedVariantCount)} variants compressed` : '',
-      seeded.length ? `<span class="seedname">${seeded.length} deterministic seeds → Pass 1</span>` : (cp.status === 'complete' ? '0 deterministic seeds' : ''),
-      state.scout?.runs?.length ? `Scout checks: <b>${state.scout.runs.length}</b>` : ''
-    ].filter(Boolean).map(x => `<span>${x}</span>`).join('');
-
-    if (!arcs.length) {
-      $('flows').innerHTML = `<div class="empty">${esc(state.lastMessage || 'Waiting for deterministic business-flow seeds.')}</div>`;
-      return;
-    }
-
-    $('flows').innerHTML = arcs.map(arc => {
-      const active = arc.id === activeId;
-      const seed = seededByArc.get(arc.id);
-      const origin = seed ? `deterministic seed · ${seed.callPathId || arc.callPathId || ''}` : (arc.seedSource === 'scout' ? 'Scout hypothesis admitted by Pass 1' : (arc.seedSource === 'call_path_preprocessor' ? `deterministic seed · ${arc.callPathId || ''}` : 'Pass-1 flow'));
-      const pct = Math.max(0, Math.min(100, Number(arc.progress) || 0));
-      let now = active ? (state.lastMessage || state.currentArtifact?.path || 'Exploring this flow…') : (arc.businessIntent || arc.outcome || arc.status || 'queued');
-      return `<button type="button" class="flow ${active ? 'active' : ''}" data-arc-id="${esc(arc.id)}">
-        <div class="flow-head">
-          <div><div class="flow-title">${esc(arc.title || arc.id)}${active ? '<span class="active-tag">ACTIVE</span>' : ''}</div><div class="flow-origin">${esc(origin)}</div></div>
-          <div class="flow-pct">${Math.round(pct)}%</div>
-        </div>
-        <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
-        <div class="flow-now">${esc(now)}</div>
-      </button>`;
-    }).join('');
-    document.querySelectorAll('[data-arc-id]').forEach(el => el.addEventListener('click', () => showMap(el.dataset.arcId)));
-  }
-
-  function section(label, values, cls='') {
-    const list = (values || []).filter(Boolean);
-    if (!list.length) return '';
-    return `<div class="map-label">${esc(label)}</div><div class="chips">${list.map(v => `<span class="chip ${cls}">${esc(v)}</span>`).join('')}</div>`;
-  }
-
-  function renderArcMap(arc) {
-    const stages = arc.majorStages || [];
-    const stageHtml = stages.length
-      ? `<div class="map-label">Business steps</div><div class="stage-line">${stages.map((v,i) => `${i ? '<span class="arrow">→</span>' : ''}<span class="stage">${esc(v)}</span>`).join('')}</div>`
-      : '<div class="map-label">Business steps</div><div class="empty">Still being discovered.</div>';
-    const evidence = (arc.evidence || []).slice(-12);
-    return `<section class="map-arc">
-      <div class="map-title">${esc(arc.title || arc.id)} · ${Math.round(Number(arc.progress)||0)}%</div>
-      <div class="map-intent">${esc(arc.trigger || '')}${arc.businessIntent ? ` — ${esc(arc.businessIntent)}` : ''}${arc.outcome ? `<br><b>Outcome:</b> ${esc(arc.outcome)}` : ''}</div>
-      ${stageHtml}
-      <div class="map-grid">
-        <div>${section('Entities', arc.entities)}${section('Persistent objects', arc.persistentObjects, 'persist')}</div>
-        <div>${section('External effects', arc.externalEffects, 'external')}${section('Relationships', arc.relationships)}</div>
-      </div>
-      ${evidence.length ? `<div class="map-label">Evidence trail</div>${evidence.map(e => `<div class="evidence">${esc(e.artifactId || '')}${e.meaning ? ` — ${esc(e.meaning)}` : ''}</div>`).join('')}` : ''}
-    </section>`;
-  }
-
-  function showMap(arcId='') {
-    const arcs = state.pass1Arcs || [];
-    const chosen = arcId ? arcs.filter(a => a.id === arcId) : arcs;
-    if (!chosen.length) return;
-    $('mapTitle').textContent = arcId ? (chosen[0].title || 'Business flow') : 'DataSong business map';
-    $('mapSubtitle').textContent = arcId
-      ? 'Current map for this Pass-1 arc. It updates as Pass 2 learns more.'
-      : `${chosen.length} qualified business flow${chosen.length === 1 ? '' : 's'} · snapshot at ${state.tokenUsage?.total || 0} tokens`;
-    $('mapBody').innerHTML = chosen.map(renderArcMap).join('');
-    $('mapDialog').showModal();
-  }
-
-  fetch('/api/state').then(r => r.json()).then(render);
+function currentMode(s){
+  if(s.stopRequested)return'stopping';
+  if((s.callPathPreprocess?.status||'')!=='complete')return'building executable map';
+  if(String(s.lastMessage||'').toLowerCase().includes('scout'))return'scouting for new business threads';
+  if(s.pass1Scheduler?.activeArcId)return'interpreting active thread';
+  if(s.status==='exploring')return'updating enterprise map';
+  return s.status||'idle';
+}
+function render(next){
+  state=next||{};
+  const running=['preparing','exploring'].includes(state.status)&&!state.stopRequested;
+  $('status').textContent=state.status||'idle';
+  $('tokens').textContent=state.tokenUsage?.total||0;$('promptTokens').textContent=state.tokenUsage?.prompt||0;$('completionTokens').textContent=state.tokenUsage?.completion||0;
+  $('logLink').classList.toggle('hidden',!state.runLogFile);$('stop').classList.toggle('hidden',!running);$('stop').disabled=!running;
+  $('mode').textContent=currentMode(state);$('message').textContent=state.lastMessage||'';$('artifact').textContent=state.currentArtifact?.path||'';
+  $('learningState').innerHTML=running?'<span class="pulse"></span> learning':'map available';
+  if(state.status&&state.status!=='idle'){$('start').classList.add('hidden');$('workspace').classList.remove('hidden');}
+  renderFlows();renderWiki();
+}
+function arcOrigin(arc){
+  if(arc.seedSource==='scout_call_path'||arc.seedSource==='scout')return'scout-discovered';
+  if(arc.callPathId)return arc.callPathId;
+  return arc.seedSource||'business thread';
+}
+function renderFlows(){
+  const arcs=state.pass1Arcs||[],activeId=state.pass1Scheduler?.activeArcId||'';$('flowCount').textContent=String(arcs.length);
+  if(!arcs.length){$('flows').innerHTML='<div class="empty">Waiting for business threads.</div>';return;}
+  $('flows').innerHTML=arcs.map(arc=>{const active=arc.id===activeId,p=Math.max(0,Math.min(100,Number(arc.progress)||0));return`<button class="flow ${active?'active':''}" data-arc="${esc(arc.id)}"><div class="flowtop"><div><div class="flowtitle">${esc(arc.title||arc.id)}</div><div class="origin">${esc(arcOrigin(arc))}</div></div><div class="pct">${Math.round(p)}%</div></div><div class="bar"><div class="fill" style="width:${p}%"></div></div><div class="now">${esc(active?(state.lastMessage||'learning…'):(arc.businessIntent||arc.outcome||arc.status||'queued'))}</div></button>`}).join('');
+  document.querySelectorAll('[data-arc]').forEach(el=>el.onclick=()=>{selectedArcId=el.dataset.arc;renderWiki();document.querySelector('.canvas').scrollTo({top:0,behavior:'smooth'});});
+}
+function chips(values,cls=''){const a=uniq(values);return a.length?a.map(v=>`<span class="chip ${cls}">${esc(v)}</span>`).join(''):'<span class="muted">—</span>'}
+function selectedArcs(){const arcs=state.pass1Arcs||[];if(!selectedArcId)return arcs;const a=arcs.find(x=>x.id===selectedArcId);return a?[a]:arcs}
+function workflowHtml(arc){
+  const stages=arc.majorStages||[];const stageHtml=stages.length?`<div class="stage-line">${stages.map((s,i)=>`${i?'<span class="arrow">→</span>':''}<span class="stage">${esc(s)}</span>`).join('')}</div>`:'<span class="muted">Stages still being learned.</span>';
+  return `<div class="workflow" id="wf-${esc(arc.id)}"><div class="workflow-title">${esc(arc.title||arc.id)}</div><div class="workflow-meta">${Math.round(Number(arc.progress)||0)}% reconstructed · ${esc(arcOrigin(arc))}</div>${arc.businessIntent?`<div class="intent">${esc(arc.businessIntent)}</div>`:''}${stageHtml}${arc.outcome?`<h3>Outcome</h3><div class="intent">${esc(arc.outcome)}</div>`:''}</div>`;
+}
+function renderWiki(){
+  const all=state.pass1Arcs||[],arcs=selectedArcs();
+  $('wikiTitle').textContent=selectedArcId?(arcs[0]?.title||'Business flow'):'Enterprise business map';
+  if(businessDescription&&!selectedArcId)$('wikiIntro').textContent=businessDescription;
+  else if(selectedArcId)$('wikiIntro').textContent=arcs[0]?.businessIntent||arcs[0]?.concept||'Current evidence for this business flow.';
+  const complete=all.filter(a=>(a.progress||0)>=90).length;$('overview').textContent=all.length?`${all.length} business threads identified. ${complete} are broadly reconstructed. The map below is cumulative and refreshes as new evidence is learned.`:'lemap is still looking for the first business threads.';
+  $('workflowWiki').innerHTML=arcs.length?arcs.map(workflowHtml).join(''):'<p class="muted">Workflows will appear here as lemap learns them.</p>';
+  const entities=uniq(arcs.flatMap(a=>a.entities||[]));const persist=uniq(arcs.flatMap(a=>a.persistentObjects||[]));const rels=uniq(arcs.flatMap(a=>a.relationships||[]));const effects=uniq(arcs.flatMap(a=>a.externalEffects||[]));
+  $('entityWiki').innerHTML=chips(entities);$('persistentWiki').innerHTML=chips(persist,'persist');$('relationshipWiki').innerHTML=rels.length?rels.map(r=>`<div class="relation">${esc(r)}</div>`).join(''):'<span class="muted">—</span>';$('externalWiki').innerHTML=chips(effects,'external');
+}
+function relevantForSales(){
+  const arcs=state.pass1Arcs||[];const terms=['sale','order','checkout','cart','product','payment','shipment','shipping','customer','return','inventory'];
+  const scored=arcs.map(a=>{const text=[a.title,a.businessIntent,a.outcome,...(a.majorStages||[]),...(a.entities||[])].join(' ').toLowerCase();return{a,score:terms.reduce((n,t)=>n+(text.includes(t)?1:0),0)}}).filter(x=>x.score>0).sort((x,y)=>y.score-x.score).map(x=>x.a);
+  return scored.length?scored:arcs.slice(0,5);
+}
+function renderQuestion(){
+  const q=$('question').value.trim();const arcs=relevantForSales();const entities=uniq(arcs.flatMap(a=>a.entities||[]));const rels=uniq(arcs.flatMap(a=>a.relationships||[]));const p=uniq(arcs.flatMap(a=>a.persistentObjects||[]));
+  const preferred=['Order','OrderItem','Product','Customer','Payment','Shipment','Inventory'];const view=uniq([...preferred.filter(x=>entities.some(e=>e.toLowerCase().includes(x.toLowerCase()))),...entities.slice(0,8)]);
+  $('queryResult').classList.remove('hidden');$('queryResult').innerHTML=`<h2>${esc(q||'Business question')}</h2><div class="answer">lemap resolves the question against the business meaning it has reconstructed. For a sales question, these are the currently relevant workflows and enterprise objects.</div><div class="viewline">sales view → ${esc(view.join(' → ')||'map still learning the required entities')}</div><div class="mapgrid"><div><h3>Relevant workflows</h3>${arcs.slice(0,6).map(a=>`<div class="relation">${esc(a.title||a.id)}</div>`).join('')||'<span class="muted">—</span>'}</div><div><h3>Entities / persistent objects</h3><div class="chips">${chips([...entities.slice(0,12),...p.slice(0,8)])}</div></div></div>${rels.length?`<h3>Known relationships</h3>${rels.slice(0,12).map(r=>`<div class="relation">${esc(r)}</div>`).join('')}:''}`;
+  $('queryResult').scrollIntoView({behavior:'smooth',block:'start'});
+}
 </script>
 </body>
 </html>
