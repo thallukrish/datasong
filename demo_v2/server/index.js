@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV36 } from './progressiveRepositoryExplorerV36.js';
+import { ProgressiveRepositoryExplorerV37 } from './progressiveRepositoryExplorerV37.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV36({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV37({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
@@ -65,6 +65,6 @@ function broadcast(state) {
 }
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] SCOUT → DISCOVERY ─┐');
-  console.log('[DataSong v2] CALL-PATH PREPROCESSOR + XML adapters → normalized flow-family compression → compact classifier → deterministic containment ─┴→ PASS 1 → PASS 2; Scout may reopen Discovery on weak/exhausted Pass-2 signals, but call-path preprocessing is one-shot per repository prepare.');
+  console.log('[DataSong v2] CALL-PATH PREPROCESSOR → PASS 1 → PASS 2');
+  console.log('[DataSong v2] Scout scans broad unexplored regions only when Pass-2 signal weakens; new directions become Pass-1 hypotheses for Pass 2 to prove or reject. Discovery is disabled.');
 });
