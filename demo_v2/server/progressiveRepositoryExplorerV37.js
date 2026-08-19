@@ -39,6 +39,20 @@ export class ProgressiveRepositoryExplorerV37 extends ProgressiveRepositoryExplo
 
   applyDelta(parsed, observation) {
     const result = super.applyDelta(parsed, observation);
+
+    if (parsed?._callPathPreprocess) {
+      const seededIds = arr(this.state.callPathPreprocess?.seededArcIds);
+      if (seededIds.length) {
+        const chosen = this.pass1().chooseNextArc(seededIds[0]);
+        if (chosen) {
+          this.pass2().restore(chosen.id);
+          this.state.lastMessage = `Pass 1 scheduled ${chosen.title}; Pass 2 is tracing this deterministic seed.`;
+          this.pass1().syncStories();
+        }
+      }
+      return result;
+    }
+
     if (!parsed?._pass12) return result;
     const update = parsed.arcUpdate || {};
     const arc = this.pass1().arcByReference(update.arcId) || this.pass1().activeArc();
