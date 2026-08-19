@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
-import { ProgressiveRepositoryExplorerV27 } from './progressiveRepositoryExplorerV27.js';
+import { ProgressiveRepositoryTopologyV8 } from './progressiveRepositoryTopologyV8.js';
+import { ProgressiveRepositoryExplorerV28 } from './progressiveRepositoryExplorerV28.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -11,13 +11,17 @@ const app = express();
 const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
-const topology = new ProgressiveRepositoryTopologyV7({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV27({ topology, dataRoot, onState: (state) => broadcast(state) });
+const topology = new ProgressiveRepositoryTopologyV8({ cacheRoot: path.join(dataRoot, 'repo-cache') });
+const explorer = new ProgressiveRepositoryExplorerV28({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'public')));
 app.get('/api/state', (_req, res) => res.json(explorer.snapshot()));
+app.get('/api/call-paths', (_req, res) => res.json({
+  ready: !!topology.callPathIndex,
+  topPaths: topology.callPathIndex ? topology.topCallPaths(10) : []
+}));
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -51,5 +55,5 @@ function broadcast(state) {
 }
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] SCOUT global novelty → DISCOVERY concrete actor-goal entrances only → PASS 1 qualified-arc scheduler → PASS 2 per-arc DFS → Scout-reopened Discovery auto-closes when seeds resolve; detailed traces go to data/runs/*.jsonl');
+  console.log('[DataSong v2] CALL-PATH PREPROCESSOR (longest first) → SCOUT global novelty + DISCOVERY concrete actor-goal entrances → PASS 1 qualified-arc scheduler → PASS 2 per-arc DFS; detailed traces go to data/runs/*.jsonl');
 });
