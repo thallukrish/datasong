@@ -46,9 +46,6 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
     const bMiddle = bb.slice(prefixLength, bb.length - suffixLength || bb.length);
     const commonSuffix = suffixLength ? aa.slice(aa.length - suffixLength) : [];
 
-    // A dominant common prefix means one flow that fans out. If the branches
-    // reconverge, commonSuffix captures that explicitly instead of creating
-    // multiple near-identical leaf paths.
     if (prefixLength >= 2 && prefixRatio > 0.5) {
       return {
         relation: 'branch', overlapRatio: prefixRatio,
@@ -58,8 +55,6 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
       };
     }
 
-    // A dominant common suffix with only a tiny differing entrance is the same
-    // downstream flow triggered from alternate entry points.
     if (suffixLength >= 2 && suffixRatio > 0.5) {
       const aEntranceLength = aa.length - suffixLength;
       const bEntranceLength = bb.length - suffixLength;
@@ -72,8 +67,6 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
           commonSuffix
         };
       }
-      // Large distinct prefixes converging on a common suffix are separate
-      // threads calling a reusable/shared subflow. Do not merge them.
       return {
         relation: 'shared_subflow', overlapRatio: suffixRatio,
         prefixLength, suffixLength,
@@ -103,7 +96,14 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
         for (const member of group.members) {
           const shape = this.overlapShape(member, path);
           if (shape.relation === 'shared_subflow') {
-            sharedSubflows.push({ from: member.id, to: path.id, ...shape });
+            sharedSubflows.push({
+              from: member.id,
+              to: path.id,
+              ...shape,
+              // Public/exported name makes the relationship explicit while
+              // preserving commonSuffix as the internal overlap descriptor.
+              sharedSuffix: arr(shape.commonSuffix)
+            });
             continue;
           }
           if (this.mergeableRelation(shape.relation)) {
