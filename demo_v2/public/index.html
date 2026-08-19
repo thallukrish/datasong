@@ -42,12 +42,25 @@
     .step-row:last-child:after { display:none; }
     .step-bridge { color:#666; margin-top:3px; }
     .scores { color:#999; font-size:11px; margin-top:4px; }
+    .cp-head { display:flex; justify-content:space-between; gap:16px; align-items:start; margin-bottom:12px; }
+    .cp-title { font-weight:750; font-size:17px; }
+    .cp-subtitle { color:#777; font-size:13px; margin-top:4px; }
+    .cp-list { border-top:1px solid #eef0f1; }
+    .cp-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; padding:11px 0; border-bottom:1px solid #eef0f1; }
+    .cp-name { font-weight:650; font-size:14px; }
+    .cp-detail { color:#666; font-size:12px; margin-top:3px; }
+    .cp-result { text-align:right; font-size:12px; color:#666; white-space:nowrap; }
+    .badge { display:inline-block; border-radius:999px; padding:3px 8px; font-size:11px; font-weight:750; background:#f0f1f2; color:#555; }
+    .badge.business { background:#eaf6ee; color:#247a3d; }
+    .badge.technical { background:#f1f2f3; color:#666; }
+    .badge.uncertain { background:#fff4db; color:#8a6400; }
+    .seed { color:#247a3d; font-weight:700; }
   </style>
 </head>
 <body>
 <main>
   <h1>DataSong v2</h1>
-  <div class="subtitle">Semantic exploration over code topology — orientation stays separate while coherent stories emerge from behavior.</div>
+  <div class="subtitle">Semantic exploration over code topology — deterministic flow seeds and semantic discovery converge into the same business-story board.</div>
 
   <div class="panel">
     <form id="form">
@@ -64,6 +77,18 @@
     </div>
     <div id="message" class="status"></div>
     <div style="margin-top:12px"><span class="label">Current artifact</span><div id="artifact" class="artifact">—</div></div>
+  </div>
+
+  <div class="panel" id="callPathPanel">
+    <div class="cp-head">
+      <div>
+        <div class="cp-title">Deterministic call-path seeds</div>
+        <div class="cp-subtitle">One-shot structural preprocessing per repository; Scout can still reopen Discovery later when semantic signals weaken.</div>
+      </div>
+      <div id="callPathStatus" class="badge">pending</div>
+    </div>
+    <div id="callPathMeta" class="meta"></div>
+    <div id="callPathList" class="cp-list"><div class="empty">Call-path preprocessing has not completed yet.</div></div>
   </div>
 
   <div id="stories" class="stories"><div class="empty">No semantic story has crystallized yet.</div></div>
@@ -99,12 +124,50 @@
     $('artifact').textContent = state.currentArtifact?.path || '—';
     $('go').disabled = ['preparing','exploring'].includes(state.status);
 
+    renderCallPaths(state.callPathPreprocess || {});
+
     const stories = state.stories || [];
     if (!stories.length) {
       $('stories').innerHTML = '<div class="empty">Orienting in the evidence world; no coherent story has crystallized yet.</div>';
       return;
     }
     $('stories').innerHTML = stories.map(renderStory).join('');
+  }
+
+  function renderCallPaths(cp) {
+    const status = cp.status || 'pending';
+    $('callPathStatus').textContent = status;
+    $('callPathStatus').className = `badge ${status === 'complete' ? 'business' : ''}`;
+    const summary = cp.topologySummary || {};
+    const seeded = cp.seededArcs || [];
+    $('callPathMeta').innerHTML = [
+      `Top candidates: <b>${Number(summary.topCandidateCount || (cp.classifications || []).length)}</b>`,
+      `Grouped variants: <b>${Number(summary.groupedVariantCount || 0)}</b>`,
+      `Alternate entrances: <b>${Number(summary.alternateEntranceCount || 0)}</b>`,
+      `Pass-1 seeds: <b>${seeded.length}</b>`
+    ].map((x) => `<span>${x}</span>`).join('');
+
+    const classifications = cp.classifications || [];
+    if (!classifications.length) {
+      $('callPathList').innerHTML = `<div class="empty">${status === 'complete' ? 'No call-path business seed qualified.' : 'Call-path preprocessing has not completed yet.'}</div>`;
+      return;
+    }
+    const seedByPath = new Map(seeded.map((s) => [s.callPathId, s]));
+    $('callPathList').innerHTML = classifications.map((item) => {
+      const seed = seedByPath.get(item.pathId);
+      const confidence = Math.round((Number(item.confidence) || 0) * 100);
+      const kind = item.classification || 'uncertain';
+      return `<div class="cp-row">
+        <div>
+          <div class="cp-name">${esc(item.flowTitle || item.pathId)}</div>
+          <div class="cp-detail">${esc(item.pathId)}${item.businessActor ? ` · ${esc(item.businessActor)}` : ''}${item.businessIntent ? ` · ${esc(item.businessIntent)}` : ''}</div>
+        </div>
+        <div class="cp-result">
+          <span class="badge ${esc(kind)}">${esc(kind)}</span> ${confidence}%
+          <div>${seed ? `<span class="seed">→ Pass 1: ${esc(seed.title)}</span>` : 'not seeded'}</div>
+        </div>
+      </div>`;
+    }).join('');
   }
 
   function renderStory(story) {
