@@ -16,6 +16,34 @@ function commonSuffixLength(a, b) {
   return i;
 }
 
+function contiguousContainment(container, candidate) {
+  if (!candidate.length || candidate.length > container.length) return false;
+  outer: for (let offset = 0; offset <= container.length - candidate.length; offset += 1) {
+    for (let i = 0; i < candidate.length; i += 1) {
+      if (container[offset + i] !== candidate[i]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+function longestCommonContiguousLength(a, b) {
+  if (!a.length || !b.length) return 0;
+  let best = 0;
+  const previous = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = new Array(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j += 1) {
+      if (a[i - 1] === b[j - 1]) {
+        current[j] = previous[j - 1] + 1;
+        if (current[j] > best) best = current[j];
+      }
+    }
+    for (let j = 0; j <= b.length; j += 1) previous[j] = current[j];
+  }
+  return best;
+}
+
 function xmlAttr(signature, name) {
   const match = String(signature || '').match(new RegExp(`\\b${name}=["']([^"']+)["']`, 'i'));
   return match ? match[1].trim() : '';
@@ -46,8 +74,8 @@ function normalizeFlowToken(signature) {
   const location = xmlAttr(raw, 'location');
   const valueField = xmlAttr(raw, 'value-field');
 
-  // Generic XML containers and local data-shaping nodes are useful to render to
-  // the LLM, but they are structural noise for deterministic flow-family matching.
+  // Containers/local data-shaping nodes remain in the rendered evidence but do
+  // not distinguish executable flow families.
   if (['screen', 'actions', 'script', 'if', 'else', 'condition', 'iterate', 'set'].includes(tag)) return '';
 
   if (tag === 'transition' || tag === 'transition-include') return name ? `transition:${name.toLowerCase()}` : tag;
@@ -154,7 +182,6 @@ export class CallPathIndexerV2 extends CallPathIndexer {
     const shorter = Math.min(aa.length, bb.length);
     if (shorter < 3) return false;
     const sharedPrefix = commonPrefixLength(aa, bb);
-    // Same normalized execution prefix with a small divergent tail => branches/extensions of one flow.
     return sharedPrefix >= 3 && (sharedPrefix / shorter) >= 0.75;
   }
 
@@ -165,24 +192,55 @@ export class CallPathIndexerV2 extends CallPathIndexer {
     if (shorter < 3) return false;
     const sharedSuffix = commonSuffixLength(aa, bb);
     if (sharedSuffix < 3 || (sharedSuffix / shorter) < 0.8) return false;
-
     const aPrefix = aa.length - sharedSuffix;
     const bPrefix = bb.length - sharedSuffix;
-    // Major common downstream flow, differing only by a tiny normalized entrance prefix.
     return aPrefix <= 2 && bPrefix <= 2;
+  }
+
+  sameNearNormalizedFamily(a, b) {
+    const aa = arr(a.normalizedFlowTokens);
+    const bb = arr(b.normalizedFlowTokens);
+    const shorter = aa.length <= bb.length ? aa : bb;
+    const longer = aa.length <= bb.length ? bb : aa;
+    if (shorter.length < 3) return false;
+
+    // Safest near-duplicate case: one normalized path is literally contained in
+    // the other and only one or two meaningful executable steps differ.
+    if (longer.length - shorter.length <= 2 && contiguousContainment(longer, shorter)) return true;
+
+    // Also absorb tiny internal XML-dialect variations when almost the entire
+    // shorter business skeleton is one common contiguous block.
+    const common = longestCommonContiguousLength(aa, bb);
+    const nonSharedA = aa.length - common;
+    const nonSharedB = bb.length - common;
+    return common >= 3
+      && (common / shorter.length) >= 0.8
+      && nonSharedA <= 2
+      && nonSharedB <= 2;
   }
 
   sameStructuralFamily(a, b) {
     const aa = arr(a.normalizedFlowTokens);
     const bb = arr(b.normalizedFlowTokens);
     if (aa.length && aa.length === bb.length && aa.every((token, index) => token === bb[index])) return true;
-    return this.sameBranchFamily(a, b) || this.sameAlternateEntranceFamily(a, b);
+    return this.sameAlternateEntranceFamily(a, b)
+      || this.sameBranchFamily(a, b)
+      || this.sameNearNormalizedFamily(a, b);
+  }
+
+  familyRelation(representative, path) {
+    if (this.sameAlternateEntranceFamily(representative, path)) return 'alternate_entrance';
+    if (this.sameBranchFamily(representative, path)) return 'branch';
+    if (this.sameNearNormalizedFamily(representative, path)) return 'normalized_variant';
+    return 'grouped_variant';
   }
 
   top(limit = 10) {
     const groups = [];
     for (const path of this.rankedPaths) {
-      const group = groups.find((candidate) => this.sameStructuralFamily(candidate[0], path));
+      // Compare against every member, not only the first representative. This
+      // makes deterministic families transitive without fuzzy global clustering.
+      const group = groups.find((candidate) => candidate.some((member) => this.sameStructuralFamily(member, path)));
       if (group) group.push(path);
       else groups.push([path]);
     }
@@ -197,11 +255,11 @@ export class CallPathIndexerV2 extends CallPathIndexer {
           normalizedFlowTokens: path.normalizedFlowTokens,
           relations: path.relations,
           terminal: path.terminal,
-          familyRelation: this.sameAlternateEntranceFamily(representative, path) ? 'alternate_entrance' : 'branch'
+          familyRelation: this.familyRelation(representative, path)
         }));
         return {
           ...representative,
-          branchVariantCount: 1 + alternatives.filter((path) => path.familyRelation === 'branch').length,
+          branchVariantCount: 1 + alternatives.filter((path) => path.familyRelation !== 'alternate_entrance').length,
           alternateEntranceCount: alternatives.filter((path) => path.familyRelation === 'alternate_entrance').length,
           alternatives
         };
@@ -227,7 +285,7 @@ export class CallPathIndexerV2 extends CallPathIndexer {
 
   snapshot() {
     return {
-      version: 4,
+      version: 5,
       fragmentCount: this.fragments.length,
       rawPathCount: this.rawPaths.length,
       rankedPathCount: this.rankedPaths.length,
