@@ -16,7 +16,11 @@ const explorer = new ProgressiveRepositoryExplorerV38({ topology, dataRoot, onSt
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(root, 'public')));
+app.use(express.static(path.join(root, 'public'), {
+  etag: false,
+  lastModified: false,
+  setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); }
+}));
 app.get('/api/state', (_req, res) => res.json(explorer.snapshot()));
 app.get('/api/call-paths', (_req, res) => res.json({
   ready: !!topology.callPathIndex,
