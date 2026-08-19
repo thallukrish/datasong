@@ -14,34 +14,57 @@ A business-use-case arc is one coherent actor goal with a recognizable completio
 
 ---
 
-# Four-layer exploration model
+# Two parallel discovery routes into one arc board
+
+DataSong v2 now has two independent ways to propose qualified business-flow seeds. They converge only at Pass 1.
 
 ```text
+ROUTE A — semantic entrance discovery
+
 SCOUT
 challenge the current board and look for missing business-use-case directions
         ↓ novel starts
 DISCOVERY
 coarse-to-fine qualification of promising business-use-case entrances
         ↓ qualified starts
-PASS 1
-scheduler across qualified business arcs
-        ↓ selected arcId
-PASS 2
-per-arc DFS reconstruction of the selected use case
-        ↓ semantic milestone / flattening / exhaustion
-SCOUT
+        ┐
+        │
+        ├──→ PASS 1 → PASS 2
+        │
+        ┘
+
+ROUTE B — deterministic executable-path preprocessing
+
+REPOSITORY
+        ↓
+code/XML executable topology
+        ↓
+compressed branch-aware call paths
+        ↓
+longest grouped paths
+        ↓
+LLM boundary/containment/business-flow classifier
+        ↓ qualified coherent flow seeds
+        ┘
 ```
 
-Each layer has one question:
+The two routes answer different questions.
 
 ```text
-Scout:     are we missing an entirely different business-use-case direction?
-Discovery: does this direction expose one concrete actor goal that really qualifies?
-Pass 1:    which qualified business arc should be explored now?
-Pass 2:    how does this selected business use case work end to end?
+Scout/Discovery:
+Where in the repository are there promising entrances into business behavior?
+
+Call-path preprocessor:
+What long executable structures already exist mechanically, and which coherent business flows do they appear to represent?
+
+Pass 1:
+Which qualified business arc should be explored now?
+
+Pass 2:
+How does this selected business use case work end to end?
 ```
 
-Scout protects against premature exploitation. Discovery protects against promoting UI/technical structure into flows. Pass 1 and Pass 2 protect against unfocused global wandering.
+Call-path evidence is **not mixed into Discovery's next-level candidate list**. It has its own deterministic preprocessing and lightweight classifier, then seeds Pass 1 directly when a coherent business flow is supported.
 
 ---
 
@@ -139,18 +162,19 @@ status: candidate | qualified | deprioritized
 
 ## Concrete qualification gate
 
-The model still owns semantic qualification, but DataSong enforces the contract mechanically.
+The model owns semantic interpretation, while DataSong derives qualification mechanically from the returned evidence fields.
 
-A start may qualify only when the model explicitly says the evidence supports:
+A start qualifies when:
 
 ```text
 isConcreteBusinessUseCase = true
-businessActor
-businessIntent
-completionCondition
-businessOutcome
-qualifiesAsBusinessUseCase = true
+businessActor exists
+businessIntent exists
+completionCondition exists
+businessOutcome exists
 ```
+
+The model does not also have to remember to flip a redundant qualification boolean.
 
 The completion condition is what observable event/state means the actor goal has completed. The business outcome is the user/business effect produced by that completion.
 
@@ -182,34 +206,319 @@ Only an explicitly named `startId` may update a Discovery start. DataSong never 
 
 Once a start is qualified, it is frozen in Discovery. Unrelated later evidence cannot reduce its confidence or rewrite its trail. Detailed evolution happens in Pass 2.
 
-This prevents the failure mode:
+---
+
+# Deterministic executable-path preprocessing
+
+The call-path preprocessor is a parallel structural discovery mechanism. It does not ask the LLM to wander through source code looking for business flows.
+
+Its job is:
 
 ```text
-Order flow qualifies at 85%
-→ Discovery later inspects .gitignore / CI / README
-→ unrelated 0-confidence assessment accidentally updates Order flow
-→ UI shows Order flow at 0%
+repository
+→ executable nodes
+→ deterministic executable edges
+→ branch/cycle-aware path compression
+→ reconstruct longest grouped paths
+→ give only compact path structure to the classifier
+```
+
+## Executable node abstraction
+
+The path indexer does not fundamentally care whether an executable node came from ordinary source code or a structured workflow artifact.
+
+Conceptually:
+
+```text
+ExecutableNode {
+  id
+  signature
+  provenance
+  outgoingEdges[]
+}
+```
+
+Code parsers produce ordinary function/method/service nodes.
+
+Structured formats require **dialect-specific deterministic adapters** because XML itself has no universal execution semantics.
+
+Examples:
+
+```text
+Moqui screen XML adapter
+future BPMN adapter
+future Spring XML adapter
+future package-specific workflow adapter
+```
+
+A generic XML hierarchy parser may expose structure, but only a dialect adapter may assert executable semantics such as navigation, calls, branches or writes.
+
+## Moqui XML execution adapter
+
+The current Moqui adapter recognizes executable screen elements such as:
+
+```text
+screen
+transition
+transition-include
+actions
+service-call
+entity-find / entity-one / entity-find-count
+entity-create / entity-update / entity-delete
+if / condition / else / iterate
+set / script
+default-response / conditional-response / error-response
+subscreens-item
+```
+
+These become the same executable graph consumed by the call-path indexer.
+
+Cross-screen navigation is followed only when the target can be resolved deterministically inside the supplied repository. External service implementations remain black boxes.
+
+## Repository boundary
+
+The path preprocessor never assumes source for imported libraries or dependencies.
+
+```text
+implementation inside supplied repo
+    → follow deterministically
+
+implementation outside supplied repo
+    → terminate as EXTERNAL
+```
+
+A short path ending in an external business service may still be semantically useful, but its unknown implementation is never invented.
+
+---
+
+# Branches, shared paths, recursion and compression
+
+Each branch is a distinct executable path mechanically, but repeated structure is compressed through references.
+
+Conceptually:
+
+```text
+P0: A → B → C
+P1: REF(P0) → D → E
+P2: REF(P0) → F → G
+```
+
+Shared tails are represented once and referenced. Recursion/cycles terminate by referring back to an existing path fragment rather than expanding forever.
+
+```text
+P7: X → Y → Z → REF(P7)
+```
+
+The LLM never sees the compressed storage representation directly. Selected paths are reconstructed into function/XML signatures before classification.
+
+---
+
+# Longest-path heuristic
+
+The first deterministic ranking heuristic remains intentionally simple:
+
+```text
+effective executable function/node count
+```
+
+Longer paths are surfaced first because orchestration/business workflows often span more executable nodes than helpers or local utilities.
+
+This is a heuristic, not proof. The classifier may mark a long path technical, uncertain or a subflow.
+
+The experiment is deliberately keeping this ranking simple before introducing richer deterministic scoring.
+
+---
+
+# Grouping branch variants before LLM classification
+
+Raw graph traversal can produce many near-identical paths that differ only in a branch tail.
+
+DataSong groups heavily overlapping paths before choosing the top N. The classifier therefore sees one representative flow plus compact branch information rather than dozens of repeated paths.
+
+Instead of sending every full branch:
+
+```text
+common prefix → branch A
+common prefix → branch B
+common prefix → branch C
+```
+
+DataSong sends approximately:
+
+```text
+representative rendered path
+branchVariantCount
+compact divergent tails
+terminal kinds
+```
+
+This preserves the structural signal while substantially reducing prompt size.
+
+---
+
+# Executable edge semantics and semantic boundaries
+
+Call-path rendering preserves edge type.
+
+```text
+CALL
+NEXT
+TRIGGER
+NAVIGATE
+EXTERNAL CALL
+```
+
+These labels are structural evidence.
+
+```text
+CALL / NEXT / TRIGGER
+normally preserve execution continuity
+
+NAVIGATE
+crosses a screen/navigation boundary and is weaker semantic continuity
+```
+
+A navigation edge may still belong to the same business flow, for example:
+
+```text
+Checkout
+→ Review
+→ Place Order
+```
+
+But navigation may also land in a different concern:
+
+```text
+Change Password
+→ Login
+→ cart recovery
+```
+
+The classifier must explicitly identify a semantic boundary when behavior after a NAVIGATE serves a different actor goal.
+
+When such a boundary exists, the classifier must describe and seed **only the coherent flow segment up to that boundary**. It must not create a combined flow title spanning two different concerns.
+
+Example:
+
+```text
+Change Password
+→ update password
+→ NAVIGATE Login
+```
+
+may seed:
+
+```text
+Change Password
+```
+
+while a separate path may seed:
+
+```text
+Login with Cart Merge
 ```
 
 ---
 
-# Transition from Discovery to Pass 1
+# Flow containment across top paths
 
-Only qualified discovery starts are promoted into the Pass-1 arc board.
+Different longest paths can represent different granularities of the same customer journey.
+
+Example:
 
 ```text
-DISCOVERY STARTS
-candidate A
-qualified B
-qualified C
-deprioritized D
-        ↓
-qualified B + qualified C
-        ↓
-PASS 1 ARC BOARD
+Product Search
+Product Search → Add to Cart
+Product Search → Add to Cart → Update Cart
 ```
 
-The discovery-start artifact is preserved as the entrance for later Pass-2 exploration. Unqualified starts do not receive DFS state.
+These should not necessarily become three competing Pass-1 arcs.
+
+The call-path classifier compares supplied top paths and returns one of:
+
+```text
+broader_flow
+subflow
+alternate_entrance
+independent
+```
+
+Rules:
+
+```text
+broader_flow
+contains a larger coherent business journey
+
+subflow
+meaningful business behavior contained inside a supplied broader flow
+
+alternate_entrance
+a different prefix/entry point reaching essentially the same flow
+
+independent
+materially distinct business flow
+```
+
+Pass-1 seeding then prefers the broadest coherent business flow.
+
+Contained subflows remain evidence but do not compete as independent top-level arcs when their broader flow is already supplied and qualified.
+
+Alternate entrances are attached to the existing arc as supporting call-path evidence.
+
+This preserves useful granularity for later Pass 2 without polluting the global arc board with overlapping fragments.
+
+---
+
+# Call-path classifier contract
+
+The classifier sees only deterministic reconstructed structural evidence and compact branch summaries.
+
+For each grouped top path it returns roughly:
+
+```text
+classification: business_flow | technical | subflow | uncertain
+confidence
+flowTitle
+businessActor
+businessIntent
+completionCondition
+businessOutcome
+semanticBoundaryAt
+coherentThroughSignature
+relationToOtherPaths
+relatedPathId
+reason
+```
+
+A path seeds Pass 1 directly only when it represents a coherent qualified business flow with sufficient confidence and actor/intent/completion/outcome evidence.
+
+Subflows and alternate entrances are attached rather than promoted into competing arcs when a broader/parent flow already exists.
+
+---
+
+# Transition into the common Pass-1 arc board
+
+There are now two valid sources of qualified arcs:
+
+```text
+Discovery-qualified start
+        ↓
+Pass-1 arc
+
+Call-path coherent business-flow seed
+        ↓
+Pass-1 arc
+```
+
+Both preserve provenance describing how the arc was discovered.
+
+```text
+qualification = business_use_case
+or
+qualification = call_path_preprocessor
+```
+
+From Pass 1 onward, the detailed exploration machinery is shared.
 
 ---
 
@@ -278,11 +587,13 @@ f1 body
 
 Scout and Discovery are coarser and prefer names, signatures, top-level hierarchy and compact reasoning trails.
 
+Call-path preprocessing is different again: it sends reconstructed executable signatures/edge labels but no source bodies.
+
 ---
 
 # Progressive artifact exposure
 
-Directories expose structural names and deterministic previews. Source files first expose signatures. Selected functions expose bodies plus lightweight referenced signatures. XML/JMX is lazy and hierarchical. Config is progressively exposed by keys/objects. Documents are interpreted according to their real artifact type.
+Directories expose structural names and deterministic previews. Source files first expose signatures. Selected functions expose bodies plus lightweight referenced signatures. XML/JMX is lazy and hierarchical for semantic exploration, while supported XML dialect adapters may separately contribute deterministic executable topology to the call-path preprocessor. Config is progressively exposed by keys/objects. Documents are interpreted according to their real artifact type.
 
 ---
 
@@ -304,6 +615,9 @@ Is this a materially different global business-use-case direction?
 
 Discovery likelihood:
 Does this trail increasingly expose one concrete actor goal with a completion condition?
+
+Call-path classification:
+Does this long executable structure contain one coherent business goal, where are its semantic boundaries, and how does it relate to other top paths?
 
 Pass-2 semantic fit:
 Does this candidate continue the already-qualified business use case coherently?
@@ -333,15 +647,34 @@ MODEL — Discovery
 - score coarse-to-fine paths for business-use-case likelihood
 - identify one concrete actor goal
 - provide actor, intent, completion condition and business outcome
-- decide semantic qualification
 
 DATASONG — Discovery
 - maintain isolated discovery starts and selected trails
 - expose one next level at a time
-- enforce the concrete qualification contract
+- derive/enforce the concrete qualification contract
 - freeze qualified starts
 - auto-close Scout-reopened Discovery when its seeds resolve
 - promote qualified starts to Pass 1
+
+DATASONG — Call-path preprocessing
+- construct executable topology deterministically
+- apply code and dialect-specific structured adapters
+- preserve repository boundaries
+- compress shared paths/cycles
+- group branch variants
+- rank by effective executable length
+- reconstruct compact path evidence for the classifier
+
+MODEL — Call-path classifier
+- classify business flow / technical / subflow / uncertain
+- identify semantic boundaries across weak navigation edges
+- compare path containment and alternate entrances
+- describe only coherent actor goals
+
+DATASONG — Call-path admission
+- seed only coherent qualified business flows
+- attach contained subflows and alternate entrances instead of creating competing arcs
+- preserve call-path provenance for Pass 2
 
 MODEL — Pass 1 / Pass 2
 - interpret detailed current evidence
@@ -349,7 +682,7 @@ MODEL — Pass 1 / Pass 2
 - score candidate signatures for semantic continuation
 
 PASS 1 / DATASONG
-- maintain qualified arc board
+- maintain one common qualified arc board fed by both discovery routes
 - schedule among arcs
 - keep progress monotonic
 
@@ -362,4 +695,4 @@ PASS 2 / DATASONG
 
 The governing architecture is:
 
-> **Scout looks for what DataSong may be missing. Discovery qualifies concrete actor goals, not UI areas. Pass 1 schedules the qualified arcs. Pass 2 reconstructs each selected arc end to end.**
+> **Scout/Discovery searches semantically for concrete actor-goal entrances. In parallel, deterministic executable-path preprocessing finds long structural flows and asks a lightweight classifier to identify coherent business seeds, boundaries and containment. Both routes converge at Pass 1; Pass 2 reconstructs each selected arc end to end.**
