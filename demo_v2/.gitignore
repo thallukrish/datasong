@@ -1,3 +1,4 @@
 node_modules/
 data/repo-cache/
 data/runs/
+.env
