@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV38 } from './progressiveRepositoryExplorerV38.js';
+import { ProgressiveRepositoryExplorerV39 } from './progressiveRepositoryExplorerV39.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV38({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV39({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
@@ -70,5 +70,5 @@ function broadcast(state) {
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
   console.log('[DataSong v2] CALL-PATH PREPROCESSOR → PASS 1 → PASS 2');
-  console.log('[DataSong v2] Each deterministic Pass-1 arc starts Pass 2 at its own call-path entry; Scout only scans broad novelty when local signal weakens. Discovery is disabled.');
+  console.log('[DataSong v2] Pass 2 collapses same-file Moqui XML execution into compact branches and scores only semantic exits; Scout only scans broad novelty when local signal weakens. Discovery is disabled.');
 });
