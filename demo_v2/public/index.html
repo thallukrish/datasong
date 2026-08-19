@@ -5,183 +5,57 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>lemap — live enterprise learning demo</title>
 <style>
-:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;color:#171717;background:#f5f5f5;--line:#dedede;--muted:#717171;--soft:#f7f7f7;--green:#267a46}
-*{box-sizing:border-box}body{margin:0;background:#f5f5f5}button,input,textarea{font:inherit}button{cursor:pointer}.hidden{display:none!important}
-.shell{height:100vh;display:flex;flex-direction:column}.topbar{height:54px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex:0 0 auto}.brand{font-size:17px;font-weight:650;letter-spacing:-.03em}.topmeta{display:flex;align-items:center;gap:18px;color:var(--muted);font-size:12px}.token{font-variant-numeric:tabular-nums}.link{color:#555;text-decoration:none;border-bottom:1px dotted #888}
-.start{max-width:860px;width:100%;margin:0 auto;padding:72px 26px 90px}.start .eyebrow{font-size:13px;color:var(--muted);margin-bottom:16px}.start h1{font-size:38px;line-height:1.12;letter-spacing:-.035em;margin:0 0 14px;font-weight:620}.start>p{color:var(--muted);font-size:17px;max-width:690px;margin:0 0 36px}.startcard{background:#fff;border:1px solid var(--line);border-radius:15px;padding:24px}.field{margin-bottom:20px}.field:last-of-type{margin-bottom:24px}.field label{display:block;font-size:12px;font-weight:650;color:#555;margin-bottom:8px}.field textarea,.field input{width:100%;border:1px solid #d6d6d6;border-radius:9px;padding:12px 13px;background:#fff;color:#222;outline:none}.field textarea{min-height:112px;resize:vertical;line-height:1.45}.field textarea:focus,.field input:focus{border-color:#999}.primary{border:0;border-radius:9px;padding:11px 17px;background:#171717;color:#fff;font-weight:650}.secondary{border:1px solid #d5d5d5;border-radius:8px;padding:8px 11px;background:#fff;color:#444}.primary:disabled,.secondary:disabled{opacity:.4;cursor:default}
-.workspace{min-height:0;flex:1;display:grid;grid-template-columns:290px minmax(0,1fr);overflow:hidden}.rail{background:#fafafa;border-right:1px solid var(--line);overflow:auto;padding:18px 16px 26px}.railhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.railtitle{font-size:12px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.05em}.count{font-size:11px;color:#999}.runstate{border-top:1px solid #e5e5e5;border-bottom:1px solid #e5e5e5;padding:11px 0;margin-bottom:7px}.mode{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#777}.message{font-size:12px;color:#3f3f3f;line-height:1.4;margin-top:5px}.artifact{font-size:10px;color:#999;line-height:1.35;margin-top:4px;overflow-wrap:anywhere}.flows{margin-top:4px}.flow{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #e7e7e7;background:transparent;color:inherit;padding:13px 0}.flow:hover{background:#f4f4f4}.flow.active{background:#f1f1f1;margin:0 -8px;padding:13px 8px;width:calc(100% + 16px);border-radius:8px}.flowtop{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start}.flowtitle{font-size:13px;font-weight:620;line-height:1.25}.pct{font-size:11px;font-weight:650;font-variant-numeric:tabular-nums;color:#555}.origin{font-size:10px;color:#999;margin-top:3px}.bar{height:4px;background:#e2e2e2;border-radius:999px;overflow:hidden;margin-top:8px}.fill{height:100%;background:#333;transition:width .25s ease}.flow.active .fill{background:var(--green)}.now{font-size:10px;color:#777;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.empty{font-size:12px;color:#999;padding:16px 0}
-.canvas{overflow:auto;background:#fff}.wiki{max-width:1020px;margin:0 auto;padding:38px 50px 80px}.wikihead{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:28px}.wikihead small{display:block;color:var(--muted);font-size:12px;margin-bottom:9px}.wikihead h1{font-size:34px;line-height:1.15;letter-spacing:-.035em;margin:0 0 9px;font-weight:620}.wikihead p{margin:0;color:var(--muted);font-size:15px;line-height:1.55;max-width:820px}.wiki-controls{display:flex;gap:8px;margin-top:18px}.wikisection{padding:26px 0;border-bottom:1px solid #e8e8e8}.wikisection:last-child{border-bottom:0}.wikisection h2{font-size:19px;letter-spacing:-.015em;margin:0 0 14px;font-weight:630}.wikisection h3{font-size:15px;margin:22px 0 9px}.muted{color:var(--muted)}.workflow{padding:18px 0;border-top:1px solid #eee}.workflow:first-of-type{border-top:0;padding-top:0}.workflow-title{font-size:16px;font-weight:650;margin-bottom:3px}.workflow-meta{font-size:11px;color:#8a8a8a;margin-bottom:10px}.intent{font-size:13px;color:#555;line-height:1.5;margin-bottom:12px}.stage-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.stage{border:1px solid #ddd;border-radius:7px;padding:6px 8px;font-size:11px;background:#fafafa}.arrow{color:#aaa;font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{border:1px solid #e2e2e2;background:#fafafa;border-radius:999px;padding:5px 8px;font-size:11px;color:#444}.persist{background:#f2f8f4;border-color:#dbeadd}.external{background:#faf7ef;border-color:#ede4cf}.relation{font-size:12px;padding:7px 0;border-bottom:1px dotted #e5e5e5;color:#444}.evidence{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#888;padding:4px 0;overflow-wrap:anywhere}.two{display:grid;grid-template-columns:1fr 1fr;gap:32px}.learning{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:#6c6c6c}.pulse{width:7px;height:7px;border-radius:50%;background:#34a853;box-shadow:0 0 0 0 rgba(52,168,83,.45);animation:pulse 1.7s infinite}@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,168,83,.35)}70%{box-shadow:0 0 0 8px rgba(52,168,83,0)}100%{box-shadow:0 0 0 0 rgba(52,168,83,0)}}
-.querybar{display:flex;gap:8px;margin-top:16px}.querybar input{flex:1;border:1px solid #d6d6d6;border-radius:8px;padding:10px 12px}.queryresult{margin-top:24px;padding:24px;background:#f7f7f7;border-radius:12px}.queryresult h2{font-size:20px;margin:0 0 6px}.queryresult .answer{font-size:13px;color:#555;line-height:1.55;margin-bottom:20px}.viewline{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;padding:11px 0;border-top:1px solid #ddd;border-bottom:1px solid #ddd;color:#444;overflow-wrap:anywhere}.mapgrid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:20px}
-@media(max-width:800px){.workspace{grid-template-columns:220px minmax(0,1fr)}.wiki{padding:28px 26px 60px}.two,.mapgrid{grid-template-columns:1fr}}@media(max-width:620px){.workspace{display:block;overflow:auto}.rail{border-right:0;border-bottom:1px solid var(--line);max-height:300px}.canvas{overflow:visible}.topmeta{gap:8px}.hide-mobile{display:none}.wiki{padding:24px 20px 60px}}
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;color:#171717;background:#fff;--line:#e5e5e5;--muted:#777;--soft:#f7f7f7}
+*{box-sizing:border-box}body{margin:0;background:#fff}button,input,textarea{font:inherit}.hidden{display:none!important}
+.shell{height:100vh;display:flex;flex-direction:column}.topbar{height:54px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex:0 0 auto}.brand{font-size:18px;font-weight:650;letter-spacing:-.03em}.topright{display:flex;align-items:center;gap:14px}.state{font-size:12px;color:var(--muted)}button{cursor:pointer}.primary{border:0;border-radius:8px;padding:10px 15px;background:#171717;color:#fff;font-weight:600}.secondary{border:1px solid #d6d6d6;border-radius:8px;padding:8px 11px;background:#fff;color:#444}.primary:disabled,.secondary:disabled{opacity:.4;cursor:default}
+.start{max-width:840px;width:100%;margin:0 auto;padding:78px 26px}.start small{font-size:13px;color:var(--muted)}.start h1{font-size:40px;line-height:1.12;letter-spacing:-.04em;margin:14px 0 12px;font-weight:620}.start>p{color:var(--muted);font-size:17px;max-width:660px;margin:0 0 34px}.formbox{border-top:1px solid var(--line);padding-top:28px}.field{margin-bottom:20px}.field label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:8px}.field textarea,.field input{width:100%;border:1px solid #d7d7d7;border-radius:8px;padding:12px 13px;background:#fff;outline:none}.field textarea{min-height:110px;resize:vertical;line-height:1.45}.field textarea:focus,.field input:focus{border-color:#999}
+.workspace{min-height:0;flex:1;display:grid;grid-template-columns:280px minmax(0,1fr);overflow:hidden}.rail{border-right:1px solid var(--line);background:#fafafa;overflow:auto;padding:20px 16px 28px}.railhead{font-size:12px;font-weight:650;color:#555;margin-bottom:14px;display:flex;justify-content:space-between}.count{color:#999;font-weight:400}.learningline{font-size:12px;color:#555;padding:10px 0 14px;border-bottom:1px solid var(--line);margin-bottom:4px;line-height:1.45}.pulse{display:inline-block;width:7px;height:7px;background:#333;border-radius:50%;margin-right:7px;animation:pulse 1.5s infinite}@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+.thread{width:100%;display:block;text-align:left;border:0;border-bottom:1px solid var(--line);background:transparent;padding:13px 0;color:inherit}.thread:hover{background:#f3f3f3}.thread.active{background:#efefef;margin:0 -8px;padding:13px 8px;width:calc(100% + 16px)}.threadtop{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.threadtitle{font-size:13px;font-weight:600;line-height:1.3}.pct{font-size:11px;color:#555}.bar{height:3px;background:#ddd;border-radius:999px;margin-top:8px;overflow:hidden}.fill{height:100%;background:#333;transition:width .25s ease}.threadstate{font-size:10px;color:#8a8a8a;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.empty{font-size:12px;color:#999;padding:15px 0}
+.canvas{overflow:auto}.wiki{max-width:1040px;margin:0 auto;padding:40px 54px 90px}.wikihead{padding-bottom:24px;border-bottom:1px solid var(--line)}.wikihead small{font-size:12px;color:var(--muted)}.wikihead h1{font-size:35px;letter-spacing:-.04em;line-height:1.15;margin:8px 0 10px;font-weight:620}.wikihead p{font-size:15px;color:var(--muted);max-width:800px;line-height:1.55;margin:0}.controls{margin-top:17px}.section{padding:28px 0;border-bottom:1px solid var(--line)}.section h2{font-size:19px;margin:0 0 15px;font-weight:620}.section p{font-size:14px;color:#555;line-height:1.55}.workflow{padding:20px 0;border-top:1px solid #eee}.workflow:first-child{padding-top:0;border-top:0}.workflowtitle{font-size:16px;font-weight:620;margin-bottom:4px}.workflowdesc{font-size:13px;color:#666;line-height:1.5;margin-bottom:12px}.steps{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.step{font-size:11px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;background:#fafafa}.arrow{font-size:11px;color:#aaa}.two{display:grid;grid-template-columns:1fr 1fr;gap:34px}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{font-size:11px;border:1px solid #e1e1e1;border-radius:999px;padding:5px 8px;background:#fafafa;color:#444}.relation{font-size:12px;color:#444;padding:7px 0;border-bottom:1px dotted #ddd}.query{display:flex;gap:8px;margin-top:16px}.query input{flex:1;border:1px solid #d6d6d6;border-radius:8px;padding:10px 12px}.result{margin-top:22px;background:var(--soft);padding:24px;border-radius:10px}.result h3{font-size:18px;margin:0 0 8px}.result p{font-size:13px}.view{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;border-top:1px solid #ddd;border-bottom:1px solid #ddd;padding:10px 0;margin-top:16px;color:#444;overflow-wrap:anywhere}
+@media(max-width:760px){.workspace{grid-template-columns:220px minmax(0,1fr)}.wiki{padding:30px 28px 70px}.two{grid-template-columns:1fr}}@media(max-width:620px){.workspace{display:block;overflow:auto}.rail{max-height:280px;border-right:0;border-bottom:1px solid var(--line)}.canvas{overflow:visible}.wiki{padding:24px 20px 60px}}
 </style>
 </head>
-<body>
-<div class="shell">
-<header class="topbar">
-  <div class="brand">lemap</div>
-  <div class="topmeta">
-    <span id="status">idle</span>
-    <span class="token">tokens <b id="tokens">0</b></span>
-    <span class="token hide-mobile">prompt <b id="promptTokens">0</b></span>
-    <span class="token hide-mobile">completion <b id="completionTokens">0</b></span>
-    <a id="logLink" class="link hidden" href="/api/run-log">run log</a>
-    <button id="stop" class="secondary hidden" type="button">Stop</button>
-  </div>
-</header>
+<body><div class="shell">
+<header class="topbar"><div class="brand">lemap</div><div class="topright"><span id="stateLabel" class="state">ready</span><button id="stop" class="secondary hidden" type="button">Stop</button></div></header>
 
 <section id="start" class="start">
-  <div class="eyebrow">live learning experiment</div>
-  <h1>Give lemap an unfamiliar enterprise application.</h1>
-  <p>Describe the business briefly and point lemap at the repository. The map will form as it learns.</p>
-  <form id="form" class="startcard">
-    <div class="field">
-      <label for="business">What does this business do?</label>
-      <textarea id="business">An ecommerce company selling products online. Customers browse products, maintain carts, place orders and make payments. The business manages fulfilment, inventory, shipping, returns and accounting.</textarea>
-    </div>
-    <div class="field">
-      <label for="repo">Git repository</label>
-      <input id="repo" value="https://github.com/moqui/PopCommerce" />
-    </div>
-    <button id="go" class="primary">Learn this enterprise →</button>
-  </form>
+<small>live enterprise learning demo</small>
+<h1>Give lemap an unfamiliar application.</h1>
+<p>Describe the business and point lemap at its repository. Watch the enterprise map form as it learns.</p>
+<form id="form" class="formbox">
+<div class="field"><label for="business">What does this business do?</label><textarea id="business">An ecommerce company selling products online. Customers browse products, maintain carts, place orders and make payments. The business manages fulfilment, inventory, shipping, returns and accounting.</textarea></div>
+<div class="field"><label for="repo">Git repository</label><input id="repo" value="https://github.com/moqui/PopCommerce" /></div>
+<button id="go" class="primary">Learn this enterprise →</button>
+</form>
 </section>
 
 <section id="workspace" class="workspace hidden">
-  <aside class="rail">
-    <div class="railhead"><div class="railtitle">threads</div><div id="flowCount" class="count">0</div></div>
-    <div class="runstate">
-      <div id="mode" class="mode">idle</div>
-      <div id="message" class="message"></div>
-      <div id="artifact" class="artifact"></div>
-    </div>
-    <div id="flows" class="flows"><div class="empty">Waiting for business threads.</div></div>
-  </aside>
+<aside class="rail">
+<div class="railhead"><span>business threads</span><span id="threadCount" class="count">0</span></div>
+<div id="learningLine" class="learningline"><span class="pulse"></span>Preparing to learn</div>
+<div id="threads"><div class="empty">Threads will appear here as lemap identifies them.</div></div>
+</aside>
 
-  <main class="canvas">
-    <article class="wiki">
-      <div class="wikihead">
-        <small>enterprise map · continuously reconstructed</small>
-        <h1 id="wikiTitle">Understanding the business</h1>
-        <p id="wikiIntro">lemap is reading the application and accumulating what it learns. Existing knowledge stays visible as new workflows, entities and relationships are discovered.</p>
-        <div class="wiki-controls">
-          <span id="learningState" class="learning"><span class="pulse"></span> learning</span>
-          <button id="showAll" class="secondary" type="button">Show full map</button>
-        </div>
-      </div>
-
-      <section id="overviewSection" class="wikisection">
-        <h2>Overview</h2>
-        <p id="overview" class="muted">No business flow has been reconstructed yet.</p>
-      </section>
-
-      <section class="wikisection">
-        <h2>Workflows</h2>
-        <div id="workflowWiki"><p class="muted">Workflows will appear here as lemap learns them.</p></div>
-      </section>
-
-      <section class="wikisection two">
-        <div><h2>Entities</h2><div id="entityWiki" class="chips"><span class="muted">—</span></div></div>
-        <div><h2>Persistent objects</h2><div id="persistentWiki" class="chips"><span class="muted">—</span></div></div>
-      </section>
-
-      <section class="wikisection two">
-        <div><h2>Relationships</h2><div id="relationshipWiki"><span class="muted">—</span></div></div>
-        <div><h2>External effects</h2><div id="externalWiki" class="chips"><span class="muted">—</span></div></div>
-      </section>
-
-      <section id="useSection" class="wikisection">
-        <h2>Use the map</h2>
-        <p class="muted">Once meaning is connected, teams can ask for a business view without first reconstructing the underlying systems.</p>
-        <div class="querybar">
-          <input id="question" value="Why is sales dropping?" />
-          <button id="ask" class="primary" type="button">Use map</button>
-        </div>
-        <div id="queryResult" class="queryresult hidden"></div>
-      </section>
-    </article>
-  </main>
+<main class="canvas"><article class="wiki">
+<div class="wikihead"><small>enterprise map</small><h1 id="wikiTitle">Understanding the business</h1><p id="wikiIntro">The map grows as lemap connects workflows, entities and relationships.</p><div class="controls"><button id="showAll" class="secondary" type="button">Show full map</button></div></div>
+<section class="section"><h2>Overview</h2><p id="overview">No business knowledge reconstructed yet.</p></section>
+<section class="section"><h2>Workflows</h2><div id="workflows"><p>Workflows will appear here as lemap learns.</p></div></section>
+<section class="section two"><div><h2>Entities</h2><div id="entities" class="chips"></div></div><div><h2>Persistent objects</h2><div id="persistent" class="chips"></div></div></section>
+<section class="section two"><div><h2>Relationships</h2><div id="relationships"></div></div><div><h2>External effects</h2><div id="effects" class="chips"></div></div></section>
+<section class="section"><h2>Use the map</h2><p>Ask from the business meaning lemap has reconstructed so far.</p><div class="query"><input id="question" value="Why is sales dropping?" /><button id="ask" class="primary" type="button">Ask</button></div><div id="result" class="result hidden"></div></section>
+</article></main>
 </section>
 </div>
-
 <script>
-const $=id=>document.getElementById(id);
-const esc=(s='')=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-const uniq=xs=>[...new Set((xs||[]).filter(Boolean).map(x=>String(x)))];
-let state={};let businessDescription='';let selectedArcId='';
-
-$('form').addEventListener('submit',async e=>{
-  e.preventDefault();
-  businessDescription=$('business').value.trim();
-  $('go').disabled=true;
-  const res=await fetch('/api/explore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repoUrl:$('repo').value.trim(),businessDescription})});
-  if(!res.ok){const b=await res.json().catch(()=>({}));alert(b.error||'Could not start exploration');$('go').disabled=false;return;}
-  $('start').classList.add('hidden');$('workspace').classList.remove('hidden');$('stop').classList.remove('hidden');
-  $('wikiIntro').textContent=businessDescription||$('wikiIntro').textContent;
-});
-$('stop').addEventListener('click',async()=>{ $('stop').disabled=true; await fetch('/api/stop',{method:'POST'}); });
-$('showAll').addEventListener('click',()=>{selectedArcId='';renderWiki();});
-$('ask').addEventListener('click',()=>renderQuestion());
-$('question').addEventListener('keydown',e=>{if(e.key==='Enter')renderQuestion();});
-
-const events=new EventSource('/api/events');events.onmessage=e=>render(JSON.parse(e.data));
-
-function currentMode(s){
-  if(s.stopRequested)return'stopping';
-  if((s.callPathPreprocess?.status||'')!=='complete')return'building executable map';
-  if(String(s.lastMessage||'').toLowerCase().includes('scout'))return'scouting for new business threads';
-  if(s.pass1Scheduler?.activeArcId)return'interpreting active thread';
-  if(s.status==='exploring')return'updating enterprise map';
-  return s.status||'idle';
-}
-function render(next){
-  state=next||{};
-  const running=['preparing','exploring'].includes(state.status)&&!state.stopRequested;
-  $('status').textContent=state.status||'idle';
-  $('tokens').textContent=state.tokenUsage?.total||0;$('promptTokens').textContent=state.tokenUsage?.prompt||0;$('completionTokens').textContent=state.tokenUsage?.completion||0;
-  $('logLink').classList.toggle('hidden',!state.runLogFile);$('stop').classList.toggle('hidden',!running);$('stop').disabled=!running;
-  $('mode').textContent=currentMode(state);$('message').textContent=state.lastMessage||'';$('artifact').textContent=state.currentArtifact?.path||'';
-  $('learningState').innerHTML=running?'<span class="pulse"></span> learning':'map available';
-  if(state.status&&state.status!=='idle'){$('start').classList.add('hidden');$('workspace').classList.remove('hidden');}
-  renderFlows();renderWiki();
-}
-function arcOrigin(arc){
-  if(arc.seedSource==='scout_call_path'||arc.seedSource==='scout')return'scout-discovered';
-  if(arc.callPathId)return arc.callPathId;
-  return arc.seedSource||'business thread';
-}
-function renderFlows(){
-  const arcs=state.pass1Arcs||[],activeId=state.pass1Scheduler?.activeArcId||'';$('flowCount').textContent=String(arcs.length);
-  if(!arcs.length){$('flows').innerHTML='<div class="empty">Waiting for business threads.</div>';return;}
-  $('flows').innerHTML=arcs.map(arc=>{const active=arc.id===activeId,p=Math.max(0,Math.min(100,Number(arc.progress)||0));return`<button class="flow ${active?'active':''}" data-arc="${esc(arc.id)}"><div class="flowtop"><div><div class="flowtitle">${esc(arc.title||arc.id)}</div><div class="origin">${esc(arcOrigin(arc))}</div></div><div class="pct">${Math.round(p)}%</div></div><div class="bar"><div class="fill" style="width:${p}%"></div></div><div class="now">${esc(active?(state.lastMessage||'learning…'):(arc.businessIntent||arc.outcome||arc.status||'queued'))}</div></button>`}).join('');
-  document.querySelectorAll('[data-arc]').forEach(el=>el.onclick=()=>{selectedArcId=el.dataset.arc;renderWiki();document.querySelector('.canvas').scrollTo({top:0,behavior:'smooth'});});
-}
-function chips(values,cls=''){const a=uniq(values);return a.length?a.map(v=>`<span class="chip ${cls}">${esc(v)}</span>`).join(''):'<span class="muted">—</span>'}
-function selectedArcs(){const arcs=state.pass1Arcs||[];if(!selectedArcId)return arcs;const a=arcs.find(x=>x.id===selectedArcId);return a?[a]:arcs}
-function workflowHtml(arc){
-  const stages=arc.majorStages||[];const stageHtml=stages.length?`<div class="stage-line">${stages.map((s,i)=>`${i?'<span class="arrow">→</span>':''}<span class="stage">${esc(s)}</span>`).join('')}</div>`:'<span class="muted">Stages still being learned.</span>';
-  return `<div class="workflow" id="wf-${esc(arc.id)}"><div class="workflow-title">${esc(arc.title||arc.id)}</div><div class="workflow-meta">${Math.round(Number(arc.progress)||0)}% reconstructed · ${esc(arcOrigin(arc))}</div>${arc.businessIntent?`<div class="intent">${esc(arc.businessIntent)}</div>`:''}${stageHtml}${arc.outcome?`<h3>Outcome</h3><div class="intent">${esc(arc.outcome)}</div>`:''}</div>`;
-}
-function renderWiki(){
-  const all=state.pass1Arcs||[],arcs=selectedArcs();
-  $('wikiTitle').textContent=selectedArcId?(arcs[0]?.title||'Business flow'):'Enterprise business map';
-  if(businessDescription&&!selectedArcId)$('wikiIntro').textContent=businessDescription;
-  else if(selectedArcId)$('wikiIntro').textContent=arcs[0]?.businessIntent||arcs[0]?.concept||'Current evidence for this business flow.';
-  const complete=all.filter(a=>(a.progress||0)>=90).length;$('overview').textContent=all.length?`${all.length} business threads identified. ${complete} are broadly reconstructed. The map below is cumulative and refreshes as new evidence is learned.`:'lemap is still looking for the first business threads.';
-  $('workflowWiki').innerHTML=arcs.length?arcs.map(workflowHtml).join(''):'<p class="muted">Workflows will appear here as lemap learns them.</p>';
-  const entities=uniq(arcs.flatMap(a=>a.entities||[]));const persist=uniq(arcs.flatMap(a=>a.persistentObjects||[]));const rels=uniq(arcs.flatMap(a=>a.relationships||[]));const effects=uniq(arcs.flatMap(a=>a.externalEffects||[]));
-  $('entityWiki').innerHTML=chips(entities);$('persistentWiki').innerHTML=chips(persist,'persist');$('relationshipWiki').innerHTML=rels.length?rels.map(r=>`<div class="relation">${esc(r)}</div>`).join(''):'<span class="muted">—</span>';$('externalWiki').innerHTML=chips(effects,'external');
-}
-function relevantForSales(){
-  const arcs=state.pass1Arcs||[];const terms=['sale','order','checkout','cart','product','payment','shipment','shipping','customer','return','inventory'];
-  const scored=arcs.map(a=>{const text=[a.title,a.businessIntent,a.outcome,...(a.majorStages||[]),...(a.entities||[])].join(' ').toLowerCase();return{a,score:terms.reduce((n,t)=>n+(text.includes(t)?1:0),0)}}).filter(x=>x.score>0).sort((x,y)=>y.score-x.score).map(x=>x.a);
-  return scored.length?scored:arcs.slice(0,5);
-}
-function renderQuestion(){
-  const q=$('question').value.trim();const arcs=relevantForSales();const entities=uniq(arcs.flatMap(a=>a.entities||[]));const rels=uniq(arcs.flatMap(a=>a.relationships||[]));const p=uniq(arcs.flatMap(a=>a.persistentObjects||[]));
-  const preferred=['Order','OrderItem','Product','Customer','Payment','Shipment','Inventory'];const view=uniq([...preferred.filter(x=>entities.some(e=>e.toLowerCase().includes(x.toLowerCase()))),...entities.slice(0,8)]);
-  $('queryResult').classList.remove('hidden');$('queryResult').innerHTML=`<h2>${esc(q||'Business question')}</h2><div class="answer">lemap resolves the question against the business meaning it has reconstructed. For a sales question, these are the currently relevant workflows and enterprise objects.</div><div class="viewline">sales view → ${esc(view.join(' → ')||'map still learning the required entities')}</div><div class="mapgrid"><div><h3>Relevant workflows</h3>${arcs.slice(0,6).map(a=>`<div class="relation">${esc(a.title||a.id)}</div>`).join('')||'<span class="muted">—</span>'}</div><div><h3>Entities / persistent objects</h3><div class="chips">${chips([...entities.slice(0,12),...p.slice(0,8)])}</div></div></div>${rels.length?`<h3>Known relationships</h3>${rels.slice(0,12).map(r=>`<div class="relation">${esc(r)}</div>`).join('')}:''}`;
-  $('queryResult').scrollIntoView({behavior:'smooth',block:'start'});
-}
+const $=id=>document.getElementById(id);const esc=(s='')=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));const uniq=a=>[...new Set((a||[]).filter(Boolean).map(String))];let state={},selected='';
+$('form').addEventListener('submit',async e=>{e.preventDefault();$('go').disabled=true;const business=$('business').value.trim();const res=await fetch('/api/explore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repoUrl:$('repo').value.trim(),businessDescription:business})});if(!res.ok){const b=await res.json().catch(()=>({}));alert(b.error||'Could not start');$('go').disabled=false;return}$('start').classList.add('hidden');$('workspace').classList.remove('hidden');$('stop').classList.remove('hidden');$('wikiIntro').textContent=business||$('wikiIntro').textContent});
+$('stop').addEventListener('click',async()=>{await fetch('/api/stop',{method:'POST'});$('stop').disabled=true});$('showAll').addEventListener('click',()=>{selected='';renderMap()});$('ask').addEventListener('click',renderQuestion);const es=new EventSource('/api/events');es.onmessage=e=>render(JSON.parse(e.data));
+function friendlyActivity(s){const m=String(s.lastMessage||'').toLowerCase();if(s.stopRequested)return'Stopping after the current step…';if(m.includes('scout'))return'Looking for another business thread…';if(s.pass1Scheduler?.activeArcId){const a=(s.pass1Arcs||[]).find(x=>x.id===s.pass1Scheduler.activeArcId);return a?`Learning ${a.title}…`:'Learning a business thread…'}if(s.status==='preparing')return'Reading the application…';if(s.status==='exploring')return'Connecting what it has learned…';if(s.status==='complete')return'Learning complete';return'Ready'}
+function render(s){state=s||{};$('stateLabel').textContent=state.status==='complete'?'complete':(state.status==='exploring'||state.status==='preparing'?'learning':'ready');$('learningLine').innerHTML=(state.status==='complete'?'':'<span class="pulse"></span>')+esc(friendlyActivity(state));$('stop').classList.toggle('hidden',!['preparing','exploring'].includes(state.status));renderThreads();renderMap()}
+function renderThreads(){const arcs=state.pass1Arcs||[];const active=state.pass1Scheduler?.activeArcId||'';$('threadCount').textContent=arcs.length;if(!arcs.length){$('threads').innerHTML='<div class="empty">Threads will appear here as lemap identifies them.</div>';return}$('threads').innerHTML=arcs.map(a=>{const p=Math.max(0,Math.min(100,Number(a.progress)||0));return `<button class="thread ${a.id===active?'active':''}" data-id="${esc(a.id)}"><div class="threadtop"><div class="threadtitle">${esc(a.title||'Business flow')}</div><div class="pct">${Math.round(p)}%</div></div><div class="bar"><div class="fill" style="width:${p}%"></div></div><div class="threadstate">${esc(a.outcome||a.businessIntent||a.status||'learning')}</div></button>`}).join('');document.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>{selected=b.dataset.id;renderMap()})}
+function chosenArcs(){const arcs=state.pass1Arcs||[];return selected?arcs.filter(a=>a.id===selected):arcs}
+function chips(id,values){$(id).innerHTML=uniq(values).length?uniq(values).map(v=>`<span class="chip">${esc(v)}</span>`).join(''):'<span style="color:#999;font-size:12px">—</span>'}
+function renderMap(){const arcs=chosenArcs();const all=state.pass1Arcs||[];const one=selected&&arcs[0];$('wikiTitle').textContent=one?(one.title||'Business thread'):'Enterprise map';$('overview').textContent=one?(one.businessIntent||one.outcome||'This thread is still being learned.'):(all.length?`${all.length} business threads have been identified so far. The map is continuously updated as each thread is understood.`:'No business knowledge reconstructed yet.');$('workflows').innerHTML=arcs.length?arcs.map(a=>{const steps=a.majorStages||[];return `<div class="workflow"><div class="workflowtitle">${esc(a.title||'Workflow')}</div><div class="workflowdesc">${esc(a.businessIntent||a.outcome||'')}</div>${steps.length?`<div class="steps">${steps.map((v,i)=>`${i?'<span class="arrow">→</span>':''}<span class="step">${esc(v)}</span>`).join('')}</div>`:''}</div>`}).join(''):'<p>Workflows will appear here as lemap learns.</p>';chips('entities',arcs.flatMap(a=>a.entities||[]));chips('persistent',arcs.flatMap(a=>a.persistentObjects||[]));chips('effects',arcs.flatMap(a=>a.externalEffects||[]));const rel=uniq(arcs.flatMap(a=>a.relationships||[]));$('relationships').innerHTML=rel.length?rel.map(r=>`<div class="relation">${esc(r)}</div>`).join(''):'<span style="color:#999;font-size:12px">—</span>'}
+function renderQuestion(){const q=$('question').value.trim()||'Why is sales dropping?';const arcs=state.pass1Arcs||[];const sales=arcs.filter(a=>/sale|order|cart|product|payment|shipment|customer/i.test([a.title,a.businessIntent,a.outcome].join(' ')));const use=sales.length?sales:arcs.slice(0,5);const ents=uniq(use.flatMap(a=>a.entities||[]));const rels=uniq(use.flatMap(a=>a.relationships||[]));const objs=uniq(use.flatMap(a=>a.persistentObjects||[]));$('result').classList.remove('hidden');$('result').innerHTML=`<h3>${esc(q)}</h3><p>lemap would start with the parts of the enterprise map connected to sales and follow their relationships to construct the relevant business view.</p><div class="view">${esc(ents.slice(0,10).join(' → ')||'Order → Order Item → Product → Customer → Payment → Shipment')}</div><h3 style="margin-top:22px">Relevant entities</h3><div class="chips">${ents.slice(0,14).map(x=>`<span class="chip">${esc(x)}</span>`).join('')||'<span class="chip">Order</span><span class="chip">Product</span><span class="chip">Customer</span>'}</div><h3 style="margin-top:22px">Relationships</h3>${rels.slice(0,10).map(x=>`<div class="relation">${esc(x)}</div>`).join('')||'<div class="relation">Customer → Order → Product → Payment → Shipment</div>'}${objs.length?`<h3 style="margin-top:22px">Data behind the view</h3><div class="chips">${objs.slice(0,12).map(x=>`<span class="chip">${esc(x)}</span>`).join('')}</div>`:''}`}
 </script>
-</body>
-</html>
+</body></html>
