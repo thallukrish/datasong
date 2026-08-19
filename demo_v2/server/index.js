@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV40 } from './progressiveRepositoryExplorerV40.js';
+import { ProgressiveRepositoryExplorerV41 } from './progressiveRepositoryExplorerV41.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -12,7 +12,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV40({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV41({ topology, dataRoot, onState: (state) => broadcast(state) });
 let running = false;
 
 app.use(express.json({ limit: '1mb' }));
@@ -70,5 +70,5 @@ function broadcast(state) {
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
   console.log('[DataSong v2] CALL-PATH PREPROCESSOR → PASS 1 → PASS 2');
-  console.log('[DataSong v2] Pass 2 navigates the precomputed compressed call-path graph only; Scout is the only layer that scans for missing repository directions. Discovery is disabled.');
+  console.log('[DataSong v2] Pass 2 uses a dedicated interpreter over the precomputed call-path graph; it cannot request repository artifacts/neighbors/search. Scout alone scans for missing directions. Discovery is disabled.');
 });
