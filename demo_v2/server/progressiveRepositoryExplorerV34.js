@@ -81,6 +81,15 @@ export class ProgressiveRepositoryExplorerV34 extends ProgressiveRepositoryExplo
     ].join('\n');
   }
 
+  clippedSignatures(path, item) {
+    const tokens = arr(path?.normalizedFlowTokens);
+    if (!tokens.length) return [];
+    const through = String(item?.coherentThroughSignature || '').trim();
+    if (!through) return tokens;
+    const index = tokens.findIndex((token) => token === through);
+    return index >= 0 ? tokens.slice(0, index + 1) : tokens;
+  }
+
   async callModel(dynamicPrompt, maxTokens) {
     if (String(dynamicPrompt || '').startsWith('MODE call-path-business-seed-classification-v4')) {
       return this.lightweightModelCall(
@@ -97,9 +106,6 @@ export class ProgressiveRepositoryExplorerV34 extends ProgressiveRepositoryExplo
       return super.getSemanticUpdate(args);
     }
 
-    // V31 already owns the parsing/normalization contract for call-path classifier
-    // responses. Its mode guard is v3-specific, so temporarily use the same
-    // call/retry mechanics here and reuse normalizeCallPathClassification().
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const retry = attempt > 0;
