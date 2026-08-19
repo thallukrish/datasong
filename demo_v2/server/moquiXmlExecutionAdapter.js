@@ -106,7 +106,6 @@ export class MoquiXmlExecutionAdapter {
       createdByFile.set(sourcePath, symbols);
     }
 
-    // Reindex once all nodes exist so deterministic references can resolve across files.
     this.topology.reindexAllSymbols();
 
     const screenRootByFile = new Map();
@@ -129,10 +128,18 @@ export class MoquiXmlExecutionAdapter {
         const parent = byOrdinal.get(parentOrdinal);
         if (!parent || !childSymbols.length) continue;
         const ordered = [...childSymbols].sort((a, b) => a.moquiXmlNode.ordinal - b.moquiXmlNode.ordinal);
-        this.addRef(parent, ordered[0], parent.moquiXmlNode.tag === 'screen' ? 'routes_to' : 'calls');
 
-        // XML action children execute in document order. Conditional containers are
-        // branch points, so each immediate child is independently reachable.
+        // A screen is a container of alternate transitions/subscreens, not a
+        // sequential program. Each direct executable child is an independent entrance.
+        if (parent.moquiXmlNode.tag === 'screen') {
+          for (const child of ordered) this.addRef(parent, child, 'routes_to');
+          continue;
+        }
+
+        this.addRef(parent, ordered[0], 'calls');
+
+        // Conditional containers branch. Other executable containers preserve
+        // document order, which is the deterministic action order in Moqui XML.
         if (['if', 'condition'].includes(parent.moquiXmlNode.tag)) {
           for (const branch of ordered.slice(1)) this.addRef(parent, branch, 'calls');
         } else {
