@@ -1,6 +1,9 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { ProgressiveRepositoryExplorerV46 } from './progressiveRepositoryExplorerV46.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function meaningfulOutcome(value) {
   const s = String(value || '').trim();
   return !!s && !/^(no outcome|none|unknown|not evidenced)/i.test(s);
@@ -11,6 +14,63 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
     const state = super.emptyState();
     state.arcSchedulerVersion = 'persistent-full-scout-evidence-closure-v27';
     return state;
+  }
+
+  async run(repoUrl) {
+    // Each explicit Start is a new runtime lifecycle. The semantic map itself is
+    // durable, but these restore/stop flags are not. Without this reset, a second
+    // Start in the same server process could skip restoring the persisted map.
+    this._mapRestoreAttempted = false;
+    this._mapRestored = false;
+    this._stoppedByUser = false;
+    return super.run(repoUrl);
+  }
+
+  loadLatestPersistedMapForRepo(repoUrl) {
+    const wanted = String(repoUrl || '').trim();
+    if (!wanted) return null;
+    const dir = this.mapDirectory();
+    if (!fs.existsSync(dir)) return null;
+
+    const candidates = [];
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const file = path.join(dir, name);
+        const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (Number(saved?.version || 0) !== 2) continue;
+        if (String(saved?.repoUrl || '').trim() !== wanted) continue;
+        if (!saved?.semanticState) continue;
+        candidates.push(saved);
+      } catch {
+        // Ignore damaged/partial files and keep looking for the newest valid map.
+      }
+    }
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
+    const saved = candidates[0];
+    const restored = clone(saved.semanticState);
+    restored.repoUrl = saved.repoUrl;
+    restored.commit = saved.commit;
+    restored.status = 'complete';
+    restored.stopRequested = false;
+    restored.currentArtifact = null;
+    restored.frontier = [];
+    restored.executionStack = [];
+    restored.mapPersistence = {
+      restored: true,
+      savedAt: saved.savedAt || '',
+      repoUrl: saved.repoUrl,
+      commit: saved.commit,
+      version: Number(saved.version || 2)
+    };
+    restored.lastMessage = 'Loaded the existing enterprise map. Start learning to continue from where it stopped.';
+    this.state = restored;
+    this._mapRestoreAttempted = true;
+    this._mapRestored = true;
+    this._stoppedByUser = false;
+    super.emit();
+    return this.snapshot();
   }
 
   normalizeWholeFlowPass2(raw, observation) {
