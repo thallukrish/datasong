@@ -2,6 +2,11 @@ import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopology
 import { CallPathIndexerV3 } from './callPathIndexerV3.js';
 import { createMoquiAdapters } from './adapters/moqui/index.js';
 
+const identityKey = (value = '') => String(value || '')
+  .normalize('NFKC')
+  .toLowerCase()
+  .replace(/[^\p{L}\p{N}]+/gu, '');
+
 export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopologyV7 {
   constructor(options) {
     super(options);
@@ -42,8 +47,16 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
   entitySchema(name) {
     if (!name) return null;
     if (this.entitySchemaByName.has(name)) return this.entitySchemaByName.get(name);
-    const leaf = String(name).split(/[.#:/]/).at(-1);
-    return this.entitySchemaByName.get(leaf) || this.entitySchemas.find((s) => s.name === leaf || s.fullName === name) || null;
+    const raw = String(name);
+    const leaf = raw.split(/[.#:/]/).at(-1);
+    if (this.entitySchemaByName.has(leaf)) return this.entitySchemaByName.get(leaf);
+
+    const wanted = identityKey(leaf);
+    return this.entitySchemas.find((schema) =>
+      identityKey(schema?.name) === wanted ||
+      identityKey(schema?.fullName) === identityKey(raw) ||
+      identityKey(String(schema?.fullName || '').split(/[.#:/]/).at(-1)) === wanted
+    ) || null;
   }
 
   topCallPaths(limit = 10) {
