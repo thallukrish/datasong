@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
@@ -19,6 +20,7 @@ const queryClient = process.env.DEEPSEEK_API_KEY
   : null;
 const queryModel = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 let running = false;
+let latestQueryLogPath = '';
 
 const arr = (value) => Array.isArray(value) ? value : [];
 const compactText = (value, max = 320) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
@@ -48,6 +50,41 @@ function arcDetail(arc) {
   };
 }
 
+function queryRunPath() {
+  const dir = path.join(dataRoot, 'query-runs');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.join(dir, `${stamp}.jsonl`);
+}
+
+function appendQueryLog(file, event) {
+  if (!file) return;
+  fs.appendFileSync(file, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+function normalizedUsage(usage = {}) {
+  const prompt = Number(usage.prompt_tokens || usage.input_tokens || 0);
+  const completion = Number(usage.completion_tokens || usage.output_tokens || 0);
+  const total = Number(usage.total_tokens || (prompt + completion));
+  const details = usage.prompt_tokens_details || {};
+  return {
+    prompt,
+    completion,
+    total,
+    cacheHit: Number(details.cached_tokens || usage.prompt_cache_hit_tokens || 0),
+    cacheMiss: Number(usage.prompt_cache_miss_tokens || 0)
+  };
+}
+
+function addUsage(total, usage) {
+  total.prompt += usage.prompt;
+  total.completion += usage.completion;
+  total.total += usage.total;
+  total.cacheHit += usage.cacheHit;
+  total.cacheMiss += usage.cacheMiss;
+  return total;
+}
+
 async function jsonModelCall(system, user, maxTokens = 1200) {
   const completion = await queryClient.chat.completions.create({
     model: queryModel,
@@ -57,7 +94,12 @@ async function jsonModelCall(system, user, maxTokens = 1200) {
     max_tokens: maxTokens
   });
   const raw = completion.choices?.[0]?.message?.content || '{}';
-  return JSON.parse(raw);
+  return {
+    parsed: JSON.parse(raw),
+    raw,
+    finishReason: completion.choices?.[0]?.finish_reason || '',
+    usage: normalizedUsage(completion.usage || {})
+  };
 }
 
 app.use(express.json({ limit: '1mb' }));
@@ -89,8 +131,15 @@ app.get('/api/call-paths', (_req, res) => res.json({
 }));
 
 app.get('/api/run-log', (_req, res) => {
-  if (!explorer.runLogPath) return res.status(404).json({ error: 'No run log is available yet' });
+  if (!explorer.runLogPath) return res.status(404).json({ error: 'No learning run log is available yet' });
   return res.download(explorer.runLogPath, path.basename(explorer.runLogPath));
+});
+
+app.get('/api/query-log', (_req, res) => {
+  if (!latestQueryLogPath || !fs.existsSync(latestQueryLogPath)) {
+    return res.status(404).json({ error: 'No query run log is available yet' });
+  }
+  return res.download(latestQueryLogPath, path.basename(latestQueryLogPath));
 });
 
 app.get('/api/events', (req, res) => {
@@ -129,6 +178,11 @@ app.post('/api/stop', (_req, res) => {
 });
 
 app.post('/api/query-map', async (req, res) => {
+  const queryLog = queryRunPath();
+  latestQueryLogPath = queryLog;
+  const cumulativeUsage = { prompt: 0, completion: 0, total: 0, cacheHit: 0, cacheMiss: 0 };
+  const startedAt = new Date().toISOString();
+
   try {
     if (!queryClient) return res.status(503).json({ error: 'The reasoning service is not configured' });
     const question = String(req.body?.question || '').trim();
@@ -139,18 +193,39 @@ app.post('/api/query-map', async (req, res) => {
     const arcs = arr(snapshot.pass1Arcs);
     if (!arcs.length) return res.status(409).json({ error: 'The enterprise map has not learned any business workflows yet' });
 
+    appendQueryLog(queryLog, {
+      type: 'query_start',
+      timestamp: startedAt,
+      question,
+      repoUrl: snapshot.repoUrl || '',
+      commit: snapshot.commit || '',
+      workflowCount: arcs.length
+    });
+
     const summaries = arcs.map(arcSummary);
     const selectorSystem = `You are lemap's semantic-map workflow selector.
 Given a business question and ONLY top-level workflow summaries, select the smallest set of workflows whose detailed semantic content is needed to answer or investigate the question.
 Do not answer the question. Do not infer entities that are not supplied. Prefer 1-4 workflows; include an extra workflow only when its top-level intent/outcome makes it plausibly explanatory.
 Return strict JSON only: {"workflowIds":["exact ids"],"selectionReason":"one short sentence"}.`;
-    const selected = await jsonModelCall(
-      selectorSystem,
-      `QUESTION\n${question}\n\nWORKFLOWS\n${JSON.stringify(summaries)}`,
-      500
-    );
+    const selectorUser = `QUESTION\n${question}\n\nWORKFLOWS\n${JSON.stringify(summaries)}`;
+    const selectorCall = await jsonModelCall(selectorSystem, selectorUser, 500);
+    addUsage(cumulativeUsage, selectorCall.usage);
+
+    appendQueryLog(queryLog, {
+      type: 'workflow_selection_call',
+      timestamp: new Date().toISOString(),
+      model: queryModel,
+      systemPrompt: selectorSystem,
+      prompt: selectorUser,
+      rawResponse: selectorCall.raw,
+      parsedResponse: selectorCall.parsed,
+      finishReason: selectorCall.finishReason,
+      usage: selectorCall.usage,
+      cumulativeUsage: { ...cumulativeUsage }
+    });
+
     const allowed = new Set(arcs.map((arc) => arc.id));
-    let selectedIds = arr(selected.workflowIds).filter((id) => allowed.has(id)).slice(0, 4);
+    let selectedIds = arr(selectorCall.parsed.workflowIds).filter((id) => allowed.has(id)).slice(0, 4);
     if (!selectedIds.length) selectedIds = arcs.slice(0, Math.min(2, arcs.length)).map((arc) => arc.id);
 
     const details = arcs.filter((arc) => selectedIds.includes(arc.id)).map(arcDetail);
@@ -169,20 +244,50 @@ Return strict JSON only:
   "candidateView":{"purpose":"","entities":[],"dimensions":[],"measures":[]},
   "nextStep":"single most useful next analytical step"
 }`;
-    const answer = await jsonModelCall(
-      answerSystem,
-      `QUESTION\n${question}\n\nSELECTED WORKFLOW DETAILS\n${JSON.stringify(details)}`,
-      1400
-    );
+    const answerUser = `QUESTION\n${question}\n\nSELECTED WORKFLOW DETAILS\n${JSON.stringify(details)}`;
+    const answerCall = await jsonModelCall(answerSystem, answerUser, 1400);
+    addUsage(cumulativeUsage, answerCall.usage);
 
-    return res.json({
-      ...answer,
+    appendQueryLog(queryLog, {
+      type: 'answer_call',
+      timestamp: new Date().toISOString(),
+      model: queryModel,
+      selectedWorkflowIds: selectedIds,
+      systemPrompt: answerSystem,
+      prompt: answerUser,
+      rawResponse: answerCall.raw,
+      parsedResponse: answerCall.parsed,
+      finishReason: answerCall.finishReason,
+      usage: answerCall.usage,
+      cumulativeUsage: { ...cumulativeUsage }
+    });
+
+    const response = {
+      ...answerCall.parsed,
       retrieval: {
         workflowIds: selectedIds,
-        selectionReason: compactText(selected.selectionReason, 280)
+        selectionReason: compactText(selectorCall.parsed.selectionReason, 280)
       }
+    };
+
+    appendQueryLog(queryLog, {
+      type: 'query_complete',
+      timestamp: new Date().toISOString(),
+      question,
+      selectedWorkflowIds: selectedIds,
+      response,
+      cumulativeUsage: { ...cumulativeUsage }
     });
+
+    console.log(`[lemap query] tokens ${cumulativeUsage.total} (prompt ${cumulativeUsage.prompt}, completion ${cumulativeUsage.completion}) — ${question}`);
+    return res.json(response);
   } catch (error) {
+    appendQueryLog(queryLog, {
+      type: 'query_error',
+      timestamp: new Date().toISOString(),
+      error: error.message || String(error),
+      cumulativeUsage: { ...cumulativeUsage }
+    });
     console.error(`[lemap query] ${error.message}`);
     return res.status(500).json({ error: error.message || 'Query failed' });
   }
@@ -197,5 +302,5 @@ app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
   console.log('[DataSong v2] PERSISTENT MAP → FULL CALL-PATH SCOUT → PASS 1 → PASS 2');
   console.log('[DataSong v2] Scout widens through the ranked call-path index until unseen entrances are exhausted. Path interpretation and business-workflow closure are separate: only sufficiently evidenced workflows close at 100%.');
-  console.log('[DataSong v2] QUERY: top-level workflow selection first; only selected workflow semantics are expanded for the final reasoning call.');
+  console.log('[DataSong v2] QUERY: top-level workflow selection first; only selected workflow semantics are expanded for the final reasoning call. Query LLM calls are logged separately under data/query-runs/.');
 });
