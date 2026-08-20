@@ -19,10 +19,32 @@ export const EVIDENCE_STRENGTH = Object.freeze({
   llm_inference: 0.35
 });
 
+// Semantic identity is deliberately stricter than display text. Casing,
+// whitespace and punctuation variants should converge on one object, while
+// genuinely different names (Order vs OrderHeader) remain distinct.
+export function semanticIdentityKey(value = '') {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function canonicalScope(scope = '') {
+  const s = clean(scope, 500);
+  // Scope may itself be a semantic object id. Preserve those separators; for
+  // ordinary human labels normalize like a semantic identity token.
+  if (/^[a-z_]+:[0-9a-f]{8,}$/i.test(s)) return s.toLowerCase();
+  if (s.includes('|') && s.split('|').every((part) => /^[a-z_]+:[0-9a-f]{8,}$/i.test(part))) {
+    return s.split('|').map((part) => part.toLowerCase()).join('|');
+  }
+  return semanticIdentityKey(s);
+}
+
 export function semanticId(type, name, scope = '') {
-  const raw = `${clean(type, 80)}|${clean(scope, 300)}|${clean(name, 500)}`;
+  const canonicalType = semanticIdentityKey(type);
+  const raw = `${canonicalType}|${canonicalScope(scope)}|${semanticIdentityKey(name)}`;
   const hash = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16);
-  return `${clean(type, 80)}:${hash}`;
+  return `${canonicalType || 'object'}:${hash}`;
 }
 
 function evidenceKey(e) {
@@ -35,29 +57,69 @@ export function aggregateConfidence(evidence = []) {
   return clamp(1 - residual);
 }
 
+function mergeObjects(target, incoming) {
+  target.properties = { ...(target.properties || {}), ...(incoming.properties || {}) };
+  target.aliases = [...new Set([...(target.aliases || []), incoming.name, ...(incoming.aliases || [])].filter(Boolean))];
+  for (const evidence of arr(incoming.evidence)) {
+    if (!arr(target.evidence).some((e) => evidenceKey(e) === evidenceKey(evidence))) target.evidence.push(evidence);
+  }
+  target.confidence = aggregateConfidence(target.evidence);
+  target.updatedAt = new Date().toISOString();
+  return target;
+}
+
 export class SemanticEvidenceStore {
   constructor(state) {
     this.state = state;
     if (!this.state.semanticObjects || typeof this.state.semanticObjects !== 'object') this.state.semanticObjects = {};
   }
 
+  findEquivalent(type, name, scope = '') {
+    const typeKey = semanticIdentityKey(type);
+    const nameKey = semanticIdentityKey(name);
+    const scopeKey = canonicalScope(scope);
+    return Object.values(this.state.semanticObjects).find((object) =>
+      semanticIdentityKey(object?.type) === typeKey &&
+      semanticIdentityKey(object?.name) === nameKey &&
+      canonicalScope(object?.scope) === scopeKey
+    ) || null;
+  }
+
   ensure({ id, type, name, scope = '', properties = {} }) {
     const objectId = id || semanticId(type, name, scope);
-    const existing = this.state.semanticObjects[objectId] || {
-      id: objectId,
-      type: clean(type, 80),
-      name: clean(name, 500),
-      scope: clean(scope, 500),
-      properties: {},
-      evidence: [],
-      confidence: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    let existing = this.state.semanticObjects[objectId] || this.findEquivalent(type, name, scope);
+
+    if (existing && existing.id !== objectId && !id) {
+      delete this.state.semanticObjects[existing.id];
+      existing.id = objectId;
+    }
+
+    if (!existing) {
+      existing = {
+        id: objectId,
+        type: clean(type, 80),
+        name: clean(name, 500),
+        aliases: [],
+        scope: clean(scope, 500),
+        properties: {},
+        evidence: [],
+        confidence: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    } else if (clean(name, 500) && clean(name, 500) !== existing.name) {
+      existing.aliases = [...new Set([...(existing.aliases || []), clean(name, 500)])];
+      // Prefer a conventional title-cased/camel-cased display form over a
+      // lower-case model mention, but identity remains canonicalized.
+      if (existing.name === existing.name.toLowerCase() && clean(name, 500) !== clean(name, 500).toLowerCase()) existing.name = clean(name, 500);
+    }
+
     existing.properties = { ...existing.properties, ...properties };
     existing.updatedAt = new Date().toISOString();
-    this.state.semanticObjects[objectId] = existing;
-    return existing;
+
+    const collision = this.state.semanticObjects[objectId];
+    this.state.semanticObjects[objectId] = collision && collision !== existing ? mergeObjects(existing, collision) : existing;
+    return this.state.semanticObjects[objectId];
   }
 
   addEvidence(objectOrId, evidence = {}) {
