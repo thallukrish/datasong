@@ -20,22 +20,81 @@ const queryClient = process.env.DEEPSEEK_API_KEY
 const queryModel = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 let running = false;
 
+const arr = (value) => Array.isArray(value) ? value : [];
+const compactText = (value, max = 320) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
+
+function arcSummary(arc) {
+  return {
+    id: arc.id,
+    title: compactText(arc.title, 160),
+    actor: compactText(arc.businessActor, 120),
+    intent: compactText(arc.businessIntent, 220),
+    outcome: compactText(arc.outcome || arc.businessOutcome, 220),
+    progress: Number(arc.progress || 0),
+    closureState: arc.closureState || ''
+  };
+}
+
+function arcDetail(arc) {
+  return {
+    ...arcSummary(arc),
+    concept: compactText(arc.concept || arc.pathNature, 280),
+    stages: arr(arc.majorStages).map((v) => compactText(v, 180)),
+    entities: arr(arc.entities).map((v) => compactText(v, 140)),
+    persistentObjects: arr(arc.persistentObjects).map((v) => compactText(v, 160)),
+    relationships: arr(arc.relationships).map((v) => compactText(v, 220)),
+    externalEffects: arr(arc.externalEffects).map((v) => compactText(v, 180)),
+    traceability: arc.traceability || null
+  };
+}
+
+async function jsonModelCall(system, user, maxTokens = 1200) {
+  const completion = await queryClient.chat.completions.create({
+    model: queryModel,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    response_format: { type: 'json_object' },
+    temperature: 0.1,
+    max_tokens: maxTokens
+  });
+  const raw = completion.choices?.[0]?.message?.content || '{}';
+  return JSON.parse(raw);
+}
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'public'), {
   etag: false,
   lastModified: false,
   setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); }
 }));
+
 app.get('/api/state', (_req, res) => res.json(explorer.snapshot()));
+
+app.get('/api/map', (_req, res) => {
+  // Keep the map screen tied to the durable creation-layer state. Persist before
+  // returning so what the user browses is the same semantic state stored on disk.
+  explorer.persistSemanticMap?.();
+  const snapshot = explorer.snapshot();
+  const arcs = arr(snapshot.pass1Arcs);
+  return res.json({
+    repoUrl: snapshot.repoUrl || '',
+    commit: snapshot.commit || '',
+    savedAt: snapshot.mapPersistence?.savedAt || '',
+    restored: !!snapshot.mapPersistence?.restored,
+    workflows: arcs.map(arcDetail)
+  });
+});
+
 app.get('/api/call-paths', (_req, res) => res.json({
   ready: !!topology.callPathIndex,
   xmlAdapter: topology.moquiXmlExecution,
   topPaths: topology.callPathIndex ? topology.topCallPaths(10) : []
 }));
+
 app.get('/api/run-log', (_req, res) => {
   if (!explorer.runLogPath) return res.status(404).json({ error: 'No run log is available yet' });
   return res.download(explorer.runLogPath, path.basename(explorer.runLogPath));
 });
+
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -45,6 +104,7 @@ app.get('/api/events', (req, res) => {
   res.write(`data: ${JSON.stringify(explorer.snapshot())}\n\n`);
   req.on('close', () => clients.delete(res));
 });
+
 app.post('/api/explore', async (req, res) => {
   const repoUrl = String(req.body?.repoUrl || '').trim();
   if (!repoUrl) return res.status(400).json({ error: 'repoUrl is required' });
@@ -63,6 +123,7 @@ app.post('/api/explore', async (req, res) => {
     })
     .finally(() => { running = false; });
 });
+
 app.post('/api/stop', (_req, res) => {
   if (!running) return res.status(409).json({ error: 'No exploration is running' });
   explorer.requestStop();
@@ -75,64 +136,59 @@ app.post('/api/query-map', async (req, res) => {
     const question = String(req.body?.question || '').trim();
     if (!question) return res.status(400).json({ error: 'question is required' });
 
+    explorer.persistSemanticMap?.();
     const snapshot = explorer.snapshot();
-    const arcs = Array.isArray(snapshot.pass1Arcs) ? snapshot.pass1Arcs : [];
+    const arcs = arr(snapshot.pass1Arcs);
     if (!arcs.length) return res.status(409).json({ error: 'The enterprise map has not learned any business workflows yet' });
 
-    const semanticMap = arcs.map((arc) => ({
-      id: arc.id,
-      title: arc.title || '',
-      actor: arc.businessActor || '',
-      intent: arc.businessIntent || '',
-      stages: Array.isArray(arc.majorStages) ? arc.majorStages : [],
-      entities: Array.isArray(arc.entities) ? arc.entities : [],
-      persistentObjects: Array.isArray(arc.persistentObjects) ? arc.persistentObjects : [],
-      relationships: Array.isArray(arc.relationships) ? arc.relationships : [],
-      externalEffects: Array.isArray(arc.externalEffects) ? arc.externalEffects : [],
-      outcome: arc.outcome || arc.businessOutcome || '',
-      confidence: Number(arc.confidence || 0),
-      progress: Number(arc.progress || 0),
-      closureState: arc.closureState || '',
-      traceability: arc.traceability || null
-    }));
+    // Stage 1: retrieval. Send ONLY top-level workflow summaries. The model is not
+    // allowed to answer the business question here; it only selects the smallest
+    // useful workflow set for the question.
+    const summaries = arcs.map(arcSummary);
+    const selectorSystem = `You are lemap's semantic-map workflow selector.
+Given a business question and ONLY top-level workflow summaries, select the smallest set of workflows whose detailed semantic content is needed to answer or investigate the question.
+Do not answer the question. Do not infer entities that are not supplied. Prefer 1-4 workflows; include an extra workflow only when its top-level intent/outcome makes it plausibly explanatory.
+Return strict JSON only: {"workflowIds":["exact ids"],"selectionReason":"one short sentence"}.`;
+    const selected = await jsonModelCall(
+      selectorSystem,
+      `QUESTION\n${question}\n\nWORKFLOWS\n${JSON.stringify(summaries)}`,
+      500
+    );
+    const allowed = new Set(arcs.map((arc) => arc.id));
+    let selectedIds = arr(selected.workflowIds).filter((id) => allowed.has(id)).slice(0, 4);
+    if (!selectedIds.length) selectedIds = arcs.slice(0, Math.min(2, arcs.length)).map((arc) => arc.id);
 
-    const system = `You are lemap's enterprise semantic-map query layer.
-You are given a business question and a semantic map reconstructed from enterprise workflows.
-Reason ONLY from the supplied map. Do not claim that historical operational data has already been inspected unless it is explicitly supplied.
-
-Your job is to use workflow context to identify the business concepts that matter, expand through related workflows that share entities, and propose testable explanations and useful analytical views.
-
-Return strict JSON with this shape:
+    // Stage 2: reasoning. Only the selected workflows are expanded. This keeps the
+    // prompt proportional to what the business question actually touches.
+    const details = arcs.filter((arc) => selectedIds.includes(arc.id)).map(arcDetail);
+    const answerSystem = `You are lemap's enterprise semantic-map query layer.
+Answer or frame the business question using ONLY the supplied selected workflow details reconstructed by lemap.
+The semantic map contains meaning and structure, not historical measurements. Never claim a factual operational cause unless the supplied map itself proves it.
+Use entities, concepts, stages and relationships from these workflows to explain what can be concluded, what plausible scenarios are structurally supported, and what data view or drill-down would test them.
+Be concise. Do not dump the map.
+Return strict JSON only:
 {
-  "answer": "short explanation of how to investigate the question from the map",
-  "primaryWorkflows": [{"id":"", "title":"", "why":""}],
-  "relatedWorkflows": [{"id":"", "title":"", "sharedEntities":[], "whyRelevant":""}],
-  "relevantEntities": [],
-  "relevantRelationships": [],
-  "scenarios": [{"scenario":"", "reasoning":"", "workflowIds":[], "entities":[], "dataNeeded":[]}],
-  "candidateViews": [{"name":"", "purpose":"", "entities":[], "dimensions":[], "measures":[]}],
-  "nextDrilldowns": []
-}
+  "answer":"clean concise answer",
+  "workflowsUsed":[{"id":"","title":"","role":"why it matters"}],
+  "relevantEntities":[],
+  "relevantRelationships":[],
+  "scenarios":[{"scenario":"","why":"","dataToCheck":[]}],
+  "candidateView":{"purpose":"","entities":[],"dimensions":[],"measures":[]},
+  "nextStep":"single most useful next analytical step"
+}`;
+    const answer = await jsonModelCall(
+      answerSystem,
+      `QUESTION\n${question}\n\nSELECTED WORKFLOW DETAILS\n${JSON.stringify(details)}`,
+      1400
+    );
 
-Prefer 3-6 strong scenarios, not an exhaustive list. A scenario must be grounded in at least one supplied workflow/entity/relationship. Related workflows are important: for example Product in sales may connect sales to inventory, catalog/pricing, shipment or returns. Explain those connections through shared entities.`;
-
-    const user = `BUSINESS QUESTION\n${question}\n\nENTERPRISE SEMANTIC MAP\n${JSON.stringify(semanticMap)}`;
-    const completion = await queryClient.chat.completions.create({
-      model: queryModel,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-      max_tokens: 1800
+    return res.json({
+      ...answer,
+      retrieval: {
+        workflowIds: selectedIds,
+        selectionReason: compactText(selected.selectionReason, 280)
+      }
     });
-
-    const raw = completion.choices?.[0]?.message?.content || '{}';
-    let parsed;
-    try { parsed = JSON.parse(raw); }
-    catch { return res.status(502).json({ error: 'The query layer returned an invalid response' }); }
-    return res.json(parsed);
   } catch (error) {
     console.error(`[lemap query] ${error.message}`);
     return res.status(500).json({ error: error.message || 'Query failed' });
@@ -143,9 +199,10 @@ function broadcast(state) {
   const payload = `data: ${JSON.stringify(state)}\n\n`;
   for (const client of clients) client.write(payload);
 }
+
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
   console.log('[DataSong v2] PERSISTENT MAP → CALL-PATH PREPROCESSOR → PASS 1 → PASS 2 → SCOUT');
   console.log('[DataSong v2] Completed flow families are closed at 100%, persisted with call-path/source traceability, and skipped on resume for the same repository commit.');
-  console.log('[DataSong v2] QUERY LAYER: business questions reason over the completed/partial semantic map without modifying it.');
+  console.log('[DataSong v2] QUERY: top-level workflow selection first; only selected workflow semantics are expanded for the final reasoning call.');
 });
