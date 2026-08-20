@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV45 } from './progressiveRepositoryExplorerV45.js';
+import { ProgressiveRepositoryExplorerV46 } from './progressiveRepositoryExplorerV46.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -13,7 +13,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV45({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV46({ topology, dataRoot, onState: (state) => broadcast(state) });
 const queryClient = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com', timeout: 60_000 })
   : null;
@@ -91,7 +91,9 @@ app.post('/api/query-map', async (req, res) => {
       externalEffects: Array.isArray(arc.externalEffects) ? arc.externalEffects : [],
       outcome: arc.outcome || arc.businessOutcome || '',
       confidence: Number(arc.confidence || 0),
-      progress: Number(arc.progress || 0)
+      progress: Number(arc.progress || 0),
+      closureState: arc.closureState || '',
+      traceability: arc.traceability || null
     }));
 
     const system = `You are lemap's enterprise semantic-map query layer.
@@ -143,7 +145,7 @@ function broadcast(state) {
 }
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] CALL-PATH PREPROCESSOR → PASS 1 → PASS 2 → SCOUT');
-  console.log('[DataSong v2] Pass 2 interprets each compressed call-path family in one model call. Scout owns direct promotion of strong novel unseen call-path directions into Pass 1 (max three per batch); no Discovery/hypothesis handoff is used.');
+  console.log('[DataSong v2] PERSISTENT MAP → CALL-PATH PREPROCESSOR → PASS 1 → PASS 2 → SCOUT');
+  console.log('[DataSong v2] Completed flow families are closed at 100%, persisted with call-path/source traceability, and skipped on resume for the same repository commit.');
   console.log('[DataSong v2] QUERY LAYER: business questions reason over the completed/partial semantic map without modifying it.');
 });
