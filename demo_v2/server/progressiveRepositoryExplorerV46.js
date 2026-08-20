@@ -6,6 +6,7 @@ import { ProgressiveRepositoryExplorerV45 } from './progressiveRepositoryExplore
 function arr(value) { return Array.isArray(value) ? value : []; }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function safeName(value) { return crypto.createHash('sha1').update(String(value || '')).digest('hex'); }
+const MAP_VERSION = 2;
 
 export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplorerV45 {
   constructor(args) {
@@ -18,7 +19,7 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
   emptyState() {
     const state = super.emptyState();
     state.arcSchedulerVersion = 'persistent-callgraph-whole-flow-v26';
-    state.mapPersistence = { restored: false, savedAt: '', repoUrl: '', commit: '' };
+    state.mapPersistence = { restored: false, savedAt: '', repoUrl: '', commit: '', version: MAP_VERSION };
     state.stopRequested = false;
     return state;
   }
@@ -41,12 +42,13 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
     if (!file || !fs.existsSync(file)) return false;
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      // Persistence format is intentionally versioned. Structural changes to map
+      // semantics must not silently restore an older shallow/incorrect map.
+      if (Number(saved?.version || 0) !== MAP_VERSION) return false;
       if (saved?.repoUrl !== this.state.repoUrl || saved?.commit !== this.state.commit || !saved?.semanticState) return false;
       const live = this.state;
       const prior = saved.semanticState;
 
-      // Restore only durable semantic/navigation state. Keep the freshly prepared
-      // repository topology, current observation and live run lifecycle.
       for (const key of [
         'pass1Arcs', 'pass1Scheduler', 'pass2WholeFlowByArc', 'pass2GraphByArc',
         'callPathPreprocess', 'scout', 'stories', 'threadAssignments',
@@ -59,7 +61,8 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
         restored: true,
         savedAt: saved.savedAt || '',
         repoUrl: saved.repoUrl,
-        commit: saved.commit
+        commit: saved.commit,
+        version: MAP_VERSION
       };
       live.lastMessage = `Loaded the existing enterprise map for this repository revision.`;
       this._mapRestored = true;
@@ -102,8 +105,6 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
           : 'high-confidence flow with no unresolved branches';
         arc.closedAt = arc.closedAt || new Date().toISOString();
         arc.progress = 100;
-        // Keep broadly_complete instead of the legacy story status "closed";
-        // the base explorer treats any closed story as a reason to end the whole run.
         if (arc.status !== 'unresolved') arc.status = 'broadly_complete';
         arc.opportunityScore = 0;
       }
@@ -119,14 +120,13 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
       fs.mkdirSync(dir, { recursive: true });
       const savedAt = new Date().toISOString();
       const semanticState = clone(this.state);
-      // Runtime-only fields should not drive a resumed exploration.
       semanticState.currentArtifact = null;
       semanticState.frontier = [];
       semanticState.executionStack = [];
       semanticState.stopRequested = false;
       semanticState.status = 'saved';
       fs.writeFileSync(this.mapFilePath(), JSON.stringify({
-        version: 1,
+        version: MAP_VERSION,
         repoUrl: this.state.repoUrl,
         commit: this.state.commit,
         savedAt,
@@ -136,7 +136,8 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
         restored: !!this._mapRestored,
         savedAt,
         repoUrl: this.state.repoUrl,
-        commit: this.state.commit
+        commit: this.state.commit,
+        version: MAP_VERSION
       };
     } catch (error) {
       console.warn(`[lemap] could not persist semantic map: ${error.message}`);
@@ -144,8 +145,6 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
   }
 
   emit() {
-    // The first emit after topology.prepare has repoUrl+commit. Restore before
-    // broadcasting or saving so we never overwrite an existing map with an empty one.
     if (this.state?.repoUrl && this.state?.commit && !this._mapRestoreAttempted) {
       this.restorePersistedMapIfAvailable();
     }
