@@ -42,8 +42,6 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
     if (!file || !fs.existsSync(file)) return false;
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-      // Persistence format is intentionally versioned. Structural changes to map
-      // semantics must not silently restore an older shallow/incorrect map.
       if (Number(saved?.version || 0) !== MAP_VERSION) return false;
       if (saved?.repoUrl !== this.state.repoUrl || saved?.commit !== this.state.commit || !saved?.semanticState) return false;
       const live = this.state;
@@ -52,7 +50,8 @@ export class ProgressiveRepositoryExplorerV46 extends ProgressiveRepositoryExplo
       for (const key of [
         'pass1Arcs', 'pass1Scheduler', 'pass2WholeFlowByArc', 'pass2GraphByArc',
         'callPathPreprocess', 'scout', 'stories', 'threadAssignments',
-        'trajectoryEvidence', 'orientation', 'unattachedFragments'
+        'trajectoryEvidence', 'orientation', 'unattachedFragments',
+        'semanticObjects'
       ]) {
         if (prior[key] !== undefined) live[key] = clone(prior[key]);
       }
