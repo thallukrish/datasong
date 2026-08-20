@@ -13,6 +13,13 @@ function meaningfulOutcome(value) {
   const s = String(value || '').trim();
   return !!s && !/^(no outcome|none|unknown|not evidenced)/i.test(s);
 }
+function entityNamesIn(value) {
+  const source = JSON.stringify(value || {});
+  const names = [];
+  const re = /entity-name=["']([^"']+)["']/gi;
+  let m; while ((m = re.exec(source))) names.push(m[1]);
+  return uniq(names);
+}
 
 export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplorerV46 {
   constructor(args) {
@@ -22,7 +29,7 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
 
   emptyState() {
     const state = super.emptyState();
-    state.arcSchedulerVersion = 'structured-workflow-semantics-v28';
+    state.arcSchedulerVersion = 'structured-workflow-entity-schema-v29';
     return state;
   }
 
@@ -90,11 +97,21 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
     const base = super.compactFlowPackage(arc);
     if (!base) return null;
     const grouped = this.groupedPathForArc(arc);
+    const names = entityNamesIn({ base, signatures: grouped?.signatures });
+    const entitySchemas = names.map((name) => this.topology.entitySchema?.(name)).filter(Boolean).map((schema) => ({
+      name: schema.name,
+      fullName: schema.fullName,
+      description: schema.description || '',
+      sourcePath: schema.sourcePath || '',
+      fields: arr(schema.fields).slice(0, 80).map((f) => ({ name: f.name, type: f.type, isPk: !!f.isPk, description: f.description || '' })),
+      relationships: arr(schema.relationships).slice(0, 30)
+    }));
     return {
       ...base,
       sourcePaths: uniq(grouped?.sourcePaths),
       entrySymbolId: grouped?.entrySymbolId || '',
-      signatures: arr(grouped?.signatures)
+      signatures: arr(grouped?.signatures),
+      entitySchemas
     };
   }
 
@@ -130,7 +147,11 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
           effect: 'state change or visible result',
           sourcePath: 'best matching supplied source path, else empty'
         }],
-        entityDetails: [{ name: 'entity name', description: 'business meaning of this entity in this workflow' }],
+        entityDetails: [{
+          name: 'entity name',
+          description: 'business meaning of this entity in this workflow',
+          fields: [{ name: 'exact schema field name', description: 'business meaning of this field in context; only for supplied schema fields' }]
+        }],
         relationshipDetails: [{
           from: 'source entity or step',
           relation: 'business relationship/action',
@@ -148,7 +169,7 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
 
     return [
       'MODE pass2-whole-compressed-flow-v1',
-      'SCHEMA structured-workflow-semantics-v2',
+      'SCHEMA structured-workflow-entity-schema-v3',
       `ACTIVE_ARC ${JSON.stringify(arcView)}`,
       `EXECUTABLE_FLOW ${JSON.stringify(flow)}`,
       `ALREADY_INTERPRETED_BRANCHES ${JSON.stringify(arr(state?.interpretedBranchIndexes))}`,
@@ -159,8 +180,10 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
       '- Every step description must explain what happens, which entities/records participate, and the effect when evidenced.',
       '- relationshipDetails must explicitly connect from -> relation -> to and explain the business scenario.',
       '- entityDetails must explain what each entity represents in this workflow.',
+      '- When EXECUTABLE_FLOW.entitySchemas contains fields, describe only those exact fields; do not invent fields.',
+      '- Field descriptions should explain business meaning, not repeat the camel-case field name.',
       '- Attach sourcePath to the individual step when a supplied source path reasonably matches it; otherwise leave empty.',
-      '- Use only evidence in the supplied deterministic flow. Never invent persistence or behavior.',
+      '- Use only evidence in the supplied deterministic flow and entity schemas. Never invent persistence or behavior.',
       '- unresolvedBranches is normally empty and only for materially ambiguous supplied branches.',
       `- Valid unresolved branch indexes are 0..${Math.max(-1, branchCount - 1)}.`,
       '- flowAction=complete when the supplied flow is semantically interpreted.',
@@ -182,7 +205,9 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
       persistentObjects: uniq(step?.persistentObjects).slice(0, 12), effect: text(step?.effect, 320), sourcePath: text(step?.sourcePath, 320)
     })).filter((step) => step.name || step.description);
     const entityDetails = arr(update.entityDetails).map((entity) => ({
-      name: text(entity?.name, 160), description: text(entity?.description, 420)
+      name: text(entity?.name, 160),
+      description: text(entity?.description, 420),
+      fields: arr(entity?.fields).map((field) => ({ name: text(field?.name, 160), description: text(field?.description, 420) })).filter((field) => field.name)
     })).filter((entity) => entity.name);
     const relationshipDetails = arr(update.relationshipDetails).map((rel) => ({
       from: text(rel?.from, 180), relation: text(rel?.relation, 180), to: text(rel?.to, 180), description: text(rel?.description, 520)
