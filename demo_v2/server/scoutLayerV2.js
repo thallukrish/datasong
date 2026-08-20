@@ -30,14 +30,22 @@ export class ScoutLayerV2 extends ScoutLayer {
     return ids;
   }
 
+  legacyPriorityCandidate() {
+    const arc = this.explorer.legacyUnrankedWorkflows?.(1)?.[0] || null;
+    return arc ? [{
+      id: `legacy-priority:${arc.id}`,
+      path: 'persisted semantic map',
+      label: `Rank legacy workflow ${arc.title || arc.id}`,
+      callPathIds: [],
+      legacyPriorityOnly: true
+    }] : [];
+  }
+
   broadCandidates() {
     const scout = this.ensureState();
     const represented = this.representedCallPathIds();
-    if (typeof this.explorer.topology?.callPathScoutCandidates !== 'function') return [];
+    if (typeof this.explorer.topology?.callPathScoutCandidates !== 'function') return this.legacyPriorityCandidate();
 
-    // Scout must exhaust the ranked call-path population, not a fixed top-N
-    // window. Grow the window until unseen entrances appear or the ranked index
-    // has genuinely been covered.
     const rankedCount = Number(this.explorer.topology?.callPathIndex?.rankedPathCount || 0);
     const hardCap = Math.max(60, Math.min(2500, rankedCount || 600));
     let window = Math.max(60, Number(scout.candidateWindow || 60));
@@ -58,18 +66,18 @@ export class ScoutLayerV2 extends ScoutLayer {
 
       if (window >= hardCap) {
         scout.candidateWindow = hardCap;
-        return [];
+        return this.legacyPriorityCandidate();
       }
 
       const next = Math.min(hardCap, Math.max(window + 60, window * 2));
-      if (next === window) return [];
+      if (next === window) return this.legacyPriorityCandidate();
       window = next;
     }
   }
 
   fingerprint(candidates) {
     const arcs = this.explorer.pass1().arcBoard().map((a) => `${a.id}:${a.title}:${a.progress}`).sort();
-    const ids = arr(candidates).flatMap((candidate) => arr(candidate.callPathIds)).sort();
+    const ids = arr(candidates).map((candidate) => candidate.id).sort();
     return JSON.stringify({ arcs, ids });
   }
 
@@ -86,8 +94,6 @@ export class ScoutLayerV2 extends ScoutLayer {
       }))
       .sort((a, b) => (b.novelty * b.businessUseCaseLikelihood) - (a.novelty * a.businessUseCaseLikelihood));
 
-    // Every supplied path is considered reviewed in this Scout turn. The next
-    // invocation therefore advances to lower-ranked unseen call-path entrances.
     for (const candidate of arr(candidates)) {
       for (const id of arr(candidate.callPathIds)) {
         if (!scout.reviewedCallPathIds.includes(id)) scout.reviewedCallPathIds.push(id);

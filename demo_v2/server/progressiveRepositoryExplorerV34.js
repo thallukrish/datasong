@@ -1,6 +1,19 @@
 import { ProgressiveRepositoryExplorerV33 } from './progressiveRepositoryExplorerV33.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
+function clamp01(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+}
+function text(value, max = 320) {
+  const s = String(value || '').trim().replace(/\s+/g, ' ');
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+const PRIORITY_CLASSES = new Set([
+  'core_end_user', 'revenue_critical', 'core_business', 'operational',
+  'support', 'reporting', 'admin', 'configuration', 'technical'
+]);
 
 const STATIC_CONTRACT_V4 = {
   summary: 'brief assessment of the supplied executable flow candidates',
@@ -13,6 +26,9 @@ const STATIC_CONTRACT_V4 = {
     businessIntent: 'if evidenced',
     completionCondition: 'if evidenced',
     businessOutcome: 'if evidenced',
+    businessPriority: 0,
+    priorityClass: 'core_end_user|revenue_critical|core_business|operational|support|reporting|admin|configuration|technical',
+    priorityReason: 'short reason for business importance',
     semanticBoundaryAt: 'optional compact flow token where another concern begins',
     coherentThroughSignature: 'last compact flow token belonging to this flow',
     reason: 'short evidence-based reason'
@@ -25,7 +41,9 @@ const STATIC_RULES_V4 = `Rules:
 - transition/service/entity/navigate tokens describe executable business structure; navigate may mark a semantic boundary.
 - If behavior after a navigation serves a different actor goal, describe only the coherent prefix before the new concern.
 - For business_flow paths, coherentThroughSignature must be one exact compact token appearing in flowSequence, flow.prefix, flow.branches, or flow.suffix.
-- Do NOT compare paths, infer parent/subflow relationships, or decide which flow is broader. DataSong handles structural grouping and containment deterministically.
+- Rank business flows by business importance: core customer/end-user and revenue-critical journeys first, then core business/operational, support/reporting, admin/configuration; technical stays lowest.
+- businessPriority controls exploration order, not whether a valid low-priority business flow eventually gets explored.
+- Do NOT compare paths for containment or infer parent/subflow relationships. DataSong handles structural grouping and containment deterministically.
 - Mark technical/framework-only paths technical.
 - Classify every supplied path and keep reasons short.`;
 
@@ -65,10 +83,7 @@ export class ProgressiveRepositoryExplorerV34 extends ProgressiveRepositoryExplo
       };
     }
 
-    return {
-      ...base,
-      flowSequence: arr(path.normalizedFlowTokens)
-    };
+    return { ...base, flowSequence: arr(path.normalizedFlowTokens) };
   }
 
   callPathPrompt() {
@@ -93,12 +108,27 @@ export class ProgressiveRepositoryExplorerV34 extends ProgressiveRepositoryExplo
   async callModel(dynamicPrompt, maxTokens) {
     if (String(dynamicPrompt || '').startsWith('MODE call-path-business-seed-classification-v4')) {
       return this.lightweightModelCall(
-        `You are DataSong's CALL-PATH BUSINESS-FLOW SEED CLASSIFIER.\nYou receive compact deterministic normalized executable flow structures from the supplied repository boundary.\nDo not reconstruct omitted source/XML details and do not infer implementations for external calls.\nFor each supplied candidate decide only whether its coherent segment is a business_flow, technical, or uncertain.\nA business_flow is one recognizable actor/business goal with a completion condition and outcome.\nReturn strict compact JSON only.`,
+        `You are DataSong's CALL-PATH BUSINESS-FLOW SEED CLASSIFIER.\nYou receive compact deterministic normalized executable flow structures from the supplied repository boundary.\nDo not reconstruct omitted source/XML details and do not infer implementations for external calls.\nFor each supplied candidate classify its coherent business flow and assign a business-priority score. Prefer core customer/end-user and revenue-critical journeys over admin/reporting/configuration flows.\nReturn strict compact JSON only.`,
         dynamicPrompt,
         'CALL-PATH BUSINESS-FLOW SEED CLASSIFIER V4'
       );
     }
     return super.callModel(dynamicPrompt, maxTokens);
+  }
+
+  normalizeCallPathClassification(raw) {
+    const parsed = super.normalizeCallPathClassification(raw);
+    const byId = new Map(arr(raw?.paths).map((item) => [item?.pathId, item]));
+    parsed.paths = arr(parsed.paths).map((item) => {
+      const source = byId.get(item.pathId) || {};
+      return {
+        ...item,
+        businessPriority: clamp01(source.businessPriority),
+        priorityClass: PRIORITY_CLASSES.has(source.priorityClass) ? source.priorityClass : (item.classification === 'technical' ? 'technical' : 'core_business'),
+        priorityReason: text(source.priorityReason, 300)
+      };
+    });
+    return parsed;
   }
 
   async getSemanticUpdate(args) {
@@ -132,5 +162,55 @@ export class ProgressiveRepositoryExplorerV34 extends ProgressiveRepositoryExplo
       }
     }
     throw new Error(`No valid call-path classification after retry: ${lastError?.message || 'unknown error'}`);
+  }
+
+  applyDelta(parsed, observation) {
+    const result = super.applyDelta(parsed, observation);
+    if (!parsed?._callPathPreprocess) return result;
+
+    const priorityByPath = new Map(arr(parsed.paths).map((item) => [item.pathId, item]));
+    for (const arc of this.pass1().arcs()) {
+      const item = priorityByPath.get(arc.callPathId);
+      if (!item) continue;
+      arc.businessPriority = Number(item.businessPriority || 0);
+      arc.priorityClass = item.priorityClass || 'core_business';
+      arc.priorityReason = item.priorityReason || '';
+      arc.priorityModelVersion = 'business-priority-v1';
+      arc.priorityRankedAt = new Date().toISOString();
+      // The existing Pass-1 scheduler uses opportunityScore. Seed it with the
+      // business-priority score so the initial top-10 flows are scheduled in
+      // business order without another model call.
+      arc.opportunityScore = Math.max(Number(arc.opportunityScore || 0), Number(arc.businessPriority || 0));
+    }
+
+    const cp = this.state.callPathPreprocess;
+    const arcs = this.pass1().arcs();
+    const seededIds = new Set(arr(cp?.seededArcIds));
+    cp.seededArcs = arcs
+      .filter((arc) => seededIds.has(arc.id) || arc.seedSource === 'call_path_preprocessor')
+      .map((arc) => ({
+        arcId: arc.id,
+        title: arc.title || '',
+        actor: arc.businessActor || arc.trigger || '',
+        intent: arc.businessIntent || '',
+        confidence: Number(arc.confidence || arc.opportunityScore || 0),
+        businessPriority: Number(arc.businessPriority || 0),
+        priorityClass: arc.priorityClass || '',
+        callPathId: arc.callPathId || '',
+        coherentFunctionCount: Number(arc.coherentFunctionCount || 0),
+        containedCallPathIds: arr(arc.containedCallPathIds),
+        status: arc.status || 'seeded'
+      }));
+
+    const top = typeof this.topology?.topCallPaths === 'function' ? this.topology.topCallPaths(10) : [];
+    cp.topologySummary = {
+      topCandidateCount: top.length,
+      groupedVariantCount: top.reduce((sum, path) => sum + Number(path.branchVariantCount || 1), 0),
+      alternateEntranceCount: top.reduce((sum, path) => sum + Number(path.alternateEntranceCount || 0), 0),
+      classifierInput: 'compact_normalized_flow_structure',
+      rankingPolicy: 'business_priority_v1',
+      rerunPolicy: 'one_shot_per_repository_prepare'
+    };
+    return result;
   }
 }
