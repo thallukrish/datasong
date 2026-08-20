@@ -58,9 +58,13 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
       .slice(0, Math.max(0, Number(limit) || 0));
   }
 
+  scoutPriorityBatch(candidates) {
+    return arr(candidates).slice(0, 10);
+  }
+
   scoutPriorityPrompt(candidates) {
     const legacy = this.legacyUnrankedWorkflows(8).map((arc) => this.prioritySummary(arc));
-    const paths = arr(candidates).slice(0, 10).map((candidate) => this.candidatePrioritySummary(candidate));
+    const paths = this.scoutPriorityBatch(candidates).map((candidate) => this.candidatePrioritySummary(candidate));
     const existingCovered = this.pass1().arcs()
       .filter((arc) => Number.isFinite(Number(arc.businessPriority)) && Number(arc.progress || 0) >= 80)
       .sort((a, b) => Number(b.businessPriority || 0) - Number(a.businessPriority || 0))
@@ -112,7 +116,7 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
   }
 
   normalizePriorityResult(raw, candidates) {
-    const candidateIds = new Set(arr(candidates).map((c) => `path:${c.id}`));
+    const candidateIds = new Set(this.scoutPriorityBatch(candidates).map((c) => `path:${c.id}`));
     const legacyIds = new Set(this.legacyUnrankedWorkflows(50).map((a) => `arc:${a.id}`));
     return arr(raw?.rankings)
       .filter((item) => candidateIds.has(item?.itemId) || legacyIds.has(item?.itemId))
@@ -145,7 +149,7 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
   }
 
   promotePriorityPaths(rankings, candidates) {
-    const byArtifact = new Map(arr(candidates).map((candidate) => [candidate.id, candidate]));
+    const byArtifact = new Map(this.scoutPriorityBatch(candidates).map((candidate) => [candidate.id, candidate]));
     const existingTitles = new Set(this.pass1().arcs().map((arc) => String(arc.title || '').trim().toLowerCase()));
     const created = [];
     for (const item of arr(rankings).filter((r) => r.itemId.startsWith('path:'))) {
@@ -195,7 +199,7 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
 
   markScoutBatchReviewed(candidates) {
     const scout = this.scout().ensureState();
-    for (const candidate of arr(candidates)) {
+    for (const candidate of this.scoutPriorityBatch(candidates)) {
       for (const id of arr(candidate.callPathIds)) {
         if (!scout.reviewedCallPathIds.includes(id)) scout.reviewedCallPathIds.push(id);
       }
@@ -236,7 +240,8 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const retry = attempt > 0;
       const prompt = retry ? `${dynamicPrompt}\nRETRY: return complete valid JSON only.` : dynamicPrompt;
-      const result = await this.callAndRecordAttempt({ dynamicPrompt: prompt, observation, candidates, before, maxTokens: undefined, retry });
+      const batch = this.scoutPriorityBatch(candidates);
+      const result = await this.callAndRecordAttempt({ dynamicPrompt: prompt, observation, candidates: batch, before, maxTokens: undefined, retry });
       try {
         const raw = JSON.parse(result.raw);
         const rankings = this.normalizePriorityResult(raw, candidates);
@@ -253,7 +258,7 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
         scout.runs.push({
           step: this.state.step,
           reason: scout.pendingReason,
-          candidateCount: arr(candidates).length,
+          candidateCount: batch.length,
           candidateWindow: Number(scout.candidateWindow || 0),
           reviewedCallPathCount: scout.reviewedCallPathIds.length,
           rankedExistingWorkflowCount: rankings.filter((r) => r.itemId.startsWith('arc:')).length,
