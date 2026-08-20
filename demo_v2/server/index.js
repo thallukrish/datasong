@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV46 } from './progressiveRepositoryExplorerV46.js';
+import { ProgressiveRepositoryExplorerV47 } from './progressiveRepositoryExplorerV47.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -13,7 +13,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV46({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV47({ topology, dataRoot, onState: (state) => broadcast(state) });
 const queryClient = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com', timeout: 60_000 })
   : null;
@@ -70,8 +70,6 @@ app.use(express.static(path.join(root, 'public'), {
 app.get('/api/state', (_req, res) => res.json(explorer.snapshot()));
 
 app.get('/api/map', (_req, res) => {
-  // Keep the map screen tied to the durable creation-layer state. Persist before
-  // returning so what the user browses is the same semantic state stored on disk.
   explorer.persistSemanticMap?.();
   const snapshot = explorer.snapshot();
   const arcs = arr(snapshot.pass1Arcs);
@@ -141,9 +139,6 @@ app.post('/api/query-map', async (req, res) => {
     const arcs = arr(snapshot.pass1Arcs);
     if (!arcs.length) return res.status(409).json({ error: 'The enterprise map has not learned any business workflows yet' });
 
-    // Stage 1: retrieval. Send ONLY top-level workflow summaries. The model is not
-    // allowed to answer the business question here; it only selects the smallest
-    // useful workflow set for the question.
     const summaries = arcs.map(arcSummary);
     const selectorSystem = `You are lemap's semantic-map workflow selector.
 Given a business question and ONLY top-level workflow summaries, select the smallest set of workflows whose detailed semantic content is needed to answer or investigate the question.
@@ -158,8 +153,6 @@ Return strict JSON only: {"workflowIds":["exact ids"],"selectionReason":"one sho
     let selectedIds = arr(selected.workflowIds).filter((id) => allowed.has(id)).slice(0, 4);
     if (!selectedIds.length) selectedIds = arcs.slice(0, Math.min(2, arcs.length)).map((arc) => arc.id);
 
-    // Stage 2: reasoning. Only the selected workflows are expanded. This keeps the
-    // prompt proportional to what the business question actually touches.
     const details = arcs.filter((arc) => selectedIds.includes(arc.id)).map(arcDetail);
     const answerSystem = `You are lemap's enterprise semantic-map query layer.
 Answer or frame the business question using ONLY the supplied selected workflow details reconstructed by lemap.
@@ -202,7 +195,7 @@ function broadcast(state) {
 
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
-  console.log('[DataSong v2] PERSISTENT MAP → CALL-PATH PREPROCESSOR → PASS 1 → PASS 2 → SCOUT');
-  console.log('[DataSong v2] Completed flow families are closed at 100%, persisted with call-path/source traceability, and skipped on resume for the same repository commit.');
+  console.log('[DataSong v2] PERSISTENT MAP → FULL CALL-PATH SCOUT → PASS 1 → PASS 2');
+  console.log('[DataSong v2] Scout widens through the ranked call-path index until unseen entrances are exhausted. Path interpretation and business-workflow closure are separate: only sufficiently evidenced workflows close at 100%.');
   console.log('[DataSong v2] QUERY: top-level workflow selection first; only selected workflow semantics are expanded for the final reasoning call.');
 });
