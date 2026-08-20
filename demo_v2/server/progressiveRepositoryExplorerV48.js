@@ -19,6 +19,7 @@ const PRIORITY_CLASSES = new Set([
   'core_end_user', 'revenue_critical', 'core_business', 'operational',
   'support', 'reporting', 'admin', 'configuration', 'technical'
 ]);
+const REPRESENTATION_RELATIONS = new Set(['represented_by', 'stored_in', 'identified_by', 'referenced_through']);
 
 function mergeFieldDescriptions(schema, learnedEntity) {
   const learnedByName = new Map(arr(learnedEntity?.fields).map((field) => [identityKey(field?.name), field]));
@@ -38,9 +39,30 @@ function mergeFieldDescriptions(schema, learnedEntity) {
 export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplorerV47 {
   emptyState() {
     const state = super.emptyState();
-    state.arcSchedulerVersion = 'evidence-backed-scout-business-priority-v32';
+    state.arcSchedulerVersion = 'evidence-backed-business-entity-representations-v33';
     if (!state.semanticObjects || typeof state.semanticObjects !== 'object') state.semanticObjects = {};
     return state;
+  }
+
+  wholeFlowPrompt(observation) {
+    return `${super.wholeFlowPrompt(observation)}\nENTITY REPRESENTATION EXTENSION:\n- arcUpdate may additionally include entityRepresentations: [{businessEntity, physicalEntity, relation, description, confidence, evidence}].\n- Use this only when the supplied executable/schema evidence supports that a business-level entity is represented, stored, identified, or referenced through a concrete persistence/schema entity.\n- relation must be represented_by|stored_in|identified_by|referenced_through.\n- Example shape only: a business concept such as Order may be represented by one or more concrete persisted entities, but NEVER assert such a mapping merely from general knowledge.\n- physicalEntity should use the exact concrete entity/schema name when evidenced.\n- description must explain how the concrete entity represents or carries the business entity in this workflow.\n- confidence expresses strength of the semantic mapping, not strength of the physical schema definition.\n- It is valid to return an empty entityRepresentations array.`;
+  }
+
+  normalizeWholeFlowPass2(raw, observation) {
+    const update = raw?.arcUpdate && typeof raw.arcUpdate === 'object'
+      ? raw.arcUpdate
+      : (raw?.arcFit?.arcUpdate && typeof raw.arcFit.arcUpdate === 'object' ? raw.arcFit.arcUpdate : {});
+    const representations = arr(update?.entityRepresentations).map((item) => ({
+      businessEntity: clean(item?.businessEntity, 160),
+      physicalEntity: clean(item?.physicalEntity, 160),
+      relation: REPRESENTATION_RELATIONS.has(item?.relation) ? item.relation : 'represented_by',
+      description: clean(item?.description, 520),
+      confidence: clamp01(item?.confidence),
+      evidence: clean(item?.evidence, 420)
+    })).filter((item) => item.businessEntity && item.physicalEntity && identityKey(item.businessEntity) !== identityKey(item.physicalEntity));
+    const parsed = super.normalizeWholeFlowPass2(raw, observation);
+    parsed._entityRepresentations = representations;
+    return parsed;
   }
 
   canonicalEntityName(name) {
@@ -62,10 +84,66 @@ export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplo
     return [...byKey.values()];
   }
 
+  mergeEntityRepresentations(arc, incoming) {
+    if (!arc) return;
+    const byKey = new Map();
+    for (const raw of [...arr(arc.entityRepresentations), ...arr(incoming)]) {
+      const businessEntity = this.canonicalEntityName(raw?.businessEntity);
+      const physicalEntity = this.canonicalEntityName(raw?.physicalEntity);
+      if (!businessEntity || !physicalEntity || identityKey(businessEntity) === identityKey(physicalEntity)) continue;
+      const relation = REPRESENTATION_RELATIONS.has(raw?.relation) ? raw.relation : 'represented_by';
+      const key = `${identityKey(businessEntity)}|${relation}|${identityKey(physicalEntity)}`;
+      const prior = byKey.get(key) || {};
+      byKey.set(key, {
+        ...prior,
+        ...raw,
+        businessEntity,
+        physicalEntity,
+        relation,
+        description: clean(raw?.description || prior?.description || '', 520),
+        evidence: clean(raw?.evidence || prior?.evidence || '', 420),
+        confidence: Math.max(clamp01(raw?.confidence), clamp01(prior?.confidence))
+      });
+    }
+    arc.entityRepresentations = [...byKey.values()];
+  }
+
+  representationDetailsFor(arc, businessName, learnedByKey) {
+    const mappings = arr(arc?.entityRepresentations)
+      .filter((item) => identityKey(item?.businessEntity) === identityKey(businessName));
+    const out = [];
+    for (const mapping of mappings) {
+      const schema = this.topology.entitySchema?.(mapping.physicalEntity) || null;
+      const physicalName = String(schema?.name || mapping.physicalEntity || '');
+      if (!physicalName) continue;
+      const learnedPhysical = learnedByKey.get(identityKey(physicalName)) || {};
+      const fields = schema ? mergeFieldDescriptions(schema, learnedPhysical).map((field) => ({
+        ...field,
+        sourceEntity: physicalName,
+        schemaSourcePath: schema.sourcePath || '',
+        authoritative: true
+      })) : arr(learnedPhysical.fields).map((field) => ({ ...field, sourceEntity: physicalName, authoritative: false }));
+      out.push({
+        entityName: physicalName,
+        relation: mapping.relation,
+        description: mapping.description || '',
+        evidence: mapping.evidence || '',
+        confidence: clamp01(mapping.confidence),
+        schemaResolved: !!schema,
+        schemaName: schema?.fullName || schema?.name || '',
+        schemaSourcePath: schema?.sourcePath || '',
+        schemaComponent: schema?.component || '',
+        fields
+      });
+    }
+    return out;
+  }
+
   enrichArcEntitySchemas(arc) {
     if (!arc) return;
     arc.entities = this.canonicalizeEntityList(arc.entities);
     arc.persistentObjects = this.canonicalizeEntityList(arc.persistentObjects);
+    this.mergeEntityRepresentations(arc, []);
     arc.workflowSteps = arr(arc.workflowSteps).map((step) => ({
       ...step,
       entities: this.canonicalizeEntityList(step?.entities),
@@ -88,6 +166,7 @@ export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplo
     const names = this.canonicalizeEntityList([
       ...arr(arc.entities), ...arr(arc.persistentObjects),
       ...arr(arc.entityDetails).map((entity) => entity?.name),
+      ...arr(arc.entityRepresentations).flatMap((item) => [item?.businessEntity]),
       ...arr(arc.workflowSteps).flatMap((step) => [...arr(step?.entities), ...arr(step?.persistentObjects)])
     ]);
 
@@ -95,6 +174,33 @@ export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplo
       const schema = this.topology.entitySchema?.(rawName) || null;
       const name = String(schema?.name || rawName);
       const learned = learnedByKey.get(identityKey(name)) || { name, description: '', fields: [] };
+      const representedBy = this.representationDetailsFor(arc, name, learnedByKey);
+      let fields = schema ? mergeFieldDescriptions(schema, learned) : arr(learned.fields);
+
+      // A business entity may not have a physical schema of the same name. In
+      // that case expose authoritative fields from the concrete representations,
+      // but keep the physical source in the field name/provenance so this is not
+      // mistaken for a direct schema declaration on the business entity itself.
+      if (!schema && representedBy.length) {
+        const aggregate = [];
+        const seen = new Set();
+        for (const representation of representedBy) {
+          for (const field of arr(representation.fields)) {
+            const key = `${identityKey(representation.entityName)}|${identityKey(field.name)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            aggregate.push({
+              ...field,
+              name: `${representation.entityName}.${field.name}`,
+              physicalFieldName: field.name,
+              sourceEntity: representation.entityName,
+              description: field.description || `Field on ${representation.entityName}, which ${representation.relation.replaceAll('_', ' ')} ${name} in this workflow.`
+            });
+          }
+        }
+        if (aggregate.length) fields = aggregate;
+      }
+
       return {
         ...learned, name,
         description: clean(learned.description || schema?.description || '', 420),
@@ -102,7 +208,8 @@ export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplo
         schemaName: schema?.fullName || schema?.name || '',
         schemaSourcePath: schema?.sourcePath || '',
         schemaComponent: schema?.component || '',
-        fields: schema ? mergeFieldDescriptions(schema, learned) : arr(learned.fields)
+        representedBy,
+        fields
       };
     });
 
@@ -144,7 +251,8 @@ export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplo
         type: 'entity', name,
         properties: {
           description: detail.description || '', schemaResolved: !!detail.schemaResolved,
-          schemaName: detail.schemaName || '', schemaSourcePath: detail.schemaSourcePath || '', schemaComponent: detail.schemaComponent || ''
+          schemaName: detail.schemaName || '', schemaSourcePath: detail.schemaSourcePath || '', schemaComponent: detail.schemaComponent || '',
+          representedBy: arr(detail.representedBy).map((item) => ({ entityName: item.entityName, relation: item.relation, confidence: item.confidence }))
         }
       });
       entityObjects.set(identityKey(name), entity);
@@ -165,25 +273,60 @@ export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplo
       for (const field of arr(detail.fields)) {
         const fieldObject = store.ensure({
           type: 'field', name: `${name}.${field.name}`, scope: entity.id,
-          properties: { entityId: entity.id, entityName: name, fieldName: field.name, dataType: field.type || '', isPk: !!field.isPk, description: field.description || '' }
+          properties: {
+            entityId: entity.id, entityName: name, fieldName: field.name, dataType: field.type || '', isPk: !!field.isPk,
+            description: field.description || '', sourceEntity: field.sourceEntity || '', physicalFieldName: field.physicalFieldName || ''
+          }
         });
-        const sourceType = detail.schemaResolved ? 'schema_definition' : 'llm_inference';
+        const authoritative = !!detail.schemaResolved || field.authoritative === true;
+        const sourceType = authoritative ? 'schema_definition' : 'llm_inference';
+        const evidenceSource = field.schemaSourcePath || detail.schemaSourcePath || `pass2:${arc.id}`;
         store.addEvidence(fieldObject, {
-          sourceType, source: detail.schemaSourcePath || `pass2:${arc.id}`,
-          strength: detail.schemaResolved ? EVIDENCE_STRENGTH.schema_definition : EVIDENCE_STRENGTH.llm_inference,
-          assertion: detail.schemaResolved ? `The schema declares field ${field.name}.` : `The model mentioned field ${field.name}; no authoritative schema was resolved.`,
+          sourceType, source: evidenceSource,
+          strength: authoritative ? EVIDENCE_STRENGTH.schema_definition : EVIDENCE_STRENGTH.llm_inference,
+          assertion: authoritative
+            ? `The schema declares ${field.sourceEntity ? `${field.sourceEntity}.` : ''}${field.physicalFieldName || field.name}.`
+            : `The model mentioned field ${field.name}; no authoritative schema was resolved.`,
           property: 'field', value: field.name,
-          provenance: detail.schemaResolved ? { schemaName: detail.schemaName || '', component: detail.schemaComponent || '' } : null
+          provenance: authoritative ? {
+            schemaName: detail.schemaName || '', component: detail.schemaComponent || '',
+            sourceEntity: field.sourceEntity || name, schemaSourcePath: field.schemaSourcePath || detail.schemaSourcePath || ''
+          } : null
         });
         if (field.description) store.addEvidence(fieldObject, {
           sourceType: 'llm_interpretation', source: `pass2:${arc.id}`,
           assertion: field.description, property: 'description', value: field.description
         });
         store.link(entity, 'has field', fieldObject, {
-          sourceType, source: detail.schemaSourcePath || `pass2:${arc.id}`,
-          assertion: `${name} has field ${field.name}.`
+          sourceType, source: evidenceSource,
+          assertion: `${name} exposes ${field.name}${field.sourceEntity ? ` through ${field.sourceEntity}` : ''}.`
         });
       }
+    }
+
+    for (const mapping of arr(arc.entityRepresentations)) {
+      const business = entityObjects.get(identityKey(mapping.businessEntity)) || store.ensure({ type: 'entity', name: mapping.businessEntity });
+      const schema = this.topology.entitySchema?.(mapping.physicalEntity) || null;
+      const physicalName = String(schema?.name || mapping.physicalEntity || '');
+      if (!physicalName) continue;
+      const physical = store.ensure({
+        type: 'entity', name: physicalName,
+        properties: {
+          schemaResolved: !!schema, schemaName: schema?.fullName || schema?.name || '',
+          schemaSourcePath: schema?.sourcePath || '', schemaComponent: schema?.component || '', physicalRepresentation: true
+        }
+      });
+      store.link(business, mapping.relation.replaceAll('_', ' '), physical, {
+        sourceType: 'llm_interpretation', source: `pass2:${arc.id}`,
+        strength: Math.max(EVIDENCE_STRENGTH.llm_inference, clamp01(mapping.confidence) * 0.75),
+        assertion: mapping.description || `${mapping.businessEntity} ${mapping.relation.replaceAll('_', ' ')} ${physicalName}.`,
+        provenance: { workflowId: arc.id, evidence: mapping.evidence || '', callPathId: arc.callPathId || '' }
+      });
+      if (schema) store.addEvidence(physical, {
+        sourceType: 'schema_definition', source: schema.sourcePath || schema.fullName || schema.name,
+        assertion: `The authoritative schema defines ${physicalName}.`,
+        provenance: { component: schema.component || '', schemaName: schema.fullName || schema.name || '' }
+      });
     }
 
     arr(arc.workflowSteps).forEach((step, index) => {
@@ -439,6 +582,7 @@ export class ProgressiveRepositoryExplorerV48 extends ProgressiveRepositoryExplo
     if (arcId) {
       const arc = this.pass1().arcByReference(arcId);
       if (arc) {
+        if (arr(parsed?._entityRepresentations).length) this.mergeEntityRepresentations(arc, parsed._entityRepresentations);
         this.enrichArcEntitySchemas(arc);
         this.syncArcSemanticObjects(arc);
       }
