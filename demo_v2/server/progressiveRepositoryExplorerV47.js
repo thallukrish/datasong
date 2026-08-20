@@ -10,6 +10,14 @@ function meaningfulOutcome(value) {
 }
 
 export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplorerV46 {
+  constructor(args) {
+    super(args);
+    // The persisted semantic map is the product state, not merely a resume cache.
+    // Load the newest valid map immediately so the UI can browse/query what was
+    // already learned before another automatic learning cycle is started.
+    this.loadMostRecentPersistedMap();
+  }
+
   emptyState() {
     const state = super.emptyState();
     state.arcSchedulerVersion = 'persistent-full-scout-evidence-closure-v27';
@@ -26,29 +34,26 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
     return super.run(repoUrl);
   }
 
-  loadLatestPersistedMapForRepo(repoUrl) {
-    const wanted = String(repoUrl || '').trim();
-    if (!wanted) return null;
+  persistedMaps() {
     const dir = this.mapDirectory();
-    if (!fs.existsSync(dir)) return null;
-
-    const candidates = [];
+    if (!fs.existsSync(dir)) return [];
+    const out = [];
     for (const name of fs.readdirSync(dir)) {
       if (!name.endsWith('.json')) continue;
       try {
         const file = path.join(dir, name);
         const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (Number(saved?.version || 0) !== 2) continue;
-        if (String(saved?.repoUrl || '').trim() !== wanted) continue;
-        if (!saved?.semanticState) continue;
-        candidates.push(saved);
+        if (Number(saved?.version || 0) !== 2 || !saved?.semanticState || !saved?.repoUrl || !saved?.commit) continue;
+        out.push(saved);
       } catch {
-        // Ignore damaged/partial files and keep looking for the newest valid map.
+        // Ignore damaged/partial files and keep the last known-good map usable.
       }
     }
-    if (!candidates.length) return null;
-    candidates.sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
-    const saved = candidates[0];
+    return out.sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
+  }
+
+  installPersistedMap(saved) {
+    if (!saved?.semanticState) return null;
     const restored = clone(saved.semanticState);
     restored.repoUrl = saved.repoUrl;
     restored.commit = saved.commit;
@@ -69,8 +74,21 @@ export class ProgressiveRepositoryExplorerV47 extends ProgressiveRepositoryExplo
     this._mapRestoreAttempted = true;
     this._mapRestored = true;
     this._stoppedByUser = false;
-    super.emit();
     return this.snapshot();
+  }
+
+  loadMostRecentPersistedMap() {
+    const saved = this.persistedMaps()[0];
+    if (!saved) return null;
+    return this.installPersistedMap(saved);
+  }
+
+  loadLatestPersistedMapForRepo(repoUrl) {
+    const wanted = String(repoUrl || '').trim();
+    if (!wanted) return null;
+    const saved = this.persistedMaps().find((item) => String(item.repoUrl || '').trim() === wanted);
+    if (!saved) return null;
+    return this.installPersistedMap(saved);
   }
 
   normalizeWholeFlowPass2(raw, observation) {
