@@ -14,6 +14,7 @@ export class ScoutLayerV2 extends ScoutLayer {
   ensureState() {
     const scout = super.ensureState();
     if (!Array.isArray(scout.reviewedCallPathIds)) scout.reviewedCallPathIds = [];
+    if (!Number.isFinite(Number(scout.candidateWindow))) scout.candidateWindow = 60;
     return scout;
   }
 
@@ -30,18 +31,40 @@ export class ScoutLayerV2 extends ScoutLayer {
   }
 
   broadCandidates() {
+    const scout = this.ensureState();
     const represented = this.representedCallPathIds();
-    const pathSeeds = typeof this.explorer.topology?.callPathScoutCandidates === 'function'
-      ? this.explorer.topology.callPathScoutCandidates(60)
-      : [];
+    if (typeof this.explorer.topology?.callPathScoutCandidates !== 'function') return [];
 
-    return arr(pathSeeds)
-      .map((candidate) => ({
-        ...candidate,
-        callPathIds: arr(candidate.callPathIds).filter((id) => !represented.has(id))
-      }))
-      .filter((candidate) => candidate.callPathIds.length > 0)
-      .slice(0, 12);
+    // Scout must exhaust the ranked call-path population, not a fixed top-N
+    // window. Grow the window until unseen entrances appear or the ranked index
+    // has genuinely been covered.
+    const rankedCount = Number(this.explorer.topology?.callPathIndex?.rankedPathCount || 0);
+    const hardCap = Math.max(60, Math.min(2500, rankedCount || 600));
+    let window = Math.max(60, Number(scout.candidateWindow || 60));
+
+    while (true) {
+      const pathSeeds = this.explorer.topology.callPathScoutCandidates(window);
+      const unseen = arr(pathSeeds)
+        .map((candidate) => ({
+          ...candidate,
+          callPathIds: arr(candidate.callPathIds).filter((id) => !represented.has(id))
+        }))
+        .filter((candidate) => candidate.callPathIds.length > 0);
+
+      if (unseen.length) {
+        scout.candidateWindow = window;
+        return unseen.slice(0, 12);
+      }
+
+      if (window >= hardCap) {
+        scout.candidateWindow = hardCap;
+        return [];
+      }
+
+      const next = Math.min(hardCap, Math.max(window + 60, window * 2));
+      if (next === window) return [];
+      window = next;
+    }
   }
 
   fingerprint(candidates) {
@@ -77,7 +100,7 @@ export class ScoutLayerV2 extends ScoutLayer {
       const candidate = direction.candidate;
       const callPathId = arr(candidate.callPathIds)[0] || '';
       const grouped = callPathId
-        ? (this.explorer.rankedPathById?.(callPathId) || this.explorer.topology.topCallPaths?.(200)?.find((p) => p.id === callPathId))
+        ? (this.explorer.rankedPathById?.(callPathId) || this.explorer.topology.topCallPaths?.(500)?.find((p) => p.id === callPathId))
         : null;
       const arc = this.explorer.pass1().createArc({
         title: text(direction.suggestedArcTitle, 180),
@@ -110,6 +133,8 @@ export class ScoutLayerV2 extends ScoutLayer {
       step: this.state().step,
       reason: scout.pendingReason,
       candidateCount: arr(candidates).length,
+      candidateWindow: Number(scout.candidateWindow || 0),
+      reviewedCallPathCount: scout.reviewedCallPathIds.length,
       newDirectionCount: created.length,
       chosenArcId: chosen?.arc?.id || '',
       chosenArtifactId: chosen?.direction?.artifactId || '',
