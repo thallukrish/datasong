@@ -1,16 +1,19 @@
 import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
 import { CallPathIndexerV3 } from './callPathIndexerV3.js';
-import { MoquiXmlExecutionAdapter } from './moquiXmlExecutionAdapter.js';
-import { MoquiEntitySchemaAdapter } from './moquiEntitySchemaAdapter.js';
+import { createMoquiAdapters } from './adapters/moqui/index.js';
 
 export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopologyV7 {
   constructor(options) {
     super(options);
     this.callPathIndexer = new CallPathIndexerV3(this);
     this.callPathIndex = null;
-    this.moquiXmlAdapter = new MoquiXmlExecutionAdapter(this);
+
+    // Framework-specific behavior is isolated behind the adapter bundle. The
+    // core topology only orchestrates normalized adapter outputs.
+    this.frameworkAdapters = createMoquiAdapters(this);
+    this.moquiXmlAdapter = this.frameworkAdapters.execution;
+    this.moquiEntitySchemaAdapter = this.frameworkAdapters.entitySchema;
     this.moquiXmlExecution = null;
-    this.moquiEntitySchemaAdapter = new MoquiEntitySchemaAdapter(this);
     this.moquiEntitySchema = null;
     this.entitySchemas = [];
     this.entitySchemaByName = new Map();
