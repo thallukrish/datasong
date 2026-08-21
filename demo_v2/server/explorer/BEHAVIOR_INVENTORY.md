@@ -8,7 +8,8 @@ The rule for the refactor is simple: **before removing any historical layer, the
 
 As of the latest peel, the live runtime composition is:
 
-`ProgressiveRepositoryExplorerV42`
+`ProgressiveRepositoryExplorerV41`
+→ `withWholeFlowPass2`
 → `withWholeFlowScheduler`
 → `withScoutLifecycle`
 → `withMapPersistence`
@@ -129,6 +130,28 @@ Reason:
 - `explorer/businessPriorityScout.js` now owns `unfinishedWholeFlowArcs()` and orders pending workflows by persisted business priority before older opportunity heuristics.
 - `wholeFlowScheduler.js` intentionally dispatches to the current composed `unfinishedWholeFlowArcs()` rather than preserving V43's old ordering.
 
+### V42 → V41
+
+Preserved and extracted:
+- Per-workflow whole-flow Pass-2 state (`started`, `completed`, unresolved/interpreted branches and call counts).
+- Compact call-path family packaging for Pass 2.
+- Whole-flow and bounded branch observations built from the precomputed call graph.
+- Prompt routing/model-call routing for whole-flow Pass 2.
+- Whole-flow retry/logging/accounting behavior.
+- Start/resume behavior for a selected Pass-1 workflow.
+- Explicit prevention of fallback into node-by-node repository/frontier traversal once an indexed whole-flow workflow has started.
+
+Module:
+- `explorer/wholeFlowPass2.js`
+
+Discarded as superseded:
+- V42's older shallow Pass-2 response contract (`majorStages`, flat entity/relationship lists).
+- V42's older `wholeFlowPrompt()` and `normalizeWholeFlowPass2()` implementations.
+
+Reason:
+- `explorer/structuredWorkflow.js` owns the current richer Pass-2 semantic contract: ordered workflow steps, entity details/field descriptions and structured relationship details.
+- `wholeFlowPass2.js` retains only the execution engine and dynamically calls the currently composed `wholeFlowPrompt()` / `normalizeWholeFlowPass2()`, preserving the richer behavior rather than duplicating the old schema.
+
 ## Runtime contract
 
 - `server/index.js` imports and instantiates only `RepositoryExplorer`.
@@ -163,6 +186,7 @@ Reason:
 - Supports entity representation evidence, e.g. a business entity may be represented/stored/referenced through concrete schema entities.
 - Does not invent physical schema entities or fields.
 - Completion of one admitted whole-flow workflow schedules the next uninterpreted admitted workflow before falling back to Scout or the legacy outer loop.
+- Once a deterministic whole-flow Pass-2 interpretation starts, it never regresses to node-by-node frontier exploration; only explicitly unresolved supplied branches may receive bounded follow-up passes.
 
 ## Canonical semantic identity
 
@@ -196,6 +220,7 @@ Reason:
 
 - Do not dump the whole semantic map into model calls when a compact evidence packet is sufficient.
 - Scout ranking operates on bounded candidate batches.
+- Pass 2 sends the complete compact precomputed flow family once, with follow-up only for explicitly unresolved supplied branches; it does not rediscover or walk repository nodes incrementally.
 - Entity reconciliation sends only changed unresolved entities, compact workflow contexts and a small candidate-schema set.
 - Field-description enrichment sends exact fields/types only and cannot add or rename fields.
 - Unchanged unresolved entities cost zero model tokens until new evidence arrives.
