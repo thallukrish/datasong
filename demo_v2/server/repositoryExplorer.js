@@ -1,4 +1,4 @@
-import { ProgressiveRepositoryExplorerV20 } from './progressiveRepositoryExplorerV20.js';
+import { ProgressiveRepositoryExplorerV17 } from './progressiveRepositoryExplorerV17.js';
 import { withPass1State } from './explorer/pass1State.js';
 import { withCallPathPreprocessLifecycle } from './explorer/callPathPreprocessLifecycle.js';
 import { withCallPathSeedPreprocessor } from './explorer/callPathSeedPreprocessor.js';
@@ -16,7 +16,7 @@ import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 
-const ExplorerWithPass1State = withPass1State(ProgressiveRepositoryExplorerV20);
+const ExplorerWithPass1State = withPass1State(ProgressiveRepositoryExplorerV17);
 const ExplorerWithPreprocessLifecycle = withCallPathPreprocessLifecycle(ExplorerWithPass1State);
 const ExplorerWithSeedPreprocessor = withCallPathSeedPreprocessor(ExplorerWithPreprocessLifecycle);
 const ExplorerWithInitialClassifier = withInitialCallPathClassifier(ExplorerWithSeedPreprocessor);
