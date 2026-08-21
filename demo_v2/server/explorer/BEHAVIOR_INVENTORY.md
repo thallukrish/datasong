@@ -1,14 +1,15 @@
 # RepositoryExplorer behavior inventory
 
-This is the regression contract and peel ledger for removing the historical `ProgressiveRepositoryExplorerV*` inheritance chain.
+This is the regression contract and peel ledger for the explorer refactor.
 
-Rule: before deleting a historical layer, preserve every intentional current behavior in one focused owner module. Superseded traversal/policy code is deleted, not hidden underneath newer overrides.
+Rule: preserve intentional current behavior in one focused owner module; delete superseded traversal/policy code rather than leaving it hidden underneath newer overrides.
 
 ## Current live composition
 
 Checkpoint 2026-08-21:
 
-`ProgressiveRepositoryExplorerV8`
+`ProgressiveRepositoryExplorer` (non-numbered stable base)
+→ `withLightweightModelCall`
 → `withPass1State`
 → `withCallPathPreprocessLifecycle`
 → `withCallPathSeedPreprocessor`
@@ -27,12 +28,12 @@ Checkpoint 2026-08-21:
 → `withEntityReconciliation`
 → `RepositoryExplorer`
 
-Only `RepositoryExplorer` is public/live for new server code.
+Only `RepositoryExplorer` is public/live for new server code. There are no remaining `ProgressiveRepositoryExplorerV*` imports in the repository and no new numbered explorer classes may be introduced.
 
 ## Checkpoint discipline
 
-- Work in small coherent batches, normally 2–4 historical layers.
-- Classify each delta as required / superseded / ambiguous.
+- Work in small coherent batches.
+- Classify each historical delta as required / superseded / ambiguous.
 - Extract only required behavior.
 - Delete superseded behavior physically.
 - Update this ledger and commit before continuing.
@@ -52,10 +53,10 @@ Only `RepositoryExplorer` is public/live for new server code.
 - Stop persists the map and later resume continues from learned state.
 
 ### Pass 1
-- Pass-1 workflow state is owned by `Pass1ArcScheduler` through `withPass1State`.
-- Business-use-case admission/update normalization remains compact and explicit.
+- Workflow state is owned by `Pass1ArcScheduler` through `withPass1State`.
+- Business-use-case admission/update normalization is explicit and compact.
 - Actor, intent, outcome, priority and traceability remain durable workflow properties.
-- Initial call-path and Scout classifications create/update Pass-1 workflows.
+- Initial call-path and Scout classifications create/update workflows.
 
 ### Pass 2
 - Pass 2 consumes the complete compact deterministic call-path family, not repository frontier nodes.
@@ -77,140 +78,94 @@ Only `RepositoryExplorer` is public/live for new server code.
 - Query-facing workflows expose steps, entity details/fields, relationships and representation evidence.
 - Missing workflows/entities/fields are reported rather than invented.
 
-## Peel ledger
+## Focused owners extracted from the historical chain
 
-### Current → V48
-Preserved: `entityReconciliation.js` — cross-workflow unresolved-entity reconciliation, bounded field descriptions, final bounded reconciliation.
+- `entityReconciliation.js` — cross-workflow unresolved-entity reconciliation and bounded field-description enrichment.
+- `semanticModel.js` — canonical semantic identity, evidence, schema representation and business↔physical mappings.
+- `businessPriorityScout.js` — business-priority reranking/scheduling across learned and unseen flows.
+- `persistedMap.js` — startup/repository-specific restore lifecycle.
+- `structuredWorkflow.js` — ordered workflow steps, entity/field semantics, structured relationships and evidence-depth closure.
+- `mapPersistence.js` — semantic-map persistence, traceability and stop/persist behavior.
+- `scoutLifecycle.js` — Scout state, unseen-batch exhaustion and fallback before termination.
+- `wholeFlowScheduler.js` — completion handoff/resume between admitted workflows.
+- `wholeFlowPass2.js` — compact whole-flow interpretation, bounded branch follow-up and its result normalizer.
+- `callPathAccess.js` — deterministic ranked/grouped call-path lookup.
+- `initialCallPathSeeds.js` — deterministic seed attachment/projection and initial Pass-2 handoff.
+- `businessMapAccumulation.js` — persistent objects/external effects accumulation; Discovery disabled.
+- `initialCallPathClassifier.js` — bounded initial business-flow classification and priority/admission.
+- `callPathSeedPreprocessor.js` — deterministic ranked-path preparation and conversion into Pass-1 seeds.
+- `callPathPreprocessLifecycle.js` — preprocessing state/detection/routing.
+- `pass1State.js` — Pass1 scheduler ownership, normalization/admission contract and minimal delta handoff; legacy Pass2 DFS state retained only as compatibility state where existing seed/persisted contracts still touch it.
+- `modelCall.js` — focused lightweight JSON model call utility, including optional single-step console gating.
 
-### V48 → V47
-Preserved: `semanticModel.js`, `businessPriorityScout.js` — semantic identity/evidence/schema representation plus business-priority ranking/scheduling.
+## Historical peel ledger
 
-### V47 → V46
-Preserved: `persistedMap.js`, `structuredWorkflow.js` — restore lifecycle, ordered workflow reconstruction, schema-constrained field semantics, structured relations, evidence-depth closure.
+### V48 → V41
+- V48 current delta preserved as `entityReconciliation.js`.
+- V48/V47 semantic identity/evidence/schema representation and business-priority behavior preserved as `semanticModel.js` + `businessPriorityScout.js`.
+- V47/V46 restore and structured-workflow behavior preserved as `persistedMap.js` + `structuredWorkflow.js`.
+- V46/V45 persistence/stop/traceability behavior preserved as `mapPersistence.js`.
+- V45 old Scout policy discarded as superseded.
+- V44 Scout lifecycle preserved as `scoutLifecycle.js`.
+- V43 completion handoff preserved as `wholeFlowScheduler.js`; old ordering discarded.
+- V42 whole-flow engine preserved as `wholeFlowPass2.js`; shallow output contract discarded.
+- V41 node-by-node graph interpreter discarded completely.
 
-### V46 → V45
-Preserved: `mapPersistence.js` — persisted semantic map, traceability enrichment, stop/persist behavior.
+### V40 → V23
+- V40 deterministic call-path lookup preserved as `callPathAccess.js`; graph navigation discarded.
+- V39 XML/node-walker traversal discarded.
+- V38 deterministic seed handoff preserved as `initialCallPathSeeds.js`; seed-local DFS discarded.
+- V37 durable persistent/external-effect accumulation preserved as `businessMapAccumulation.js`; Scout/Discovery policy discarded.
+- V36 corrected initial seed projection absorbed into `initialCallPathSeeds.js`; old runtime/UI bookkeeping discarded.
+- V35 UI/topology duplication discarded.
+- V34 initial business classifier preserved as `initialCallPathClassifier.js`.
+- V33 old classifier prompt discarded.
+- V32 old call-path packing discarded.
+- V31 seed preprocessing preserved as `callPathSeedPreprocessor.js`.
+- V30 old model-containment routing discarded.
+- V29 preprocessing lifecycle preserved as `callPathPreprocessLifecycle.js`.
+- V28 had no separate surviving responsibility.
+- V27/V26/V25 Discovery-era qualification/bridging/infrastructure discarded.
+- V24 pre-admission broad traversal discarded.
+- V23 pre-admission frontier/search fallback discarded.
 
-### V45 → V44
-Discarded: old Scout ranking/admission policy. Superseded by `businessPriorityScout.js`.
+### V22 → V18
+- V22 business-use-case normalization/admission contract preserved in `pass1State.js`; mixed Pass1/Pass2 prompt and candidate navigation discarded.
+- V21 Pass1 scheduler ownership/minimal delta handoff preserved in `pass1State.js`; per-arc DFS/navigation discarded.
+- `wholeFlowPass2.js` was made to explicitly own `normalizeWholeFlowPass2()` rather than inheriting it accidentally.
+- V20 semantic-source-container browse normalization discarded.
+- V19 durable-thread/arc-title compatibility discarded.
+- V18 typed XML/file browse normalization and XML hierarchy compaction discarded.
 
-### V44 → V43
-Preserved: `scoutLifecycle.js` — Scout state, unseen-batch exhaustion, fallback to Scout before termination, unchanged-batch retirement.
+### V17 → V9
+- V17 compact artifact/candidate navigator discarded.
+- V16 candidate-scoring prompt/descriptor discarded.
+- V15 lazy XML/JMX hierarchy prompt discarded.
+- V14 repeated-directory handling discarded.
+- V13 ordered semantic-search plan/retry machinery discarded.
+- V12 repeated-artifact/no-repeat escape behavior discarded.
+- V11 old artifact-driven Pass-1 discovery implementation discarded; required state/admission/update behavior already lives in `Pass1ArcScheduler` + `pass1State.js`.
+- V10 semantic DFS escape/backtracking discarded.
+- V9 browse-path canonicalization discarded.
 
-### V43 → V42
-Preserved: `wholeFlowScheduler.js` — completion handoff/resume between admitted workflows. Old ordering discarded; business-priority ordering owns it now.
+### V8 → V6
+- V8 business-flow objective prompt decoration discarded as implementation; the product intent is enforced by the current call-path classifiers and Scout.
+- V7 semantic-scoring rubric discarded with the old candidate walker.
+- V6 semantic branch flattening/scored DFS/backtracking discarded completely.
 
-### V42 → V41
-Preserved: `wholeFlowPass2.js` — whole-flow state, compact flow packaging, bounded branch follow-up, model routing/retry/accounting. Old shallow semantic contract discarded in favor of `structuredWorkflow.js`.
-
-### V41 → V40
-Discarded completely: node-by-node call-graph interpreter and graph navigator.
-
-### V40 → V39
-Preserved: `callPathAccess.js` — deterministic ranked/grouped call-path lookup. Duplicate `callPathLookup.js` removed.
-
-### V39 → V38
-Discarded: old XML/node-walker compression/navigation behavior.
-
-### V38 → V37
-Preserved: `initialCallPathSeeds.js` — deterministic seed attachment/projection and initial Pass-2 handoff. Seed-local DFS discarded.
-
-### V37 → V36
-Preserved: `businessMapAccumulation.js` — Discovery disabled; persistent objects/external effects accumulated as business evidence. Old Scout/Discovery policy discarded.
-
-### V36 → V35
-Preserved only corrected initial seed projection/scheduling in `initialCallPathSeeds.js`. Superseded runtime/UI/stop bookkeeping discarded.
-
-### V35 → V34
-Discarded: obsolete UI/topology projection duplication.
-
-### V34 → V33
-Preserved: `initialCallPathClassifier.js` — bounded initial call-path business-flow classification and priority/admission.
-
-### V33 → V32
-Discarded: superseded older classifier prompt/schema layer.
-
-### V32 → V31
-Discarded: older call-path packing policy.
-
-### V31 → V30
-Preserved: `callPathSeedPreprocessor.js` — deterministic ranked path preparation and accepted-classification conversion into Pass-1 seeds.
-
-### V30 → V29
-Discarded: superseded model-containment/prompt-routing layer.
-
-### V29 → V28
-Preserved: `callPathPreprocessLifecycle.js` — initial preprocessing state/detection/routing.
-
-### V28 → V27
-No separate current responsibility survives; useful preprocessing behavior is already owned by focused modules.
-
-### V27 → V26
-Discarded: old Discovery qualification loop.
-
-### V26 → V25
-Discarded: Scout-to-Discovery bridging from retired architecture.
-
-### V25 → V24
-Discarded: retired Discovery infrastructure.
-
-### V24 → V23
-Discarded: old pre-admission broad/frontier traversal.
-
-### V23 → V22
-Discarded: pre-admission frontier walk/search/fallback traversal. Deterministic call-path classification/seeding and Scout own candidate discovery.
-
-### V22 → V21
-Preserved in `pass1State.js`: business-use-case normalization/admission contract. Old mixed Pass1/Pass2 prompt and candidate navigation discarded.
-
-### V21 → V20
-Preserved in `pass1State.js`: `Pass1ArcScheduler` ownership, compatibility `Pass2ArcExplorerState` accessor, Pass-1 delta application and compact semantic helpers. Per-arc DFS/navigation discarded.
-
-Additional fix: `wholeFlowPass2.js` explicitly owns `normalizeWholeFlowPass2()` instead of inheriting it historically.
-
-### V20 → V19
-Discarded completely: semantic-source-container browse request normalization and source-container prompt hint. Current learning does not ask the model to navigate repository artifacts.
-
-### V19 → V18
-Discarded completely: durable-thread ID vs Pass-1 arc-title compatibility. Current semantic map uses explicit Pass-1 workflows/semantic objects rather than the old thread-placement contract.
-
-### V18 → V17
-Discarded completely: typed XML/file browse normalization, XML-node validation and XML hierarchy prompt compaction. Deterministic call-path preprocessing replaces this browse path.
-
-### V17 → V16
-Discarded completely: old compact Pass-1 artifact/candidate prompt, thread/proto boards and generic `callModel` routing. Current model modes have focused owners.
-
-### V16 → V15
-Discarded completely: old semantic-neighborhood candidate scoring prompt/descriptor used by frontier traversal.
-
-### V15 → V14
-Discarded completely: lazy XML/JMX hierarchy navigation prompt policy.
-
-### V14 → V13
-Discarded completely: repeated-directory normalization and directory-choice browse observations.
-
-### V13 → V12
-Discarded completely: ordered semantic-search plans/retries and semantic-fit based search switching.
-
-### V12 → V11
-Discarded completely: repeated-artifact guard plus semantic escape/backtrack behavior from the old broad frontier walker.
-
-### V11 → V10
-Discarded as implementation: old broad artifact-driven Pass-1 discovery, arc seed search/switching and prompt contract. Its required state/admission/update behavior is already owned by `Pass1ArcScheduler` + `pass1State.js`.
-
-### V10 → V9
-Discarded completely: semantically-pruned DFS backtracking and goal-directed semantic escape.
-
-### V9 → V8
-Discarded completely: model browse-path canonicalization for `getArtifact` requests.
+### V5 → V2
+- V5 `lightweightModelCall()` preserved as `modelCall.js`; repository-orientation/source-index prompt routes discarded.
+- V4 proto-thread machinery discarded; first-class Pass-1 workflows/semantic objects supersede it.
+- V3 old thread/browse validation discarded.
+- V2 orientation/validation bridge discarded.
 
 ## Physical cleanup status
 
-Deleted from the live inheritance chain through this checkpoint:
-- V9–V48 as applicable to the modern runtime, with surviving responsibilities extracted above.
-- The canonical runtime is now based on `ProgressiveRepositoryExplorerV8`.
-- No new numbered explorer classes may be introduced.
+- All numbered `progressiveRepositoryExplorerV*.js` layers have been removed from the live chain and deleted through V2–V48.
+- Repository search reports no remaining `progressiveRepositoryExplorerV` references.
+- `RepositoryExplorer` now composes the non-numbered stable base with focused modules only.
+- Duplicate `callPathLookup.js` was removed; `callPathAccess.js` is the single call-path lookup owner.
 
-## Next peel target
+## Remaining cleanup opportunity
 
-Inspect V8 → V7 → V6. Preserve only stable mechanics still called by focused modules; continue deleting traversal-era behavior. The eventual destination is the non-numbered stable base plus focused `explorer/` modules.
+The non-numbered `progressiveRepositoryExplorer.js` still contains the oldest model-driven browse/orientation implementation. It now acts only as the stable mechanical base beneath focused modules. Before deleting/splitting portions of that file, compare its methods against actual calls from the focused modules and `ModelDirectedExplorerV2`; extract stable mechanics first and delete only proven-dead browse behavior. This is a separate cleanup from the completed numbered-layer peel.
