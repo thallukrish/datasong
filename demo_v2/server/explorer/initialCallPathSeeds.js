@@ -17,12 +17,31 @@ export const withInitialCallPathSeeds = (Base) => class InitialCallPathSeedsExpl
     }
   }
 
+  projectInitialSeedArcs() {
+    const cp = this.state.callPathPreprocess || {};
+    const seededIds = arr(cp.seededArcIds);
+    const arcsById = new Map(this.pass1().arcs().map((arc) => [arc.id, arc]));
+    cp.seededArcs = seededIds.map((id) => arcsById.get(id)).filter(Boolean).map((arc) => ({
+      arcId: arc.id,
+      title: arc.title || '',
+      actor: arc.trigger || arc.businessActor || '',
+      intent: arc.businessIntent || '',
+      confidence: Number(arc.opportunityScore || arc.confidence || 0),
+      callPathId: arc.callPathId || '',
+      coherentFunctionCount: Number(arc.coherentFunctionCount || 0),
+      containedCallPathIds: arr(arc.containedCallPathIds),
+      status: arc.status || 'seeded'
+    }));
+    for (const id of seededIds) this.pass2().seed(id);
+    return seededIds;
+  }
+
   applyDelta(parsed, observation) {
     const result = super.applyDelta(parsed, observation);
     if (!parsed?._callPathPreprocess) return result;
 
     this.attachDeterministicSeedStarts();
-    const seededIds = arr(this.state.callPathPreprocess?.seededArcIds);
+    const seededIds = this.projectInitialSeedArcs();
     const chosen = this.pass1().chooseNextArc(seededIds[0] || '');
     if (chosen) {
       this._pendingSeedArcId = chosen.id;
