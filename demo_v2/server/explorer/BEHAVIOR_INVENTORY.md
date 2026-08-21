@@ -8,7 +8,7 @@ Rule: before deleting a historical layer, preserve every intentional current beh
 
 Checkpoint 2026-08-21:
 
-`ProgressiveRepositoryExplorerV20`
+`ProgressiveRepositoryExplorerV8`
 → `withPass1State`
 → `withCallPathPreprocessLifecycle`
 → `withCallPathSeedPreprocessor`
@@ -34,7 +34,7 @@ Only `RepositoryExplorer` is public/live for new server code.
 - Work in small coherent batches, normally 2–4 historical layers.
 - Classify each delta as required / superseded / ambiguous.
 - Extract only required behavior.
-- Delete superseded behavior.
+- Delete superseded behavior physically.
 - Update this ledger and commit before continuing.
 - Verify no live import points to a deleted layer.
 - Never resurrect node-by-node Pass-2 traversal or the retired Discovery architecture.
@@ -53,7 +53,7 @@ Only `RepositoryExplorer` is public/live for new server code.
 
 ### Pass 1
 - Pass-1 workflow state is owned by `Pass1ArcScheduler` through `withPass1State`.
-- Business-use-case admission/update normalization remains schema-constrained and compact.
+- Business-use-case admission/update normalization remains compact and explicit.
 - Actor, intent, outcome, priority and traceability remain durable workflow properties.
 - Initial call-path and Scout classifications create/update Pass-1 workflows.
 
@@ -107,7 +107,7 @@ Preserved: `wholeFlowPass2.js` — whole-flow state, compact flow packaging, bou
 Discarded completely: node-by-node call-graph interpreter and graph navigator.
 
 ### V40 → V39
-Preserved: `callPathAccess.js` — deterministic ranked/grouped call-path lookup. Duplicate `callPathLookup.js` was removed.
+Preserved: `callPathAccess.js` — deterministic ranked/grouped call-path lookup. Duplicate `callPathLookup.js` removed.
 
 ### V39 → V38
 Discarded: old XML/node-walker compression/navigation behavior.
@@ -143,13 +143,13 @@ Discarded: superseded model-containment/prompt-routing layer.
 Preserved: `callPathPreprocessLifecycle.js` — initial preprocessing state/detection/routing.
 
 ### V28 → V27
-No separate current responsibility survives; useful preprocessing behavior is already owned by the focused modules above.
+No separate current responsibility survives; useful preprocessing behavior is already owned by focused modules.
 
 ### V27 → V26
 Discarded: old Discovery qualification loop.
 
 ### V26 → V25
-Discarded: Scout-to-Discovery bridging from the retired architecture.
+Discarded: Scout-to-Discovery bridging from retired architecture.
 
 ### V25 → V24
 Discarded: retired Discovery infrastructure.
@@ -158,46 +158,59 @@ Discarded: retired Discovery infrastructure.
 Discarded: old pre-admission broad/frontier traversal.
 
 ### V23 → V22
-Discarded completely in checkpoint 2026-08-21:
-- pre-admission frontier walk
-- pre-admission semantic search
-- fallback traversal before admission
-
-Reason: deterministic initial call-path classification/seeding and subsequent Scout batches own candidate discovery. No hidden frontier fallback is allowed.
+Discarded: pre-admission frontier walk/search/fallback traversal. Deterministic call-path classification/seeding and Scout own candidate discovery.
 
 ### V22 → V21
-Preserved in `pass1State.js`:
-- business-use-case normalization (`normalizePass12`)
-- admitted/hypothesis semantics needed by current workflow updates
-- compact Pass-1 state contract
-
-Discarded:
-- old mixed Pass1/Pass2 prompt policy
-- candidate-level semantic navigation policy
+Preserved in `pass1State.js`: business-use-case normalization/admission contract. Old mixed Pass1/Pass2 prompt and candidate navigation discarded.
 
 ### V21 → V20
-Preserved in `pass1State.js`:
-- `Pass1ArcScheduler` ownership/access
-- compatibility `Pass2ArcExplorerState` accessor required by existing seed/persisted-state contracts
-- Pass-1 delta application into the workflow board
-- semantic-mode/current/candidate compact helpers still called by focused modules
+Preserved in `pass1State.js`: `Pass1ArcScheduler` ownership, compatibility `Pass2ArcExplorerState` accessor, Pass-1 delta application and compact semantic helpers. Per-arc DFS/navigation discarded.
 
-Discarded:
-- per-arc DFS candidate scoring/storage
-- semantic-search resume machinery
-- candidate selection/backtracking/navigation
-- scheduled DFS switching
+Additional fix: `wholeFlowPass2.js` explicitly owns `normalizeWholeFlowPass2()` instead of inheriting it historically.
 
-Additional fix at this boundary:
-- `wholeFlowPass2.js` now explicitly owns `normalizeWholeFlowPass2()` instead of relying on a historical inherited implementation.
+### V20 → V19
+Discarded completely: semantic-source-container browse request normalization and source-container prompt hint. Current learning does not ask the model to navigate repository artifacts.
 
-Physical cleanup completed:
-- `progressiveRepositoryExplorerV23.js` deleted
-- `progressiveRepositoryExplorerV22.js` deleted
-- `progressiveRepositoryExplorerV21.js` deleted
-- canonical runtime rebased to V20
-- repository search shows no remaining live references to V23/V22/V21
+### V19 → V18
+Discarded completely: durable-thread ID vs Pass-1 arc-title compatibility. Current semantic map uses explicit Pass-1 workflows/semantic objects rather than the old thread-placement contract.
+
+### V18 → V17
+Discarded completely: typed XML/file browse normalization, XML-node validation and XML hierarchy prompt compaction. Deterministic call-path preprocessing replaces this browse path.
+
+### V17 → V16
+Discarded completely: old compact Pass-1 artifact/candidate prompt, thread/proto boards and generic `callModel` routing. Current model modes have focused owners.
+
+### V16 → V15
+Discarded completely: old semantic-neighborhood candidate scoring prompt/descriptor used by frontier traversal.
+
+### V15 → V14
+Discarded completely: lazy XML/JMX hierarchy navigation prompt policy.
+
+### V14 → V13
+Discarded completely: repeated-directory normalization and directory-choice browse observations.
+
+### V13 → V12
+Discarded completely: ordered semantic-search plans/retries and semantic-fit based search switching.
+
+### V12 → V11
+Discarded completely: repeated-artifact guard plus semantic escape/backtrack behavior from the old broad frontier walker.
+
+### V11 → V10
+Discarded as implementation: old broad artifact-driven Pass-1 discovery, arc seed search/switching and prompt contract. Its required state/admission/update behavior is already owned by `Pass1ArcScheduler` + `pass1State.js`.
+
+### V10 → V9
+Discarded completely: semantically-pruned DFS backtracking and goal-directed semantic escape.
+
+### V9 → V8
+Discarded completely: model browse-path canonicalization for `getArtifact` requests.
+
+## Physical cleanup status
+
+Deleted from the live inheritance chain through this checkpoint:
+- V9–V48 as applicable to the modern runtime, with surviving responsibilities extracted above.
+- The canonical runtime is now based on `ProgressiveRepositoryExplorerV8`.
+- No new numbered explorer classes may be introduced.
 
 ## Next peel target
 
-V20 → V19 → V18, again as a small checkpoint. V20/V19/V18 are mainly request-normalization/thread/traversal-era compatibility layers; preserve only helpers still called by the current focused modules and delete the rest.
+Inspect V8 → V7 → V6. Preserve only stable mechanics still called by focused modules; continue deleting traversal-era behavior. The eventual destination is the non-numbered stable base plus focused `explorer/` modules.
