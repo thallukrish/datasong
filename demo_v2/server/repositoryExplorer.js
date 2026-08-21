@@ -1,4 +1,5 @@
-import { ProgressiveRepositoryExplorerV44 } from './progressiveRepositoryExplorerV44.js';
+import { ProgressiveRepositoryExplorerV43 } from './progressiveRepositoryExplorerV43.js';
+import { withScoutLifecycle } from './explorer/scoutLifecycle.js';
 import { withMapPersistence } from './explorer/mapPersistence.js';
 import { withPersistedMap } from './explorer/persistedMap.js';
 import { withStructuredWorkflow } from './explorer/structuredWorkflow.js';
@@ -6,7 +7,8 @@ import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 
-const ExplorerWithMapPersistence = withMapPersistence(ProgressiveRepositoryExplorerV44);
+const ExplorerWithScoutLifecycle = withScoutLifecycle(ProgressiveRepositoryExplorerV43);
+const ExplorerWithMapPersistence = withMapPersistence(ExplorerWithScoutLifecycle);
 const ExplorerWithPersistedMap = withPersistedMap(ExplorerWithMapPersistence);
 const ExplorerWithStructuredWorkflow = withStructuredWorkflow(ExplorerWithPersistedMap);
 const ExplorerWithSemanticModel = withSemanticModel(ExplorerWithStructuredWorkflow);
