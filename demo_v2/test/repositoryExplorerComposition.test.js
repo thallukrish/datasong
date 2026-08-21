@@ -3,9 +3,22 @@ import assert from 'node:assert/strict';
 import { RepositoryExplorer } from '../server/repositoryExplorer.js';
 
 const requiredMethods = [
-  // V48 semantic model/evidence behavior
+  // V47 persisted map lifecycle
+  'run',
+  'persistedMaps',
+  'installPersistedMap',
+  'loadMostRecentPersistedMap',
+  'loadLatestPersistedMapForRepo',
+
+  // V47 structured workflow behavior
+  'compactFlowPackage',
   'wholeFlowPrompt',
   'normalizeWholeFlowPass2',
+  'applyDelta',
+  'evidenceDepth',
+  'closeCompletedArcs',
+
+  // V48 semantic model/evidence behavior
   'canonicalEntityName',
   'canonicalizeEntityList',
   'mergeEntityRepresentations',
@@ -14,7 +27,6 @@ const requiredMethods = [
   'semanticStore',
   'syncArcSemanticObjects',
   'syncAllSemanticObjects',
-  'applyDelta',
   'persistSemanticMap',
 
   // V48 business-priority Scout behavior
@@ -49,7 +61,7 @@ test('canonical RepositoryExplorer retains extracted behavior contracts', () => 
   }
 });
 
-test('canonical RepositoryExplorer is composed without V48 as its direct base', () => {
+test('canonical RepositoryExplorer is composed from focused explorer layers', () => {
   const source = RepositoryExplorer.toString();
   assert.match(source, /extends ExplorerWithReconciliation/);
 });
