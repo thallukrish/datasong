@@ -106,21 +106,20 @@ Preserved in `explorer/wholeFlowScheduler.js`:
 - Retirement/rescheduling when an admitted workflow cannot produce a deterministic flow package.
 
 Discarded: V43 ordering by started/opportunity score.
-
-Reason: `businessPriorityScout.js` owns current priority-aware `unfinishedWholeFlowArcs()` ordering.
+Reason: `businessPriorityScout.js` owns current priority-aware ordering.
 
 ### V42 → V41
 Preserved in `explorer/wholeFlowPass2.js`:
-- Per-workflow whole-flow state (`started`, `completed`, unresolved/interpreted branches, call counts).
+- Per-workflow whole-flow state.
 - Compact call-path family packaging.
 - Whole-flow and bounded branch observations.
 - Whole-flow model routing, retry/logging/accounting.
 - Start/resume behavior for selected Pass-1 workflows.
-- Explicit prevention of fallback into node-by-node traversal after whole-flow interpretation starts.
+- Prevention of fallback into node-by-node traversal after whole-flow interpretation starts.
 
 Discarded as superseded:
-- V42 shallow output contract (`majorStages`, flat entity/relationship lists).
-- V42 old whole-flow prompt semantics; `structuredWorkflow.js` owns the richer ordered-step/entity/field/relationship contract.
+- V42 shallow semantic output contract and prompt semantics.
+Reason: `structuredWorkflow.js` owns the richer ordered-step/entity/field/relationship contract.
 
 ### V41 → V40
 Discarded completely as obsolete:
@@ -131,10 +130,139 @@ Discarded completely as obsolete:
 
 Reason: whole compressed-flow Pass 2 supersedes this traversal model and current behavior explicitly forbids fallback to node-by-node graph rediscovery.
 
-### Historical V40 → current V23 checkpoint
-The repository had already lost several intermediate numbered files while the canonical explorer still referenced a removed V40 boundary. During recovery, only current-surviving behavior was carried forward and the live boundary was moved to V23. Focused modules now own call-path preprocessing/classification/seeding/access plus the modern whole-flow/Scout/persistence/semantic behaviors listed above.
+## Audited historical bridge: V40 → V23
 
-Important: do **not** recreate missing V24–V40 classes merely to peel them again. Historical versions are archaeological evidence only. Extract a behavior only if the current product still requires it.
+This section closes the earlier documentation gap. The historical layers were already removed while their surviving behavior was extracted. They are archaeological evidence only; they are not to be recreated.
+
+### V40 → V39
+Preserved:
+- Deterministic `rankedPathById()` / `groupedPathForArc()` lookup in `explorer/callPathAccess.js`.
+
+Discarded:
+- V40 graph-navigation machinery, already superseded by whole-flow Pass 2.
+
+Cleanup:
+- A second accidentally-created `callPathLookup.js` implementation duplicated this responsibility and has been deleted. `callPathAccess.js` is the single owner.
+
+### V39 → V38
+Discarded:
+- Moqui XML same-file compression/navigation behavior used by the old node walker.
+
+Reason:
+- Current topology/call-path preprocessing provides deterministic compact flow evidence before Pass 2; the old traversal optimization must not be resurrected.
+
+### V38 → V37
+Preserved in `explorer/initialCallPathSeeds.js`:
+- Deterministic seed artifact/source-path attachment for admitted call-path workflows.
+- Initial seed projection and Pass-2 handoff.
+
+Discarded:
+- Seed-local DFS state/navigation.
+
+Reason:
+- Whole-flow Pass 2 starts from the complete selected call-path family, not local DFS.
+
+### V37 → V36
+Preserved in `explorer/businessMapAccumulation.js`:
+- Discovery remains disabled in the modern runtime.
+- `persistentObjects` and `externalEffects` are normalized and accumulated as durable workflow evidence.
+
+Discarded:
+- V37 Scout/discovery policy superseded by current call-path Scout architecture.
+
+### V36 → V35
+Preserved:
+- Corrected initial deterministic seed projection/scheduling is absorbed by `explorer/initialCallPathSeeds.js`.
+
+Discarded:
+- Superseded runtime/stop/UI bookkeeping; stop/persistence is owned by `mapPersistence.js` and semantic scheduling by current modules.
+
+### V35 → V34
+Discarded:
+- Obsolete UI/topology projection duplication.
+
+Reason:
+- It did not own semantic learning behavior required by the current explorer.
+
+### V34 → V33
+Preserved in `explorer/initialCallPathClassifier.js`:
+- Bounded initial top-call-path business-flow classification.
+- Initial business priority/seed admission without an extra Scout rediscovery cycle.
+
+### V33 → V32
+Discarded:
+- Older classifier prompt/schema layer.
+
+Reason:
+- Superseded by the extracted current initial classifier contract.
+
+### V32 → V31
+Discarded:
+- Older call-path shape/packing policy.
+
+Reason:
+- Superseded by the current deterministic seed preprocessor and compact whole-flow package.
+
+### V31 → V30
+Preserved in `explorer/callPathSeedPreprocessor.js`:
+- Deterministic preparation of ranked call-path candidates for business seed classification.
+- Conversion of accepted classifications into Pass-1 workflow seeds with call-path traceability.
+
+### V30 → V29
+Discarded:
+- Older model-containment/prompt routing layer that is superseded by current classifier and whole-flow model routing.
+
+### V29 → V28
+Preserved in `explorer/callPathPreprocessLifecycle.js`:
+- `callPathPreprocess` state ownership.
+- Detection of pending initial call-path preprocessing.
+- Routing the initial preprocessing prompt before normal semantic work.
+
+### V28 → V27
+No separate current responsibility survives as an owning module.
+- Any useful call-path preprocessing behavior is already owned by V29/V31-derived focused modules.
+- Older traversal/discovery policy is not retained.
+
+### V27 → V26
+Discarded:
+- Discovery qualification loop.
+
+Reason:
+- Discovery is intentionally disabled; business flows originate from deterministic call paths and Scout.
+
+### V26 → V25
+Discarded:
+- Scout/discovery bridging from the retired Discovery architecture.
+
+Reason:
+- Current `scoutLifecycle.js` + `businessPriorityScout.js` own unseen-path exhaustion, ranking and admission.
+
+### V25 → V24
+Discarded:
+- Retired Discovery infrastructure.
+
+Reason:
+- Discovery must remain unreachable in the current product architecture.
+
+### V24 → V23
+Discarded:
+- Pre-admission traversal layer from the old frontier-based architecture.
+
+Reason:
+- Initial call-path preprocessing/classification and later Scout batches now provide business-flow candidates deterministically. We do not preserve a hidden fallback into broad frontier exploration.
+
+### Bridge continuity conclusion
+The V40→V23 bridge is now accounted for without recreating historical classes. Current ownership is coherent:
+- call-path lookup → `callPathAccess.js`
+- initial preprocessing lifecycle → `callPathPreprocessLifecycle.js`
+- seed preparation/admission → `callPathSeedPreprocessor.js`
+- initial business classification → `initialCallPathClassifier.js`
+- initial Pass-2 handoff → `initialCallPathSeeds.js`
+- persistent/external business evidence → `businessMapAccumulation.js`
+- whole-flow interpretation → `wholeFlowPass2.js` + `structuredWorkflow.js`
+- ongoing unseen-path learning → `scoutLifecycle.js` + `businessPriorityScout.js`
+
+No historical V24–V40 traversal/discovery class is required by the live runtime.
 
 ### V23 → V22 (next checkpoint target)
 V23 is pre-admission frontier/semantic-search traversal from the older architecture. Before preserving any of it, verify whether deterministic initial call-path classification/seeding now guarantees admitted business arcs and therefore supersedes V23 pre-admission exploration. Do not preserve the old frontier walker by default.
