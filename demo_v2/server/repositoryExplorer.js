@@ -1,4 +1,5 @@
-import { ProgressiveRepositoryExplorerV5 } from './progressiveRepositoryExplorerV5.js';
+import { ProgressiveRepositoryExplorer } from './progressiveRepositoryExplorer.js';
+import { withLightweightModelCall } from './explorer/modelCall.js';
 import { withPass1State } from './explorer/pass1State.js';
 import { withCallPathPreprocessLifecycle } from './explorer/callPathPreprocessLifecycle.js';
 import { withCallPathSeedPreprocessor } from './explorer/callPathSeedPreprocessor.js';
@@ -16,7 +17,8 @@ import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 
-const ExplorerWithPass1State = withPass1State(ProgressiveRepositoryExplorerV5);
+const ExplorerWithModelCall = withLightweightModelCall(ProgressiveRepositoryExplorer);
+const ExplorerWithPass1State = withPass1State(ExplorerWithModelCall);
 const ExplorerWithPreprocessLifecycle = withCallPathPreprocessLifecycle(ExplorerWithPass1State);
 const ExplorerWithSeedPreprocessor = withCallPathSeedPreprocessor(ExplorerWithPreprocessLifecycle);
 const ExplorerWithInitialClassifier = withInitialCallPathClassifier(ExplorerWithSeedPreprocessor);
