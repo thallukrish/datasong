@@ -4,6 +4,112 @@ This file is the regression contract for dismantling the historical `Progressive
 
 The rule for the refactor is simple: **before removing any historical layer, the canonical `RepositoryExplorer` plus focused modules must preserve every behavior listed here.**
 
+## Current live composition
+
+As of the latest peel, the live runtime composition is:
+
+`ProgressiveRepositoryExplorerV43`
+→ `withScoutLifecycle`
+→ `withMapPersistence`
+→ `withPersistedMap`
+→ `withStructuredWorkflow`
+→ `withSemanticModel`
+→ `withBusinessPriorityScout`
+→ `withEntityReconciliation`
+→ `RepositoryExplorer`
+
+Only `RepositoryExplorer` is public/live for new server code. The remaining numbered base is temporary and will be peeled one layer at a time.
+
+## Continuity / coherence rules
+
+For every peel, verify all three:
+
+- **Continuity:** no currently observable behavior disappears unless it is intentionally obsolete.
+- **Coherence:** one responsibility has one owning module; avoid keeping older parallel policies under newer overrides.
+- **No accidental duplication:** if a newer module fully supersedes an older method/policy, discard the older implementation rather than re-extracting it.
+
+If it is unclear whether an older behavior is still intended product behavior, stop and ask before preserving or deleting it.
+
+## Peel ledger
+
+### Current RepositoryExplorer → V48
+
+Preserved and extracted:
+- Batch/cross-workflow unresolved-entity reconciliation.
+- Bounded field-description enrichment.
+- Final bounded reconciliation pass.
+
+Module:
+- `explorer/entityReconciliation.js`
+
+### V48 → V47
+
+Preserved and extracted:
+- Canonical semantic entity identity.
+- Schema/entity enrichment and authoritative field provenance.
+- Business↔physical entity representation links.
+- Semantic evidence objects and evidence strengths/provenance.
+- Business-priority Scout reranking across legacy workflows and unseen path families.
+- Priority-based scheduling/promotion.
+
+Modules:
+- `explorer/semanticModel.js`
+- `explorer/businessPriorityScout.js`
+
+Discarded:
+- Nothing from this layer was judged fully obsolete at extraction time.
+
+### V47 → V46
+
+Preserved and extracted:
+- Startup/latest-map restoration lifecycle.
+- Repo-specific persisted-map restore behavior.
+- Structured Pass-2 workflow reconstruction with ordered steps.
+- Entity/field descriptions constrained to supplied schema evidence.
+- Structured entity/relationship details.
+- Evidence-depth based workflow closure semantics.
+
+Modules:
+- `explorer/persistedMap.js`
+- `explorer/structuredWorkflow.js`
+
+### V46 → V45
+
+Preserved and extracted:
+- Semantic-map persistence keyed by repository revision.
+- Traceability fingerprint/source-path enrichment.
+- Stop request persistence and stop-after-current-step behavior.
+- Persistence hooks on emit/apply-delta.
+
+Module:
+- `explorer/mapPersistence.js`
+
+### V45 → V44
+
+Discarded as fully superseded:
+- Old Scout `runScout()` policy.
+- Old direct Pass-1 promotion/ranking logic in `promoteScoutDirections()`.
+
+Reason:
+- `explorer/businessPriorityScout.js` owns the current Scout ranking, legacy-workflow reranking, path promotion and scheduling policy.
+- Keeping V45 logic would retain a dead parallel policy underneath an override and reduce coherence.
+
+No V45 module was created.
+
+### V44 → V43
+
+Preserved and extracted:
+- `ScoutLayerV2` ownership/state accessor.
+- Batch-by-batch unseen-call-path exhaustion lifecycle.
+- Fallback from drained admitted workflows into Scout before terminating exploration.
+- Deterministic retirement of unchanged Scout batches to prevent spinning.
+
+Module:
+- `explorer/scoutLifecycle.js`
+
+Discarded/not carried from this layer:
+- No separate ranking/admission policy; current ranking remains owned by `businessPriorityScout.js`.
+
 ## Runtime contract
 
 - `server/index.js` imports and instantiates only `RepositoryExplorer`.
@@ -120,11 +226,14 @@ For each historical layer, working backwards:
 
 1. Compare the current canonical explorer/module set against the next inherited `ProgressiveRepositoryExplorerVn` class.
 2. Identify exactly what behavior/method overrides that layer contributes relative to `V(n-1)`.
-3. Group that delta by responsibility (`scout`, `pass1`, `pass2`, `persistence`, `semanticEvidence`, `entityReconciliation`, etc.).
-4. Move the delta into the appropriate focused module under `server/explorer/`.
-5. Keep `RepositoryExplorer` as a thin orchestrator/delegator.
-6. Verify every applicable item in this inventory still holds.
-7. Only then change the inheritance boundary/remove that historical version.
-8. Repeat with the next version.
+3. For each contribution, classify it as **still required**, **fully superseded**, or **ambiguous**.
+4. Preserve only still-required behavior, grouped into focused responsibilities (`scout`, `pass1`, `pass2`, `persistence`, `semanticEvidence`, `entityReconciliation`, etc.).
+5. Discard fully superseded behavior rather than reproducing it underneath newer overrides.
+6. Ask before acting on ambiguous behavior.
+7. Keep `RepositoryExplorer` as a thin orchestrator/delegator.
+8. Update the peel ledger and current live composition in this file.
+9. Verify every applicable behavior-contract item still holds.
+10. Only then change the inheritance boundary/remove that historical version.
+11. Repeat with the next version.
 
 The inventory itself must be updated whenever intentional product behavior changes.
