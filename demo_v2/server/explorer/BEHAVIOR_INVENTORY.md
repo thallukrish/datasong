@@ -6,7 +6,15 @@ Rule: **before removing any historical layer, the canonical `RepositoryExplorer`
 
 ## Current live composition
 
-`ProgressiveRepositoryExplorerV40`
+Checkpoint 2026-08-21:
+
+`ProgressiveRepositoryExplorerV23`
+→ `withCallPathPreprocessLifecycle`
+→ `withCallPathSeedPreprocessor`
+→ `withInitialCallPathClassifier`
+→ `withBusinessMapAccumulation`
+→ `withInitialCallPathSeeds`
+→ `withCallPathAccess`
 → `withWholeFlowPass2`
 → `withWholeFlowScheduler`
 → `withScoutLifecycle`
@@ -18,7 +26,19 @@ Rule: **before removing any historical layer, the canonical `RepositoryExplorer`
 → `withEntityReconciliation`
 → `RepositoryExplorer`
 
-Only `RepositoryExplorer` is public/live for new server code. The remaining numbered base is temporary and will be peeled one layer at a time.
+Only `RepositoryExplorer` is public/live for new server code. The remaining numbered base is temporary and will continue to be peeled in small committed batches.
+
+## Checkpoint discipline
+
+- Inspect only a small coherent historical batch (normally 2–4 layers).
+- Classify behavior as required / superseded / ambiguous.
+- Extract only required behavior; discard superseded behavior.
+- Wire the canonical explorer to the new boundary.
+- Update this ledger.
+- Commit the checkpoint before continuing.
+- Verify there are no imports to deleted numbered layers and no missing live base.
+- Prefer a runnable/recoverable repository after every checkpoint rather than a long half-completed archaeology chain.
+- If behavior is ambiguous, stop and ask before preserving or deleting it.
 
 ## Continuity / coherence rules
 
@@ -100,23 +120,30 @@ Preserved in `explorer/wholeFlowPass2.js`:
 
 Discarded as superseded:
 - V42 shallow output contract (`majorStages`, flat entity/relationship lists).
-- V42 old `wholeFlowPrompt()` / `normalizeWholeFlowPass2()` semantics.
-
-Reason: `structuredWorkflow.js` owns the richer ordered-step/entity/field/relationship contract.
+- V42 old whole-flow prompt semantics; `structuredWorkflow.js` owns the richer ordered-step/entity/field/relationship contract.
 
 ### V41 → V40
 Discarded completely as obsolete:
 - Node-by-node Pass-2 call-graph interpreter.
-- Per-node `graphPrompt()` and branch scoring.
+- Per-node graph prompt and branch scoring.
 - Advance/backtrack graph navigation model calls.
-- `normalizeGraphPass2()` and its node-level retry/logging path.
+- Node-level retry/logging path.
 
-Reason:
-- Whole compressed-flow Pass 2 supersedes this entire traversal model.
-- Current product behavior explicitly requires Pass 2 to use the already-built call graph and interpret the complete compact flow family rather than rediscovering the flow one graph node at a time.
-- Retaining V41 underneath the new engine would create a forbidden fallback path and unnecessary token spend.
+Reason: whole compressed-flow Pass 2 supersedes this traversal model and current behavior explicitly forbids fallback to node-by-node graph rediscovery.
 
-No V41 module was created.
+### Historical V40 → current V23 checkpoint
+The repository had already lost several intermediate numbered files while the canonical explorer still referenced a removed V40 boundary. During recovery, only current-surviving behavior was carried forward and the live boundary was moved to V23. Focused modules now own call-path preprocessing/classification/seeding/access plus the modern whole-flow/Scout/persistence/semantic behaviors listed above.
+
+Important: do **not** recreate missing V24–V40 classes merely to peel them again. Historical versions are archaeological evidence only. Extract a behavior only if the current product still requires it.
+
+### V23 → V22 (next checkpoint target)
+V23 is pre-admission frontier/semantic-search traversal from the older architecture. Before preserving any of it, verify whether deterministic initial call-path classification/seeding now guarantees admitted business arcs and therefore supersedes V23 pre-admission exploration. Do not preserve the old frontier walker by default.
+
+### V22 → V21 (next checkpoint target)
+V22 contains the business-use-case admission normalization contract. Parts may still be required because modern whole-flow results ultimately update the Pass-1 arc board. Preserve only normalization/admission semantics still consumed by current modules; discard old candidate DFS/navigation policy.
+
+### V21 → V20 (next checkpoint target)
+V21 owns `Pass1ArcScheduler` / `Pass2ArcExplorerState` accessors and the old Pass1/Pass2 semantic handoff. Preserve Pass-1 arc-state ownership and any current delta-application contract still required. The per-arc DFS candidate navigation is obsolete under whole-flow Pass 2 and must not survive.
 
 ## Runtime contract
 
@@ -241,7 +268,8 @@ For each historical layer, working backwards:
 7. Keep `RepositoryExplorer` thin.
 8. Update this ledger and current composition.
 9. Check continuity, coherence and duplicate/forbidden fallbacks.
-10. Only then change the inheritance boundary/remove that historical version.
-11. Repeat.
+10. Commit a runnable/recoverable checkpoint.
+11. Only then change the inheritance boundary/remove that historical version.
+12. Repeat.
 
 Update this inventory whenever intentional product behavior changes.
