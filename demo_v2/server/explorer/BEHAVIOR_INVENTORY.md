@@ -8,7 +8,8 @@ The rule for the refactor is simple: **before removing any historical layer, the
 
 As of the latest peel, the live runtime composition is:
 
-`ProgressiveRepositoryExplorerV43`
+`ProgressiveRepositoryExplorerV42`
+→ `withWholeFlowScheduler`
 → `withScoutLifecycle`
 → `withMapPersistence`
 → `withPersistedMap`
@@ -110,6 +111,24 @@ Module:
 Discarded/not carried from this layer:
 - No separate ranking/admission policy; current ranking remains owned by `businessPriorityScout.js`.
 
+### V43 → V42
+
+Preserved and extracted:
+- Completion handoff from one admitted whole-flow workflow to the next.
+- `_wholeFlowNextArcId` scheduling/resume mechanism.
+- Immediate Pass-2 resume of the next admitted workflow before returning to the outer legacy loop.
+- Retirement and rescheduling when an admitted workflow cannot produce a deterministic flow package.
+
+Module:
+- `explorer/wholeFlowScheduler.js`
+
+Discarded as superseded:
+- V43's `unfinishedWholeFlowArcs()` ordering by started/opportunity score.
+
+Reason:
+- `explorer/businessPriorityScout.js` now owns `unfinishedWholeFlowArcs()` and orders pending workflows by persisted business priority before older opportunity heuristics.
+- `wholeFlowScheduler.js` intentionally dispatches to the current composed `unfinishedWholeFlowArcs()` rather than preserving V43's old ordering.
+
 ## Runtime contract
 
 - `server/index.js` imports and instantiates only `RepositoryExplorer`.
@@ -143,6 +162,7 @@ Discarded/not carried from this layer:
 - Produces entities, persistent objects, relationships and external effects when supported by evidence.
 - Supports entity representation evidence, e.g. a business entity may be represented/stored/referenced through concrete schema entities.
 - Does not invent physical schema entities or fields.
+- Completion of one admitted whole-flow workflow schedules the next uninterpreted admitted workflow before falling back to Scout or the legacy outer loop.
 
 ## Canonical semantic identity
 
