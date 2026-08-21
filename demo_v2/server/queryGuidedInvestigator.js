@@ -3,47 +3,260 @@ const clean = (v, n = 180) => String(v || '').trim().replace(/\s+/g, ' ').slice(
 const key = (v) => String(v || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 const uniq = (xs) => [...new Set(arr(xs).filter(Boolean).map(String))];
 
-function usageOf(u = {}) { const prompt=Number(u.prompt_tokens||u.input_tokens||0), completion=Number(u.completion_tokens||u.output_tokens||0); return {prompt,completion,total:Number(u.total_tokens||prompt+completion)}; }
-function addUsage(t,u){t.prompt+=u.prompt;t.completion+=u.completion;t.total+=u.total;}
-function parseJson(text){ try{return {value:JSON.parse(text||'{}'),error:''};}catch(e){return {value:{},error:e.message||'invalid JSON'};} }
-function friendlyName(name){const v=clean(name,100);return !!v && !/[.#/:()]/.test(v) && !/\b(service|services|record|records|result|results|output|retrieved|read\/updated)\b/i.test(v);}
-function nonEmptyObject(v){return !!v && typeof v==='object' && Object.keys(v).length>0;}
+function usageOf(u = {}) {
+  const prompt = Number(u.prompt_tokens || u.input_tokens || 0);
+  const completion = Number(u.completion_tokens || u.output_tokens || 0);
+  return { prompt, completion, total: Number(u.total_tokens || prompt + completion) };
+}
+function addUsage(total, u) { total.prompt += u.prompt; total.completion += u.completion; total.total += u.total; }
+function parseJson(text) { try { return JSON.parse(text || '{}'); } catch { return {}; } }
+function friendlyName(name) {
+  const v = clean(name, 100);
+  return !!v && !/[.#/:()]/.test(v) && !/\b(service|services|record|records|result|results|output|retrieved|read\/updated)\b/i.test(v);
+}
 
-function workflowCatalog(arcs,mapStateForArc,snapshot){return arcs.map(a=>({id:a.id,name:clean(a.title,100),description:clean(a.businessIntent||a.outcome||a.businessOutcome||a.nature,110),state:mapStateForArc(a,snapshot)}));}
-function entityCatalog(arcs){const by=new Map();for(const a of arcs){for(const d of arr(a.entityDetails)){const name=clean(d?.name,90);if(!friendlyName(name))continue;const k=key(name),cur=by.get(k)||{name,description:'',fieldCount:0};if(!cur.description&&d?.description)cur.description=clean(d.description,90);cur.fieldCount=Math.max(cur.fieldCount,arr(d?.fields).length);by.set(k,cur);}for(const raw of arr(a.entities)){const name=clean(raw,90);if(!friendlyName(name))continue;const k=key(name);if(!by.has(k))by.set(k,{name,description:'',fieldCount:0});}}return [...by.values()];}
-function fieldScore(f,q){const words=String(q||'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>2),hay=`${f?.name||''} ${f?.description||''}`.toLowerCase();let s=f?.isPk?2:0;for(const w of words)if(hay.includes(w))s+=2;if(/orderid|partyid|productid|contactmechid|seqid/i.test(f?.name||''))s+=2;if(/quantity|amount|total|price|date|status|region|state|country|geo/i.test(hay))s+=1;return s;}
-function fieldsForEntity(entityName,arcs,q,limit=8){const wanted=key(entityName),by=new Map();for(const a of arcs)for(const d of arr(a.entityDetails)){if(key(d?.name)!==wanted)continue;for(const f of arr(d?.fields)){const entity=clean(f?.sourceEntity||d?.name||entityName,90),name=clean(f?.physicalFieldName||f?.name,90);if(!name)continue;const fk=`${key(entity)}|${key(name)}`;if(!by.has(fk))by.set(fk,{entity,name,type:clean(f?.type,40),description:clean(f?.description,70),isPk:!!f?.isPk,score:fieldScore(f,q)});}}return [...by.values()].sort((a,b)=>b.score-a.score).slice(0,limit).map(({score,...f})=>f);}
-function relationEdges(arcs){const out=[];for(const a of arcs)for(const r of arr(a.relationshipDetails)){const from=clean(r?.from,90),to=clean(r?.to,90);if(friendlyName(from)&&friendlyName(to))out.push({from,to,relation:clean(r?.relation,80),workflowId:a.id});}return out;}
-function entityDetail(name,arcs,q){const wanted=key(name);let description='';const workflows=[];for(const a of arcs){const d=arr(a.entityDetails).find(x=>key(x?.name)===wanted),present=d||arr(a.entities).some(e=>key(e)===wanted)||arr(a.persistentObjects).some(e=>key(e)===wanted);if(!present)continue;if(!description&&d?.description)description=clean(d.description,90);workflows.push({id:a.id,name:clean(a.title,80)});}return{name,description,fields:fieldsForEntity(name,arcs,q),workflows:workflows.slice(0,3)};}
-function selectedWorkflowDetail(ids,arcs){const wanted=new Set(arr(ids).map(String));return arcs.filter(a=>wanted.has(String(a.id))).slice(0,4).map(a=>({id:a.id,name:clean(a.title,90),description:clean(a.businessIntent||a.outcome,90),relations:arr(a.relationshipDetails).filter(r=>friendlyName(r?.from)&&friendlyName(r?.to)).slice(0,8).map(r=>({from:r.from,relation:r.relation,to:r.to}))}));}
-function nearbyEntities(selected,edges,limit=5){const wanted=new Set(arr(selected).map(key)),out=[];for(const e of edges){if(wanted.has(key(e.from))&&!wanted.has(key(e.to)))out.push(e.to);if(wanted.has(key(e.to))&&!wanted.has(key(e.from)))out.push(e.from);}return uniq(out).filter(friendlyName).slice(0,limit);}
-function sameNamedJoinFields(a,b){const out=[];for(const lf of arr(a.fields))for(const rf of arr(b.fields)){if(lf.name&&rf.name&&key(lf.name)===key(rf.name)&&/id$|seqid$/i.test(lf.name))out.push({left:`${a.name}.${lf.name}`,right:`${b.name}.${rf.name}`,basis:'matching identifier fields',evidenced:true});}return out.slice(0,4);}
-function findEntityPath(from,to,edges,maxDepth=4){const start=key(from),target=key(to);if(!start||!target)return null;const q=[{name:from,path:[]}],seen=new Set([start]);while(q.length){const cur=q.shift();if(cur.path.length>=maxDepth)continue;for(const e of edges){let next=null,edge=null;if(key(e.from)===key(cur.name)){next=e.to;edge=e;}else if(key(e.to)===key(cur.name)){next=e.from;edge={...e,from:e.to,to:e.from};}if(!next||seen.has(key(next)))continue;const path=[...cur.path,edge];if(key(next)===target)return path;seen.add(key(next));q.push({name:next,path});}}return null;}
-function connectSelectedEntities(names,arcs,q){const edges=relationEdges(arcs),details=new Map(arr(names).map(n=>[key(n),entityDetail(n,arcs,q)])),connections=[];for(let i=0;i<names.length;i++)for(let j=i+1;j<names.length;j++){const a=names[i],b=names[j],da=details.get(key(a)),db=details.get(key(b)),fieldJoins=da&&db?sameNamedJoinFields(da,db):[],path=findEntityPath(a,b,edges);if(fieldJoins.length||path)connections.push({from:a,to:b,fieldJoins,semanticPath:path||[]});}return connections.slice(0,8);}
+function workflowCatalog(arcs, mapStateForArc, snapshot) {
+  return arcs.map((arc) => ({
+    id: String(arc.id),
+    name: clean(arc.title, 110),
+    description: clean(arc.businessIntent || arc.businessOutcome || arc.outcome || arc.nature, 150),
+    state: mapStateForArc(arc, snapshot)
+  }));
+}
 
-function expandedTerms(question){const q=String(question||'').toLowerCase(),terms=new Set(q.split(/[^a-z0-9]+/).filter(w=>w.length>2));if(/sell|sales|revenue|sold/.test(q))['order','item','quantity','amount','total','price'].forEach(x=>terms.add(x));if(/region|location|geograph|state|country/.test(q))['region','state','country','geo','address','postal','contact'].forEach(x=>terms.add(x));if(/product|item/.test(q))['product','item'].forEach(x=>terms.add(x));if(/customer|buyer/.test(q))['customer','party'].forEach(x=>terms.add(x));return [...terms];}
-function localEntityScore(name,arcs,question){const detail=entityDetail(name,arcs,question),terms=expandedTerms(question);let score=0;const hay=`${name} ${detail.description}`.toLowerCase();for(const t of terms)if(hay.includes(t))score+=3;for(const f of arr(detail.fields)){const fh=`${f.name} ${f.description}`.toLowerCase();for(const t of terms)if(fh.includes(t))score+=1;}if(/orderitem/i.test(name)&&/sell|sales|product/.test(String(question).toLowerCase()))score+=8;if(/orderpart/i.test(name)&&/region|address|shipping/.test(String(question).toLowerCase()))score+=7;if(/postaladdress/i.test(name)&&/region|address|state|country/.test(String(question).toLowerCase()))score+=8;return score;}
-function localWorkflowScore(w,question){const terms=expandedTerms(question),hay=`${w.name} ${w.description}`.toLowerCase();return terms.reduce((s,t)=>s+(hay.includes(t)?1:0),0);}
-function compactScopeCatalog(question,workflows,entities,arcs){return{workflows:workflows.map(w=>({...w,score:localWorkflowScore(w,question)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,12).map(({score,...x})=>x),entities:entities.map(e=>({...e,score:localEntityScore(e.name,arcs,question)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,18).map(({score,...x})=>x)};}
-function fallbackScope(question,workflows,entities,arcs){const rankedEntities=entities.map(e=>({name:e.name,score:localEntityScore(e.name,arcs,question)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,6).map(x=>x.name);const rankedWorkflows=workflows.map(w=>({id:w.id,score:localWorkflowScore(w,question)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score).slice(0,5).map(x=>x.id);return{intent:/region|product|sales|sell|highest|lowest|trend|group|rank/.test(String(question).toLowerCase())?'data_analytics':'other',workflowIds:rankedWorkflows,entities:rankedEntities,needs:expandedTerms(question).slice(0,6)};}
-function fieldRole(f){const t=`${f?.name||''} ${f?.description||''}`.toLowerCase();if(/productid|product identifier/.test(t))return'dimension';if(/quantity/.test(t))return'measure';if(/unitamount|grandtotal|parttotal|price|amount|revenue/.test(t))return'measure';if(/stategeoname|region|country|geo|province/.test(t))return'dimension';if(/date/.test(t))return'time';if(/orderid|seqid|contactmechid|partyid/.test(t))return'key';if(/status/.test(t))return'attribute';return'';}
-function fallbackPlan(question,evidence){const scored=[];for(const d of arr(evidence.entities))for(const f of arr(d.fields)){const role=fieldRole(f);if(!role)continue;let score=fieldScore(f,question);if(role==='dimension'&&/product/.test(`${f.name} ${f.description}`.toLowerCase()))score+=6;if(role==='dimension'&&/region|state|geo|country/.test(`${f.name} ${f.description}`.toLowerCase()))score+=6;if(role==='measure'&&/quantity|amount|price|total/.test(`${f.name} ${f.description}`.toLowerCase()))score+=5;scored.push({entity:d.name,field:f.name,role,score});}const chosen=scored.sort((a,b)=>b.score-a.score).filter((x,i,self)=>self.findIndex(y=>key(y.entity)===key(x.entity)&&key(y.field)===key(x.field))===i).slice(0,8).map(({score,...x})=>x);const entities=uniq(chosen.map(x=>x.entity)).slice(0,5);return{grain:/product/.test(String(question).toLowerCase())?'one sold product / order item':'business event',entities,fields:chosen,connections:[],missing:[]};}
-function compactEvidenceForPlan(evidence){return{question:evidence.question,intent:evidence.intent,needs:evidence.needs,workflows:arr(evidence.workflows).map(w=>({id:w.id,name:w.name,relations:w.relations})),entities:arr(evidence.entities).map(e=>({name:e.name,fields:arr(e.fields).map(f=>({entity:f.entity,name:f.name,type:f.type,isPk:f.isPk}))})),relations:arr(evidence.relations).map(r=>({from:r.from,relation:r.relation,to:r.to}))};}
-function compactPacketForAnswer(packet){return{question:packet.question,intent:packet.intent,grain:packet.grain,fields:packet.fields,connections:arr(packet.connections).map(c=>({from:c.from,to:c.to,fieldJoins:c.fieldJoins,semanticPath:arr(c.semanticPath).map(e=>({from:e.from,relation:e.relation,to:e.to}))})),missing:packet.missing,selectedEntities:packet.selectedEntities};}
+function entityCatalog(arcs) {
+  const by = new Map();
+  for (const arc of arcs) {
+    for (const detail of arr(arc.entityDetails)) {
+      const name = clean(detail?.name, 100);
+      if (!friendlyName(name)) continue;
+      const k = key(name);
+      const current = by.get(k) || { name, description: '' };
+      if (!current.description && detail?.description) current.description = clean(detail.description, 150);
+      by.set(k, current);
+    }
+    for (const raw of [...arr(arc.entities), ...arr(arc.persistentObjects)]) {
+      const name = clean(raw, 100);
+      if (!friendlyName(name)) continue;
+      if (!by.has(key(name))) by.set(key(name), { name, description: '' });
+    }
+  }
+  return [...by.values()];
+}
 
-async function jsonCall(client,model,system,payload,log,stage,usage,{maxTokens=null}={}){const request={model,messages:[{role:'system',content:system},{role:'user',content:JSON.stringify(payload)}],response_format:{type:'json_object'},temperature:0};if(Number.isFinite(maxTokens)&&maxTokens>0)request.max_tokens=maxTokens;const completion=await client.chat.completions.create(request);const u=usageOf(completion.usage||{});addUsage(usage,u);const msg=completion.choices?.[0]?.message||{},raw=msg.content||'',finishReason=completion.choices?.[0]?.finish_reason||'',parsed=parseJson(raw);log('query_guided_stage',{stage,model,input:payload,output:parsed.value,rawOutput:raw,reasoningOutput:clean(msg.reasoning_content||'',4000),parseError:parsed.error,finishReason,usage:u});return{value:parsed.value,finishReason,raw};}
+function relationEdges(arcs) {
+  const seen = new Set();
+  const out = [];
+  for (const arc of arcs) {
+    for (const rel of arr(arc.relationshipDetails)) {
+      const from = clean(rel?.from, 100), to = clean(rel?.to, 100), relation = clean(rel?.relation, 100);
+      if (!friendlyName(from) || !friendlyName(to)) continue;
+      const k = `${key(from)}|${key(relation)}|${key(to)}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ from, relation, to, workflowId: String(arc.id), workflowName: clean(arc.title, 100) });
+    }
+  }
+  return out;
+}
 
-export async function investigateQuery({question,client,model,arcs,snapshot,mapStateForArc,pathHints=()=>[],log=()=>{}}){const usage={prompt:0,completion:0,total:0},workflows=workflowCatalog(arcs,mapStateForArc,snapshot),entities=entityCatalog(arcs),scopeCatalog=compactScopeCatalog(question,workflows,entities,arcs);const selectionModel=/reasoner/i.test(String(model||''))?'deepseek-chat':model;
- const scopeCall=await jsonCall(client,selectionModel,'Select relevant supplied workflow IDs and entity names. Return compact JSON only: {"intent":"data_analytics|web_analytics|operations|support|decision_support|engineering|other","workflowIds":[],"entities":[],"needs":[]}. Max 5 workflows, 6 entities, 6 needs.',{question,...scopeCatalog},log,'scope',usage);
- const scope=nonEmptyObject(scopeCall.value)&&arr(scopeCall.value.entities).length?scopeCall.value:fallbackScope(question,workflows,entities,arcs);if(scope!==scopeCall.value)log('query_guided_recovery',{stage:'scope',reason:'empty_model_selection',recovered:scope});
- const selectedWorkflowIds=arr(scope.workflowIds).map(String).slice(0,5),selectedEntities=uniq(arr(scope.entities).filter(n=>entities.some(e=>key(e.name)===key(n)))).slice(0,6),edges=relationEdges(arcs),neighborhood=nearbyEntities(selectedEntities,edges,5),evidenceNames=uniq([...selectedEntities,...neighborhood]).slice(0,8);
- const evidence={question,intent:scope.intent||'',needs:arr(scope.needs).slice(0,6),workflows:selectedWorkflowDetail(selectedWorkflowIds,arcs),entities:evidenceNames.map(n=>entityDetail(n,arcs,question)),relations:edges.filter(e=>evidenceNames.some(n=>key(n)===key(e.from)||key(n)===key(e.to))).slice(0,14)};
- const compactPlanEvidence=compactEvidenceForPlan(evidence);
- const planCall=await jsonCall(client,selectionModel,'Choose the exact data fields needed. Return compact JSON only: {"grain":"","entities":[],"fields":[{"entity":"","field":"","role":"key|measure|dimension|time|attribute"}],"connections":[],"missing":[]}. Max 5 entities and 8 fields. Never invent names.',compactPlanEvidence,log,'plan',usage);
- const plan=nonEmptyObject(planCall.value)&&arr(planCall.value.fields).length?planCall.value:fallbackPlan(question,evidence);if(plan!==planCall.value)log('query_guided_recovery',{stage:'plan',reason:'empty_model_plan',recovered:plan});
- const plannedEntities=uniq(arr(plan.entities).filter(n=>evidenceNames.some(e=>key(e)===key(n)))).slice(0,5),connections=connectSelectedEntities(plannedEntities,arcs,question),plannedFields=arr(plan.fields).filter(f=>{const d=evidence.entities.find(e=>key(e.name)===key(f?.entity));return d&&arr(d.fields).some(x=>key(x.name)===key(f?.field));}).slice(0,8);
- const packet={question,intent:scope.intent||'other',grain:clean(plan.grain,140),fields:plannedFields,connections,missing:arr(plan.missing).slice(0,5),selectedEntities:plannedEntities,unlearnedHints:pathHints(question).slice(0,2).map(h=>({id:h.id||h.pathId,label:clean(h.workflowTitle||h.label,90)}))};
- const answerCall=await jsonCall(client,model,'Answer from this validated packet only. Return compact JSON only: {"intent":"","answer":"","dataView":{"grain":"","select":[],"joins":[],"filters":[],"groupBy":[],"orderBy":[],"missing":[]},"nextStep":""}. For analytics use packet fields only. fieldJoins are evidenced joins; semantic-only paths are not exact joins. Answer in at most 3 sentences.',compactPacketForAnswer(packet),log,'answer',usage);
- const answer=answerCall.value;
- return{...answer,investigation:{mode:'guided',stages:3,selectionModel,selectedWorkflowIds,selectedEntities:plannedEntities,usage}};
+function fieldsForEntity(name, arcs) {
+  const wanted = key(name), seen = new Set(), out = [];
+  for (const arc of arcs) {
+    for (const detail of arr(arc.entityDetails)) {
+      if (key(detail?.name) !== wanted) continue;
+      for (const field of arr(detail?.fields)) {
+        const fieldName = clean(field?.physicalFieldName || field?.name, 100);
+        if (!fieldName) continue;
+        const sourceEntity = clean(field?.sourceEntity || detail?.name || name, 100);
+        const k = `${key(sourceEntity)}|${key(fieldName)}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({
+          entity: sourceEntity,
+          field: fieldName,
+          type: clean(field?.type, 50),
+          description: clean(field?.description, 120),
+          isPk: !!field?.isPk
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function workflowsForEntity(name, arcs) {
+  const wanted = key(name), out = [];
+  for (const arc of arcs) {
+    const present = arr(arc.entityDetails).some((d) => key(d?.name) === wanted)
+      || arr(arc.entities).some((e) => key(e) === wanted)
+      || arr(arc.persistentObjects).some((e) => key(e) === wanted);
+    if (present) out.push({ id: String(arc.id), name: clean(arc.title, 110), description: clean(arc.businessIntent || arc.outcome, 140) });
+  }
+  return out;
+}
+
+function entitiesForWorkflow(workflowId, arcs) {
+  const arc = arcs.find((a) => String(a.id) === String(workflowId));
+  if (!arc) return [];
+  return uniq([
+    ...arr(arc.entities),
+    ...arr(arc.persistentObjects),
+    ...arr(arc.entityDetails).map((d) => d?.name)
+  ]).filter(friendlyName).map((name) => ({ name }));
+}
+
+function relatedWorkflows(workflowId, arcs) {
+  const arc = arcs.find((a) => String(a.id) === String(workflowId));
+  if (!arc) return [];
+  const own = new Set(entitiesForWorkflow(workflowId, arcs).map((e) => key(e.name)));
+  if (!own.size) return [];
+  const out = [];
+  for (const other of arcs) {
+    if (String(other.id) === String(workflowId)) continue;
+    const shared = entitiesForWorkflow(other.id, arcs).map((e) => e.name).filter((n) => own.has(key(n)));
+    if (!shared.length) continue;
+    out.push({ id: String(other.id), name: clean(other.title, 110), description: clean(other.businessIntent || other.outcome, 140), sharedEntities: uniq(shared).slice(0, 8) });
+  }
+  return out;
+}
+
+function oneHopExpand(selection, arcs) {
+  const edges = relationEdges(arcs);
+  const selectedEntityNames = uniq(arr(selection?.entities).filter(friendlyName));
+  const selectedWorkflowIds = uniq(arr(selection?.workflowIds).map(String));
+  const entityNames = new Set(selectedEntityNames.map(key));
+  const workflowIds = new Set(selectedWorkflowIds);
+
+  for (const id of selectedWorkflowIds) {
+    for (const entity of entitiesForWorkflow(id, arcs)) entityNames.add(key(entity.name));
+    for (const wf of relatedWorkflows(id, arcs)) workflowIds.add(String(wf.id));
+  }
+  for (const name of selectedEntityNames) {
+    for (const edge of edges) {
+      if (key(edge.from) === key(name)) entityNames.add(key(edge.to));
+      if (key(edge.to) === key(name)) entityNames.add(key(edge.from));
+    }
+    for (const wf of workflowsForEntity(name, arcs)) workflowIds.add(String(wf.id));
+  }
+
+  const entityCatalogByKey = new Map(entityCatalog(arcs).map((e) => [key(e.name), e]));
+  const entities = [...entityNames]
+    .map((k) => entityCatalogByKey.get(k))
+    .filter(Boolean)
+    .slice(0, 24)
+    .map((entity) => ({ ...entity, fields: fieldsForEntity(entity.name, arcs).slice(0, 24) }));
+
+  const entityKeySet = new Set(entities.map((e) => key(e.name)));
+  const workflows = [...workflowIds]
+    .map((id) => arcs.find((a) => String(a.id) === String(id)))
+    .filter(Boolean)
+    .slice(0, 16)
+    .map((arc) => ({
+      id: String(arc.id),
+      name: clean(arc.title, 110),
+      description: clean(arc.businessIntent || arc.outcome, 150),
+      entities: entitiesForWorkflow(arc.id, arcs).map((e) => e.name).filter((n) => entityKeySet.has(key(n))).slice(0, 16)
+    }));
+
+  const connections = edges
+    .filter((edge) => entityKeySet.has(key(edge.from)) && entityKeySet.has(key(edge.to)))
+    .slice(0, 40);
+
+  return { entities, workflows, connections };
+}
+
+function compactExpandedMap(expanded) {
+  return {
+    entities: arr(expanded.entities).map((e) => ({
+      name: e.name,
+      description: clean(e.description, 100),
+      fields: arr(e.fields).map((f) => ({ field: f.field, type: f.type, description: clean(f.description, 80), isPk: f.isPk })).slice(0, 16)
+    })),
+    workflows: arr(expanded.workflows).map((w) => ({ id: w.id, name: w.name, description: clean(w.description, 100), entities: w.entities })),
+    connections: arr(expanded.connections).map((c) => ({ from: c.from, relation: c.relation, to: c.to }))
+  };
+}
+
+function lexicalFallback(question, workflows, entities) {
+  const words = String(question || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  const score = (text) => words.reduce((s, w) => s + (String(text || '').toLowerCase().includes(w) ? 1 : 0), 0);
+  return {
+    intent: /sales|sell|sold|highest|lowest|region|product|trend|group|rank/.test(String(question).toLowerCase()) ? 'data_analytics' : 'other',
+    workflowIds: workflows.map((w) => ({ id: w.id, s: score(`${w.name} ${w.description}`) })).filter((x) => x.s > 0).sort((a,b) => b.s-a.s).slice(0,4).map((x) => x.id),
+    entities: entities.map((e) => ({ name: e.name, s: score(`${e.name} ${e.description}`) })).filter((x) => x.s > 0).sort((a,b) => b.s-a.s).slice(0,6).map((x) => x.name)
+  };
+}
+
+async function jsonCall(client, model, system, payload, stage, usage, log) {
+  const completion = await client.chat.completions.create({
+    model,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(payload) }],
+    response_format: { type: 'json_object' },
+    temperature: 0
+  });
+  const u = usageOf(completion.usage || {}); addUsage(usage, u);
+  const message = completion.choices?.[0]?.message || {};
+  const raw = message.content || '';
+  const parsed = parseJson(raw);
+  log('query_guided_stage', {
+    stage, model, input: payload, output: parsed, rawOutput: raw,
+    reasoningOutput: clean(message.reasoning_content || '', 4000),
+    finishReason: completion.choices?.[0]?.finish_reason || '', usage: u
+  });
+  return parsed;
+}
+
+export async function investigateQuery({ question, client, model, arcs, snapshot, mapStateForArc, pathHints = () => [], log = () => {} }) {
+  const usage = { prompt: 0, completion: 0, total: 0 };
+  const workflows = workflowCatalog(arcs, mapStateForArc, snapshot);
+  const entities = entityCatalog(arcs);
+
+  const selectionModel = /reasoner/i.test(String(model || '')) ? 'deepseek-chat' : model;
+  const selected = await jsonCall(
+    client,
+    selectionModel,
+    `Given a business question and a top-level semantic catalog, select only the relevant items. Return JSON only: {"intent":"data_analytics|web_analytics|operations|support|decision_support|engineering|other","workflowIds":[],"entities":[]}. Use only supplied workflow IDs/entity names. Select at most 5 workflows and 6 entities. Do not answer the question yet.`,
+    { question, workflows, entities },
+    'select', usage, log
+  );
+
+  const validWorkflowIds = new Set(workflows.map((w) => String(w.id)));
+  const validEntityNames = new Map(entities.map((e) => [key(e.name), e.name]));
+  let selection = {
+    intent: selected.intent || '',
+    workflowIds: uniq(arr(selected.workflowIds).map(String).filter((id) => validWorkflowIds.has(id))).slice(0, 5),
+    entities: uniq(arr(selected.entities).map((n) => validEntityNames.get(key(n))).filter(Boolean)).slice(0, 6)
+  };
+  if (!selection.workflowIds.length && !selection.entities.length) {
+    selection = { ...lexicalFallback(question, workflows, entities), intent: selected.intent || lexicalFallback(question, workflows, entities).intent };
+    log('query_guided_recovery', { stage: 'select', reason: 'empty_selection', recovered: selection });
+  }
+
+  const expanded = oneHopExpand(selection, arcs);
+  const localMap = compactExpandedMap(expanded);
+
+  const answer = await jsonCall(
+    client,
+    model,
+    `Answer the user's question ONLY from the locally expanded semantic map. The expected answer is a DATA VIEW, not an investigation narrative. Return JSON exactly in this shape:
+{"intent":"","answer":"2-4 concise sentences","dataView":{"grain":"","select":[{"entity":"","field":"","alias":"","role":"key|measure|dimension|time|attribute"}],"joins":[{"left":"Entity.field or Entity","right":"Entity.field or Entity","relation":"","evidenced":true}],"filters":[],"groupBy":[],"orderBy":[],"missing":[]},"nextStep":""}.
+Rules: (1) select only fields that exist in the supplied entities; (2) show only entities/fields needed to answer the question; (3) explain how those entities connect; (4) use exact field-to-field joins only when the supplied map supports them; otherwise show the entity-level connection and set evidenced=false; (5) for analytics, include the fact grain, measures, dimensions, filters/grouping/order needed to build one combined data view; (6) if the map lacks a required field or join, put that exact gap in dataView.missing instead of inventing it; (7) never expose source paths, framework classes, service names, or implementation details.`,
+    { question, intent: selection.intent, selected: selection, localMap, unlearnedHints: pathHints(question).slice(0, 2) },
+    'answer', usage, log
+  );
+
+  return {
+    ...answer,
+    investigation: {
+      mode: 'select-expand-answer',
+      stages: 2,
+      selectionModel,
+      selectedWorkflowIds: selection.workflowIds,
+      selectedEntities: selection.entities,
+      expandedEntityCount: expanded.entities.length,
+      expandedWorkflowCount: expanded.workflows.length,
+      usage
+    }
+  };
 }
