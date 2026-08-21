@@ -8,7 +8,7 @@ Rule: preserve intentional current behavior in one focused owner module; delete 
 
 Checkpoint 2026-08-21:
 
-`ProgressiveRepositoryExplorer` (non-numbered stable base)
+`ModelDirectedExplorerV2`
 → `withLightweightModelCall`
 → `withPass1State`
 → `withCallPathPreprocessLifecycle`
@@ -28,7 +28,7 @@ Checkpoint 2026-08-21:
 → `withEntityReconciliation`
 → `RepositoryExplorer`
 
-Only `RepositoryExplorer` is public/live for new server code. There are no remaining `ProgressiveRepositoryExplorerV*` imports in the repository and no new numbered explorer classes may be introduced.
+Only `RepositoryExplorer` is public/live for new server code. There are no remaining `ProgressiveRepositoryExplorer*` imports in the repository and no new numbered explorer classes may be introduced.
 
 ## Checkpoint discipline
 
@@ -159,13 +159,26 @@ Only `RepositoryExplorer` is public/live for new server code. There are no remai
 - V3 old thread/browse validation discarded.
 - V2 orientation/validation bridge discarded.
 
+### Non-numbered ProgressiveRepositoryExplorer → ModelDirectedExplorerV2
+Discarded completely:
+- model-driven repository directory orientation
+- source-file index browsing
+- direct XML/config/text interpretation path
+- `listDirectory` / `getFunction` / direct-file browse validation and execution
+- raw repository-browse prompt contracts and coverage bookkeeping tied to that path
+
+Reason:
+- current learning starts from deterministic topology/call-path evidence and whole-flow interpretation; no focused module calls these browse-specific methods.
+- generic model/run mechanics remain supplied by `ModelDirectedExplorerV2` and lower bases.
+
 ## Physical cleanup status
 
-- All numbered `progressiveRepositoryExplorerV*.js` layers have been removed from the live chain and deleted through V2–V48.
-- Repository search reports no remaining `progressiveRepositoryExplorerV` references.
-- `RepositoryExplorer` now composes the non-numbered stable base with focused modules only.
+- All numbered `progressiveRepositoryExplorerV*.js` layers have been deleted.
+- The non-numbered `progressiveRepositoryExplorer.js` has also been deleted.
+- Repository search reports no remaining `progressiveRepositoryExplorer` references.
+- `RepositoryExplorer` now composes directly over `ModelDirectedExplorerV2` plus focused modules.
 - Duplicate `callPathLookup.js` was removed; `callPathAccess.js` is the single call-path lookup owner.
 
 ## Remaining cleanup opportunity
 
-The non-numbered `progressiveRepositoryExplorer.js` still contains the oldest model-driven browse/orientation implementation. It now acts only as the stable mechanical base beneath focused modules. Before deleting/splitting portions of that file, compare its methods against actual calls from the focused modules and `ModelDirectedExplorerV2`; extract stable mechanics first and delete only proven-dead browse behavior. This is a separate cleanup from the completed numbered-layer peel.
+Inspect `ModelDirectedExplorerV2` / `ModelDirectedExplorer` next. They still contain the older generic semantic-neighborhood/thread-navigation implementation. Do not remove them wholesale until the focused modules' dependencies on generic run/model/accounting/state mechanics are separated from obsolete navigation behavior.
