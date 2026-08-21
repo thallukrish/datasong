@@ -193,6 +193,7 @@ async function jsonCall(client, model, system, payload, stage, usage, log) {
     model,
     messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(payload) }],
     response_format: { type: 'json_object' },
+    thinking: { type: 'disabled' },
     temperature: 0
   });
   const u = usageOf(completion.usage || {}); addUsage(usage, u);
@@ -212,10 +213,9 @@ export async function investigateQuery({ question, client, model, arcs, snapshot
   const workflows = workflowCatalog(arcs, mapStateForArc, snapshot);
   const entities = entityCatalog(arcs);
 
-  const selectionModel = /reasoner/i.test(String(model || '')) ? 'deepseek-chat' : model;
   const selected = await jsonCall(
     client,
-    selectionModel,
+    model,
     `Given a business question and a top-level semantic catalog, select only the relevant items. Return JSON only: {"intent":"data_analytics|web_analytics|operations|support|decision_support|engineering|other","workflowIds":[],"entities":[]}. Use only supplied workflow IDs/entity names. Select at most 5 workflows and 6 entities. Do not answer the question yet.`,
     { question, workflows, entities },
     'select', usage, log
@@ -251,7 +251,7 @@ Rules: (1) select only fields that exist in the supplied entities; (2) show only
     investigation: {
       mode: 'select-expand-answer',
       stages: 2,
-      selectionModel,
+      thinking: 'disabled',
       selectedWorkflowIds: selection.workflowIds,
       selectedEntities: selection.entities,
       expandedEntityCount: expanded.entities.length,
