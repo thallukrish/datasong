@@ -36,24 +36,23 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
     }
 
     const packets = [];
+    let remaining = 120;
     for (const rawName of names) {
+      if (remaining <= 0 || packets.length >= 6) break;
       const schema = this.topology.entitySchema?.(rawName) || null;
       if (!schema) continue;
       const exactName = String(schema.name || rawName);
       const learned = arr(parsed?._structuredWorkflow?.entityDetails).find((item) => key(item?.name) === key(exactName)) || {};
       const learnedFields = new Map(arr(learned.fields).map((field) => [key(field?.name), clean(field?.description, 420)]));
+      const maxForEntity = Math.min(35, remaining);
       const missing = arr(schema.fields)
         .filter((field) => field?.name)
         .filter((field) => !clean(field.description, 420) && !learnedFields.get(key(field.name)))
-        .slice(0, 50)
+        .slice(0, maxForEntity)
         .map((field) => ({ name: String(field.name), type: String(field.type || ''), isPk: !!field.isPk }));
       if (!missing.length) continue;
-      packets.push({
-        name: exactName,
-        description: clean(schema.description || learned.description || '', 300),
-        fields: missing
-      });
-      if (packets.length >= 7) break;
+      packets.push({ name: exactName, description: clean(schema.description || learned.description || '', 300), fields: missing });
+      remaining -= missing.length;
     }
     return packets;
   }
@@ -62,19 +61,12 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
     const arcId = String(parsed?.arcUpdate?.arcId || this.pass1().activeArcId() || '');
     const arc = this.pass1().arcByReference(arcId) || this.pass1().activeArc();
     const steps = arr(parsed?._structuredWorkflow?.workflowSteps).slice(0, 12).map((step) => ({
-      name: clean(step?.name, 140),
-      description: clean(step?.description, 260),
-      entities: arr(step?.entities).slice(0, 8),
-      persistentObjects: arr(step?.persistentObjects).slice(0, 8),
-      effect: clean(step?.effect, 180)
+      name: clean(step?.name, 140), description: clean(step?.description, 260),
+      entities: arr(step?.entities).slice(0, 8), persistentObjects: arr(step?.persistentObjects).slice(0, 8), effect: clean(step?.effect, 180)
     }));
     return {
-      arcId,
-      title: clean(arc?.title, 180),
-      actor: clean(arc?.businessActor || arc?.trigger, 140),
-      intent: clean(arc?.businessIntent, 240),
-      outcome: clean(arc?.outcome || arc?.businessOutcome, 240),
-      steps
+      arcId, title: clean(arc?.title, 180), actor: clean(arc?.businessActor || arc?.trigger, 140),
+      intent: clean(arc?.businessIntent, 240), outcome: clean(arc?.outcome || arc?.businessOutcome, 240), steps
     };
   }
 
@@ -82,7 +74,6 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
     if (!parsed?._structuredWorkflow || !Array.isArray(enriched?.entities)) return;
     const details = arr(parsed._structuredWorkflow.entityDetails);
     const byName = new Map(details.map((item) => [key(item?.name), item]));
-
     for (const entity of enriched.entities) {
       const schema = this.topology.entitySchema?.(entity?.name) || null;
       if (!schema) continue;
@@ -90,8 +81,7 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
       let target = byName.get(key(schema.name));
       if (!target) {
         target = { name: String(schema.name), description: clean(schema.description, 420), fields: [] };
-        details.push(target);
-        byName.set(key(schema.name), target);
+        details.push(target); byName.set(key(schema.name), target);
       }
       const current = new Map(arr(target.fields).map((field) => [key(field?.name), field]));
       for (const item of arr(entity?.fields)) {
@@ -103,8 +93,7 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
         if (existing) existing.description = existing.description || description;
         else {
           const added = { name: String(schemaField.name), description };
-          target.fields.push(added);
-          current.set(key(schemaField.name), added);
+          target.fields.push(added); current.set(key(schemaField.name), added);
         }
       }
     }
@@ -133,37 +122,25 @@ export class ProgressiveRepositoryExplorerV50 extends ProgressiveRepositoryExplo
       const result = await this.callAndRecordAttempt({
         dynamicPrompt: prompt,
         observation: {
-          id: `field-semantics:${workflow.arcId || this.state.step}`,
-          path: observation?.path || '',
-          kind: 'field_semantic_enrichment',
-          canonical: { arcId: workflow.arcId, entityCount: entities.length }
+          id: `field-semantics:${workflow.arcId || this.state.step}`, path: observation?.path || '', kind: 'field_semantic_enrichment',
+          canonical: { arcId: workflow.arcId, entityCount: entities.length, fieldCount: entities.reduce((n, e) => n + arr(e.fields).length, 0) }
         },
-        candidates: [],
-        before: this.snapshot(),
-        maxTokens: undefined,
-        retry: false
+        candidates: [], before: this.snapshot(), maxTokens: undefined, retry: false
       });
       const enriched = JSON.parse(result.raw || '{}');
       this.mergeFieldMeanings(parsed, enriched);
       await this.appendRunLog({
-        type: 'field_semantics_enriched',
-        call: result.callNumber,
-        explorationStep: this.state.step,
-        timestamp: new Date().toISOString(),
-        arcId: workflow.arcId,
-        entityCount: entities.length,
-        parsedResponse: enriched
+        type: 'field_semantics_enriched', call: result.callNumber, explorationStep: this.state.step,
+        timestamp: new Date().toISOString(), arcId: workflow.arcId, entityCount: entities.length,
+        fieldCount: entities.reduce((n, e) => n + arr(e.fields).length, 0), parsedResponse: enriched
       });
       this.printCallSummary(result.usage, result.callNumber, `described schema fields for ${entities.length} entit${entities.length === 1 ? 'y' : 'ies'}`);
     } catch (error) {
       await this.appendRunLog({
-        type: 'field_semantics_enrichment_skipped',
-        explorationStep: this.state.step,
-        timestamp: new Date().toISOString(),
-        arcId: workflow.arcId,
-        error: error.message
+        type: 'field_semantics_enrichment_skipped', explorationStep: this.state.step,
+        timestamp: new Date().toISOString(), arcId: workflow.arcId, error: error.message
       });
-      // Field descriptions are useful enrichment, never a reason to reject an otherwise valid workflow interpretation.
+      // Description enrichment is optional; never reject a valid workflow because it failed.
     }
   }
 
