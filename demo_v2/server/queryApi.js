@@ -16,7 +16,7 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
   };
   const append = (file, type, payload = {}) => fs.appendFileSync(file, `${JSON.stringify({ type, timestamp: new Date().toISOString(), ...payload })}\n`, 'utf8');
 
-  app.post('/api/query-map-agent', async (req, res) => {
+  app.post('/api/query-map', async (req, res) => {
     const queryLog = queryRunPath(); onLatestLog(queryLog);
     try {
       if (!queryClient) return res.status(503).json({ error: 'The reasoning service is not configured' });
