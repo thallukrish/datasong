@@ -42,6 +42,39 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     };
   }
 
+  normalizeWholeFlowPass2(raw, observation) {
+    const arc = this.pass1().activeArc();
+    const fit = raw?.arcFit && typeof raw.arcFit === 'object' ? raw.arcFit : {};
+    const update = raw?.arcUpdate && typeof raw.arcUpdate === 'object' ? raw.arcUpdate : {};
+    const normalized = this.normalizePass12({
+      meaning: String(raw?.meaning || '').trim(),
+      evidenceClassification: 'business_use_case',
+      arcFits: arc ? [{
+        arcId: arc.id,
+        continuity: fit.continuity,
+        coherence: fit.coherence,
+        expectedGain: fit.expectedGain,
+        reason: fit.reason
+      }] : [],
+      bestArc: arc?.id || 'UNATTACHED',
+      newArcs: [],
+      arcUpdate: { ...update, arcId: arc?.id || update.arcId || '' },
+      candidateScores: [],
+      evidenceRequest: { type: 'stop' }
+    }, []);
+
+    const maxBranch = Math.max(-1, arr(observation?.canonical?.executableFlow?.flow?.branches).length - 1);
+    normalized.unresolvedBranches = arr(raw?.unresolvedBranches)
+      .map((item) => ({ branchIndex: Number(item?.branchIndex), reason: String(item?.reason || '').trim() }))
+      .filter((item) => Number.isInteger(item.branchIndex) && item.branchIndex >= 0 && item.branchIndex <= maxBranch);
+    normalized.flowAction = ['complete', 'inspect_branches', 'scout'].includes(raw?.flowAction)
+      ? raw.flowAction
+      : (normalized.unresolvedBranches.length ? 'inspect_branches' : 'complete');
+    normalized._wholeFlowPass2 = true;
+    normalized.next = { type: 'stop' };
+    return normalized;
+  }
+
   wholeFlowObservation(arc, branchIndex = null) {
     const flowPackage = this.compactFlowPackage(arc);
     if (!flowPackage) return null;
