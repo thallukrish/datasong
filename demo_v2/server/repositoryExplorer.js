@@ -1,4 +1,5 @@
-import { ProgressiveRepositoryExplorerV40 } from './progressiveRepositoryExplorerV40.js';
+import { ProgressiveRepositoryExplorerV39 } from './progressiveRepositoryExplorerV39.js';
+import { withCallPathAccess } from './explorer/callPathAccess.js';
 import { withWholeFlowPass2 } from './explorer/wholeFlowPass2.js';
 import { withWholeFlowScheduler } from './explorer/wholeFlowScheduler.js';
 import { withScoutLifecycle } from './explorer/scoutLifecycle.js';
@@ -9,7 +10,8 @@ import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 
-const ExplorerWithWholeFlowPass2 = withWholeFlowPass2(ProgressiveRepositoryExplorerV40);
+const ExplorerWithCallPathAccess = withCallPathAccess(ProgressiveRepositoryExplorerV39);
+const ExplorerWithWholeFlowPass2 = withWholeFlowPass2(ExplorerWithCallPathAccess);
 const ExplorerWithWholeFlowScheduler = withWholeFlowScheduler(ExplorerWithWholeFlowPass2);
 const ExplorerWithScoutLifecycle = withScoutLifecycle(ExplorerWithWholeFlowScheduler);
 const ExplorerWithMapPersistence = withMapPersistence(ExplorerWithScoutLifecycle);
