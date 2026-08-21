@@ -1,1 +1,1 @@
-export { ProgressiveRepositoryExplorerV51 as ProgressiveRepositoryExplorerV50 } from './progressiveRepositoryExplorerV51.js';
+export { ProgressiveRepositoryExplorerV52 as ProgressiveRepositoryExplorerV50 } from './progressiveRepositoryExplorerV52.js';
