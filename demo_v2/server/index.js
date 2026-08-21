@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
-import { ProgressiveRepositoryExplorerV48 } from './progressiveRepositoryExplorerV48.js';
+import { ProgressiveRepositoryExplorerV50 } from './progressiveRepositoryExplorerV50.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -14,7 +14,7 @@ const port = Number(process.env.PORT || 3102);
 const clients = new Set();
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.join(dataRoot, 'repo-cache') });
-const explorer = new ProgressiveRepositoryExplorerV48({ topology, dataRoot, onState: (state) => broadcast(state) });
+const explorer = new ProgressiveRepositoryExplorerV50({ topology, dataRoot, onState: (state) => broadcast(state) });
 const queryClient = process.env.DEEPSEEK_API_KEY
   ? new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com', timeout: 60_000 })
   : null;
@@ -25,7 +25,17 @@ let latestQueryLogPath = '';
 const arr = (value) => Array.isArray(value) ? value : [];
 const compactText = (value, max = 320) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
 const uniq = (values) => [...new Set(arr(values).filter(Boolean).map(String))];
+const STOP_WORDS = new Set(['a','an','and','are','as','at','be','by','for','from','how','in','is','it','last','of','on','or','the','to','was','what','when','where','which','why','with','want','know']);
 
+function words(value) {
+  return uniq(String(value || '').toLowerCase().split(/[^a-z0-9]+/).filter((v) => v.length > 1 && !STOP_WORDS.has(v)));
+}
+function wordMatches(queryWord, candidateWord) {
+  if (queryWord === candidateWord) return true;
+  if (queryWord.length >= 4 && candidateWord.startsWith(queryWord)) return true;
+  if (candidateWord.length >= 4 && queryWord.startsWith(candidateWord)) return true;
+  return false;
+}
 function isBusinessArc(arc) {
   const marks = [arc?.classification, arc?.qualification, arc?.pathNature, arc?.evidenceClassification]
     .map((v) => String(v || '').toLowerCase());
@@ -33,79 +43,160 @@ function isBusinessArc(arc) {
   if (arc?.qualifiesAsBusinessUseCase === false) return false;
   return true;
 }
-
 function mapStateForArc(arc, snapshot) {
   if (arc?.closureState === 'closed') return 'complete';
   const flow = snapshot?.pass2WholeFlowByArc?.[arc?.id];
   const calls = Number(flow?.wholeFlowCalls || 0) + Number(flow?.branchCalls || 0);
-  const semanticDetail = arr(arc?.majorStages).length + arr(arc?.entities).length + arr(arc?.relationships).length + arr(arc?.persistentObjects).length;
+  const semanticDetail = arr(arc?.workflowSteps).length + arr(arc?.entityDetails).length + arr(arc?.relationshipDetails).length
+    + arr(arc?.majorStages).length + arr(arc?.entities).length + arr(arc?.relationships).length + arr(arc?.persistentObjects).length;
   if (calls > 0 || semanticDetail > 0) return 'explored';
   return 'identified';
 }
-
 function arcSummary(arc, snapshot) {
+  const details = arr(arc?.entityDetails);
   return {
     id: arc.id,
     title: compactText(arc.title, 160),
-    actor: compactText(arc.businessActor, 120),
+    actor: compactText(arc.businessActor || arc.trigger, 120),
     intent: compactText(arc.businessIntent, 220),
     outcome: compactText(arc.outcome || arc.businessOutcome, 220),
+    entities: uniq([...arr(arc.entities), ...details.map((d) => d?.name)]).slice(0, 16),
+    fieldNames: uniq(details.flatMap((d) => arr(d?.fields).map((f) => f?.name))).slice(0, 30),
+    relationHints: arr(arc.relationshipDetails).slice(0, 8).map((r) => compactText([r?.from, r?.relation, r?.to].filter(Boolean).join(' → '), 180)),
     progress: Number(arc.progress || 0),
     closureState: arc.closureState || '',
-    mapState: mapStateForArc(arc, snapshot)
+    mapState: mapStateForArc(arc, snapshot),
+    businessPriority: Number.isFinite(Number(arc.businessPriority)) ? Number(arc.businessPriority) : null
   };
 }
-
 function arcDetail(arc, snapshot) {
   return {
     ...arcSummary(arc, snapshot),
-    stages: arr(arc.majorStages).map((v) => compactText(v, 180)),
+    trigger: compactText(arc.trigger, 260),
+    workflowSteps: arr(arc.workflowSteps).slice(0, 30).map((step) => ({
+      name: compactText(step?.name, 180),
+      description: compactText(step?.description, 520),
+      entities: uniq(step?.entities).slice(0, 12),
+      persistentObjects: uniq(step?.persistentObjects).slice(0, 12),
+      effect: compactText(step?.effect, 320)
+    })),
+    entityDetails: arr(arc.entityDetails).slice(0, 24).map((entity) => ({
+      name: compactText(entity?.name, 160),
+      description: compactText(entity?.description, 420),
+      schemaResolved: !!entity?.schemaResolved,
+      representedBy: arr(entity?.representedBy).slice(0, 8).map((item) => ({
+        entityName: compactText(item?.entityName, 160), relation: compactText(item?.relation, 80),
+        description: compactText(item?.description, 260), confidence: Number(item?.confidence || 0)
+      })),
+      fields: arr(entity?.fields).slice(0, 80).map((field) => ({
+        name: compactText(field?.name, 180), type: compactText(field?.type, 100), isPk: !!field?.isPk,
+        description: compactText(field?.description, 420), sourceEntity: compactText(field?.sourceEntity, 160),
+        physicalFieldName: compactText(field?.physicalFieldName, 160), authoritative: field?.authoritative === true
+      }))
+    })),
+    entityRepresentations: arr(arc.entityRepresentations).slice(0, 24).map((item) => ({
+      businessEntity: compactText(item?.businessEntity, 160), physicalEntity: compactText(item?.physicalEntity, 160),
+      relation: compactText(item?.relation, 80), description: compactText(item?.description, 420), confidence: Number(item?.confidence || 0)
+    })),
+    relationshipDetails: arr(arc.relationshipDetails).slice(0, 30).map((rel) => ({
+      from: compactText(rel?.from, 180), relation: compactText(rel?.relation, 180), to: compactText(rel?.to, 180),
+      description: compactText(rel?.description, 520)
+    })),
+    stages: arr(arc.majorStages).map((v) => compactText(v, 220)),
     entities: arr(arc.entities).map((v) => compactText(v, 140)),
     persistentObjects: arr(arc.persistentObjects).map((v) => compactText(v, 160)),
-    relationships: arr(arc.relationships).map((v) => compactText(v, 220)),
+    relationships: arr(arc.relationships).map((v) => compactText(v, 260)),
     externalEffects: arr(arc.externalEffects).map((v) => compactText(v, 180)),
     traceability: arc.traceability || null
   };
 }
-
-function businessArcs(snapshot) {
-  return arr(snapshot?.pass1Arcs).filter(isBusinessArc);
+function businessArcs(snapshot) { return arr(snapshot?.pass1Arcs).filter(isBusinessArc); }
+function allGroupedPaths() {
+  if (!topology.callPathIndex) return [];
+  const n = Math.min(2500, Math.max(1, Number(topology.callPathIndex.rankedPathCount || 1200)));
+  return topology.topCallPaths(n);
 }
-
+function pathArc(pathId, snapshot = explorer.snapshot()) {
+  return businessArcs(snapshot).find((arc) => [arc.callPathId, ...arr(arc.callPathVariantIds), ...arr(arc.containedCallPathIds), ...arr(arc.relatedCallPathIds)].includes(pathId)) || null;
+}
+function flowTokens(pathItem) {
+  const direct = arr(pathItem?.normalizedFlowTokens).filter(Boolean).map(String);
+  if (direct.length) return direct;
+  const signatures = arr(pathItem?.signatures).filter(Boolean).map(String);
+  if (signatures.length) return signatures;
+  return [pathItem?.entrySymbolId].filter(Boolean).map(String);
+}
+function lexicalScore(query, text) {
+  const q = words(query); if (!q.length) return 0;
+  const candidate = words(text); if (!candidate.length) return 0;
+  let hit = 0;
+  for (const qw of q) if (candidate.some((cw) => wordMatches(qw, cw))) hit += 1;
+  const phrase = String(text || '').toLowerCase().includes(String(query || '').trim().toLowerCase()) ? 0.8 : 0;
+  return hit / q.length + phrase;
+}
+function pathPreview(pathItem, query) {
+  const tokens = flowTokens(pathItem);
+  if (!tokens.length) return [];
+  const q = words(query);
+  const matched = [];
+  tokens.forEach((token, index) => {
+    const tw = words(token);
+    if (q.some((qw) => tw.some((cw) => wordMatches(qw, cw)))) matched.push(index);
+  });
+  if (!matched.length) return tokens.slice(0, 5);
+  const keep = new Set();
+  for (const i of matched) for (let j = Math.max(0, i - 1); j <= Math.min(tokens.length - 1, i + 1); j += 1) keep.add(j);
+  const out = [];
+  let previous = -2;
+  for (const i of [...keep].sort((a, b) => a - b)) {
+    if (i > previous + 1 && out.length) out.push('…');
+    out.push(compactText(tokens[i], 160));
+    previous = i;
+  }
+  if (Math.max(...keep) < tokens.length - 1) out.push('…');
+  return out.slice(0, 13);
+}
+function pathSearch(query, limit = 12) {
+  const snapshot = explorer.snapshot();
+  return allGroupedPaths().map((p) => {
+    const arc = pathArc(p.id, snapshot);
+    const haystack = `${p.entrySymbolId || ''} ${flowTokens(p).join(' ')} ${arr(p.sourcePaths).join(' ')}`;
+    const score = lexicalScore(query, haystack);
+    return {
+      id: p.id,
+      score,
+      label: compactText(arc?.title || p.entrySymbolId || flowTokens(p)[0] || p.id, 180),
+      preview: pathPreview(p, query),
+      sourcePaths: uniq(p.sourcePaths).slice(0, 3),
+      functionCount: Number(p.functionCount || 0),
+      workflowId: arc?.id || '',
+      workflowTitle: arc?.title || '',
+      status: arc ? mapStateForArc(arc, snapshot) : 'unlearned'
+    };
+  }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score || b.functionCount - a.functionCount).slice(0, limit);
+}
+function relevantPathHints(query, limit = 8) {
+  return pathSearch(query, limit).map(({ sourcePaths, ...item }) => item);
+}
 function coverageSummary(snapshot) {
   const total = Number(topology.callPathIndex?.rankedPathCount || 0);
   const reviewed = new Set(arr(snapshot?.scout?.reviewedCallPathIds));
   for (const arc of arr(snapshot?.pass1Arcs)) {
     if (arc.callPathId) reviewed.add(arc.callPathId);
-    for (const key of ['callPathVariantIds', 'containedCallPathIds', 'relatedCallPathIds']) {
-      for (const id of arr(arc[key])) reviewed.add(id);
-    }
+    for (const key of ['callPathVariantIds', 'containedCallPathIds', 'relatedCallPathIds']) for (const id of arr(arc[key])) reviewed.add(id);
   }
   const reviewedCount = total ? Math.min(total, reviewed.size) : reviewed.size;
-  return {
-    reviewedPaths: reviewedCount,
-    totalPaths: total,
-    remainingPaths: Math.max(0, total - reviewedCount),
-    percent: total ? Math.round((reviewedCount / total) * 100) : 0
-  };
+  return { reviewedPaths: reviewedCount, totalPaths: total, remainingPaths: Math.max(0, total - reviewedCount), percent: total ? Math.round((reviewedCount / total) * 100) : 0 };
 }
-
 function queryRunPath() {
-  const dir = path.join(dataRoot, 'query-runs');
-  fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return path.join(dir, `${stamp}.jsonl`);
+  const dir = path.join(dataRoot, 'query-runs'); fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`);
 }
 function appendQueryLog(file, event) { if (file) fs.appendFileSync(file, `${JSON.stringify(event)}\n`, 'utf8'); }
 function normalizedUsage(usage = {}) {
-  const prompt = Number(usage.prompt_tokens || usage.input_tokens || 0);
-  const completion = Number(usage.completion_tokens || usage.output_tokens || 0);
+  const prompt = Number(usage.prompt_tokens || usage.input_tokens || 0), completion = Number(usage.completion_tokens || usage.output_tokens || 0);
   const details = usage.prompt_tokens_details || {};
-  return {
-    prompt, completion, total: Number(usage.total_tokens || prompt + completion),
-    cacheHit: Number(details.cached_tokens || usage.prompt_cache_hit_tokens || 0),
-    cacheMiss: Number(usage.prompt_cache_miss_tokens || 0)
-  };
+  return { prompt, completion, total: Number(usage.total_tokens || prompt + completion), cacheHit: Number(details.cached_tokens || usage.prompt_cache_hit_tokens || 0), cacheMiss: Number(usage.prompt_cache_miss_tokens || 0) };
 }
 function addUsage(total, usage) { for (const k of Object.keys(total)) total[k] += Number(usage[k] || 0); return total; }
 async function jsonModelCall(system, user, maxTokens = 1200) {
@@ -117,54 +208,90 @@ async function jsonModelCall(system, user, maxTokens = 1200) {
   const raw = completion.choices?.[0]?.message?.content || '{}';
   return { parsed: JSON.parse(raw), raw, finishReason: completion.choices?.[0]?.finish_reason || '', usage: normalizedUsage(completion.usage || {}) };
 }
+function prioritizeArc(arc, message = '') {
+  const scheduler = explorer.pass1?.().ensureState?.() || explorer.state.pass1Scheduler || {};
+  scheduler.activeArcId = arc.id;
+  arc.opportunityScore = 1;
+  arc.businessPriority = 1;
+  arc.targetedByUser = true;
+  arc.lastScheduledStep = Number(explorer.state?.step || 0);
+  explorer.state.lastMessage = message || `Targeted ${arc.title || 'selected workflow'} for learning. Press Start to continue.`;
+  explorer.pass1?.().syncStories?.();
+  explorer.persistSemanticMap?.();
+  explorer.emit?.();
+  return arc;
+}
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'public'), { etag: false, lastModified: false, setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); } }));
 
-app.get('/api/state', (_req, res) => {
-  const snapshot = explorer.snapshot();
-  res.json({ ...snapshot, learningCoverage: coverageSummary(snapshot), visibleBusinessArcIds: businessArcs(snapshot).map((a) => a.id) });
-});
-
+app.get('/api/state', (_req, res) => { const snapshot = explorer.snapshot(); res.json({ ...snapshot, learningCoverage: coverageSummary(snapshot), visibleBusinessArcIds: businessArcs(snapshot).map((a) => a.id) }); });
 app.get('/api/map', (_req, res) => {
-  explorer.persistSemanticMap?.();
-  const snapshot = explorer.snapshot();
-  const arcs = businessArcs(snapshot);
-  res.json({
-    repoUrl: snapshot.repoUrl || '', commit: snapshot.commit || '', savedAt: snapshot.mapPersistence?.savedAt || '',
-    restored: !!snapshot.mapPersistence?.restored, coverage: coverageSummary(snapshot), workflows: arcs.map((arc) => arcDetail(arc, snapshot))
-  });
+  explorer.persistSemanticMap?.(); const snapshot = explorer.snapshot(); const arcs = businessArcs(snapshot);
+  res.json({ repoUrl: snapshot.repoUrl || '', commit: snapshot.commit || '', savedAt: snapshot.mapPersistence?.savedAt || '', restored: !!snapshot.mapPersistence?.restored, coverage: coverageSummary(snapshot), workflows: arcs.map((arc) => arcDetail(arc, snapshot)) });
 });
 
 app.get('/api/search-learning', (req, res) => {
-  const q = compactText(req.query.q, 120).toLowerCase();
+  if (running) return res.status(409).json({ error: 'Stop learning before searching for a targeted workflow.' });
+  const raw = compactText(req.query.q, 120), q = raw.toLowerCase();
   if (!q) return res.json({ query: '', workflows: [], pathMatches: [] });
   const snapshot = explorer.snapshot();
-  const workflows = businessArcs(snapshot)
-    .map((arc) => arcSummary(arc, snapshot))
-    .filter((w) => `${w.title} ${w.actor} ${w.intent} ${w.outcome}`.toLowerCase().includes(q))
-    .slice(0, 20);
-  const pathMatches = topology.callPathIndex
-    ? topology.topCallPaths(Math.min(1200, Number(topology.callPathIndex.rankedPathCount || 1200)))
-      .filter((p) => `${p.entrySymbolId || ''} ${arr(p.signatures).join(' ')}`.toLowerCase().includes(q))
-      .slice(0, 12)
-      .map((p) => ({ id: p.id, label: compactText(p.entrySymbolId || arr(p.signatures)[0] || p.id, 180), sourcePaths: uniq(p.sourcePaths).slice(0, 3) }))
-    : [];
-  return res.json({ query: q, workflows, pathMatches });
+  const workflows = businessArcs(snapshot).map((arc) => ({ ...arcSummary(arc, snapshot), score: lexicalScore(q, `${arc.title} ${arc.businessActor || arc.trigger} ${arc.businessIntent} ${arc.outcome || arc.businessOutcome} ${arr(arc.entities).join(' ')} ${arr(arc.relationships).join(' ')}`) }))
+    .filter((w) => w.score > 0).sort((a, b) => b.score - a.score || Number(b.businessPriority || 0) - Number(a.businessPriority || 0)).slice(0, 12);
+  return res.json({ query: raw, workflows, pathMatches: pathSearch(q, 12) });
 });
 
 app.post('/api/prioritize-workflow', (req, res) => {
+  if (running) return res.status(409).json({ error: 'Stop learning before changing the targeted workflow.' });
   const id = String(req.body?.workflowId || '');
   const arc = explorer.pass1?.().arcByReference?.(id) || arr(explorer.state?.pass1Arcs).find((a) => a.id === id);
   if (!arc || !isBusinessArc(arc)) return res.status(404).json({ error: 'Workflow not found' });
-  const scheduler = explorer.pass1?.().ensureState?.() || explorer.state.pass1Scheduler || {};
-  scheduler.activeArcId = arc.id;
-  arc.opportunityScore = 1;
-  arc.lastScheduledStep = Number(explorer.state?.step || 0);
-  explorer.state.lastMessage = `Prioritized ${arc.title || 'selected workflow'} for learning.`;
-  explorer.persistSemanticMap?.();
-  explorer.emit?.();
+  prioritizeArc(arc);
   return res.json({ ok: true, workflowId: arc.id, running, state: mapStateForArc(arc, explorer.snapshot()) });
+});
+
+app.post('/api/prioritize-path', async (req, res) => {
+  try {
+    if (running) return res.status(409).json({ error: 'Stop learning before targeting another path.' });
+    if (!queryClient) return res.status(503).json({ error: 'The reasoning service is not configured' });
+    const pathId = String(req.body?.pathId || '');
+    const grouped = allGroupedPaths().find((p) => p.id === pathId);
+    if (!grouped) return res.status(404).json({ error: 'Path not found' });
+    const existing = pathArc(pathId);
+    if (existing) {
+      prioritizeArc(existing);
+      return res.json({ ok: true, workflowId: existing.id, existing: true, title: existing.title, state: mapStateForArc(existing, explorer.snapshot()) });
+    }
+
+    const compact = explorer.compactCallPath?.(grouped) || { pathId: grouped.id, functionCount: grouped.functionCount, flowSequence: flowTokens(grouped) };
+    const system = `You are lemap's targeted business-flow classifier. Decide whether one supplied compressed executable path is a coherent business workflow. Do not invent omitted behavior. Return strict JSON: {"classification":"business_flow|technical|uncertain","confidence":0,"flowTitle":"","businessActor":"","businessIntent":"","completionCondition":"","businessOutcome":"","reason":""}.`;
+    const user = `TARGETED_PATH\n${JSON.stringify(compact)}\n\nA business_flow must represent a recognizable actor/business goal with a completion condition or outcome. Keep the answer compact.`;
+    const call = await jsonModelCall(system, user, 650);
+    const item = call.parsed || {};
+    if (item.classification !== 'business_flow' || Number(item.confidence || 0) < 0.5 || !compactText(item.flowTitle, 180)) {
+      return res.status(422).json({ error: 'This matching path does not yet provide enough evidence for a business workflow.', classification: item.classification || 'uncertain', reason: compactText(item.reason, 300) });
+    }
+    const arc = explorer.pass1().createArc({
+      title: compactText(item.flowTitle, 180), concept: compactText(item.reason, 320), businessActor: compactText(item.businessActor, 220),
+      businessIntent: compactText(item.businessIntent, 300), confidence: Number(item.confidence || 0), qualifiesAsBusinessUseCase: true, qualification: 'business_use_case'
+    }, { id: grouped.entrySymbolId || pathId, path: arr(grouped.sourcePaths)[0] || '' });
+    if (!arc) return res.status(500).json({ error: 'Could not create a workflow from this path.' });
+    arc.callPathId = grouped.id;
+    arc.callPathVariantIds = arr(grouped.alternatives).map((alt) => alt.pathId);
+    arc.seedArtifactId = grouped.entrySymbolId || '';
+    arc.seedSourcePath = arr(grouped.sourcePaths)[0] || '';
+    arc.seedSource = 'targeted_path_search';
+    arc.completionCondition = compactText(item.completionCondition, 300);
+    arc.businessOutcome = compactText(item.businessOutcome, 320);
+    arc.status = 'forming';
+    arc.progress = 0;
+    explorer.pass2().seed(arc.id);
+    explorer.flowState?.(arc);
+    prioritizeArc(arc, `Found ${arc.title}. It is targeted for learning; press Start to interpret the flow.`);
+    return res.json({ ok: true, workflowId: arc.id, existing: false, title: arc.title, state: 'identified' });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'Could not target path' });
+  }
 });
 
 app.get('/api/call-paths', (_req, res) => res.json({ ready: !!topology.callPathIndex, xmlAdapter: topology.moquiXmlExecution, topPaths: topology.callPathIndex ? topology.topCallPaths(10) : [] }));
@@ -196,41 +323,36 @@ app.post('/api/query-map', async (req, res) => {
     const question = String(req.body?.question || '').trim(); if (!question) return res.status(400).json({ error: 'question is required' });
     explorer.persistSemanticMap?.();
     const snapshot = explorer.snapshot(); const arcs = businessArcs(snapshot);
-    if (!arcs.length) return res.status(409).json({ error: 'The enterprise map has not identified any business workflows yet' });
-    appendQueryLog(queryLog, { type: 'query_start', timestamp: new Date().toISOString(), question, repoUrl: snapshot.repoUrl || '', commit: snapshot.commit || '', workflowCount: arcs.length });
+    const pathHints = relevantPathHints(question, 8);
+    if (!arcs.length && !pathHints.length) return res.status(409).json({ error: 'The enterprise map has not identified anything relevant to this question yet' });
+    appendQueryLog(queryLog, { type: 'query_start', timestamp: new Date().toISOString(), question, repoUrl: snapshot.repoUrl || '', commit: snapshot.commit || '', workflowCount: arcs.length, candidatePathCount: pathHints.length });
 
     const summaries = arcs.map((arc) => arcSummary(arc, snapshot));
-    const selectorSystem = `You are lemap's workflow selector. Given a business question and top-level workflow summaries, select the smallest relevant set. Workflows have mapState=identified|explored|complete. Do not pretend an identified workflow has semantic detail. Return strict JSON only: {"exploredWorkflowIds":["ids that are explored or complete and useful"],"identifiedWorkflowIds":["relevant ids that are only identified"],"selectionReason":"short"}. Prefer at most 4 total.`;
-    const selectorUser = `QUESTION\n${question}\n\nWORKFLOWS\n${JSON.stringify(summaries)}`;
-    const selectorCall = await jsonModelCall(selectorSystem, selectorUser, 500); addUsage(cumulativeUsage, selectorCall.usage);
+    const selectorSystem = `You are lemap's map scope selector. Given a business question, learned workflow summaries, and compact candidate paths that may not yet be learned, select the smallest relevant scope. Never treat an unlearned path as established semantic truth. Return strict JSON only: {"exploredWorkflowIds":[],"identifiedWorkflowIds":[],"candidatePathIds":[],"selectionReason":""}. Prefer at most 5 total items.`;
+    const selectorUser = `QUESTION\n${question}\n\nLEARNED_WORKFLOWS\n${JSON.stringify(summaries)}\n\nUNLEARNED_OR_PATH_HINTS\n${JSON.stringify(pathHints)}`;
+    const selectorCall = await jsonModelCall(selectorSystem, selectorUser, 650); addUsage(cumulativeUsage, selectorCall.usage);
     appendQueryLog(queryLog, { type: 'workflow_selection_call', timestamp: new Date().toISOString(), model: queryModel, systemPrompt: selectorSystem, prompt: selectorUser, rawResponse: selectorCall.raw, parsedResponse: selectorCall.parsed, finishReason: selectorCall.finishReason, usage: selectorCall.usage, cumulativeUsage: { ...cumulativeUsage } });
 
     const byId = new Map(arcs.map((a) => [a.id, a]));
     const exploredIds = uniq(selectorCall.parsed.exploredWorkflowIds).filter((id) => byId.has(id) && mapStateForArc(byId.get(id), snapshot) !== 'identified').slice(0, 4);
-    const identifiedIds = uniq(selectorCall.parsed.identifiedWorkflowIds).filter((id) => byId.has(id) && mapStateForArc(byId.get(id), snapshot) === 'identified').slice(0, 4);
+    const identifiedIds = uniq(selectorCall.parsed.identifiedWorkflowIds).filter((id) => byId.has(id)).filter((id) => !exploredIds.includes(id)).slice(0, 4);
+    const hintById = new Map(pathHints.map((item) => [item.id, item]));
+    const candidateIds = uniq(selectorCall.parsed.candidatePathIds).filter((id) => hintById.has(id)).slice(0, 4);
     const identifiedRelevantWorkflows = identifiedIds.map((id) => arcSummary(byId.get(id), snapshot));
-
-    if (!exploredIds.length) {
-      const response = {
-        answer: identifiedRelevantWorkflows.length
-          ? 'The most relevant workflows have been identified but have not yet been explored deeply enough to answer from the map.'
-          : 'The learned map does not yet contain an explored workflow with enough semantic detail for this question.',
-        workflowsUsed: [], relevantEntities: [], relevantRelationships: [], scenarios: [], candidateView: {},
-        nextStep: identifiedRelevantWorkflows.length ? `Explore ${identifiedRelevantWorkflows[0].title} first.` : 'Continue learning or target a relevant workflow.',
-        identifiedRelevantWorkflows,
-        retrieval: { workflowIds: [], identifiedWorkflowIds: identifiedIds, selectionReason: compactText(selectorCall.parsed.selectionReason, 280) }
-      };
-      appendQueryLog(queryLog, { type: 'query_complete', timestamp: new Date().toISOString(), question, response, cumulativeUsage: { ...cumulativeUsage } });
-      return res.json(response);
-    }
-
+    const candidateRelevantPaths = candidateIds.map((id) => hintById.get(id));
     const details = exploredIds.map((id) => arcDetail(byId.get(id), snapshot));
-    const answerSystem = `You are lemap's enterprise-map query layer. Answer or frame the question using ONLY the supplied explored workflow details. The map contains structure, not historical measurements; never invent measured values. Use only evidenced entities/stages/relationships. Be concise and do not dump the map. Return strict JSON: {"answer":"", "workflowsUsed":[{"id":"","title":"","role":""}], "relevantEntities":[], "relevantRelationships":[], "scenarios":[{"scenario":"","why":"","dataToCheck":[]}], "candidateView":{"purpose":"","entities":[],"dimensions":[],"measures":[]}, "nextStep":""}.`;
-    const answerUser = `QUESTION\n${question}\n\nEXPLORED WORKFLOW DETAILS\n${JSON.stringify(details)}`;
-    const answerCall = await jsonModelCall(answerSystem, answerUser, 1400); addUsage(cumulativeUsage, answerCall.usage);
-    appendQueryLog(queryLog, { type: 'answer_call', timestamp: new Date().toISOString(), model: queryModel, selectedWorkflowIds: exploredIds, systemPrompt: answerSystem, prompt: answerUser, rawResponse: answerCall.raw, parsedResponse: answerCall.parsed, finishReason: answerCall.finishReason, usage: answerCall.usage, cumulativeUsage: { ...cumulativeUsage } });
 
-    const response = { ...answerCall.parsed, identifiedRelevantWorkflows, retrieval: { workflowIds: exploredIds, identifiedWorkflowIds: identifiedIds, selectionReason: compactText(selectorCall.parsed.selectionReason, 280) } };
+    const answerSystem = `You are lemap's enterprise-map query layer. Use explored workflow details as grounded semantic evidence. Identified workflows and candidate path hints may be used only to point out plausible related areas that are not yet explored; label that uncertainty clearly. The map describes structure, not historical measurements, so never invent measured sales, counts, dates, trends or causes. For analytical questions, use evidenced entity fields and relationships to propose the smallest useful data view, dimensions, measures, joins or checks. A query can still be useful when no explored workflow exists: explain what the current map/path evidence suggests and exactly what should be learned next. Return strict JSON: {"answer":"","workflowsUsed":[{"id":"","title":"","role":""}],"relevantEntities":[],"relevantRelationships":[],"scenarios":[{"scenario":"","why":"","dataToCheck":[]}],"candidateView":{"purpose":"","entities":[],"dimensions":[],"measures":[],"notes":[]},"nextStep":""}.`;
+    const answerUser = `QUESTION\n${question}\n\nEXPLORED_WORKFLOW_DETAILS\n${JSON.stringify(details)}\n\nIDENTIFIED_RELEVANT_WORKFLOWS\n${JSON.stringify(identifiedRelevantWorkflows)}\n\nRELEVANT_PATHS_NOT_YET_SEMANTICALLY_LEARNED\n${JSON.stringify(candidateRelevantPaths)}`;
+    const answerCall = await jsonModelCall(answerSystem, answerUser, 1600); addUsage(cumulativeUsage, answerCall.usage);
+    appendQueryLog(queryLog, { type: 'answer_call', timestamp: new Date().toISOString(), model: queryModel, selectedWorkflowIds: exploredIds, identifiedWorkflowIds: identifiedIds, candidatePathIds: candidateIds, systemPrompt: answerSystem, prompt: answerUser, rawResponse: answerCall.raw, parsedResponse: answerCall.parsed, finishReason: answerCall.finishReason, usage: answerCall.usage, cumulativeUsage: { ...cumulativeUsage } });
+
+    const response = {
+      ...answerCall.parsed,
+      identifiedRelevantWorkflows,
+      candidateRelevantPaths,
+      retrieval: { workflowIds: exploredIds, identifiedWorkflowIds: identifiedIds, candidatePathIds: candidateIds, selectionReason: compactText(selectorCall.parsed.selectionReason, 280) }
+    };
     appendQueryLog(queryLog, { type: 'query_complete', timestamp: new Date().toISOString(), question, response, cumulativeUsage: { ...cumulativeUsage } });
     console.log(`[lemap query] tokens ${cumulativeUsage.total} (prompt ${cumulativeUsage.prompt}, completion ${cumulativeUsage.completion}) — ${question}`);
     return res.json(response);
@@ -249,6 +371,6 @@ function broadcast(state) {
 app.listen(port, () => {
   console.log(`[DataSong v2] http://localhost:${port}`);
   console.log('[DataSong v2] PERSISTENT MAP → FULL CALL-PATH SCOUT → PASS 1 → PASS 2');
-  console.log('[DataSong v2] UI exposes only business workflows; overall progress is deterministic path coverage. Targeted workflow search/prioritization is deterministic.');
-  console.log('[DataSong v2] QUERY: workflow summaries select scope; only explored workflow detail is sent to final reasoning. Query LLM calls are logged under data/query-runs/.');
+  console.log('[DataSong v2] Targeted search spans learned workflows and compressed call paths; selected paths become Pass-1 learning targets.');
+  console.log('[DataSong v2] QUERY: rich explored semantics + identified workflows + compact unlearned path hints; query calls are logged under data/query-runs/.');
 });
