@@ -1,4 +1,4 @@
-import { ProgressiveRepositoryExplorerV30 } from './progressiveRepositoryExplorerV30.js';
+import { ProgressiveRepositoryExplorerV29 } from './progressiveRepositoryExplorerV29.js';
 import { withCallPathSeedPreprocessor } from './explorer/callPathSeedPreprocessor.js';
 import { withInitialCallPathClassifier } from './explorer/initialCallPathClassifier.js';
 import { withBusinessMapAccumulation } from './explorer/businessMapAccumulation.js';
@@ -14,7 +14,7 @@ import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 
-const ExplorerWithSeedPreprocessor = withCallPathSeedPreprocessor(ProgressiveRepositoryExplorerV30);
+const ExplorerWithSeedPreprocessor = withCallPathSeedPreprocessor(ProgressiveRepositoryExplorerV29);
 const ExplorerWithInitialClassifier = withInitialCallPathClassifier(ExplorerWithSeedPreprocessor);
 const ExplorerWithBusinessMap = withBusinessMapAccumulation(ExplorerWithInitialClassifier);
 const ExplorerWithInitialSeeds = withInitialCallPathSeeds(ExplorerWithBusinessMap);
