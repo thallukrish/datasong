@@ -247,6 +247,10 @@ export const withSemanticModel = (Base) => class SemanticModelExplorer extends B
         }
       }
     }
+    store.ensure({
+      id: 'catalog:schema', type: 'catalog', name: 'Authoritative schema catalog',
+      properties: { schemaCatalogComplete: true, entityCount: schemas.filter((schema) => schema?.name).length, repositoryCommit: marker }
+    });
     this._schemaCatalogGraphMaterializedFor = marker;
   }
 
