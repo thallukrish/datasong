@@ -42,13 +42,16 @@ export function graphQueryProjection(graph = []) {
   const workflows=[];
   for(const workflow of [...nodes.values()].filter((node)=>node.type==='workflow')){
     const entityIds=new Set(edges.filter((edge)=>edge.fromId===workflow.id&&edge.relationship==='uses entity'&&nodes.get(edge.toId)?.type==='entity').map((edge)=>edge.toId));
+    const workflowSteps=edges.filter((edge)=>edge.fromId===workflow.id&&edge.relationship==='contains step'&&nodes.get(edge.toId)?.type==='step')
+      .map((edge)=>nodes.get(edge.toId)).sort((a,b)=>Number(a?.data?.order||0)-Number(b?.data?.order||0))
+      .map((step,index)=>({name:String(step.name||`Step ${index+1}`),description:String(step.data?.description||''),effect:String(step.data?.effect||''),order:Number(step.data?.order||index+1)}));
     const workflowRelationships=edges.filter((edge)=>edge.data?.relationshipKind!=='schema_fk'&&(edge.data?.workflowId===workflow.id||(entityIds.has(edge.fromId)&&entityIds.has(edge.toId)))).map((edge)=>relationshipDetail(edge,nodes)).filter(Boolean);
     workflows.push({
       id:String(workflow.id),title:String(workflow.name||''),businessActor:String(workflow.data?.actor||''),
       businessIntent:String(workflow.data?.intent||''),businessOutcome:String(workflow.data?.outcome||''),outcome:String(workflow.data?.outcome||''),
       closureState:String(workflow.data?.closureState||''),progress:Number(workflow.data?.progress||0),
       entities:[...entityIds].map((id)=>nodes.get(id)?.name).filter(Boolean),
-      entityDetails:[...entityIds].map((id)=>detailsById.get(id)).filter(Boolean),relationshipDetails:workflowRelationships
+      entityDetails:[...entityIds].map((id)=>detailsById.get(id)).filter(Boolean),workflowSteps,relationshipDetails:workflowRelationships
     });
   }
   const schemaRelationships=edges.filter((edge)=>edge.data?.relationshipKind==='schema_fk').map((edge)=>relationshipDetail(edge,nodes)).filter(Boolean);
