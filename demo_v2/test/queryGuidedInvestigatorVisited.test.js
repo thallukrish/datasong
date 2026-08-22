@@ -9,26 +9,24 @@ function completion(payload) {
   };
 }
 
-test('query-guided traversal visits only nodes actually expanded and blocks revisits', async () => {
+test('query-guided traversal visits only expanded nodes and preserves exposed evidence even when model forgets to retain it', async () => {
   const calls = [];
   const scripted = [
     completion({ intent: 'data_analytics', startKind: 'entity', entity: 'B', workflowId: '' }),
     completion({
       status: 'incomplete', missing: ['next evidence'],
-      retainFields: [{ entity: 'B', field: 'bField', purpose: 'useful evidence' }],
-      retainSteps: [], retainLinks: [],
+      retainFields: [], retainSteps: [], retainLinks: [],
       expandEntities: ['B1'], expandWorkflowIds: []
     }),
     completion({
       status: 'incomplete', missing: ['more evidence'],
-      retainFields: [{ entity: 'B1', field: 'b1Field', purpose: 'useful evidence' }],
-      retainSteps: [], retainLinks: [],
+      retainFields: [], retainSteps: [], retainLinks: [],
       expandEntities: ['B'], expandWorkflowIds: []
     }),
     completion({
       status: 'complete', intent: 'data_analytics', answer: 'Traversal stopped without revisiting B.',
       retainFields: [], retainSteps: [], retainLinks: [],
-      dataView: { grain: '', select: [], joins: [], filters: [], groupBy: [], orderBy: [], missing: ['more evidence'] },
+      dataView: { grain: '', select: [{ entity: 'B', field: 'bField', alias: 'b', role: 'attribute' }], joins: [], filters: [], groupBy: [], orderBy: [], missing: ['more evidence'] },
       nextStep: ''
     })
   ];
@@ -43,7 +41,7 @@ test('query-guided traversal visits only nodes actually expanded and blocks revi
       { name: 'C', description: 'Untouched candidate C', fields: [{ name: 'cField', type: 'text' }] },
       { name: 'B1', description: 'Neighbour of B', fields: [{ name: 'b1Field', type: 'text' }] }
     ],
-    relationshipDetails: [{ from: 'B', relation: 'linksTo', to: 'B1' }],
+    relationshipDetails: [{ from: 'B', relation: 'linksTo', to: 'B1', keyMaps: [{ fieldName: 'bField', relatedFieldName: 'b1Field' }], evidenced: true }],
     workflowSteps: []
   }];
 
@@ -55,6 +53,7 @@ test('query-guided traversal visits only nodes actually expanded and blocks revi
   assert.equal(firstContext.currentExpanded.entities.length, 1);
   assert.equal(firstContext.currentExpanded.entities[0].name, 'B');
   assert.equal(firstContext.visited.length, 0);
+  assert.equal(firstContext.exploredEvidence.fields.length, 0);
 
   const secondContext = JSON.parse(calls[2].messages[1].content).context;
   assert.equal(secondContext.currentExpanded.entities.length, 1);
@@ -63,7 +62,10 @@ test('query-guided traversal visits only nodes actually expanded and blocks revi
   assert.ok(!secondContext.visited.some((node) => node.name === 'A'));
   assert.ok(!secondContext.visited.some((node) => node.name === 'C'));
   assert.ok(!secondContext.unselectedEntities.some((node) => node.name === 'B'));
+  assert.ok(secondContext.exploredEvidence.fields.some((field) => field.entity === 'B' && field.field === 'bField'));
+  assert.equal(secondContext.selectedEvidence.fields.length, 0);
 
   assert.equal(result.status, 'complete');
   assert.equal(result.investigation.expansionRounds, 1);
+  assert.ok(result.investigation.exploredEvidenceCount >= 1);
 });
