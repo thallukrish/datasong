@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { investigateGraphQuery } from './queryGraphInvestigator.js';
+import { investigateQuery } from './queryGuidedInvestigator.js';
 import { graphFromSemanticObjects } from './explorer/mapPersistence.js';
+import { graphQueryProjection } from './queryGraphProjection.js';
 
 const arr = (value) => Array.isArray(value) ? value : [];
 const key = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -149,13 +150,18 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       const workflowCount = graph.filter((node) => node.type === 'workflow').length;
       const entityCount = graph.filter((node) => node.type === 'entity').length;
       if (!workflowCount && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise graph has not identified anything relevant to this question yet'});
+      const projection = graphQueryProjection(graph);
 
-      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount,entityCount,graphNodeCount:graph.length,mode:'native-semantic-graph'});
-      let rawResponse = await investigateGraphQuery({
+      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount,entityCount,graphNodeCount:graph.length,mode:'guided-over-semantic-graph'});
+      let rawResponse = await investigateQuery({
         question,
         client:queryClient,
         model:queryModel,
-        graph,
+        arcs:projection.workflows,
+        navigationArcs:projection.navigationArcs,
+        snapshot,
+        mapStateForArc,
+        pathHints:(query) => relevantPathHints(query,8),
         log:(type,payload) => append(queryLog,type,payload)
       });
       if (!rawResponse?.answer) {
@@ -165,11 +171,11 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       }
       const response = uiProjection(rawResponse);
       append(queryLog,'query_complete',{question,response,cumulativeUsage:normalizedUsage(response?.investigation?.usage || {})});
-      console.log(`[lemap query-graph] tokens ${response?.investigation?.usage?.total || 0} — ${question}`);
+      console.log(`[lemap query-guided-graph] tokens ${response?.investigation?.usage?.total || 0} — ${question}`);
       return res.json(response);
     } catch (error) {
       append(queryLog,'query_error',{error:error.message || String(error)});
-      console.error(`[lemap query-graph] ${error.message}`);
+      console.error(`[lemap query-guided-graph] ${error.message}`);
       return res.status(500).json({error:error.message || 'Query failed'});
     }
   });
