@@ -6,6 +6,7 @@ export const MAP_VERSION = 3;
 const arr = (value) => Array.isArray(value) ? value : [];
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const safeName = (value) => crypto.createHash('sha1').update(String(value || '')).digest('hex');
+const identityKey = (value = '') => String(value || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 function readSavedMap(file) {
   const candidates = [file, `${file}.bak`];
@@ -45,6 +46,68 @@ function relationObjects(objects = {}) {
   return Object.values(objects).filter((object) => object?.type === 'relation');
 }
 
+export function normalizeLearnedGraph(graph = []) {
+  const source = clone(arr(graph));
+  const entityByName = new Map();
+  for (const node of source) {
+    if (node?.type !== 'entity' || !node?.id || !node?.name) continue;
+    const key = identityKey(node.name), prior = entityByName.get(key);
+    if (!prior || (!prior?.data?.schemaResolved && node?.data?.schemaResolved)) entityByName.set(key, node);
+  }
+  const redirects = new Map();
+  for (const node of source) {
+    if (node?.type !== 'concept' || !node?.id) continue;
+    const entity = entityByName.get(identityKey(node.name));
+    if (entity) redirects.set(node.id, entity.id);
+  }
+  const kept = source.filter((node) => node?.id && !redirects.has(node.id));
+  const byId = new Map(kept.map((node) => [node.id, node]));
+  const ownedFields = new Map();
+  for (const node of kept) {
+    if (node.type !== 'entity') continue;
+    const names = new Set();
+    for (const raw of arr(node.links)) {
+      if (raw?.relationship !== 'has field') continue;
+      const target = byId.get(redirects.get(raw?.nodeId) || raw?.nodeId);
+      if (target?.type !== 'field') continue;
+      const owner = String(target.data?.sourceEntity || target.data?.entityName || '');
+      if (owner && identityKey(owner) !== identityKey(node.name)) continue;
+      const fieldName = String(target.data?.physicalFieldName || target.data?.fieldName || target.name?.split('.').at(-1) || '');
+      if (fieldName) names.add(identityKey(fieldName));
+    }
+    ownedFields.set(node.id, names);
+  }
+  for (const node of kept) {
+    const seen = new Set(), links = [];
+    for (const raw of arr(node.links)) {
+      const nodeId = redirects.get(raw?.nodeId) || raw?.nodeId;
+      const target = byId.get(nodeId);
+      if (!target) continue;
+      const relationship = String(raw?.relationship || 'related to');
+      let kind = String(raw?.data?.relationshipKind || '');
+      if (kind === 'schema_fk' && target.type !== 'entity') continue;
+      if (relationship === 'has field' && node.type === 'entity' && target.type === 'field') {
+        const owner = String(target.data?.sourceEntity || target.data?.entityName || '');
+        if (owner && identityKey(owner) !== identityKey(node.name)) continue;
+      }
+      const keyMaps = arr(raw?.data?.keyMaps).map((map) => ({
+        fieldName:String(map?.fieldName || ''), relatedFieldName:String(map?.relatedFieldName || ''), implicit:!!map?.implicit
+      }));
+      const validKeyMaps = keyMaps.length > 0 && target.type === 'entity' && keyMaps.every((map) =>
+        ownedFields.get(node.id)?.has(identityKey(map.fieldName)) && ownedFields.get(target.id)?.has(identityKey(map.relatedFieldName))
+      );
+      if (kind === 'schema_fk' && !validKeyMaps) kind = 'schema_reference';
+      const signature = `${nodeId}|${identityKey(relationship)}|${kind}|${JSON.stringify(keyMaps)}`;
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      links.push({ ...raw, nodeId, data:{ ...(raw.data || {}), relationshipKind:kind, ...(keyMaps.length ? { keyMaps } : {}), ...(kind === 'schema_reference' ? { evidenced:false } : {}) } });
+    }
+    node.links = links;
+  }
+  const referencedFields = new Set(kept.flatMap((node) => arr(node.links).filter((link) => link.relationship === 'has field').map((link) => link.nodeId)));
+  return kept.filter((node) => node.type !== 'field' || referencedFields.has(node.id));
+}
+
 export function graphFromSemanticObjects(objects = {}) {
   const linksByNode = new Map();
   for (const relation of relationObjects(objects)) {
@@ -61,7 +124,7 @@ export function graphFromSemanticObjects(objects = {}) {
       evidence: clone(arr(relation.evidence))
     });
   }
-  return Object.values(objects).filter((object) => object?.type !== 'relation').map((object) => ({
+  const graph = Object.values(objects).filter((object) => object?.type !== 'relation').map((object) => ({
     id: object.id,
     type: object.type || 'concept',
     name: object.name || '',
@@ -74,6 +137,7 @@ export function graphFromSemanticObjects(objects = {}) {
     },
     links: linksByNode.get(object.id) || []
   }));
+  return normalizeLearnedGraph(graph);
 }
 
 export function semanticObjectsFromGraph(graph = []) {
@@ -206,8 +270,9 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
           if (saved.semanticState[key] !== undefined) this.state[key] = clone(saved.semanticState[key]);
         }
       } else if (Number(saved?.version || 0) === MAP_VERSION && Array.isArray(saved.graph)) {
-        this.state.semanticObjects = semanticObjectsFromGraph(saved.graph);
-        const completed = workflowArcsFromGraph(saved.graph);
+        const normalizedGraph = normalizeLearnedGraph(saved.graph);
+        this.state.semanticObjects = semanticObjectsFromGraph(normalizedGraph);
+        const completed = workflowArcsFromGraph(normalizedGraph);
         const completedIds = new Set(completed.map((arc) => arc.id));
         this.state.pass1Arcs = [...completed, ...clone(arr(saved.learningProgress?.incompleteArcs)).filter((arc) => !completedIds.has(arc?.id))];
         this.state.pass1Scheduler = { ...(this.state.pass1Scheduler || {}), ...(saved.learningProgress?.scheduler || {}) };
