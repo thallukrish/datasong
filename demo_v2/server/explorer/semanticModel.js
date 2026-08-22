@@ -186,6 +186,70 @@ export const withSemanticModel = (Base) => class SemanticModelExplorer extends B
 
   semanticStore() { return new SemanticEvidenceStore(this.state); }
 
+  materializeSchemaCatalogGraph() {
+    const marker = `${this.state?.repoUrl || ''}@${this.state?.commit || ''}`;
+    if (this._schemaCatalogGraphMaterializedFor === marker && marker !== '@') return;
+    const store = this.semanticStore();
+    const schemas = arr(this.topology?.entitySchemas);
+    const entities = new Map();
+    for (const schema of schemas) {
+      if (!schema?.name) continue;
+      const entity = store.ensure({
+        type: 'entity', name: schema.name,
+        properties: {
+          description: clean(schema.description || '', 420), schemaResolved: true,
+          schemaName: schema.fullName || schema.name, schemaSourcePath: schema.sourcePath || '',
+          schemaComponent: schema.component || '', physicalRepresentation: true
+        }
+      });
+      entities.set(identityKey(schema.name), entity);
+      store.addEvidence(entity, {
+        sourceType: 'schema_definition', source: schema.sourcePath || schema.fullName || schema.name,
+        assertion: `The authoritative schema defines ${schema.name}.`,
+        provenance: { component: schema.component || '', schemaName: schema.fullName || schema.name }
+      });
+      for (const field of arr(schema.fields)) {
+        if (!field?.name) continue;
+        const fieldObject = store.ensure({
+          type: 'field', name: `${schema.name}.${field.name}`, scope: entity.id,
+          properties: {
+            entityId: entity.id, entityName: schema.name, fieldName: field.name,
+            dataType: field.type || '', isPk: !!field.isPk, description: clean(field.description || '', 420),
+            sourceEntity: schema.name, physicalFieldName: field.name, authoritative: true
+          }
+        });
+        store.addEvidence(fieldObject, {
+          sourceType: 'schema_definition', source: schema.sourcePath || schema.fullName || schema.name,
+          assertion: `The schema declares ${schema.name}.${field.name}.`, property: 'field', value: field.name
+        });
+        store.link(entity, 'has field', fieldObject, {
+          sourceType: 'schema_definition', source: schema.sourcePath || schema.fullName || schema.name,
+          assertion: `${schema.name} exposes ${field.name}.`
+        }, { cardinality: 'one-to-many', relationshipKind: 'schema_field' });
+      }
+    }
+    if (typeof this.schemaRelationshipDetails === 'function') {
+      for (const schema of schemas) {
+        const from = entities.get(identityKey(schema?.name));
+        if (!from) continue;
+        for (const relationship of this.schemaRelationshipDetails(schema.name)) {
+          const to = entities.get(identityKey(relationship.to));
+          if (!to) continue;
+          store.link(from, relationship.relation || 'references', to, {
+            sourceType: 'schema_relationship', source: relationship.schemaSourcePath || relationship.sourceSchema || schema.name,
+            assertion: relationship.description || `${schema.name} references ${relationship.to}.`,
+            provenance: { sourceSchema: relationship.sourceSchema || '', targetSchema: relationship.targetSchema || '' }
+          }, {
+            cardinality: relationship.schemaRelationshipType || 'unknown', relationshipKind: 'schema_fk',
+            keyMaps: arr(relationship.keyMaps).map((map) => ({ fieldName: map?.fieldName || '', relatedFieldName: map?.relatedFieldName || '', implicit: !!map?.implicit })), evidenced: relationship.evidenced !== false,
+            description: clean(relationship.description || '', 520)
+          });
+        }
+      }
+    }
+    this._schemaCatalogGraphMaterializedFor = marker;
+  }
+
   syncArcSemanticObjects(arc) {
     if (!arc) return;
     const store = this.semanticStore();
@@ -321,7 +385,13 @@ export const withSemanticModel = (Base) => class SemanticModelExplorer extends B
       store.link(from, rel.relation || 'related to', to, {
         sourceType: 'llm_interpretation', source: `pass2:${arc.id}`,
         assertion: rel.description || `${rel.from} ${rel.relation} ${rel.to}`
-      }, { workflowId: workflow.id, description: clean(rel.description) });
+      }, {
+        workflowId: workflow.id, description: clean(rel.description),
+        cardinality: rel.cardinality || rel.schemaRelationshipType || 'unknown',
+        relationshipKind: rel.relationshipKind || 'business',
+        keyMaps: arr(rel.keyMaps).map((map) => ({ fieldName: map?.fieldName || '', relatedFieldName: map?.relatedFieldName || '', implicit: !!map?.implicit })),
+        evidenced: rel.evidenced !== false
+      });
     }
   }
 

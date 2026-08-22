@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { investigateQuery } from './queryGuidedInvestigator.js';
+import { investigateGraphQuery } from './queryGraphInvestigator.js';
+import { graphFromSemanticObjects } from './explorer/mapPersistence.js';
 
 const arr = (value) => Array.isArray(value) ? value : [];
 const key = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -135,30 +136,22 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       const question = String(req.body?.question || '').trim();
       if (!question) return res.status(400).json({error:'question is required'});
 
+      let snapshot = explorer.snapshot();
+      await ensureSchemaNavigation(explorer, snapshot.repoUrl || '');
+      explorer.materializeSchemaCatalogGraph?.();
       explorer.persistSemanticMap?.();
-      const snapshot = explorer.snapshot();
-      // The browser gets schema FKs in relationshipDetails for entity navigation,
-      // but model workflow context stays business-only. Schema traversal is supplied
-      // separately as a hidden deterministic navigation graph.
-      const arcs = businessArcs(snapshot).map((arc) => ({
-        ...arc,
-        relationshipDetails:arr(arc.businessRelationshipDetails).length
-          ? arr(arc.businessRelationshipDetails)
-          : arr(arc.relationshipDetails).filter((relationship) => relationship?.relationshipKind !== 'schema_fk')
-      }));
-      const schemaArc = await ensureSchemaNavigation(explorer, snapshot.repoUrl || '');
-      if (!arcs.length && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise map has not identified anything relevant to this question yet'});
+      snapshot = explorer.snapshot();
+      const graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
+      const workflowCount = graph.filter((node) => node.type === 'workflow').length;
+      const entityCount = graph.filter((node) => node.type === 'entity').length;
+      if (!workflowCount && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise graph has not identified anything relevant to this question yet'});
 
-      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount:arcs.length,mode:'guided',schemaNavigationEntities:schemaArc?.entityDetails?.length||0,schemaNavigationRelationships:schemaArc?.relationshipDetails?.length||0});
-      let rawResponse = await investigateQuery({
+      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount,entityCount,graphNodeCount:graph.length,mode:'native-semantic-graph'});
+      let rawResponse = await investigateGraphQuery({
         question,
         client:queryClient,
         model:queryModel,
-        arcs,
-        navigationArcs:schemaArc?[schemaArc]:[],
-        snapshot,
-        mapStateForArc,
-        pathHints:(query) => relevantPathHints(query,8),
+        graph,
         log:(type,payload) => append(queryLog,type,payload)
       });
       if (!rawResponse?.answer) {
