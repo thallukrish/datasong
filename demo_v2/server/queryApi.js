@@ -60,7 +60,6 @@ async function ensureSchemaNavigation(explorer, repoUrl) {
   console.log('[lemap query-guided] restoring runtime schema catalog for persisted map');
   await topology.prepare(repoUrl);
   explorer.materializeAllSchemaRelationships?.();
-  explorer.persistSemanticMap?.();
   arc = schemaNavigationArc(explorer);
   console.log(`[lemap query-guided] schema catalog ready: ${arc?.entityDetails?.length || 0} entities, ${arc?.relationshipDetails?.length || 0} relationships`);
   return arc;
@@ -142,10 +141,12 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       const schemaCatalogReady = graph.some((node) => node.type === 'catalog' && node.data?.schemaCatalogComplete === true);
       if (!schemaCatalogReady) {
         await ensureSchemaNavigation(explorer, snapshot.repoUrl || '');
+        console.log('[lemap query-guided] materializing schema catalog into semantic graph');
         explorer.materializeSchemaCatalogGraph?.();
         explorer.persistSemanticMap?.();
         snapshot = explorer.snapshot();
         graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
+        console.log(`[lemap query-guided] semantic graph ready: ${graph.length} nodes`);
       }
       const workflowCount = graph.filter((node) => node.type === 'workflow').length;
       const entityCount = graph.filter((node) => node.type === 'entity').length;

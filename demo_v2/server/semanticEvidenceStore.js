@@ -51,6 +51,10 @@ function evidenceKey(e) {
   return [e.sourceType, e.source, e.assertion, e.property, e.value].map((v) => clean(v, 500)).join('|');
 }
 
+function equivalentKey(type, name, scope = '') {
+  return `${semanticIdentityKey(type)}|${canonicalScope(scope)}|${semanticIdentityKey(name)}`;
+}
+
 export function aggregateConfidence(evidence = []) {
   let residual = 1;
   for (const item of arr(evidence)) residual *= (1 - clamp(item?.strength));
@@ -72,17 +76,15 @@ export class SemanticEvidenceStore {
   constructor(state) {
     this.state = state;
     if (!this.state.semanticObjects || typeof this.state.semanticObjects !== 'object') this.state.semanticObjects = {};
+    this.equivalentByKey = new Map();
+    for (const object of Object.values(this.state.semanticObjects)) {
+      if (!object?.id) continue;
+      this.equivalentByKey.set(equivalentKey(object.type, object.name, object.scope), object);
+    }
   }
 
   findEquivalent(type, name, scope = '') {
-    const typeKey = semanticIdentityKey(type);
-    const nameKey = semanticIdentityKey(name);
-    const scopeKey = canonicalScope(scope);
-    return Object.values(this.state.semanticObjects).find((object) =>
-      semanticIdentityKey(object?.type) === typeKey &&
-      semanticIdentityKey(object?.name) === nameKey &&
-      canonicalScope(object?.scope) === scopeKey
-    ) || null;
+    return this.equivalentByKey.get(equivalentKey(type, name, scope)) || null;
   }
 
   ensure({ id, type, name, scope = '', properties = {} }) {
@@ -119,6 +121,7 @@ export class SemanticEvidenceStore {
 
     const collision = this.state.semanticObjects[objectId];
     this.state.semanticObjects[objectId] = collision && collision !== existing ? mergeObjects(existing, collision) : existing;
+    this.equivalentByKey.set(equivalentKey(existing.type, existing.name, existing.scope), this.state.semanticObjects[objectId]);
     return this.state.semanticObjects[objectId];
   }
 
