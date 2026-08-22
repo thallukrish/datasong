@@ -69,13 +69,22 @@ export const withSchemaEntityRelationships = (Base) => class SchemaEntityRelatio
 
   materializeSchemaRelationships(arc) {
     if (!arc) return;
-    const byKey = new Map();
+    const schemaByKey = new Map();
     for (const detail of arr(arc.entityDetails)) {
       const relationships = this.schemaRelationshipDetails(detail?.name);
       detail.schemaRelationships = relationships;
-      for (const relationship of relationships) byKey.set(schemaRelationshipKey(relationship), relationship);
+      for (const relationship of relationships) schemaByKey.set(schemaRelationshipKey(relationship), relationship);
     }
-    arc.schemaRelationships = [...byKey.values()];
+    arc.schemaRelationships = [...schemaByKey.values()];
+
+    // Keep workflow/business relationships distinct, but expose the union for the
+    // existing map UI. Query navigation strips schema_fk from workflow context and
+    // follows the dedicated hidden schema graph instead.
+    const businessRelationships = arr(arc.relationshipDetails).filter((relationship) => relationship?.relationshipKind !== 'schema_fk');
+    arc.businessRelationshipDetails = businessRelationships;
+    const combined = new Map(businessRelationships.map((relationship) => [schemaRelationshipKey(relationship), relationship]));
+    for (const relationship of arc.schemaRelationships) combined.set(schemaRelationshipKey(relationship), relationship);
+    arc.relationshipDetails = [...combined.values()];
   }
 
   materializeAllSchemaRelationships() {
