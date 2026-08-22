@@ -9,71 +9,61 @@ function completion(payload) {
   };
 }
 
-test('query-guided traversal exposes visited neighbours as context but never as expandable frontier', async () => {
+test('query-guided traversal visits only nodes actually expanded and blocks revisits', async () => {
   const calls = [];
   const scripted = [
-    completion({ intent: 'data_analytics', workflowIds: [], entities: ['OrderItem', 'Order'] }),
+    completion({ intent: 'data_analytics', startKind: 'entity', entity: 'B', workflowId: '' }),
     completion({
-      status: 'incomplete',
-      missing: ['region'],
-      retainFields: [{ entity: 'OrderItem', field: 'quantity', purpose: 'sales volume' }],
-      retainSteps: [],
-      retainLinks: [],
-      expandEntities: ['OrderPart'],
-      expandWorkflowIds: []
+      status: 'incomplete', missing: ['next evidence'],
+      retainFields: [{ entity: 'B', field: 'bField', purpose: 'useful evidence' }],
+      retainSteps: [], retainLinks: [],
+      expandEntities: ['B1'], expandWorkflowIds: []
     }),
     completion({
-      status: 'incomplete',
-      missing: ['more order context'],
-      retainFields: [{ entity: 'OrderPart', field: 'region', purpose: 'region dimension' }],
-      retainSteps: [],
-      retainLinks: [],
-      expandEntities: ['Order'],
-      expandWorkflowIds: []
+      status: 'incomplete', missing: ['more evidence'],
+      retainFields: [{ entity: 'B1', field: 'b1Field', purpose: 'useful evidence' }],
+      retainSteps: [], retainLinks: [],
+      expandEntities: ['B'], expandWorkflowIds: []
     }),
     completion({
-      status: 'complete',
-      intent: 'data_analytics',
-      answer: 'Use order item quantity grouped by order-part region.',
+      status: 'complete', intent: 'data_analytics', answer: 'Traversal stopped without revisiting B.',
       retainFields: [], retainSteps: [], retainLinks: [],
-      dataView: { grain: 'order item', select: [], joins: [], filters: [], groupBy: [], orderBy: [], missing: [] },
+      dataView: { grain: '', select: [], joins: [], filters: [], groupBy: [], orderBy: [], missing: ['more evidence'] },
       nextStep: ''
     })
   ];
-  const client = {
-    chat: { completions: { create: async (request) => { calls.push(request); return scripted.shift(); } } }
-  };
+  const client = { chat: { completions: { create: async (request) => { calls.push(request); return scripted.shift(); } } } };
 
   const arcs = [{
-    id: 'w1', title: 'Order flow', businessIntent: 'Place and fulfill an order',
-    entities: ['Order', 'OrderItem', 'OrderPart'], persistentObjects: ['OrderItem', 'OrderPart'],
+    id: 'w1', title: 'ABC flow', businessIntent: 'Test traversal',
+    entities: ['A', 'B', 'C', 'B1'], persistentObjects: ['A', 'B', 'C', 'B1'],
     entityDetails: [
-      { name: 'Order', description: 'Order aggregate', fields: [] },
-      { name: 'OrderItem', description: 'Purchased product line', fields: [{ name: 'quantity', type: 'decimal' }] },
-      { name: 'OrderPart', description: 'Order shipping part', fields: [{ name: 'region', type: 'text' }] }
+      { name: 'A', description: 'Untouched candidate A', fields: [{ name: 'aField', type: 'text' }] },
+      { name: 'B', description: 'Chosen starting node B', fields: [{ name: 'bField', type: 'text' }] },
+      { name: 'C', description: 'Untouched candidate C', fields: [{ name: 'cField', type: 'text' }] },
+      { name: 'B1', description: 'Neighbour of B', fields: [{ name: 'b1Field', type: 'text' }] }
     ],
-    relationshipDetails: [
-      { from: 'Order', relation: 'contains', to: 'OrderItem' },
-      { from: 'Order', relation: 'contains', to: 'OrderPart' }
-    ],
+    relationshipDetails: [{ from: 'B', relation: 'linksTo', to: 'B1' }],
     workflowSteps: []
   }];
 
   const result = await investigateQuery({
-    question: 'highest selling products by region',
-    client,
-    model: 'fake',
-    arcs,
-    snapshot: {},
-    mapStateForArc: () => 'complete'
+    question: 'test B path', client, model: 'fake', arcs, snapshot: {}, mapStateForArc: () => 'complete'
   });
 
-  const secondAnswerPayload = JSON.parse(calls[2].messages[1].content);
-  const context = secondAnswerPayload.context;
+  const firstContext = JSON.parse(calls[1].messages[1].content).context;
+  assert.equal(firstContext.currentExpanded.entities.length, 1);
+  assert.equal(firstContext.currentExpanded.entities[0].name, 'B');
+  assert.equal(firstContext.visited.length, 0);
 
-  assert.ok(context.visitedNodes.some((node) => node.kind === 'entity' && node.name === 'Order'));
-  assert.ok(context.visitedLinkedEntities.some((node) => node.name === 'Order' && node.state === 'visited'));
-  assert.ok(!context.unselectedEntities.some((node) => node.name === 'Order'));
+  const secondContext = JSON.parse(calls[2].messages[1].content).context;
+  assert.equal(secondContext.currentExpanded.entities.length, 1);
+  assert.equal(secondContext.currentExpanded.entities[0].name, 'B1');
+  assert.ok(secondContext.visited.some((node) => node.kind === 'entity' && node.name === 'B'));
+  assert.ok(!secondContext.visited.some((node) => node.name === 'A'));
+  assert.ok(!secondContext.visited.some((node) => node.name === 'C'));
+  assert.ok(!secondContext.unselectedEntities.some((node) => node.name === 'B'));
+
   assert.equal(result.status, 'complete');
   assert.equal(result.investigation.expansionRounds, 1);
 });
