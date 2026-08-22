@@ -71,7 +71,7 @@ export function semanticObjectsFromGraph(graph = []) {
 export function workflowArcsFromGraph(graph = []) {
   const nodes = new Map(arr(graph).filter((node) => node?.id).map((node) => [node.id, node]));
   const outgoing = (node, relationship) => arr(node?.links).filter((link) => !relationship || link.relationship === relationship).map((link) => nodes.get(link.nodeId)).filter(Boolean);
-  return arr(graph).filter((node) => node?.type === 'workflow').map((workflow) => {
+  return arr(graph).filter((node) => node?.type === 'workflow' && node?.data?.closureState === 'closed').map((workflow) => {
     const data = workflow.data || {};
     const entities = outgoing(workflow, 'uses entity');
     const steps = outgoing(workflow, 'contains step').sort((a, b) => Number(a?.data?.order || 0) - Number(b?.data?.order || 0));
