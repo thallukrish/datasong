@@ -16,6 +16,86 @@ function friendlyEntity(name) {
   return /^[A-Za-z][A-Za-z0-9 _-]*$/.test(value);
 }
 
+function semanticWords(value) {
+  return String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 2 && !['the','and','for','with','from','this','that','entity','record','identifier'].includes(word));
+}
+
+function fieldSemanticScore(field, candidate) {
+  const fieldWords = new Set(semanticWords(`${field?.physicalFieldName || field?.name || ''} ${field?.description || ''}`));
+  const candidateWords = new Set(semanticWords(`${candidate.name} ${candidate.description || ''}`));
+  if (!fieldWords.size || !candidateWords.size) return 0;
+  let score = 0;
+  for (const word of fieldWords) if (candidateWords.has(word)) score += 2;
+  const fieldText = [...fieldWords].join(' ');
+  const candidateText = [...candidateWords].join(' ');
+  for (const concept of ['postal','address','contact','geo','region','state','country','party','product','order','customer','shipment','payment']) {
+    if (fieldText.includes(concept) && candidateText.includes(concept)) score += 3;
+  }
+  return score;
+}
+
+function enrichArcsWithFieldSemanticNeighbours(arcs) {
+  const catalog = new Map();
+  for (const arc of arcs) {
+    for (const detail of arr(arc.entityDetails)) {
+      const name = String(detail?.name || '').trim();
+      if (!friendlyEntity(name)) continue;
+      const k = key(name);
+      const current = catalog.get(k) || { name, description:'' };
+      if (!current.description && detail?.description) current.description = String(detail.description).trim();
+      catalog.set(k, current);
+    }
+    for (const raw of [...arr(arc.entities), ...arr(arc.persistentObjects)]) {
+      const name = String(raw || '').trim();
+      if (friendlyEntity(name) && !catalog.has(key(name))) catalog.set(key(name), { name, description:'' });
+    }
+  }
+  const candidates = [...catalog.values()];
+
+  return arcs.map((arc) => {
+    const existing = arr(arc.relationshipDetails);
+    const seen = new Set(existing.map((rel) => `${key(rel?.from)}|${key(rel?.to)}`));
+    const inferred = [];
+
+    for (const detail of arr(arc.entityDetails)) {
+      const from = String(detail?.name || '').trim();
+      if (!friendlyEntity(from)) continue;
+      for (const field of arr(detail?.fields)) {
+        const fieldName = String(field?.physicalFieldName || field?.name || '').trim();
+        const fieldDescription = String(field?.description || '').trim();
+        if (!fieldName) continue;
+        const ranked = candidates
+          .filter((candidate) => key(candidate.name) !== key(from) && !seen.has(`${key(from)}|${key(candidate.name)}`))
+          .map((candidate) => ({ candidate, score:fieldSemanticScore(field, candidate) }))
+          .filter((item) => item.score >= 6)
+          .sort((a,b) => b.score - a.score)
+          .slice(0, 2);
+
+        for (const { candidate, score } of ranked) {
+          const edgeKey = `${key(from)}|${key(candidate.name)}`;
+          if (seen.has(edgeKey)) continue;
+          seen.add(edgeKey);
+          inferred.push({
+            from,
+            relation:'field suggests',
+            to:candidate.name,
+            description:`Inferred neighbour from ${from}.${fieldName}${fieldDescription ? ` — ${fieldDescription}` : ''}. Semantic evidence score ${score}; use for exploration, not as a proven join.`,
+            evidenceType:'field-semantic',
+            evidenceStrength:'inferred',
+            sourceField:fieldName
+          });
+        }
+      }
+    }
+
+    return inferred.length ? { ...arc, relationshipDetails:[...existing, ...inferred] } : arc;
+  });
+}
+
 function sanitizeView(view = {}) {
   const selected = arr(view.select)
     .filter((x) => friendlyEntity(x?.entity) && x?.field)
@@ -46,7 +126,7 @@ function fallbackFromInvestigation(question, investigation = {}) {
       ? `The guided map walk identified ${entities.join(', ')} as the relevant semantic area, but the final field-level view was not completed. The map should be inspected further only for the missing join/field evidence.`
       : 'The guided map walk did not produce enough field-level evidence to construct a reliable view.',
     dataView:null,
-    nextStep:'Inspect the query log for the scope, plan, and connection stages.'
+    nextStep:'Inspect the query log for the selection and neighbour-expansion stages.'
   };
 }
 
@@ -89,10 +169,11 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
 
       explorer.persistSemanticMap?.();
       const snapshot = explorer.snapshot();
-      const arcs = businessArcs(snapshot);
+      const baseArcs = businessArcs(snapshot);
+      const arcs = enrichArcsWithFieldSemanticNeighbours(baseArcs);
       if (!arcs.length && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise map has not identified anything relevant to this question yet'});
 
-      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount:arcs.length,mode:'guided'});
+      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount:arcs.length,mode:'guided',fieldSemanticNeighbours:true});
       let rawResponse = await investigateQuery({
         question,
         client:queryClient,
