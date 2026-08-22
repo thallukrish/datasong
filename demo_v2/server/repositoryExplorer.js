@@ -16,6 +16,7 @@ import { withStructuredWorkflow } from './explorer/structuredWorkflow.js';
 import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
+import { withSchemaEntityRelationships } from './explorer/schemaEntityRelationships.js';
 
 const ExplorerWithModelCall = withLightweightModelCall(ModelDirectedExplorerV2);
 const ExplorerWithPass1State = withPass1State(ExplorerWithModelCall);
@@ -34,7 +35,8 @@ const ExplorerWithStructuredWorkflow = withStructuredWorkflow(ExplorerWithPersis
 const ExplorerWithSemanticModel = withSemanticModel(ExplorerWithStructuredWorkflow);
 const ExplorerWithBusinessPriority = withBusinessPriorityScout(ExplorerWithSemanticModel);
 const ExplorerWithReconciliation = withEntityReconciliation(ExplorerWithBusinessPriority);
+const ExplorerWithSchemaEntityRelationships = withSchemaEntityRelationships(ExplorerWithReconciliation);
 
-export class RepositoryExplorer extends ExplorerWithReconciliation {}
+export class RepositoryExplorer extends ExplorerWithSchemaEntityRelationships {}
 
 export default RepositoryExplorer;
