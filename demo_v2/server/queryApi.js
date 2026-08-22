@@ -46,6 +46,24 @@ function schemaNavigationArc(explorer) {
   };
 }
 
+async function ensureSchemaNavigation(explorer, repoUrl) {
+  let arc = schemaNavigationArc(explorer);
+  if (arc || !repoUrl) return arc;
+  const topology = explorer?.topology;
+  if (typeof topology?.prepare !== 'function') return null;
+
+  // A persisted semantic map can restore without rebuilding the runtime topology.
+  // Rehydrate it once, lazily, so authoritative entity schemas/FKs are available
+  // to query navigation and can be materialized back into the restored map.
+  console.log('[lemap query-guided] restoring runtime schema catalog for persisted map');
+  await topology.prepare(repoUrl);
+  explorer.materializeAllSchemaRelationships?.();
+  explorer.persistSemanticMap?.();
+  arc = schemaNavigationArc(explorer);
+  console.log(`[lemap query-guided] schema catalog ready: ${arc?.entityDetails?.length || 0} entities, ${arc?.relationshipDetails?.length || 0} relationships`);
+  return arc;
+}
+
 function sanitizeView(view = {}) {
   const selected = arr(view.select)
     .filter((x) => friendlyEntity(x?.entity) && x?.field)
@@ -128,7 +146,7 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
           ? arr(arc.businessRelationshipDetails)
           : arr(arc.relationshipDetails).filter((relationship) => relationship?.relationshipKind !== 'schema_fk')
       }));
-      const schemaArc = schemaNavigationArc(explorer);
+      const schemaArc = await ensureSchemaNavigation(explorer, snapshot.repoUrl || '');
       if (!arcs.length && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise map has not identified anything relevant to this question yet'});
 
       append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount:arcs.length,mode:'guided',schemaNavigationEntities:schemaArc?.entityDetails?.length||0,schemaNavigationRelationships:schemaArc?.relationshipDetails?.length||0});
