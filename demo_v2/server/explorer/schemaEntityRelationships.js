@@ -17,9 +17,6 @@ export const withSchemaEntityRelationships = (Base) => class SchemaEntityRelatio
         const fieldName = String(map.fieldName);
         let relatedFieldName = String(map.relatedFieldName || '');
         if (!relatedFieldName) {
-          // Moqui key-map.@related is optional. Prefer a same-name target field;
-          // otherwise a single target PK is unambiguous; otherwise positional PK
-          // mapping is deterministic only when map and PK counts match.
           relatedFieldName = targetFields.get(key(fieldName)) || '';
           if (!relatedFieldName && targetPks.length === 1) relatedFieldName = targetPks[0];
           if (!relatedFieldName && targetPks.length === rawMaps.length) relatedFieldName = targetPks[index] || '';
@@ -28,7 +25,6 @@ export const withSchemaEntityRelationships = (Base) => class SchemaEntityRelatio
       }).filter((map) => map.fieldName && map.relatedFieldName);
     }
 
-    // With no key-map Moqui maps same-name related PK fields.
     const sourceFields = new Set(arr(sourceSchema?.fields).map((field) => key(field?.name)));
     return targetPks
       .filter((pkName) => sourceFields.has(key(pkName)))
@@ -86,15 +82,23 @@ export const withSchemaEntityRelationships = (Base) => class SchemaEntityRelatio
     arc.relationshipDetails = [...byKey.values()];
   }
 
+  materializeAllSchemaRelationships() {
+    for (const arc of arr(this.state?.pass1Arcs)) this.materializeSchemaRelationships(arc);
+  }
+
   enrichArcEntitySchemas(arc) {
     const result = super.enrichArcEntitySchemas(arc);
     this.materializeSchemaRelationships(arc);
     return result;
   }
 
+  persistSemanticMap(...args) {
+    this.materializeAllSchemaRelationships();
+    return super.persistSemanticMap(...args);
+  }
+
   snapshot(...args) {
-    // Upgrade maps loaded from disk too; no workflow relearning is required.
-    for (const arc of arr(this.state?.pass1Arcs)) this.materializeSchemaRelationships(arc);
+    this.materializeAllSchemaRelationships();
     return super.snapshot(...args);
   }
 };
