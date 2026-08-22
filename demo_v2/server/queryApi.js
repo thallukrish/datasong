@@ -16,6 +16,36 @@ function friendlyEntity(name) {
   return /^[A-Za-z][A-Za-z0-9 _-]*$/.test(value);
 }
 
+function schemaNavigationArc(explorer) {
+  const schemas = arr(explorer?.topology?.entitySchemas).filter((schema) => schema?.name && friendlyEntity(schema.name));
+  if (!schemas.length || typeof explorer?.schemaRelationshipDetails !== 'function') return null;
+  const relationships = schemas.flatMap((schema) => explorer.schemaRelationshipDetails(schema.name));
+  return {
+    id:'__schema_navigation__',
+    title:'Schema navigation',
+    hiddenFromWorkflows:true,
+    entities:[],
+    persistentObjects:[],
+    entityDetails:schemas.map((schema) => ({
+      name:String(schema.name),
+      description:String(schema.description || ''),
+      schemaResolved:true,
+      schemaName:String(schema.fullName || schema.name),
+      schemaSourcePath:String(schema.sourcePath || ''),
+      schemaComponent:String(schema.component || ''),
+      fields:arr(schema.fields).map((field) => ({
+        name:String(field?.name || ''),
+        type:String(field?.type || ''),
+        isPk:!!field?.isPk,
+        description:String(field?.description || ''),
+        sourceField:String(field?.sourceField || ''),
+        entityAlias:String(field?.entityAlias || '')
+      })).filter((field) => field.name)
+    })),
+    relationshipDetails:relationships
+  };
+}
+
 function sanitizeView(view = {}) {
   const selected = arr(view.select)
     .filter((x) => friendlyEntity(x?.entity) && x?.field)
@@ -90,14 +120,16 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       explorer.persistSemanticMap?.();
       const snapshot = explorer.snapshot();
       const arcs = businessArcs(snapshot);
+      const schemaArc = schemaNavigationArc(explorer);
       if (!arcs.length && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise map has not identified anything relevant to this question yet'});
 
-      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount:arcs.length,mode:'guided'});
+      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount:arcs.length,mode:'guided',schemaNavigationEntities:schemaArc?.entityDetails?.length||0,schemaNavigationRelationships:schemaArc?.relationshipDetails?.length||0});
       let rawResponse = await investigateQuery({
         question,
         client:queryClient,
         model:queryModel,
         arcs,
+        navigationArcs:schemaArc?[schemaArc]:[],
         snapshot,
         mapStateForArc,
         pathHints:(query) => relevantPathHints(query,8),
