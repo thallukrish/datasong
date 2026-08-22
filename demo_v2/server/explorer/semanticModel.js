@@ -150,26 +150,9 @@ export const withSemanticModel = (Base) => class SemanticModelExplorer extends B
       const name = String(schema?.name || rawName);
       const learned = learnedByKey.get(identityKey(name)) || { name, description: '', fields: [] };
       const representedBy = this.representationDetailsFor(arc, name, learnedByKey);
-      let fields = schema ? mergeFieldDescriptions(schema, learned) : arr(learned.fields);
-      if (!schema && representedBy.length) {
-        const aggregate = [];
-        const seen = new Set();
-        for (const representation of representedBy) {
-          for (const field of arr(representation.fields)) {
-            const fieldKey = `${identityKey(representation.entityName)}|${identityKey(field.name)}`;
-            if (seen.has(fieldKey)) continue;
-            seen.add(fieldKey);
-            aggregate.push({
-              ...field,
-              name: `${representation.entityName}.${field.name}`,
-              physicalFieldName: field.name,
-              sourceEntity: representation.entityName,
-              description: field.description || `Field on ${representation.entityName}, which ${representation.relation.replaceAll('_', ' ')} ${name} in this workflow.`
-            });
-          }
-        }
-        if (aggregate.length) fields = aggregate;
-      }
+      const fields = schema
+        ? mergeFieldDescriptions(schema, learned)
+        : arr(learned.fields).filter((field) => !field?.sourceEntity || identityKey(field.sourceEntity) === identityKey(name));
       return {
         ...learned, name,
         description: clean(learned.description || schema?.description || '', 420),
@@ -383,9 +366,23 @@ export const withSemanticModel = (Base) => class SemanticModelExplorer extends B
       }
     });
 
+    const relationshipEndpoint = (name) => {
+      const known = entityObjects.get(identityKey(name));
+      if (known) return known;
+      const schema = this.topology.entitySchema?.(name) || null;
+      if (!schema) return store.ensure({ type: 'concept', name: name || 'unknown', scope: workflow.id });
+      return store.ensure({
+        type:'entity', name:schema.name || name,
+        properties:{
+          description:clean(schema.description || '',420), schemaResolved:true,
+          schemaName:schema.fullName || schema.name || name, schemaSourcePath:schema.sourcePath || '',
+          schemaComponent:schema.component || '', physicalRepresentation:true
+        }
+      });
+    };
     for (const rel of arr(arc.relationshipDetails)) {
-      const from = entityObjects.get(identityKey(rel.from)) || store.ensure({ type: 'concept', name: rel.from || 'unknown', scope: workflow.id });
-      const to = entityObjects.get(identityKey(rel.to)) || store.ensure({ type: 'concept', name: rel.to || 'unknown', scope: workflow.id });
+      const from = relationshipEndpoint(rel.from);
+      const to = relationshipEndpoint(rel.to);
       store.link(from, rel.relation || 'related to', to, {
         sourceType: 'llm_interpretation', source: `pass2:${arc.id}`,
         assertion: rel.description || `${rel.from} ${rel.relation} ${rel.to}`
