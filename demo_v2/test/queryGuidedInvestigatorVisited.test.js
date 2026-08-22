@@ -9,7 +9,7 @@ function completion(payload) {
   };
 }
 
-test('query-guided traversal visits only expanded nodes and preserves exposed evidence even when model forgets to retain it', async () => {
+test('query-guided traversal visits only expanded nodes and preserves qualified exposed evidence even when model forgets to retain it', async () => {
   const calls = [];
   const scripted = [
     completion({ intent: 'data_analytics', startKind: 'entity', entity: 'B', workflowId: '' }),
@@ -62,10 +62,12 @@ test('query-guided traversal visits only expanded nodes and preserves exposed ev
   assert.ok(!secondContext.visited.some((node) => node.name === 'A'));
   assert.ok(!secondContext.visited.some((node) => node.name === 'C'));
   assert.ok(!secondContext.unselectedEntities.some((node) => node.name === 'B'));
-  assert.ok(secondContext.exploredEvidence.fields.some((field) => field.entity === 'B' && field.field === 'bField'));
+  assert.ok(secondContext.exploredEvidence.fields.some((field) => field.ref === 'B.bField'));
+  assert.ok(secondContext.currentExpanded.links.some((link) => link.keyMaps.some((map) => map.leftRef === 'B.bField' && map.rightRef === 'B1.b1Field')));
   assert.equal(secondContext.selectedEvidence.fields.length, 0);
 
   assert.equal(result.status, 'complete');
   assert.equal(result.investigation.expansionRounds, 1);
   assert.ok(result.investigation.exploredEvidenceCount >= 1);
+  assert.equal(result.dataView.select[0].ref, 'B.bField');
 });
