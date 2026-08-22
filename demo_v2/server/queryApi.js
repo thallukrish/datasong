@@ -137,11 +137,15 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       if (!question) return res.status(400).json({error:'question is required'});
 
       let snapshot = explorer.snapshot();
-      await ensureSchemaNavigation(explorer, snapshot.repoUrl || '');
-      explorer.materializeSchemaCatalogGraph?.();
-      explorer.persistSemanticMap?.();
-      snapshot = explorer.snapshot();
-      const graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
+      let graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
+      const schemaCatalogReady = graph.some((node) => node.type === 'catalog' && node.data?.schemaCatalogComplete === true);
+      if (!schemaCatalogReady) {
+        await ensureSchemaNavigation(explorer, snapshot.repoUrl || '');
+        explorer.materializeSchemaCatalogGraph?.();
+        explorer.persistSemanticMap?.();
+        snapshot = explorer.snapshot();
+        graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
+      }
       const workflowCount = graph.filter((node) => node.type === 'workflow').length;
       const entityCount = graph.filter((node) => node.type === 'entity').length;
       if (!workflowCount && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise graph has not identified anything relevant to this question yet'});
@@ -161,11 +165,11 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       }
       const response = uiProjection(rawResponse);
       append(queryLog,'query_complete',{question,response,cumulativeUsage:normalizedUsage(response?.investigation?.usage || {})});
-      console.log(`[lemap query-guided] tokens ${response?.investigation?.usage?.total || 0} — ${question}`);
+      console.log(`[lemap query-graph] tokens ${response?.investigation?.usage?.total || 0} — ${question}`);
       return res.json(response);
     } catch (error) {
       append(queryLog,'query_error',{error:error.message || String(error)});
-      console.error(`[lemap query-guided] ${error.message}`);
+      console.error(`[lemap query-graph] ${error.message}`);
       return res.status(500).json({error:error.message || 'Query failed'});
     }
   });
