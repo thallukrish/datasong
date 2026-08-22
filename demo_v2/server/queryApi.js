@@ -119,7 +119,15 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
 
       explorer.persistSemanticMap?.();
       const snapshot = explorer.snapshot();
-      const arcs = businessArcs(snapshot);
+      // The browser gets schema FKs in relationshipDetails for entity navigation,
+      // but model workflow context stays business-only. Schema traversal is supplied
+      // separately as a hidden deterministic navigation graph.
+      const arcs = businessArcs(snapshot).map((arc) => ({
+        ...arc,
+        relationshipDetails:arr(arc.businessRelationshipDetails).length
+          ? arr(arc.businessRelationshipDetails)
+          : arr(arc.relationshipDetails).filter((relationship) => relationship?.relationshipKind !== 'schema_fk')
+      }));
       const schemaArc = schemaNavigationArc(explorer);
       if (!arcs.length && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise map has not identified anything relevant to this question yet'});
 
