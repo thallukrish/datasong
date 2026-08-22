@@ -8,17 +8,31 @@ function schemaRelationshipKey(rel) {
 
 export const withSchemaEntityRelationships = (Base) => class SchemaEntityRelationshipExplorer extends Base {
   relationshipKeyMaps(sourceSchema, targetSchema, relationship) {
-    const explicit = arr(relationship?.keyMaps)
-      .map((map) => ({ fieldName: String(map?.fieldName || ''), relatedFieldName: String(map?.relatedFieldName || map?.fieldName || '') }))
-      .filter((map) => map.fieldName && map.relatedFieldName);
-    if (explicit.length) return explicit;
+    const rawMaps = arr(relationship?.keyMaps).filter((map) => map?.fieldName);
+    const targetFields = new Map(arr(targetSchema?.fields).filter((field) => field?.name).map((field) => [key(field.name), String(field.name)]));
+    const targetPks = arr(targetSchema?.fields).filter((field) => field?.isPk && field?.name).map((field) => String(field.name));
 
-    // In Moqui an omitted key-map means same-name fields for the related PK.
-    // Materialize it only when both sides are present, so this remains deterministic schema evidence.
+    if (rawMaps.length) {
+      return rawMaps.map((map, index) => {
+        const fieldName = String(map.fieldName);
+        let relatedFieldName = String(map.relatedFieldName || '');
+        if (!relatedFieldName) {
+          // Moqui key-map.@related is optional. Prefer a same-name target field;
+          // otherwise a single target PK is unambiguous; otherwise positional PK
+          // mapping is deterministic only when map and PK counts match.
+          relatedFieldName = targetFields.get(key(fieldName)) || '';
+          if (!relatedFieldName && targetPks.length === 1) relatedFieldName = targetPks[0];
+          if (!relatedFieldName && targetPks.length === rawMaps.length) relatedFieldName = targetPks[index] || '';
+        }
+        return { fieldName, relatedFieldName, implicit: !map.relatedFieldName };
+      }).filter((map) => map.fieldName && map.relatedFieldName);
+    }
+
+    // With no key-map Moqui maps same-name related PK fields.
     const sourceFields = new Set(arr(sourceSchema?.fields).map((field) => key(field?.name)));
-    return arr(targetSchema?.fields)
-      .filter((field) => field?.isPk && field?.name && sourceFields.has(key(field.name)))
-      .map((field) => ({ fieldName: String(field.name), relatedFieldName: String(field.name), implicit: true }));
+    return targetPks
+      .filter((pkName) => sourceFields.has(key(pkName)))
+      .map((pkName) => ({ fieldName: pkName, relatedFieldName: pkName, implicit: true }));
   }
 
   schemaRelationshipDetails(entityName) {
@@ -41,7 +55,7 @@ export const withSchemaEntityRelationships = (Base) => class SchemaEntityRelatio
         to: String(targetSchema.name),
         description: joinText
           ? `Schema-defined entity relationship. Join: ${joinText}.`
-          : `Schema-defined entity relationship from ${sourceSchema.name} to ${targetSchema.name}.`,
+          : `Schema-defined entity relationship from ${sourceSchema.name} to ${targetSchema.name}; exact join fields are not declared or deterministically resolvable.`,
         relationshipKind: 'schema_fk',
         schemaRelationshipType: String(relationship?.type || ''),
         title: String(relationship?.title || ''),
