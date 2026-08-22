@@ -69,17 +69,13 @@ export const withSchemaEntityRelationships = (Base) => class SchemaEntityRelatio
 
   materializeSchemaRelationships(arc) {
     if (!arc) return;
-    const existing = arr(arc.relationshipDetails);
-    const byKey = new Map(existing.map((relationship) => [schemaRelationshipKey(relationship), relationship]));
+    const byKey = new Map();
     for (const detail of arr(arc.entityDetails)) {
       const relationships = this.schemaRelationshipDetails(detail?.name);
       detail.schemaRelationships = relationships;
-      for (const relationship of relationships) {
-        const relationshipKey = schemaRelationshipKey(relationship);
-        if (!byKey.has(relationshipKey)) byKey.set(relationshipKey, relationship);
-      }
+      for (const relationship of relationships) byKey.set(schemaRelationshipKey(relationship), relationship);
     }
-    arc.relationshipDetails = [...byKey.values()];
+    arc.schemaRelationships = [...byKey.values()];
   }
 
   materializeAllSchemaRelationships() {
