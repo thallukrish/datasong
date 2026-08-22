@@ -4,12 +4,10 @@ const key = (v) => String(v || '').normalize('NFKC').toLowerCase().replace(/[^\p
 const uniq = (xs) => [...new Set(arr(xs).filter(Boolean).map(String))];
 
 const MAX_EXPANSION_ROUNDS = 3;
-const MAX_EXPANDED_ENTITIES = 20;
-const MAX_EXPANDED_WORKFLOWS = 12;
-const MAX_FRONTIER_ENTITIES = 28;
-const MAX_FRONTIER_WORKFLOWS = 18;
 const MAX_FIELDS_PER_ENTITY = 18;
 const MAX_NEIGHBOURS_PER_NODE = 12;
+const MAX_FRONTIER_ENTITIES = 28;
+const MAX_FRONTIER_WORKFLOWS = 18;
 
 function usageOf(u = {}) {
   const prompt = Number(u.prompt_tokens || u.input_tokens || 0);
@@ -113,6 +111,15 @@ function fieldsForEntity(name, arcs, question) {
   return out.sort((a, b) => b.score - a.score).slice(0, MAX_FIELDS_PER_ENTITY).map(({ score, ...field }) => field);
 }
 
+function entitiesForWorkflow(workflowId, arcs) {
+  const arc = arcs.find((a) => String(a.id) === String(workflowId));
+  if (!arc) return [];
+  const catalog = new Map(entityCatalog(arcs).map((e) => [key(e.name), e]));
+  return uniq([...arr(arc.entities), ...arr(arc.persistentObjects), ...arr(arc.entityDetails).map((d) => d?.name)])
+    .filter(friendlyName)
+    .map((name) => catalog.get(key(name)) || { name, description: '' });
+}
+
 function workflowsForEntity(name, arcs) {
   const wanted = key(name), out = [];
   for (const arc of arcs) {
@@ -122,15 +129,6 @@ function workflowsForEntity(name, arcs) {
     if (present) out.push({ id: String(arc.id), name: clean(arc.title, 110), description: clean(arc.businessIntent || arc.outcome, 140) });
   }
   return out;
-}
-
-function entitiesForWorkflow(workflowId, arcs) {
-  const arc = arcs.find((a) => String(a.id) === String(workflowId));
-  if (!arc) return [];
-  const catalog = new Map(entityCatalog(arcs).map((e) => [key(e.name), e]));
-  return uniq([...arr(arc.entities), ...arr(arc.persistentObjects), ...arr(arc.entityDetails).map((d) => d?.name)])
-    .filter(friendlyName)
-    .map((name) => catalog.get(key(name)) || { name, description: '' });
 }
 
 function relatedWorkflows(workflowId, arcs) {
@@ -151,21 +149,6 @@ function relatedWorkflows(workflowId, arcs) {
   return out;
 }
 
-function connectedEntities(name, arcs) {
-  const wanted = key(name), catalog = new Map(entityCatalog(arcs).map((e) => [key(e.name), e])), out = new Map();
-  for (const edge of relationEdges(arcs)) {
-    if (key(edge.from) === wanted) {
-      const entity = catalog.get(key(edge.to)) || { name: edge.to, description: '' };
-      out.set(key(entity.name), { ...entity, via: edge });
-    }
-    if (key(edge.to) === wanted) {
-      const entity = catalog.get(key(edge.from)) || { name: edge.from, description: '' };
-      out.set(key(entity.name), { ...entity, via: edge });
-    }
-  }
-  return [...out.values()].slice(0, MAX_NEIGHBOURS_PER_NODE);
-}
-
 function relationsForEntity(name, arcs) {
   const wanted = key(name);
   return relationEdges(arcs).filter((edge) => key(edge.from) === wanted || key(edge.to) === wanted).slice(0, MAX_NEIGHBOURS_PER_NODE);
@@ -177,15 +160,20 @@ function relationsForWorkflow(workflowId, arcs) {
 function entityDetail(name, arcs, question) {
   const catalog = new Map(entityCatalog(arcs).map((e) => [key(e.name), e]));
   const base = catalog.get(key(name)) || { name, description: '' };
+  const connected = new Map();
+  for (const relation of relationsForEntity(base.name, arcs)) {
+    const other = key(relation.from) === key(base.name) ? relation.to : relation.from;
+    const entity = catalog.get(key(other)) || { name: other, description: '' };
+    connected.set(key(entity.name), { name: entity.name, description: clean(entity.description, 120), relation });
+  }
   return {
+    kind: 'entity',
     name: base.name,
     description: clean(base.description, 150),
     fields: fieldsForEntity(base.name, arcs, question),
-    connectedEntities: connectedEntities(base.name, arcs).map((e) => ({ name: e.name, description: clean(e.description, 120), via: e.via })),
+    connectedEntities: [...connected.values()].slice(0, MAX_NEIGHBOURS_PER_NODE),
     workflows: workflowsForEntity(base.name, arcs).slice(0, MAX_NEIGHBOURS_PER_NODE),
-    relations: relationsForEntity(base.name, arcs).map((r) => ({
-      from: r.from, relation: r.relation, to: r.to, description: clean(r.description, 120), workflowId: r.workflowId, workflowName: r.workflowName
-    }))
+    relations: relationsForEntity(base.name, arcs)
   };
 }
 
@@ -193,136 +181,163 @@ function workflowDetail(workflowId, arcs) {
   const arc = arcs.find((a) => String(a.id) === String(workflowId));
   if (!arc) return null;
   return {
+    kind: 'workflow',
     id: String(arc.id),
     name: clean(arc.title, 110),
     description: clean(arc.businessIntent || arc.businessOutcome || arc.outcome, 150),
-    entities: entitiesForWorkflow(arc.id, arcs).slice(0, 16).map((e) => ({ name: e.name, description: clean(e.description, 120) })),
+    entities: entitiesForWorkflow(arc.id, arcs).slice(0, 16),
     relatedWorkflows: relatedWorkflows(arc.id, arcs).slice(0, MAX_NEIGHBOURS_PER_NODE),
-    relations: relationsForWorkflow(arc.id, arcs).map((r) => ({ from: r.from, relation: r.relation, to: r.to, description: clean(r.description, 120) }))
+    relations: relationsForWorkflow(arc.id, arcs)
   };
 }
 
-function createLocalMap() {
+function createSession() {
   return {
-    expandedEntities: new Map(), expandedWorkflows: new Map(),
-    frontierEntities: new Map(), frontierWorkflows: new Map(),
-    connections: new Map(), trails: new Map()
+    history: new Map(),
+    frontierEntities: new Map(),
+    frontierWorkflows: new Map(),
+    trails: new Map(),
+    currentEntities: new Map(),
+    currentWorkflows: new Map()
   };
 }
 
-function trailKey(type, id) { return `${type}:${type === 'entity' ? key(id) : String(id)}`; }
-function compactTrail(trail) { return arr(trail).slice(-8).map((x) => ({ type: x.type, name: clean(x.name, 100), description: clean(x.description, 120) })); }
-function selectedTrail(type, name, description) {
-  return [{ type, name, description: clean(description || 'Selected from the top-level semantic catalog.', 120) }];
+function nodeKey(kind, id) { return `${kind}:${kind === 'entity' ? key(id) : String(id)}`; }
+function compactNode(kind, node) {
+  return kind === 'entity'
+    ? { kind, name: node.name, description: clean(node.description, 120) }
+    : { kind, id: String(node.id), name: node.name, description: clean(node.description, 120) };
 }
-function appendTrail(base, item) { return compactTrail([...arr(base), item]); }
+function compactTrail(trail) { return arr(trail).slice(-8).map((x) => compactNode(x.kind, x)); }
 
-function rememberConnection(local, relation) {
-  const k = `${key(relation.from)}|${key(relation.relation)}|${key(relation.to)}`;
-  if (!local.connections.has(k)) local.connections.set(k, relation);
+function addHistory(session, kind, node) {
+  const id = kind === 'entity' ? node.name : node.id;
+  session.history.set(nodeKey(kind, id), compactNode(kind, node));
 }
 
-function addFrontierEntity(local, entity, trail) {
-  if (!entity?.name || local.expandedEntities.has(key(entity.name))) return;
+function addFrontierEntity(session, entity, trail) {
+  if (!entity?.name) return;
   const k = key(entity.name);
-  if (!local.frontierEntities.has(k) && local.frontierEntities.size < MAX_FRONTIER_ENTITIES) {
-    local.frontierEntities.set(k, { name: entity.name, description: clean(entity.description, 120), state: 'unselected' });
-    local.trails.set(trailKey('entity', entity.name), compactTrail(trail));
+  if (session.currentEntities.has(k)) return;
+  if (!session.frontierEntities.has(k) && session.frontierEntities.size < MAX_FRONTIER_ENTITIES) {
+    session.frontierEntities.set(k, { name: entity.name, description: clean(entity.description, 120), state: 'unselected' });
+    session.trails.set(nodeKey('entity', entity.name), compactTrail(trail));
   }
 }
-function addFrontierWorkflow(local, workflow, trail) {
-  if (!workflow?.id || local.expandedWorkflows.has(String(workflow.id))) return;
+function addFrontierWorkflow(session, workflow, trail) {
+  if (!workflow?.id) return;
   const id = String(workflow.id);
-  if (!local.frontierWorkflows.has(id) && local.frontierWorkflows.size < MAX_FRONTIER_WORKFLOWS) {
-    local.frontierWorkflows.set(id, { id, name: workflow.name, description: clean(workflow.description, 120), state: 'unselected' });
-    local.trails.set(trailKey('workflow', id), compactTrail(trail));
+  if (session.currentWorkflows.has(id)) return;
+  if (!session.frontierWorkflows.has(id) && session.frontierWorkflows.size < MAX_FRONTIER_WORKFLOWS) {
+    session.frontierWorkflows.set(id, { id, name: workflow.name, description: clean(workflow.description, 120), state: 'unselected' });
+    session.trails.set(nodeKey('workflow', id), compactTrail(trail));
   }
 }
 
-function expandEntity(local, name, arcs, question, trail) {
-  if (local.expandedEntities.size >= MAX_EXPANDED_ENTITIES && !local.expandedEntities.has(key(name))) return;
+function beginExpansionRound(session) {
+  for (const node of session.currentEntities.values()) addHistory(session, 'entity', node);
+  for (const node of session.currentWorkflows.values()) addHistory(session, 'workflow', node);
+  session.currentEntities.clear();
+  session.currentWorkflows.clear();
+}
+
+function expandEntity(session, name, arcs, question, trail) {
   const detail = entityDetail(name, arcs, question);
   if (!detail?.name) return;
   const k = key(detail.name);
-  local.expandedEntities.set(k, detail);
-  local.frontierEntities.delete(k);
-  local.trails.set(trailKey('entity', detail.name), compactTrail(trail));
-  for (const relation of arr(detail.relations)) rememberConnection(local, relation);
+  session.frontierEntities.delete(k);
+  session.currentEntities.set(k, detail);
+  session.trails.set(nodeKey('entity', detail.name), compactTrail(trail));
 
-  for (const neighbour of arr(detail.connectedEntities)) {
-    const relation = neighbour.via || {};
-    const relationTrail = appendTrail(trail, {
-      type: 'relation',
-      name: `${relation.from || detail.name} ${relation.relation || 'relates to'} ${relation.to || neighbour.name}`,
-      description: clean(relation.description, 120)
-    });
-    addFrontierEntity(local, neighbour, appendTrail(relationTrail, { type: 'entity', name: neighbour.name, description: neighbour.description }));
+  const baseTrail = [...compactTrail(trail), compactNode('entity', detail)];
+  for (const connected of arr(detail.connectedEntities)) {
+    addFrontierEntity(session, connected, [...baseTrail, { kind: 'entity', name: connected.name, description: connected.description }]);
   }
   for (const workflow of arr(detail.workflows)) {
-    addFrontierWorkflow(local, workflow, appendTrail(trail, { type: 'workflow', name: workflow.name, description: workflow.description }));
+    addFrontierWorkflow(session, workflow, [...baseTrail, { kind: 'workflow', id: workflow.id, name: workflow.name, description: workflow.description }]);
   }
 }
 
-function expandWorkflow(local, id, arcs, question, trail) {
-  if (local.expandedWorkflows.size >= MAX_EXPANDED_WORKFLOWS && !local.expandedWorkflows.has(String(id))) return;
+function expandWorkflow(session, id, arcs, trail) {
   const detail = workflowDetail(id, arcs);
   if (!detail) return;
   const workflowId = String(detail.id);
-  local.expandedWorkflows.set(workflowId, detail);
-  local.frontierWorkflows.delete(workflowId);
-  local.trails.set(trailKey('workflow', workflowId), compactTrail(trail));
-  for (const relation of arr(detail.relations)) rememberConnection(local, relation);
+  session.frontierWorkflows.delete(workflowId);
+  session.currentWorkflows.set(workflowId, detail);
+  session.trails.set(nodeKey('workflow', workflowId), compactTrail(trail));
 
+  const baseTrail = [...compactTrail(trail), compactNode('workflow', detail)];
   for (const entity of arr(detail.entities)) {
-    addFrontierEntity(local, entity, appendTrail(trail, { type: 'entity', name: entity.name, description: entity.description }));
+    addFrontierEntity(session, entity, [...baseTrail, { kind: 'entity', name: entity.name, description: entity.description }]);
   }
   for (const workflow of arr(detail.relatedWorkflows)) {
-    addFrontierWorkflow(local, workflow, appendTrail(trail, { type: 'workflow', name: workflow.name, description: workflow.description }));
+    addFrontierWorkflow(session, workflow, [...baseTrail, { kind: 'workflow', id: workflow.id, name: workflow.name, description: workflow.description }]);
   }
 }
 
-function expandNodes(local, { entities = [], workflowIds = [] }, arcs, question, { initial = false } = {}) {
-  for (const name of uniq(arr(entities).filter(friendlyName))) {
-    const existingTrail = local.trails.get(trailKey('entity', name));
-    const catalogItem = entityCatalog(arcs).find((e) => key(e.name) === key(name)) || { name, description: '' };
-    expandEntity(local, name, arcs, question, existingTrail || selectedTrail('entity', catalogItem.name, initial ? catalogItem.description : 'Expanded from the current frontier.'));
+function expandNodes(session, request, arcs, question, { initial = false } = {}) {
+  beginExpansionRound(session);
+  const entityCatalogByKey = new Map(entityCatalog(arcs).map((e) => [key(e.name), e]));
+  const workflowCatalogById = new Map(arcs.map((a) => [String(a.id), { id: String(a.id), name: clean(a.title, 110), description: clean(a.businessIntent || a.outcome, 150) }]));
+
+  for (const name of uniq(arr(request?.entities).filter(friendlyName))) {
+    const existingTrail = session.trails.get(nodeKey('entity', name));
+    const base = entityCatalogByKey.get(key(name)) || { name, description: '' };
+    expandEntity(session, name, arcs, question, existingTrail || [compactNode('entity', base)]);
   }
-  for (const id of uniq(arr(workflowIds).map(String))) {
-    const existingTrail = local.trails.get(trailKey('workflow', id));
-    const arc = workflowCatalog(arcs, () => '', {}).find((w) => String(w.id) === String(id)) || { id, name: id, description: '' };
-    expandWorkflow(local, id, arcs, question, existingTrail || selectedTrail('workflow', arc.name, initial ? arc.description : 'Expanded from the current frontier.'));
+  for (const id of uniq(arr(request?.workflowIds).map(String))) {
+    const existingTrail = session.trails.get(nodeKey('workflow', id));
+    const base = workflowCatalogById.get(id) || { id, name: id, description: '' };
+    expandWorkflow(session, id, arcs, existingTrail || [compactNode('workflow', base)]);
+  }
+
+  if (initial) {
+    for (const node of session.currentEntities.values()) session.trails.set(nodeKey('entity', node.name), [compactNode('entity', node)]);
+    for (const node of session.currentWorkflows.values()) session.trails.set(nodeKey('workflow', node.id), [compactNode('workflow', node)]);
   }
 }
 
-function serializeLocalMap(local) {
+function serializeCurrentEntity(session, entity) {
   return {
-    expandedEntities: [...local.expandedEntities.values()].map((entity) => ({
-      name: entity.name,
-      description: clean(entity.description, 120),
-      trail: local.trails.get(trailKey('entity', entity.name)) || [],
-      fields: arr(entity.fields).map((f) => ({ field: f.field, type: f.type, description: clean(f.description, 90), isPk: f.isPk })),
-      connectedEntities: arr(entity.connectedEntities).map((e) => ({ name: e.name, description: clean(e.description, 90) })).slice(0, MAX_NEIGHBOURS_PER_NODE),
-      workflows: arr(entity.workflows).map((w) => ({ id: w.id, name: w.name, description: clean(w.description, 90) })).slice(0, MAX_NEIGHBOURS_PER_NODE),
-      relations: arr(entity.relations).map((r) => ({ from: r.from, relation: r.relation, to: r.to, description: clean(r.description, 80) })).slice(0, MAX_NEIGHBOURS_PER_NODE)
-    })),
-    expandedWorkflows: [...local.expandedWorkflows.values()].map((workflow) => ({
-      id: workflow.id,
-      name: workflow.name,
-      description: clean(workflow.description, 120),
-      trail: local.trails.get(trailKey('workflow', workflow.id)) || [],
-      entities: arr(workflow.entities).slice(0, 16),
-      relatedWorkflows: arr(workflow.relatedWorkflows).slice(0, MAX_NEIGHBOURS_PER_NODE),
-      relations: arr(workflow.relations).slice(0, 16).map((r) => ({ from: r.from, relation: r.relation, to: r.to, description: clean(r.description, 80) }))
-    })),
-    unselectedEntities: [...local.frontierEntities.values()].map((entity) => ({
-      ...entity,
-      trail: local.trails.get(trailKey('entity', entity.name)) || []
-    })),
-    unselectedWorkflows: [...local.frontierWorkflows.values()].map((workflow) => ({
-      ...workflow,
-      trail: local.trails.get(trailKey('workflow', workflow.id)) || []
-    })),
-    connections: [...local.connections.values()].slice(0, 50).map((r) => ({ from: r.from, relation: r.relation, to: r.to, description: clean(r.description, 80) }))
+    kind: 'entity',
+    name: entity.name,
+    description: clean(entity.description, 120),
+    fields: arr(entity.fields).map((f) => ({ field: f.field, type: f.type, description: clean(f.description, 90), isPk: f.isPk })),
+    relatedEntities: arr(entity.connectedEntities).map((e) => ({ name: e.name, description: clean(e.description, 90), relation: clean(e.relation?.relation, 80), relationDescription: clean(e.relation?.description, 90) })),
+    workflows: arr(entity.workflows).map((w) => ({ id: w.id, name: w.name, description: clean(w.description, 90) })),
+    relations: arr(entity.relations).map((r) => ({ from: r.from, relation: r.relation, to: r.to, description: clean(r.description, 90) }))
+  };
+}
+function serializeCurrentWorkflow(workflow) {
+  return {
+    kind: 'workflow',
+    id: workflow.id,
+    name: workflow.name,
+    description: clean(workflow.description, 120),
+    entities: arr(workflow.entities).map((e) => ({ name: e.name, description: clean(e.description, 90) })),
+    relatedWorkflows: arr(workflow.relatedWorkflows).map((w) => ({ id: w.id, name: w.name, description: clean(w.description, 90) })),
+    relations: arr(workflow.relations).map((r) => ({ from: r.from, relation: r.relation, to: r.to, description: clean(r.description, 90) }))
+  };
+}
+
+function serializeContext(session) {
+  const trailKeys = new Set();
+  for (const node of session.currentEntities.values()) for (const t of arr(session.trails.get(nodeKey('entity', node.name)))) trailKeys.add(nodeKey(t.kind, t.kind === 'entity' ? t.name : t.id || t.name));
+  for (const node of session.currentWorkflows.values()) for (const t of arr(session.trails.get(nodeKey('workflow', node.id)))) trailKeys.add(nodeKey(t.kind, t.kind === 'entity' ? t.name : t.id || t.name));
+
+  const trail = [...session.history.entries()]
+    .filter(([k]) => !trailKeys.size || trailKeys.has(k))
+    .map(([, node]) => node)
+    .slice(-16);
+
+  return {
+    trail,
+    currentExpanded: {
+      entities: [...session.currentEntities.values()].map((e) => serializeCurrentEntity(session, e)),
+      workflows: [...session.currentWorkflows.values()].map(serializeCurrentWorkflow)
+    },
+    unselectedEntities: [...session.frontierEntities.values()].map((e) => ({ ...e, trail: session.trails.get(nodeKey('entity', e.name)) || [] })),
+    unselectedWorkflows: [...session.frontierWorkflows.values()].map((w) => ({ ...w, trail: session.trails.get(nodeKey('workflow', w.id)) || [] }))
   };
 }
 
@@ -354,24 +369,26 @@ async function jsonCall(client, model, system, payload, stage, usage, log) {
   return parsed;
 }
 
-function normalizeExpansionRequest(response, local) {
-  const availableEntityNames = new Map([...local.frontierEntities.values()].map((e) => [key(e.name), e.name]));
-  const availableWorkflowIds = new Set([...local.frontierWorkflows.keys()]);
+function normalizeExpansionRequest(response, session) {
+  const availableEntityNames = new Map([...session.frontierEntities.values()].map((e) => [key(e.name), e.name]));
+  const availableWorkflowIds = new Set([...session.frontierWorkflows.keys()]);
   return {
     entities: uniq(arr(response?.expandEntities).map((n) => availableEntityNames.get(key(n))).filter(Boolean)).slice(0, 4),
     workflowIds: uniq(arr(response?.expandWorkflowIds).map(String).filter((id) => availableWorkflowIds.has(id))).slice(0, 4)
   };
 }
 
-const ANSWER_SYSTEM = `Answer the user's question ONLY from the current semantic exploration context. Expanded nodes contain full detail and a trail showing how they were reached. Unselected nodes are frontier candidates: they intentionally contain only name, description and trail until explicitly expanded.
-For analytics, the expected final answer is a DATA VIEW: exact entities, exact fields, and how those fields connect into one combined view.
-Return JSON in one of two forms.
-If more context is genuinely needed and expansion rounds remain:
+const ANSWER_SYSTEM = `Answer the user's question ONLY from the current semantic exploration context.
+The context is intentionally asymmetric:
+- trail: previously traversed nodes, name + description only;
+- currentExpanded: ONLY the nodes expanded in this round, with fields, relations, connected entities/workflows and descriptions;
+- unselectedEntities/unselectedWorkflows: frontier candidates, name + description + compact trail only.
+For analytics, the final answer must be a DATA VIEW: exact entities, exact fields and the evidenced connections needed to form one combined view.
+If more context is needed and expansion rounds remain, return:
 {"status":"incomplete","missing":["short missing concept"],"expandEntities":["UNSELECTED entity name"],"expandWorkflowIds":["UNSELECTED workflow id"]}
-Choose expansion nodes ONLY from unselectedEntities/unselectedWorkflows, using their names, descriptions and trails. Do not guess unseen nodes.
-If you can answer, or no useful expansion remains:
+Choose expansion targets only from the unselected frontier. If sufficient, return:
 {"status":"complete","intent":"","answer":"2-4 concise sentences","dataView":{"grain":"","select":[{"entity":"","field":"","alias":"","role":"key|measure|dimension|time|attribute"}],"joins":[{"left":"Entity.field or Entity","right":"Entity.field or Entity","relation":"","evidenced":true}],"filters":[],"groupBy":[],"orderBy":[],"missing":[]},"nextStep":""}.
-Rules: use only supplied entity/field names; never substitute a semantically different field for a requested concept; exact field joins must be supported by expanded evidence, otherwise use an entity-level connection with evidenced=false; put unresolved fields/joins in dataView.missing; never expose source paths, framework classes, service names, or implementation details.`;
+Never substitute a semantically different field for a requested concept. Use only supplied fields. If an exact field join is not evidenced, use an entity-level connection with evidenced=false or list the join under missing. Never expose implementation paths/classes/services.`;
 
 export async function investigateQuery({ question, client, model, arcs, snapshot, mapStateForArc, pathHints = () => [], log = () => {} }) {
   const usage = { prompt: 0, completion: 0, total: 0 };
@@ -381,7 +398,7 @@ export async function investigateQuery({ question, client, model, arcs, snapshot
   const selected = await jsonCall(
     client,
     model,
-    `Given a business question and the COMPLETE top-level semantic catalog, select only relevant starting points. The catalog contains all entity names/descriptions and workflow names/descriptions, but no fields. Return JSON only: {"intent":"data_analytics|web_analytics|operations|support|decision_support|engineering|other","workflowIds":[],"entities":[]}. Use only supplied workflow IDs/entity names. Select at most 5 workflows and 6 entities. Do not answer yet.`,
+    `Given a business question and the COMPLETE top-level semantic catalog, select relevant starting points. The catalog contains all entity names/descriptions and workflow names/descriptions, but no fields. Return JSON only: {"intent":"data_analytics|web_analytics|operations|support|decision_support|engineering|other","workflowIds":[],"entities":[]}. Use only supplied names/IDs. Select at most 5 workflows and 6 entities. Do not answer yet.`,
     { question, workflows, entities },
     'select', usage, log
   );
@@ -399,12 +416,11 @@ export async function investigateQuery({ question, client, model, arcs, snapshot
     log('query_guided_recovery', { stage: 'select', reason: 'empty_selection', recovered: selection });
   }
 
-  const local = createLocalMap();
-  expandNodes(local, selection, arcs, question, { initial: true });
+  const session = createSession();
+  expandNodes(session, selection, arcs, question, { initial: true });
 
   let response = null, expansionRounds = 0;
   for (let round = 0; round <= MAX_EXPANSION_ROUNDS; round += 1) {
-    const canExpand = round < MAX_EXPANSION_ROUNDS;
     response = await jsonCall(
       client,
       model,
@@ -414,7 +430,7 @@ export async function investigateQuery({ question, client, model, arcs, snapshot
         intent: selection.intent,
         expansionRound: round,
         expansionRoundsRemaining: MAX_EXPANSION_ROUNDS - round,
-        context: serializeLocalMap(local),
+        context: serializeContext(session),
         unlearnedHints: pathHints(question).slice(0, 2)
       },
       round === 0 ? 'answer_or_expand_0' : `answer_or_expand_${round}`,
@@ -422,28 +438,28 @@ export async function investigateQuery({ question, client, model, arcs, snapshot
       log
     );
 
-    if (response?.status !== 'incomplete' || !canExpand) break;
-    const request = normalizeExpansionRequest(response, local);
+    if (response?.status !== 'incomplete' || round >= MAX_EXPANSION_ROUNDS) break;
+    const request = normalizeExpansionRequest(response, session);
     if (!request.entities.length && !request.workflowIds.length) {
       log('query_guided_stop', { reason: 'model_requested_no_unselected_frontier_nodes', round, response });
       break;
     }
     expansionRounds += 1;
     log('query_guided_expand', { round: expansionRounds, request, missing: arr(response.missing).slice(0, 6) });
-    expandNodes(local, request, arcs, question);
+    expandNodes(session, request, arcs, question);
   }
 
   if (response?.status === 'incomplete') {
     response = await jsonCall(
       client,
       model,
-      `${ANSWER_SYSTEM}\nExpansion is now closed. You MUST return status=complete using the available expanded evidence and list every unresolved requirement under dataView.missing.`,
+      `${ANSWER_SYSTEM}\nExpansion is closed. MUST return status=complete and list unresolved requirements under dataView.missing.`,
       {
         question,
         intent: selection.intent,
         expansionRound: expansionRounds,
         expansionRoundsRemaining: 0,
-        context: serializeLocalMap(local),
+        context: serializeContext(session),
         unresolvedFromPreviousRound: arr(response.missing).slice(0, 8)
       },
       'forced_final_answer', usage, log
@@ -453,16 +469,17 @@ export async function investigateQuery({ question, client, model, arcs, snapshot
   return {
     ...response,
     investigation: {
-      mode: 'select-frontier-expand-bounded',
+      mode: 'select-current-focus-expand-bounded',
       thinking: 'disabled',
       maxExpansionRounds: MAX_EXPANSION_ROUNDS,
       expansionRounds,
       selectedWorkflowIds: selection.workflowIds,
       selectedEntities: selection.entities,
-      expandedEntityCount: local.expandedEntities.size,
-      expandedWorkflowCount: local.expandedWorkflows.size,
-      frontierEntityCount: local.frontierEntities.size,
-      frontierWorkflowCount: local.frontierWorkflows.size,
+      currentExpandedEntityCount: session.currentEntities.size,
+      currentExpandedWorkflowCount: session.currentWorkflows.size,
+      frontierEntityCount: session.frontierEntities.size,
+      frontierWorkflowCount: session.frontierWorkflows.size,
+      historyNodeCount: session.history.size,
       usage
     }
   };
