@@ -49,7 +49,11 @@ function parseRelationships(body='') {
   while((rm=relRe.exec(body))){
     const ra=rm[1]||'', rb=rm[2]||'';
     const keyMaps=[]; const km=/<key-map\b([^>]*?)\/>/gi; let k;
-    while((k=km.exec(rb))) keyMaps.push({fieldName:attr(k[1],'field-name'),relatedFieldName:attr(k[1],'related-field-name')});
+    while((k=km.exec(rb))) keyMaps.push({
+      fieldName:attr(k[1],'field-name'),
+      // `related` is the canonical Moqui attribute; related-field-name is deprecated.
+      relatedFieldName:attr(k[1],'related')||attr(k[1],'related-field-name')
+    });
     relationships.push({type:attr(ra,'type'),relatedEntityName:attr(ra,'related')||attr(ra,'related-entity-name'),title:attr(ra,'title'),shortAlias:attr(ra,'short-alias'),keyMaps});
   }
   return relationships;
