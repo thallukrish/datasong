@@ -7,6 +7,40 @@ const arr = (value) => Array.isArray(value) ? value : [];
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const safeName = (value) => crypto.createHash('sha1').update(String(value || '')).digest('hex');
 
+function readSavedMap(file) {
+  const candidates = [file, `${file}.bak`];
+  let lastError = null;
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const saved = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      if (candidate !== file) console.warn(`[lemap] recovered semantic map from ${path.basename(candidate)}`);
+      return saved;
+    } catch (error) { lastError = error; }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
+function writeSavedMap(file, value) {
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const backup = `${file}.bak`;
+  const json = JSON.stringify(value, null, 2);
+  try {
+    fs.writeFileSync(temporary, json);
+    // Validate the completed temporary file before it can replace the active map.
+    JSON.parse(fs.readFileSync(temporary, 'utf8'));
+    if (fs.existsSync(file)) {
+      try { JSON.parse(fs.readFileSync(file, 'utf8')); fs.copyFileSync(file, backup); } catch {}
+      // Windows does not consistently replace an existing destination with rename.
+      fs.rmSync(file, { force: true });
+    }
+    fs.renameSync(temporary, file);
+  } finally {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+  }
+}
+
 function relationObjects(objects = {}) {
   return Object.values(objects).filter((object) => object?.type === 'relation');
 }
@@ -164,7 +198,8 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
     const file = this.mapFilePath();
     if (!file || !fs.existsSync(file)) return false;
     try {
-      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const saved = readSavedMap(file);
+      if (!saved) return false;
       if (saved?.repoUrl !== this.state.repoUrl || saved?.commit !== this.state.commit) return false;
       if (Number(saved?.version || 0) === 2 && saved.semanticState) {
         for (const key of ['pass1Arcs','pass1Scheduler','pass2WholeFlowByArc','pass2GraphByArc','callPathPreprocess','scout','stories','threadAssignments','trajectoryEvidence','orientation','unattachedFragments','semanticObjects']) {
@@ -214,7 +249,7 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
       this.closeCompletedArcs(); this.enrichTraceability(); fs.mkdirSync(this.mapDirectory(), { recursive: true });
       const savedAt = new Date().toISOString();
       const learnedMap = { version: MAP_VERSION, repoUrl: this.state.repoUrl, commit: this.state.commit, savedAt, graph: graphFromSemanticObjects(this.state.semanticObjects), learningProgress: compactLearningProgress(this.state) };
-      fs.writeFileSync(this.mapFilePath(), JSON.stringify(learnedMap, null, 2));
+      writeSavedMap(this.mapFilePath(), learnedMap);
       this.state.mapPersistence = { restored: !!this._mapRestored, savedAt, repoUrl: this.state.repoUrl, commit: this.state.commit, version: MAP_VERSION };
     } catch (error) { console.warn(`[lemap] could not persist semantic map: ${error.message}`); }
   }
