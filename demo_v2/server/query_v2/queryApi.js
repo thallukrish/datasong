@@ -58,16 +58,19 @@ function semanticEntityIndex(graph) {
     }
   }
 
+  const degree = new Map();
   const childrenByParent = new Map();
   for (const node of nodes.values()) {
     if (node?.type !== 'entity' || !node?.name) continue;
     const fromName = String(node.name);
     const fromEntity = entities.get(key(fromName));
-    if (!fromEntity?.pk.size) continue;
     for (const link of arr(node.links)) {
       if (link?.data?.relationshipKind !== 'schema_fk' || link?.data?.evidenced === false) continue;
-      if (String(link?.cardinality || '').toLowerCase() !== 'one') continue;
       const toName = entityNameById.get(String(link?.nodeId || ''));
+      if (!toName) continue;
+      degree.set(key(fromName), (degree.get(key(fromName)) || 0) + 1);
+      degree.set(key(toName), (degree.get(key(toName)) || 0) + 1);
+      if (!fromEntity?.pk.size || String(link?.cardinality || '').toLowerCase() !== 'one') continue;
       const toEntity = entities.get(key(toName));
       if (!toEntity?.pk.size) continue;
       const keyMaps = arr(link?.data?.keyMaps);
@@ -118,6 +121,9 @@ function semanticEntityIndex(graph) {
       if (!field.name || /id$/i.test(field.name)) return false;
       return !['createdDate','lastUpdatedStamp','lastUpdatedDate','createdStamp'].includes(field.name);
     });
+    entity.semanticRole = abstractParents.has(key(entity.name))
+      ? 'abstract_base'
+      : (!entity.hasConcreteValueField && Number(degree.get(key(entity.name)) || 0) > 0 ? 'structural_bridge' : 'concrete');
   }
 
   return { entities, entityNameById, abstractParents };
@@ -213,16 +219,32 @@ function directoryWithClusterGraph(directory, graph) {
       .map((entity) => ({ name:entity.name, description:entity.description, concreteInstances:entity.concreteInstances }));
 
     const representativeConcreteEntities = memberEntities
-      .filter((entity) => !semantic.abstractParents.has(key(entity.name)) && entity.hasConcreteValueField)
+      .filter((entity) => entity.semanticRole === 'concrete')
       .sort((a, b) => b.tfidfScore - a.tfidfScore || a.name.localeCompare(b.name))
       .slice(0, MAX_CONCRETE_REPRESENTATIVES)
       .map((entity) => ({ name:entity.name, description:entity.description, tfidfScore:entity.tfidfScore }));
+
+    const compositionCounts = memberEntities.reduce((counts, entity) => {
+      if (entity.semanticRole === 'abstract_base') counts.abstractBase += 1;
+      else if (entity.semanticRole === 'structural_bridge') counts.structuralBridge += 1;
+      else counts.concrete += 1;
+      return counts;
+    }, { abstractBase:0, structuralBridge:0, concrete:0 });
+    const compositionTotal = compositionCounts.abstractBase + compositionCounts.structuralBridge + compositionCounts.concrete;
+    const pct = (count) => compositionTotal ? Number(((count / compositionTotal) * 100).toFixed(1)) : 0;
+    const composition = {
+      total:compositionTotal,
+      abstractBase:{ count:compositionCounts.abstractBase, percent:pct(compositionCounts.abstractBase) },
+      structuralBridge:{ count:compositionCounts.structuralBridge, percent:pct(compositionCounts.structuralBridge) },
+      concrete:{ count:compositionCounts.concrete, percent:pct(compositionCounts.concrete) }
+    };
 
     const related = arr(relatedByGroup.get(key(group.name)))
       .sort((a, b) => b.score - a.score || b.pairCount - a.pairCount || a.group.localeCompare(b.group))
       .slice(0, MAX_RELATED_GROUPS)
       .map(({ score, ...item }) => item);
 
+    const compositionSummary = `Member composition: ${composition.total} entities — abstract/base ${composition.abstractBase.count} (${composition.abstractBase.percent}%), structural/bridge ${composition.structuralBridge.count} (${composition.structuralBridge.percent}%), concrete ${composition.concrete.count} (${composition.concrete.percent}%).`;
     const abstractSummary = abstractEntities.length
       ? `Abstract/base entities (always shown): ${abstractEntities.map((item) => `${item.name}${item.concreteInstances.length ? ` [parent of ${item.concreteInstances.join(', ')}]` : ''}${item.description ? ` — ${item.description}` : ''}`).join('; ')}.`
       : 'Abstract/base entities: none detected in this cluster.';
@@ -236,10 +258,11 @@ function directoryWithClusterGraph(directory, graph) {
     return {
       ...group,
       baseDescription:String(group.description || '').trim(),
+      composition,
       abstractEntities,
       representativeConcreteEntities,
       relatedGroups:related,
-      description:[String(group.description || '').trim(), abstractSummary, concreteSummary, relationSummary].filter(Boolean).join(' ')
+      description:[String(group.description || '').trim(), compositionSummary, abstractSummary, concreteSummary, relationSummary].filter(Boolean).join(' ')
     };
   });
 
