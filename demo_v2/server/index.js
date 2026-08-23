@@ -6,6 +6,7 @@ import OpenAI from 'openai';
 import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopologyV9.js';
 import { RepositoryExplorer } from './repositoryExplorer.js';
 import { registerQueryApi } from './queryApi.js';
+import { registerQueryV2Api } from './query_v2/queryApi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -322,6 +323,15 @@ registerQueryApi({
   onLatestLog: (file) => { latestQueryLogPath = file; }
 });
 
+registerQueryV2Api({
+  app,
+  explorer,
+  queryClient,
+  queryModel,
+  dataRoot,
+  onLatestLog: (file) => { latestQueryLogPath = file; }
+});
+
 function broadcast(state) {
   const snapshot = state || explorer.snapshot();
   const payload = `data: ${JSON.stringify({ ...snapshot, learningCoverage: coverageSummary(snapshot), visibleBusinessArcIds: businessArcs(snapshot).map((a) => a.id) })}\n\n`;
@@ -333,4 +343,5 @@ app.listen(port, () => {
   console.log('[DataSong v2] PERSISTENT MAP → FULL CALL-PATH SCOUT → PASS 1 → PASS 2');
   console.log('[DataSong v2] Targeted search spans learned workflows and compressed call paths; selected paths become Pass-1 learning targets.');
   console.log('[DataSong v2] QUERY: DeepSeek navigates the semantic map through bounded tools; query sessions/logs are stored under data/query-runs/.');
+  console.log('[DataSong v2] QUERY V2: intent → clusters → entities → local shortest evidenced joins → grounded answer.');
 });
