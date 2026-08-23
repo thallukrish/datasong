@@ -62,9 +62,6 @@ async function ensureSchemaNavigation(explorer, repoUrl) {
   const topology = explorer?.topology;
   if (typeof topology?.prepare !== 'function') return null;
 
-  // A persisted semantic map can restore without rebuilding the runtime topology.
-  // Rehydrate it once, lazily, so authoritative entity schemas/FKs are available
-  // to query navigation and can be materialized back into the restored map.
   console.log('[lemap query-guided] restoring runtime schema catalog for persisted map');
   await topology.prepare(repoUrl);
   explorer.materializeAllSchemaRelationships?.();
@@ -143,6 +140,7 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       if (!queryClient) return res.status(503).json({error:'The reasoning service is not configured'});
       const question = String(req.body?.question || '').trim();
       if (!question) return res.status(400).json({error:'question is required'});
+      console.log(`\n[lemap query] ${question}`);
 
       let snapshot = explorer.snapshot();
       let graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
@@ -161,6 +159,7 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       if (!workflowCount && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise graph has not identified anything relevant to this question yet'});
       const projection = graphQueryProjection(graph);
       const directoryArcs = [...projection.workflows, ...arr(projection.navigationArcs)];
+      console.log(`[lemap query] graph: ${entityCount} entities, ${workflowCount} workflows; preparing business directory`);
 
       append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount,entityCount,graphNodeCount:graph.length,mode:'directory-intent-guided-over-semantic-graph'});
       const directoryBuild = await ensureEntityDirectory({
@@ -178,6 +177,8 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
         groupCount:arr(directoryBuild.directory?.groups).length,
         usage:directoryBuild.usage
       });
+      console.log(`[lemap query] directory ready: ${arr(directoryBuild.directory?.groups).length} groups, reused=${directoryBuild.reused}`);
+
       const intentParsed = await parseQueryIntent({
         client:queryClient,
         model:queryModel,
@@ -185,6 +186,7 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
         directory:directoryBuild.directory,
         log:(type,payload) => append(queryLog,type,payload)
       });
+      console.log(`[lemap query] handing ${intentParsed.preferredEntities.length} directory-guided candidate entities to starting-node selection; graph walk remains unrestricted`);
 
       let rawResponse = await investigateQuery({
         question,
@@ -201,6 +203,7 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       });
       const walkUsage = normalizedUsage(rawResponse?.investigation?.usage || {});
       const preprocessingUsage = combinedUsage(directoryBuild.usage, intentParsed.usage);
+      console.log(`[lemap query] graph walk finished: ${rawResponse?.investigation?.expansionRounds || 0} expansions, walk tokens ${walkUsage.total}`);
       if (rawResponse?.investigation) {
         rawResponse.investigation.logicalRequest = intentParsed.intent;
         rawResponse.investigation.directory = {
@@ -220,7 +223,7 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       }
       const response = uiProjection(rawResponse);
       append(queryLog,'query_complete',{question,response,cumulativeUsage:normalizedUsage(response?.investigation?.usage || {})});
-      console.log(`[lemap query-guided-graph] tokens ${response?.investigation?.usage?.total || 0} — ${question}`);
+      console.log(`[lemap query] complete: preprocessing ${preprocessingUsage.total} + walk ${walkUsage.total} = ${response?.investigation?.usage?.total || 0} tokens`);
       return res.json(response);
     } catch (error) {
       append(queryLog,'query_error',{error:error.message || String(error)});

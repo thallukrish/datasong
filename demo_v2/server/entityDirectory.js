@@ -125,14 +125,21 @@ export async function ensureEntityDirectory({ client, model, arcs, dataRoot, rep
   const signature = crypto.createHash('sha1').update(entities.map((e) => `${e.name}|${e.description}`).join('\n')).digest('hex');
   let state = load(file);
   if (!state || state.signature !== signature) {
+    console.log(`[lemap directory] creating directory: ${entities.length} entities, batch size ${BATCH_SIZE}`);
     state = { version:1, repoUrl, commit, signature, entityCount:entities.length, batchSize:BATCH_SIZE, nextIndex:0, groups:[], assignments:{}, complete:false, reconciled:false, updatedAt:new Date().toISOString() };
     save(file, state);
+  } else {
+    console.log(`[lemap directory] loaded persisted directory: ${state.entityCount || entities.length} entities, ${arr(state.groups).length} groups, processed ${state.nextIndex || 0}/${entities.length}, reconciled=${!!state.reconciled}`);
   }
   const usage = { prompt:0, completion:0, total:0 };
   if (!state.complete) {
+    const totalBatches = Math.ceil(entities.length / BATCH_SIZE);
     while (state.nextIndex < entities.length) {
+      const batchStart = state.nextIndex;
       const batch = entities.slice(state.nextIndex, state.nextIndex + BATCH_SIZE);
+      const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1;
       const existingGroups = state.groups.map((g) => ({ name:g.name, description:g.description }));
+      console.log(`[lemap directory] clustering batch ${batchNumber}/${totalBatches}: entities ${batchStart + 1}-${batchStart + batch.length}, existing groups ${existingGroups.length}`);
       const call = await modelJson(client, model,
         'Build an evolving business directory over enterprise entities. Assign EVERY supplied entity to one or more semantically appropriate business groups. An entity may belong to multiple groups. Prefer reusing an existing group when its meaning fits. Create a new group only when no existing group is a good semantic home. Group names must be concise business concepts, not technical implementation labels. Do not infer physical fields or joins. Return {"assignments":[{"entity":"exact supplied entity name","groups":["existing or new group names"]}],"newGroups":[{"name":"","description":"one-line business scope"}]}.',
         { existingGroups, entities:batch });
@@ -141,13 +148,17 @@ export async function ensureEntityDirectory({ client, model, arcs, dataRoot, rep
       state.nextIndex += batch.length;
       state.updatedAt = new Date().toISOString();
       save(file, state);
+      const created = arr(call.parsed?.newGroups).map((g) => text(g?.name, 100)).filter(Boolean);
+      console.log(`[lemap directory] batch ${batchNumber}/${totalBatches} done: ${state.nextIndex}/${entities.length} entities, ${state.groups.length} groups${created.length ? `, new: ${created.slice(0, 8).join(', ')}` : ''}, tokens ${call.usage.total}`);
       log('entity_directory_batch', { from:state.nextIndex - batch.length, to:state.nextIndex, entityCount:entities.length, groupCount:state.groups.length, usage:call.usage, output:call.parsed });
     }
     state.complete = true;
     save(file, state);
+    console.log(`[lemap directory] clustering complete: ${entities.length} entities assigned across ${state.groups.length} provisional groups`);
   }
   if (!state.reconciled && state.groups.length) {
     const groups = state.groups.map((g) => ({ name:g.name, description:g.description, representativeEntities:representatives(state, g.name) }));
+    console.log(`[lemap directory] reconciling ${groups.length} provisional groups`);
     const call = await modelJson(client, model,
       'Reconcile an enterprise business directory created incrementally. Merge groups that mean the same thing and rename unclear groups to concise stable business concepts. Preserve genuinely distinct groups. Every source group must appear exactly once in sourceGroups of the returned canonical groups. Do not reclassify individual entities here. Return {"groups":[{"name":"canonical group name","description":"one-line business scope","sourceGroups":["exact source group names"]}]}.',
       { groups });
@@ -156,13 +167,17 @@ export async function ensureEntityDirectory({ client, model, arcs, dataRoot, rep
     state.reconciled = true;
     state.updatedAt = new Date().toISOString();
     save(file, state);
+    console.log(`[lemap directory] reconciliation complete: ${groups.length} provisional → ${state.groups.length} canonical groups, tokens ${call.usage.total}`);
     log('entity_directory_reconcile', { sourceGroupCount:groups.length, canonicalGroupCount:state.groups.length, usage:call.usage, output:call.parsed });
   }
+  if (state.complete && state.reconciled && usage.total === 0) console.log(`[lemap directory] reuse ready: ${state.groups.length} canonical groups; no clustering calls needed`);
+  console.log(`[lemap directory] ready: ${state.entityCount || entities.length} entities, ${state.groups.length} groups, build tokens ${usage.total}`);
   return { directory:state, file, usage, reused:usage.total === 0 };
 }
 
 export async function parseQueryIntent({ client, model, question, directory, log = () => {} }) {
   const groups = arr(directory?.groups).map((g) => ({ name:g.name, description:g.description }));
+  console.log(`[lemap intent] parsing question against ${groups.length} directory groups: ${question}`);
   const call = await modelJson(client, model,
     'Parse the business question into a stable logical request BEFORE physical graph traversal. Requirements must be canonical business concepts, not database/entity/field names. Select only directory groups likely to help resolve those requirements. A requirement may later map to any physical field with equivalent meaning. Return {"intent":"data_analytics|web_analytics|operations|support|decision_support|engineering|other","requirements":[{"concept":"short canonical concept","role":"measure|dimension|time|filter|attribute|key","value":"optional requested value or empty"}],"relevantGroups":["exact directory group names"],"interpretation":"one concise sentence"}.',
     { question, groups });
@@ -173,6 +188,9 @@ export async function parseQueryIntent({ client, model, question, directory, log
   const preferredEntities = uniq(Object.entries(directory?.assignments || {})
     .filter(([, memberships]) => arr(memberships).some((membership) => relevantGroups.some((g) => key(g) === key(membership))))
     .map(([entity]) => entity));
+  const requirementText = requirements.map((r) => `${r.concept}${r.role ? ` [${r.role}]` : ''}${r.value ? `=${r.value}` : ''}`).join(', ');
+  console.log(`[lemap intent] requirements: ${requirementText || '(none)'}`);
+  console.log(`[lemap intent] groups: ${relevantGroups.join(', ') || '(none)'} → ${preferredEntities.length} candidate entities, tokens ${call.usage.total}`);
   log('query_intent_directory', { question, intent, preferredEntityCount:preferredEntities.length, usage:call.usage });
   return { intent, preferredEntities, usage:call.usage };
 }
