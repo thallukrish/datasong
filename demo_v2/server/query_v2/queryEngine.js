@@ -4,6 +4,7 @@ const key = (value) => String(value || '').normalize('NFKC').toLowerCase().repla
 const uniq = (values) => [...new Set(arr(values).filter(Boolean).map(String))];
 const MAX_SEMANTIC_FIELDS = 5;
 const MAX_ISOLATED_NEIGHBOURS = 12;
+const MAX_PATH_HOPS = 7;
 const STOP_WORDS = new Set([
   'a','an','and','are','as','at','be','by','can','for','from','has','have','in','is','it','its','of','on','or','that','the','their','this','to','used','using','was','were','which','with',
   'field','fields','entity','record','records','value','values','identifier','identifies','identification','description','type','types','code','codes','date','time'
@@ -43,8 +44,7 @@ function graphIndex(graph = []) {
   for (const node of nodes.values()) {
     if (node?.type !== 'entity' || !node?.name) continue;
     const name = String(node.name);
-    const entity = { name, description:text(node.data?.description, 320), fields:[] };
-    entities.set(key(name), entity);
+    entities.set(key(name), { name, description:text(node.data?.description, 320), fields:[] });
     entityIdToName.set(String(node.id), name);
   }
   for (const node of nodes.values()) {
@@ -93,8 +93,7 @@ function graphIndex(graph = []) {
 
 function semanticFieldHints(graphEntities) {
   const entities = [...graphEntities.values()];
-  const docs = new Map();
-  const df = new Map();
+  const docs = new Map(), df = new Map();
   for (const entity of entities) {
     const counts = new Map(), evidence = new Map();
     for (const field of arr(entity.fields)) {
@@ -116,8 +115,8 @@ function semanticFieldHints(graphEntities) {
     for (const [word, count] of doc.counts) {
       const tf = count / total;
       const idf = Math.log((n + 1) / ((df.get(word) || 0) + 1)) + 1;
-      const evidence = doc.evidence.get(word) || {};
-      scored.push({ term:word, score:Number((tf * idf).toFixed(4)), field:evidence.field || '', evidence:evidence.description || '' });
+      const ev = doc.evidence.get(word) || {};
+      scored.push({ term:word, score:Number((tf * idf).toFixed(4)), field:ev.field || '', evidence:ev.description || '' });
     }
     scored.sort((a, b) => b.score - a.score || a.term.localeCompare(b.term));
     result.set(key(entity.name), scored.slice(0, MAX_SEMANTIC_FIELDS));
@@ -125,17 +124,75 @@ function semanticFieldHints(graphEntities) {
   return result;
 }
 
+function pkNames(entity) {
+  return new Set(arr(entity?.fields).filter((field) => field?.isPk).map((field) => key(field.name)));
+}
+function isSharedPkOneRelationship(index, edge) {
+  if (String(edge?.cardinality || '').toLowerCase() !== 'one') return false;
+  const from = index.entities.get(key(edge?.from)), to = index.entities.get(key(edge?.to));
+  if (!from || !to || !arr(edge?.keyMaps).length) return false;
+  const fromPk = pkNames(from), toPk = pkNames(to);
+  if (!fromPk.size || !toPk.size) return false;
+  const mappedFrom = new Set(arr(edge.keyMaps).map((map) => key(map?.fieldName)));
+  const mappedTo = new Set(arr(edge.keyMaps).map((map) => key(map?.relatedFieldName || map?.fieldName)));
+  return [...fromPk].every((name) => mappedFrom.has(name)) && [...toPk].every((name) => mappedTo.has(name));
+}
+function hasConcreteValueField(entity) {
+  return arr(entity?.fields).some((field) => {
+    if (field?.isPk) return false;
+    const name = String(field?.name || '');
+    if (!name || /id$/i.test(name)) return false;
+    return !['createdDate','lastUpdatedStamp','lastUpdatedDate','createdStamp'].includes(name);
+  });
+}
+function queryEndpointRoles(index) {
+  const subtypeChildren = new Map(), degree = new Map();
+  for (const edge of index.relationships) {
+    degree.set(key(edge.from), (degree.get(key(edge.from)) || 0) + 1);
+    degree.set(key(edge.to), (degree.get(key(edge.to)) || 0) + 1);
+    if (!isSharedPkOneRelationship(index, edge)) continue;
+    const parentKey = key(edge.to);
+    if (!subtypeChildren.has(parentKey)) subtypeChildren.set(parentKey, new Map());
+    subtypeChildren.get(parentKey).set(key(edge.from), edge.from);
+  }
+  const roles = new Map();
+  for (const entity of index.entities.values()) {
+    const k = key(entity.name);
+    const children = subtypeChildren.get(k) || new Map();
+    if (children.size >= 2) {
+      roles.set(k, {
+        role:'abstract_parent',
+        querySelectable:false,
+        concreteInstances:[...children.values()].sort(),
+        reason:`shared PK parent of ${children.size} concrete subtype entities`
+      });
+      continue;
+    }
+    if (!hasConcreteValueField(entity) && Number(degree.get(k) || 0) > 0) {
+      roles.set(k, { role:'structural_connector', querySelectable:false, concreteInstances:[], reason:'identifier-only relationship/bridge entity with no concrete value fields' });
+      continue;
+    }
+    roles.set(k, { role:'concrete_endpoint', querySelectable:true, concreteInstances:[], reason:'has concrete business value fields' });
+  }
+  return roles;
+}
+
 function groupsForIntent(directory) {
   return arr(directory?.groups).map((group) => ({ name:group.name, description:group.description }));
 }
-function directoryCandidateEntities(directory, relevantGroups, graphEntities, semanticHints) {
+function directoryCandidateEntities(directory, relevantGroups, graphEntities, semanticHints, endpointRoles) {
   const wanted = new Set(arr(relevantGroups).map(key));
-  const byEntity = new Map();
+  const byEntity = new Map(), excluded = new Map();
   for (const group of arr(directory?.groups)) {
     if (!wanted.has(key(group.name))) continue;
     for (const member of arr(group.members)) {
       const graphEntity = graphEntities.get(key(member?.entity));
       if (!graphEntity) continue;
+      const endpoint = endpointRoles.get(key(graphEntity.name)) || { role:'concrete_endpoint', querySelectable:true, concreteInstances:[], reason:'' };
+      if (!endpoint.querySelectable) {
+        excluded.set(key(graphEntity.name), { name:graphEntity.name, role:endpoint.role, concreteInstances:endpoint.concreteInstances, reason:endpoint.reason });
+        continue;
+      }
       let item = byEntity.get(key(graphEntity.name));
       if (!item) {
         item = {
@@ -149,7 +206,10 @@ function directoryCandidateEntities(directory, relevantGroups, graphEntities, se
       item.groups.push(group.name);
     }
   }
-  return [...byEntity.values()].map((item) => ({ ...item, groups:uniq(item.groups) })).sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    candidates:[...byEntity.values()].map((item) => ({ ...item, groups:uniq(item.groups) })).sort((a, b) => a.name.localeCompare(b.name)),
+    excluded:[...excluded.values()].sort((a, b) => a.name.localeCompare(b.name))
+  };
 }
 
 function adjacency(index) {
@@ -165,7 +225,7 @@ function adjacency(index) {
   }
   return map;
 }
-function shortestPath(adj, from, to, maxHops = 7) {
+function shortestPath(adj, from, to, maxHops = MAX_PATH_HOPS) {
   if (key(from) === key(to)) return { nodes:[from], edges:[] };
   const queue = [{ name:from, nodes:[from], edges:[] }];
   const visited = new Set([key(from)]);
@@ -175,8 +235,7 @@ function shortestPath(adj, from, to, maxHops = 7) {
     for (const next of arr(adj.get(key(current.name)))) {
       const nk = key(next.to);
       if (visited.has(nk)) continue;
-      const nodes = [...current.nodes, next.to];
-      const edges = [...current.edges, next];
+      const nodes = [...current.nodes, next.to], edges = [...current.edges, next];
       if (nk === key(to)) return { nodes, edges };
       visited.add(nk);
       queue.push({ name:next.to, nodes, edges });
@@ -186,15 +245,13 @@ function shortestPath(adj, from, to, maxHops = 7) {
 }
 function connectSelectedEntities(index, selectedNames) {
   const selected = uniq(selectedNames).filter((name) => index.entities.has(key(name)));
-  if (!selected.length) return { selected:[], nodes:[], edges:[], disconnected:[] };
-  if (selected.length === 1) return { selected, nodes:[selected[0]], edges:[], disconnected:[] };
+  if (!selected.length) return { selected:[], nodes:[], edges:[], paths:[], disconnected:[] };
+  if (selected.length === 1) return { selected, nodes:[selected[0]], edges:[], paths:[], disconnected:[] };
   const adj = adjacency(index);
   const connectedNames = new Map([[key(selected[0]), selected[0]]]);
   const remaining = new Map(selected.slice(1).map((name) => [key(name), name]));
-  const unionNodes = new Map([[key(selected[0]), selected[0]]]);
-  const unionEdges = new Map();
-  const disconnected = [];
-
+  const unionNodes = new Map([[key(selected[0]), selected[0]]]), unionEdges = new Map();
+  const paths = [], disconnected = [];
   while (remaining.size) {
     let best = null;
     for (const source of connectedNames.values()) {
@@ -204,10 +261,8 @@ function connectSelectedEntities(index, selectedNames) {
         if (!best || path.edges.length < best.path.edges.length) best = { source, target, path };
       }
     }
-    if (!best) {
-      disconnected.push(...remaining.values());
-      break;
-    }
+    if (!best) { disconnected.push(...remaining.values()); break; }
+    paths.push(best);
     for (const name of best.path.nodes) unionNodes.set(key(name), name);
     for (const step of best.path.edges) {
       const edge = step.edge;
@@ -217,10 +272,10 @@ function connectSelectedEntities(index, selectedNames) {
     connectedNames.set(key(best.target), best.target);
     remaining.delete(key(best.target));
   }
-  return { selected, nodes:[...unionNodes.values()], edges:[...unionEdges.values()], disconnected };
+  return { selected, nodes:[...unionNodes.values()], edges:[...unionEdges.values()], paths, disconnected };
 }
 
-function compactEntity(index, semanticHints, name, includeAllFields = false) {
+function compactSemanticEntity(index, semanticHints, name, includeAllFields = false) {
   const entity = index.entities.get(key(name));
   if (!entity) return null;
   return {
@@ -230,43 +285,84 @@ function compactEntity(index, semanticHints, name, includeAllFields = false) {
     ...(includeAllFields ? { fields:entity.fields.slice(0, 24) } : {})
   };
 }
-function isolatedNeighbourhood(index, semanticHints, disconnectedNames) {
+function joinEvidence(edge) {
+  return {
+    from:edge.from,
+    to:edge.to,
+    relationship:edge.relationship,
+    cardinality:edge.cardinality,
+    keyMaps:edge.keyMaps,
+    description:edge.description,
+    evidenced:true
+  };
+}
+function abstractParentEvidence(index, semanticHints, endpointRoles, name) {
+  const role = endpointRoles.get(key(name));
+  if (role?.role !== 'abstract_parent') return null;
+  const entity = index.entities.get(key(name));
+  return {
+    role:'abstract_parent',
+    concreteInstances:arr(role.concreteInstances),
+    description:entity?.description || '',
+    semanticFields:arr(semanticHints.get(key(name))).map((hint) => ({ term:hint.term, field:hint.field, evidence:hint.evidence }))
+  };
+}
+function presentPath(index, semanticHints, endpointRoles, record) {
+  const rawNodes = arr(record?.path?.nodes);
+  const rawEdges = arr(record?.path?.edges).map((step) => step.edge);
+  const visibleNodes = [];
+  const abstractParents = [];
+  for (const name of rawNodes) {
+    const role = endpointRoles.get(key(name));
+    if (role?.role === 'abstract_parent') {
+      const evidence = abstractParentEvidence(index, semanticHints, endpointRoles, name);
+      if (evidence) abstractParents.push(evidence);
+      continue;
+    }
+    visibleNodes.push(name);
+  }
+  return {
+    from:record.source,
+    to:record.target,
+    concretePath:visibleNodes,
+    joins:rawEdges.filter((edge) => {
+      const fromRole = endpointRoles.get(key(edge.from)), toRole = endpointRoles.get(key(edge.to));
+      return fromRole?.role !== 'abstract_parent' && toRole?.role !== 'abstract_parent';
+    }).map(joinEvidence),
+    viaAbstractParents:abstractParents,
+    rawHopCount:rawEdges.length
+  };
+}
+function isolatedNeighbourhood(index, semanticHints, endpointRoles, disconnectedNames) {
   const adj = adjacency(index);
   return arr(disconnectedNames).map((name) => {
-    const selectedEntity = compactEntity(index, semanticHints, name, false);
-    const neighbours = arr(adj.get(key(name))).slice(0, MAX_ISOLATED_NEIGHBOURS).map((step) => ({
-      entity:compactEntity(index, semanticHints, step.to, false),
-      link:{
-        from:step.edge.from,
-        to:step.edge.to,
-        relationship:step.edge.relationship,
-        cardinality:step.edge.cardinality,
-        keyMaps:step.edge.keyMaps,
-        description:step.edge.description,
-        evidenced:true
+    const selectedEntity = compactSemanticEntity(index, semanticHints, name, false);
+    const neighbours = arr(adj.get(key(name))).slice(0, MAX_ISOLATED_NEIGHBOURS).map((step) => {
+      const role = endpointRoles.get(key(step.to));
+      if (role?.role === 'abstract_parent') {
+        return { abstractParent:abstractParentEvidence(index, semanticHints, endpointRoles, step.to), link:joinEvidence(step.edge) };
       }
-    })).filter((item) => item.entity);
+      return { entity:compactSemanticEntity(index, semanticHints, step.to, false), link:joinEvidence(step.edge) };
+    }).filter((item) => item.entity || item.abstractParent);
     return { selectedEntity, neighbours };
   }).filter((item) => item.selectedEntity);
 }
-function groundedSlice(index, semanticHints, connection) {
+function groundedSlice(index, semanticHints, endpointRoles, connection) {
+  const concreteEntities = connection.nodes.filter((name) => endpointRoles.get(key(name))?.role !== 'abstract_parent');
+  const paths = connection.paths.map((record) => presentPath(index, semanticHints, endpointRoles, record));
   return {
     selectedEntities:connection.selected,
     disconnectedSelectedEntities:connection.disconnected,
-    entities:connection.nodes.map((name) => {
+    entities:concreteEntities.map((name) => {
       const entity = index.entities.get(key(name));
       return { name:entity.name, description:entity.description, fields:entity.fields.slice(0, 24) };
     }),
-    joins:connection.edges.map((edge) => ({
-      from:edge.from,
-      to:edge.to,
-      relationship:edge.relationship,
-      cardinality:edge.cardinality,
-      keyMaps:edge.keyMaps,
-      description:edge.description,
-      evidenced:true
-    })),
-    isolatedEntityNeighbourhoods:isolatedNeighbourhood(index, semanticHints, connection.disconnected)
+    connectionPaths:paths,
+    joins:connection.edges.filter((edge) => {
+      const fromRole = endpointRoles.get(key(edge.from)), toRole = endpointRoles.get(key(edge.to));
+      return fromRole?.role !== 'abstract_parent' && toRole?.role !== 'abstract_parent';
+    }).map(joinEvidence),
+    isolatedEntityNeighbourhoods:isolatedNeighbourhood(index, semanticHints, endpointRoles, connection.disconnected)
   };
 }
 
@@ -274,10 +370,11 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   const usage = { prompt:0, completion:0, total:0 };
   const index = graphIndex(graph);
   const semanticHints = semanticFieldHints(index.entities);
+  const endpointRoles = queryEndpointRoles(index);
   const groups = groupsForIntent(directory);
   console.log(`[lemap query-v2] pass 1 intent: ${groups.length} groups`);
   const pass1 = await modelJson(client, model,
-    'Parse the user question into stable canonical business requirements and select every business directory group that is plausibly needed to satisfy those requirements. Do not choose database fields or entities. Coverage matters more than minimizing groups. Return {"intent":"short business intent","requirements":[{"concept":"canonical business concept","role":"measure|dimension|time|filter|attribute|key|derived","value":"optional"}],"relevantGroups":["exact supplied group names"],"interpretation":"one sentence"}.',
+    'Parse the user question into stable canonical business requirements and select every business directory group that is plausibly needed to satisfy those requirements. Select groups whose concrete entities can directly represent the requested business data; do not select a group merely because it owns, classifies, or is generally associated with that data. Do not choose database fields or entities. Coverage matters more than minimizing groups. Return {"intent":"short business intent","requirements":[{"concept":"canonical business concept","role":"measure|dimension|time|filter|attribute|key|derived","value":"optional"}],"relevantGroups":["exact supplied group names"],"interpretation":"one sentence"}.',
     { question, groups });
   addUsage(usage, pass1.usage);
   const validGroups = new Map(groups.map((group) => [key(group.name), group.name]));
@@ -287,26 +384,31 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   console.log(`[lemap query-v2] pass 1 groups: ${relevantGroups.join(', ') || '(none)'}; requirements: ${requirements.map((r) => r.concept).join(', ') || '(none)'}; tokens ${pass1.usage.total}`);
   log('query_v2_intent', { question, intent, usage:pass1.usage });
 
-  const candidates = directoryCandidateEntities(directory, relevantGroups, index.entities, semanticHints);
-  console.log(`[lemap query-v2] pass 2 entity selection: ${candidates.length} entities from selected groups`);
+  const candidateSet = directoryCandidateEntities(directory, relevantGroups, index.entities, semanticHints, endpointRoles);
+  const candidates = candidateSet.candidates, excluded = candidateSet.excluded;
+  const abstractCount = excluded.filter((item) => item.role === 'abstract_parent').length;
+  const connectorCount = excluded.filter((item) => item.role === 'structural_connector').length;
+  console.log(`[lemap query-v2] cluster candidate filter: ${excluded.length} non-concrete entities omitted from model (${abstractCount} abstract parents, ${connectorCount} structural connectors)`);
+  console.log(`[lemap query-v2] pass 2 entity selection: ${candidates.length} concrete entities from selected clusters`);
   const pass2 = await modelJson(client, model,
-    'Select the smallest sufficient set of physical entities that can plausibly satisfy ALL canonical requirements. Choose entities only from the supplied candidates. Judge relevance only from the query semantics, entity description, business-group names, and compact semantic field evidence. Do not choose joins and do not invent fields. Return {"selectedEntities":[{"entity":"exact candidate entity name","covers":["requirement concepts"],"reason":"short semantic reason"}],"uncoveredRequirements":["concepts not represented by any candidate"]}.',
+    'Select the smallest sufficient set of CONCRETE physical entities that directly satisfy ALL canonical requirements. Abstract/base parents and structural connectors are intentionally absent; LeMap can traverse them later. Choose an entity only when its OWN description or compact semantic field evidence directly represents the requirement. Do not compensate for missing abstract parents by selecting a vaguely related concrete entity. Do not choose joins and do not invent fields. Return {"selectedEntities":[{"entity":"exact candidate entity name","covers":["requirement concepts"],"reason":"short evidence-based semantic reason"}],"uncoveredRequirements":["concepts not directly represented by any candidate"]}.',
     { question, logicalRequest:intent, candidates });
   addUsage(usage, pass2.usage);
   const candidateNames = new Map(candidates.map((item) => [key(item.name), item.name]));
   const selectedEntities = uniq(arr(pass2.parsed?.selectedEntities).map((item) => candidateNames.get(key(item?.entity))).filter(Boolean)).slice(0, 8);
   const selections = arr(pass2.parsed?.selectedEntities).map((item) => ({ entity:candidateNames.get(key(item?.entity)) || '', covers:arr(item?.covers).map(String), reason:text(item?.reason, 220) })).filter((item) => item.entity);
   console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; tokens ${pass2.usage.total}`);
-  log('query_v2_entities', { selectedEntities:selections, uncoveredRequirements:arr(pass2.parsed?.uncoveredRequirements), candidateCount:candidates.length, usage:pass2.usage });
+  log('query_v2_entities', { selectedEntities:selections, uncoveredRequirements:arr(pass2.parsed?.uncoveredRequirements), candidateCount:candidates.length, excludedCandidateCount:excluded.length, excludedCandidates:excluded, usage:pass2.usage });
 
   const connection = connectSelectedEntities(index, selectedEntities);
-  const slice = groundedSlice(index, semanticHints, connection);
+  const slice = groundedSlice(index, semanticHints, endpointRoles, connection);
+  const abstractViaCount = slice.connectionPaths.reduce((sum, path) => sum + path.viaAbstractParents.length, 0);
   const isolatedNeighbourCount = slice.isolatedEntityNeighbourhoods.reduce((sum, item) => sum + item.neighbours.length, 0);
-  console.log(`[lemap query-v2] local graph: ${slice.entities.length} connected entities, ${slice.joins.length} evidenced joins${connection.disconnected.length ? `; isolated selected: ${connection.disconnected.join(', ')} with ${isolatedNeighbourCount} one-hop neighbours` : ''}`);
-  log('query_v2_local_graph', { selectedEntities, connectedEntities:slice.entities.map((e) => e.name), joins:slice.joins, disconnected:connection.disconnected, isolatedEntityNeighbourhoods:slice.isolatedEntityNeighbourhoods });
+  console.log(`[lemap query-v2] local graph: ${slice.entities.length} presented concrete entities, ${slice.connectionPaths.length} connection paths, ${abstractViaCount} abstract-parent hops collapsed${connection.disconnected.length ? `; isolated selected: ${connection.disconnected.join(', ')} with ${isolatedNeighbourCount} one-hop neighbours` : ''}`);
+  log('query_v2_local_graph', { selectedEntities, presentedEntities:slice.entities.map((e) => e.name), connectionPaths:slice.connectionPaths, joins:slice.joins, disconnected:connection.disconnected, isolatedEntityNeighbourhoods:slice.isolatedEntityNeighbourhoods });
 
   const finalCall = await modelJson(client, model,
-    'Answer the business question using ONLY the supplied grounded graph evidence. Map canonical requirements to observed entity fields, use only supplied evidenced joins, and never invent a field or join. Connected graph entities include full observed field lists. If a selected entity could not be connected, its isolated one-hop neighbourhood contains compact semantic field evidence plus exact evidenced links; use that to explain what the isolated area contains, but do NOT claim a join from it to the connected graph unless such a join is supplied. If evidence is insufficient, say exactly what is missing. Return {"answer":"concise answer about the available data/view","dataView":{"grain":"result level","select":[{"entity":"","field":"","role":"measure|dimension|time|filter|attribute|key|derived"}],"joins":[{"left":"Entity.field","right":"Entity.field","relation":"","evidenced":true}],"groupBy":["Entity.field"],"orderBy":[{"field":"Entity.field or derived expression","direction":"asc|desc"}],"filters":[],"derived":[{"name":"","expression":"business-level expression using observed fields"}],"missing":[]},"nextStep":"optional"}.',
+    'Answer the business question using ONLY the supplied grounded graph evidence. The entities list contains concrete entities only. connectionPaths show how selected concrete entities connect. Abstract parents used internally by LeMap are NOT ordinary entities in this evidence; when a path has viaAbstractParents, treat each item only as structural inheritance/base metadata. Its concreteInstances explain what it abstracts, and its compact semanticFields may provide inherited/base semantics. Never select or group by an abstract parent as if it were a concrete business entity. Use only supplied evidenced joins and never invent a field or join. If evidence is insufficient, say exactly what is missing. Return {"answer":"concise answer about the available data/view","dataView":{"grain":"result level","select":[{"entity":"","field":"","role":"measure|dimension|time|filter|attribute|key|derived"}],"joins":[{"left":"Entity.field","right":"Entity.field","relation":"","evidenced":true}],"groupBy":["Entity.field"],"orderBy":[{"field":"Entity.field or derived expression","direction":"asc|desc"}],"filters":[],"derived":[{"name":"","expression":"business-level expression using observed fields"}],"missing":[]},"nextStep":"optional"}.',
     { question, logicalRequest:intent, entitySelections:selections, groundedGraph:slice });
   addUsage(usage, finalCall.usage);
   console.log(`[lemap query-v2] final answer tokens ${finalCall.usage.total}; total ${usage.total}`);
@@ -315,15 +417,17 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   return {
     ...finalCall.parsed,
     investigation:{
-      mode:'two-pass-directory-local-shortest-path-with-isolated-neighbourhoods',
+      mode:'two-pass-concrete-cluster-entities-local-paths-collapsed-abstract-parents',
       logicalRequest:intent,
       relevantGroups,
       candidateEntityCount:candidates.length,
+      excludedCandidateCount:excluded.length,
+      excludedCandidates:excluded,
       selectedEntities:selections,
       localGraph:{
         entityCount:slice.entities.length,
-        joinCount:slice.joins.length,
         entities:slice.entities.map((entity) => entity.name),
+        connectionPaths:slice.connectionPaths,
         joins:slice.joins,
         disconnectedSelectedEntities:connection.disconnected,
         isolatedEntityNeighbourhoods:slice.isolatedEntityNeighbourhoods
