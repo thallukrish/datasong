@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { investigateQuery } from './queryGuidedInvestigator.js';
-import { ensureEntityDirectory, parseQueryIntent } from './entityDirectory.js';
+import { ensureEntityDirectory, loadEntityDirectory, parseQueryIntent } from './entityDirectory.js';
 import { graphFromSemanticObjects } from './explorer/mapPersistence.js';
 import { graphQueryProjection } from './queryGraphProjection.js';
 
@@ -68,6 +68,32 @@ async function ensureSchemaNavigation(explorer, repoUrl) {
   arc = schemaNavigationArc(explorer);
   console.log(`[lemap query-guided] schema catalog ready: ${arc?.entityDetails?.length || 0} entities, ${arc?.relationshipDetails?.length || 0} relationships`);
   return arc;
+}
+
+export async function maintainEntityDirectory({ explorer, queryClient, queryModel, dataRoot, log = () => {} }) {
+  if (!queryClient) {
+    console.log('[lemap directory] startup/learning maintenance skipped: reasoning service not configured');
+    return null;
+  }
+  const snapshot = explorer.snapshot();
+  const graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
+  const entityCount = graph.filter((node) => node.type === 'entity').length;
+  if (!entityCount) {
+    console.log('[lemap directory] no persisted semantic graph entities found; nothing to cluster');
+    return null;
+  }
+  const projection = graphQueryProjection(graph);
+  const arcs = [...projection.workflows, ...arr(projection.navigationArcs)];
+  console.log(`[lemap directory] maintaining directory from persisted graph: ${entityCount} entities`);
+  return ensureEntityDirectory({
+    client:queryClient,
+    model:queryModel,
+    arcs,
+    dataRoot,
+    repoUrl:snapshot.repoUrl || '',
+    commit:snapshot.commit || '',
+    log
+  });
 }
 
 function sanitizeView(view = {}) {
@@ -159,33 +185,23 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       if (!workflowCount && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise graph has not identified anything relevant to this question yet'});
       const projection = graphQueryProjection(graph);
       const directoryArcs = [...projection.workflows, ...arr(projection.navigationArcs)];
-      console.log(`[lemap query] graph: ${entityCount} entities, ${workflowCount} workflows; preparing business directory`);
 
       append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount,entityCount,graphNodeCount:graph.length,mode:'directory-intent-guided-over-semantic-graph'});
-      const directoryBuild = await ensureEntityDirectory({
-        client:queryClient,
-        model:queryModel,
-        arcs:directoryArcs,
-        dataRoot,
-        repoUrl:snapshot.repoUrl || '',
-        commit:snapshot.commit || '',
-        log:(type,payload) => append(queryLog,type,payload)
-      });
-      append(queryLog,'entity_directory_ready',{
-        reused:directoryBuild.reused,
-        entityCount:directoryBuild.directory?.entityCount || 0,
-        groupCount:arr(directoryBuild.directory?.groups).length,
-        usage:directoryBuild.usage
-      });
-      console.log(`[lemap query] directory ready: ${arr(directoryBuild.directory?.groups).length} groups, reused=${directoryBuild.reused}`);
-
-      const intentParsed = await parseQueryIntent({
-        client:queryClient,
-        model:queryModel,
-        question,
-        directory:directoryBuild.directory,
-        log:(type,payload) => append(queryLog,type,payload)
-      });
+      const loaded = loadEntityDirectory({ dataRoot, repoUrl:snapshot.repoUrl || '' });
+      const directory = loaded.directory;
+      let intentParsed = { intent:null, preferredEntities:[], usage:{prompt:0,completion:0,total:0} };
+      if (directory && arr(directory.groups).length) {
+        console.log(`[lemap query] using persisted directory: ${arr(directory.groups).length} groups, ${directory.clusteredEntityCount || 0}/${directory.entityCount || entityCount} entities clustered`);
+        intentParsed = await parseQueryIntent({
+          client:queryClient,
+          model:queryModel,
+          question,
+          directory,
+          log:(type,payload) => append(queryLog,type,payload)
+        });
+      } else {
+        console.log('[lemap query] no clustered directory available; query will use the unguided starting-node catalog and will NOT build clusters');
+      }
       console.log(`[lemap query] handing ${intentParsed.preferredEntities.length} directory-guided candidate entities to starting-node selection; graph walk remains unrestricted`);
 
       let rawResponse = await investigateQuery({
@@ -202,14 +218,14 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
         log:(type,payload) => append(queryLog,type,payload)
       });
       const walkUsage = normalizedUsage(rawResponse?.investigation?.usage || {});
-      const preprocessingUsage = combinedUsage(directoryBuild.usage, intentParsed.usage);
+      const preprocessingUsage = normalizedUsage(intentParsed.usage || {});
       console.log(`[lemap query] graph walk finished: ${rawResponse?.investigation?.expansionRounds || 0} expansions, walk tokens ${walkUsage.total}`);
       if (rawResponse?.investigation) {
         rawResponse.investigation.logicalRequest = intentParsed.intent;
         rawResponse.investigation.directory = {
-          reused:directoryBuild.reused,
-          groupCount:arr(directoryBuild.directory?.groups).length,
-          relevantGroups:intentParsed.intent.relevantGroups,
+          reused:true,
+          groupCount:arr(directory?.groups).length,
+          relevantGroups:arr(intentParsed.intent?.relevantGroups),
           preferredEntityCount:intentParsed.preferredEntities.length
         };
         rawResponse.investigation.preprocessingUsage = preprocessingUsage;
