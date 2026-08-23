@@ -160,6 +160,28 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
   };
   const append = (file, type, payload = {}) => fs.appendFileSync(file, `${JSON.stringify({type,timestamp:new Date().toISOString(),...payload})}\n`, 'utf8');
 
+  let maintenancePromise = null;
+  const runDirectoryMaintenance = (reason) => {
+    if (maintenancePromise) return maintenancePromise;
+    console.log(`[lemap directory] maintenance trigger: ${reason}`);
+    maintenancePromise = maintainEntityDirectory({ explorer, queryClient, queryModel, dataRoot })
+      .catch((error) => { console.error(`[lemap directory] maintenance failed: ${error.message || error}`); return null; })
+      .finally(() => { maintenancePromise = null; });
+    return maintenancePromise;
+  };
+
+  if (!explorer.__lemapDirectoryMaintenanceWrapped) {
+    const originalRun = explorer.run.bind(explorer);
+    explorer.run = async (...args) => {
+      if (maintenancePromise) await maintenancePromise;
+      const state = await originalRun(...args);
+      await runDirectoryMaintenance('learning cycle completed');
+      return state;
+    };
+    Object.defineProperty(explorer, '__lemapDirectoryMaintenanceWrapped', { value:true, enumerable:false });
+  }
+  queueMicrotask(() => { runDirectoryMaintenance('startup graph check'); });
+
   app.post('/api/query-map', async (req, res) => {
     const queryLog = queryRunPath(); onLatestLog(queryLog);
     try {
