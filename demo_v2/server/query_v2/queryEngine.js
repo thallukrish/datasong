@@ -2,6 +2,12 @@ const arr = (value) => Array.isArray(value) ? value : [];
 const text = (value, max = 240) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
 const key = (value) => String(value || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 const uniq = (values) => [...new Set(arr(values).filter(Boolean).map(String))];
+const MAX_SEMANTIC_FIELDS = 5;
+const MAX_ISOLATED_NEIGHBOURS = 12;
+const STOP_WORDS = new Set([
+  'a','an','and','are','as','at','be','by','can','for','from','has','have','in','is','it','its','of','on','or','that','the','their','this','to','used','using','was','were','which','with',
+  'field','fields','entity','record','records','value','values','identifier','identifies','identification','description','type','types','code','codes','date','time'
+]);
 
 function usageOf(usage = {}) {
   const prompt = Number(usage.prompt_tokens || usage.input_tokens || 0);
@@ -24,6 +30,10 @@ async function modelJson(client, model, system, payload) {
   });
   const raw = completion.choices?.[0]?.message?.content || '{}';
   return { parsed:parseJson(raw), usage:usageOf(completion.usage || {}) };
+}
+function naturalWords(value) {
+  return String(value || '').toLowerCase().split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 2 && !STOP_WORDS.has(word) && !/^\d+$/.test(word));
 }
 
 function graphIndex(graph = []) {
@@ -81,10 +91,44 @@ function graphIndex(graph = []) {
   return { entities, relationships };
 }
 
+function semanticFieldHints(graphEntities) {
+  const entities = [...graphEntities.values()];
+  const docs = new Map();
+  const df = new Map();
+  for (const entity of entities) {
+    const counts = new Map(), evidence = new Map();
+    for (const field of arr(entity.fields)) {
+      const description = text(field.description, 220);
+      if (!description) continue;
+      for (const word of naturalWords(description)) {
+        counts.set(word, (counts.get(word) || 0) + 1);
+        if (!evidence.has(word)) evidence.set(word, { field:field.name, description });
+      }
+    }
+    docs.set(key(entity.name), { counts, evidence });
+    for (const word of counts.keys()) df.set(word, (df.get(word) || 0) + 1);
+  }
+  const n = Math.max(entities.length, 1), result = new Map();
+  for (const entity of entities) {
+    const doc = docs.get(key(entity.name)) || { counts:new Map(), evidence:new Map() };
+    const total = [...doc.counts.values()].reduce((sum, count) => sum + count, 0) || 1;
+    const scored = [];
+    for (const [word, count] of doc.counts) {
+      const tf = count / total;
+      const idf = Math.log((n + 1) / ((df.get(word) || 0) + 1)) + 1;
+      const evidence = doc.evidence.get(word) || {};
+      scored.push({ term:word, score:Number((tf * idf).toFixed(4)), field:evidence.field || '', evidence:evidence.description || '' });
+    }
+    scored.sort((a, b) => b.score - a.score || a.term.localeCompare(b.term));
+    result.set(key(entity.name), scored.slice(0, MAX_SEMANTIC_FIELDS));
+  }
+  return result;
+}
+
 function groupsForIntent(directory) {
   return arr(directory?.groups).map((group) => ({ name:group.name, description:group.description }));
 }
-function directoryCandidateEntities(directory, relevantGroups, graphEntities) {
+function directoryCandidateEntities(directory, relevantGroups, graphEntities, semanticHints) {
   const wanted = new Set(arr(relevantGroups).map(key));
   const byEntity = new Map();
   for (const group of arr(directory?.groups)) {
@@ -94,17 +138,18 @@ function directoryCandidateEntities(directory, relevantGroups, graphEntities) {
       if (!graphEntity) continue;
       let item = byEntity.get(key(graphEntity.name));
       if (!item) {
-        item = { name:graphEntity.name, description:graphEntity.description, memberships:[], fields:graphEntity.fields.slice(0, 14).map((field) => ({ name:field.name, description:field.description })) };
+        item = {
+          name:graphEntity.name,
+          description:graphEntity.description,
+          groups:[],
+          semanticFields:arr(semanticHints.get(key(graphEntity.name))).map((hint) => ({ term:hint.term, field:hint.field, evidence:hint.evidence }))
+        };
         byEntity.set(key(graphEntity.name), item);
       }
-      item.memberships.push({ group:group.name, affinity:Number(member?.affinity || 0), reason:text(member?.reason, 180) });
+      item.groups.push(group.name);
     }
   }
-  return [...byEntity.values()].sort((a, b) => {
-    const aa = Math.max(0, ...a.memberships.map((m) => m.affinity));
-    const bb = Math.max(0, ...b.memberships.map((m) => m.affinity));
-    return bb - aa || a.name.localeCompare(b.name);
-  });
+  return [...byEntity.values()].map((item) => ({ ...item, groups:uniq(item.groups) })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function adjacency(index) {
@@ -144,7 +189,6 @@ function connectSelectedEntities(index, selectedNames) {
   if (!selected.length) return { selected:[], nodes:[], edges:[], disconnected:[] };
   if (selected.length === 1) return { selected, nodes:[selected[0]], edges:[], disconnected:[] };
   const adj = adjacency(index);
-  const connected = new Set([key(selected[0])]);
   const connectedNames = new Map([[key(selected[0]), selected[0]]]);
   const remaining = new Map(selected.slice(1).map((name) => [key(name), name]));
   const unionNodes = new Map([[key(selected[0]), selected[0]]]);
@@ -170,14 +214,42 @@ function connectSelectedEntities(index, selectedNames) {
       const signature = `${key(edge.from)}|${key(edge.to)}|${key(edge.relationship)}|${edge.keyMaps.map((m) => `${key(m.fieldName)}:${key(m.relatedFieldName)}`).join(',')}`;
       unionEdges.set(signature, edge);
     }
-    connected.add(key(best.target));
     connectedNames.set(key(best.target), best.target);
     remaining.delete(key(best.target));
   }
   return { selected, nodes:[...unionNodes.values()], edges:[...unionEdges.values()], disconnected };
 }
 
-function groundedSlice(index, connection) {
+function compactEntity(index, semanticHints, name, includeAllFields = false) {
+  const entity = index.entities.get(key(name));
+  if (!entity) return null;
+  return {
+    name:entity.name,
+    description:entity.description,
+    semanticFields:arr(semanticHints.get(key(entity.name))).map((hint) => ({ term:hint.term, field:hint.field, evidence:hint.evidence })),
+    ...(includeAllFields ? { fields:entity.fields.slice(0, 24) } : {})
+  };
+}
+function isolatedNeighbourhood(index, semanticHints, disconnectedNames) {
+  const adj = adjacency(index);
+  return arr(disconnectedNames).map((name) => {
+    const selectedEntity = compactEntity(index, semanticHints, name, false);
+    const neighbours = arr(adj.get(key(name))).slice(0, MAX_ISOLATED_NEIGHBOURS).map((step) => ({
+      entity:compactEntity(index, semanticHints, step.to, false),
+      link:{
+        from:step.edge.from,
+        to:step.edge.to,
+        relationship:step.edge.relationship,
+        cardinality:step.edge.cardinality,
+        keyMaps:step.edge.keyMaps,
+        description:step.edge.description,
+        evidenced:true
+      }
+    })).filter((item) => item.entity);
+    return { selectedEntity, neighbours };
+  }).filter((item) => item.selectedEntity);
+}
+function groundedSlice(index, semanticHints, connection) {
   return {
     selectedEntities:connection.selected,
     disconnectedSelectedEntities:connection.disconnected,
@@ -193,13 +265,15 @@ function groundedSlice(index, connection) {
       keyMaps:edge.keyMaps,
       description:edge.description,
       evidenced:true
-    }))
+    })),
+    isolatedEntityNeighbourhoods:isolatedNeighbourhood(index, semanticHints, connection.disconnected)
   };
 }
 
 export async function runTwoPassQuery({ question, client, model, graph, directory, log = () => {} }) {
   const usage = { prompt:0, completion:0, total:0 };
   const index = graphIndex(graph);
+  const semanticHints = semanticFieldHints(index.entities);
   const groups = groupsForIntent(directory);
   console.log(`[lemap query-v2] pass 1 intent: ${groups.length} groups`);
   const pass1 = await modelJson(client, model,
@@ -213,10 +287,10 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   console.log(`[lemap query-v2] pass 1 groups: ${relevantGroups.join(', ') || '(none)'}; requirements: ${requirements.map((r) => r.concept).join(', ') || '(none)'}; tokens ${pass1.usage.total}`);
   log('query_v2_intent', { question, intent, usage:pass1.usage });
 
-  const candidates = directoryCandidateEntities(directory, relevantGroups, index.entities);
+  const candidates = directoryCandidateEntities(directory, relevantGroups, index.entities, semanticHints);
   console.log(`[lemap query-v2] pass 2 entity selection: ${candidates.length} entities from selected groups`);
   const pass2 = await modelJson(client, model,
-    'Select the smallest sufficient set of physical entities that can plausibly satisfy ALL canonical requirements. Choose entities only from the supplied candidates. Prefer core/high-affinity entities when they contain the required business data. Do not choose joins and do not invent fields. Return {"selectedEntities":[{"entity":"exact candidate entity name","covers":["requirement concepts"],"reason":"short reason"}],"uncoveredRequirements":["concepts not represented by any candidate"]}.',
+    'Select the smallest sufficient set of physical entities that can plausibly satisfy ALL canonical requirements. Choose entities only from the supplied candidates. Judge relevance only from the query semantics, entity description, business-group names, and compact semantic field evidence. Do not choose joins and do not invent fields. Return {"selectedEntities":[{"entity":"exact candidate entity name","covers":["requirement concepts"],"reason":"short semantic reason"}],"uncoveredRequirements":["concepts not represented by any candidate"]}.',
     { question, logicalRequest:intent, candidates });
   addUsage(usage, pass2.usage);
   const candidateNames = new Map(candidates.map((item) => [key(item.name), item.name]));
@@ -226,12 +300,13 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   log('query_v2_entities', { selectedEntities:selections, uncoveredRequirements:arr(pass2.parsed?.uncoveredRequirements), candidateCount:candidates.length, usage:pass2.usage });
 
   const connection = connectSelectedEntities(index, selectedEntities);
-  const slice = groundedSlice(index, connection);
-  console.log(`[lemap query-v2] local graph: ${slice.entities.length} entities, ${slice.joins.length} evidenced joins${connection.disconnected.length ? `, disconnected: ${connection.disconnected.join(', ')}` : ''}`);
-  log('query_v2_local_graph', { selectedEntities, connectedEntities:slice.entities.map((e) => e.name), joins:slice.joins, disconnected:connection.disconnected });
+  const slice = groundedSlice(index, semanticHints, connection);
+  const isolatedNeighbourCount = slice.isolatedEntityNeighbourhoods.reduce((sum, item) => sum + item.neighbours.length, 0);
+  console.log(`[lemap query-v2] local graph: ${slice.entities.length} connected entities, ${slice.joins.length} evidenced joins${connection.disconnected.length ? `; isolated selected: ${connection.disconnected.join(', ')} with ${isolatedNeighbourCount} one-hop neighbours` : ''}`);
+  log('query_v2_local_graph', { selectedEntities, connectedEntities:slice.entities.map((e) => e.name), joins:slice.joins, disconnected:connection.disconnected, isolatedEntityNeighbourhoods:slice.isolatedEntityNeighbourhoods });
 
   const finalCall = await modelJson(client, model,
-    'Answer the business question using ONLY the supplied grounded graph slice. Map canonical requirements to observed entity fields, use only supplied evidenced joins, and never invent a field or join. If the evidence is insufficient, say exactly what is missing. Return {"answer":"concise answer about the available data/view","dataView":{"grain":"result level","select":[{"entity":"","field":"","role":"measure|dimension|time|filter|attribute|key|derived"}],"joins":[{"left":"Entity.field","right":"Entity.field","relation":"","evidenced":true}],"groupBy":["Entity.field"],"orderBy":[{"field":"Entity.field or derived expression","direction":"asc|desc"}],"filters":[],"derived":[{"name":"","expression":"business-level expression using observed fields"}],"missing":[]},"nextStep":"optional"}.',
+    'Answer the business question using ONLY the supplied grounded graph evidence. Map canonical requirements to observed entity fields, use only supplied evidenced joins, and never invent a field or join. Connected graph entities include full observed field lists. If a selected entity could not be connected, its isolated one-hop neighbourhood contains compact semantic field evidence plus exact evidenced links; use that to explain what the isolated area contains, but do NOT claim a join from it to the connected graph unless such a join is supplied. If evidence is insufficient, say exactly what is missing. Return {"answer":"concise answer about the available data/view","dataView":{"grain":"result level","select":[{"entity":"","field":"","role":"measure|dimension|time|filter|attribute|key|derived"}],"joins":[{"left":"Entity.field","right":"Entity.field","relation":"","evidenced":true}],"groupBy":["Entity.field"],"orderBy":[{"field":"Entity.field or derived expression","direction":"asc|desc"}],"filters":[],"derived":[{"name":"","expression":"business-level expression using observed fields"}],"missing":[]},"nextStep":"optional"}.',
     { question, logicalRequest:intent, entitySelections:selections, groundedGraph:slice });
   addUsage(usage, finalCall.usage);
   console.log(`[lemap query-v2] final answer tokens ${finalCall.usage.total}; total ${usage.total}`);
@@ -240,12 +315,19 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   return {
     ...finalCall.parsed,
     investigation:{
-      mode:'two-pass-directory-local-shortest-path',
+      mode:'two-pass-directory-local-shortest-path-with-isolated-neighbourhoods',
       logicalRequest:intent,
       relevantGroups,
       candidateEntityCount:candidates.length,
       selectedEntities:selections,
-      localGraph:{ entityCount:slice.entities.length, joinCount:slice.joins.length, entities:slice.entities.map((entity) => entity.name), joins:slice.joins, disconnectedSelectedEntities:connection.disconnected },
+      localGraph:{
+        entityCount:slice.entities.length,
+        joinCount:slice.joins.length,
+        entities:slice.entities.map((entity) => entity.name),
+        joins:slice.joins,
+        disconnectedSelectedEntities:connection.disconnected,
+        isolatedEntityNeighbourhoods:slice.isolatedEntityNeighbourhoods
+      },
       usage
     }
   };
