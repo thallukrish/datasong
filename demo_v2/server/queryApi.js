@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { investigateQuery } from './queryGuidedInvestigator.js';
+import { ensureEntityDirectory, parseQueryIntent } from './entityDirectory.js';
 import { graphFromSemanticObjects } from './explorer/mapPersistence.js';
 import { graphQueryProjection } from './queryGraphProjection.js';
 
@@ -9,6 +10,13 @@ const key = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, 
 
 function normalizedUsage(usage = {}) {
   return { prompt:Number(usage.prompt || 0), completion:Number(usage.completion || 0), total:Number(usage.total || 0) };
+}
+function combinedUsage(...items) {
+  return items.reduce((total, item) => ({
+    prompt:total.prompt + Number(item?.prompt || 0),
+    completion:total.completion + Number(item?.completion || 0),
+    total:total.total + Number(item?.total || 0)
+  }), { prompt:0, completion:0, total:0 });
 }
 
 function friendlyEntity(name) {
@@ -113,7 +121,7 @@ function uiProjection(response = {}) {
   if (arr(view.groupBy).length) shape.push(`Group by ${view.groupBy.join(' + ')}`);
   if (arr(view.orderBy).length) shape.push(`Rank/order by ${view.orderBy.map((o) => `${o.field} ${o.direction || ''}`.trim()).join(', ')}`);
   const scenarios = [
-    ...(view.grain ? [{scenario:'Data view grain',why:view.grain}] : []),
+    ...(view.grain ? [{scenario:'Result level',why:view.grain}] : []),
     ...fieldsByEntity.map((g) => ({scenario:g.entity,why:g.fields.join(' · ')})),
     ...(joinText.length ? [{scenario:'How the entities connect',why:joinText.join(' · ')}] : []),
     ...(shape.length ? [{scenario:'How to answer the question',why:shape.join(' · ')}] : []),
@@ -152,19 +160,59 @@ export function registerQueryApi({ app, explorer, queryClient, queryModel, dataR
       const entityCount = graph.filter((node) => node.type === 'entity').length;
       if (!workflowCount && !relevantPathHints(question,8).length) return res.status(409).json({error:'The enterprise graph has not identified anything relevant to this question yet'});
       const projection = graphQueryProjection(graph);
+      const directoryArcs = [...projection.workflows, ...arr(projection.navigationArcs)];
 
-      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount,entityCount,graphNodeCount:graph.length,mode:'guided-over-semantic-graph'});
+      append(queryLog,'query_start',{question,repoUrl:snapshot.repoUrl || '',commit:snapshot.commit || '',workflowCount,entityCount,graphNodeCount:graph.length,mode:'directory-intent-guided-over-semantic-graph'});
+      const directoryBuild = await ensureEntityDirectory({
+        client:queryClient,
+        model:queryModel,
+        arcs:directoryArcs,
+        dataRoot,
+        repoUrl:snapshot.repoUrl || '',
+        commit:snapshot.commit || '',
+        log:(type,payload) => append(queryLog,type,payload)
+      });
+      append(queryLog,'entity_directory_ready',{
+        reused:directoryBuild.reused,
+        entityCount:directoryBuild.directory?.entityCount || 0,
+        groupCount:arr(directoryBuild.directory?.groups).length,
+        usage:directoryBuild.usage
+      });
+      const intentParsed = await parseQueryIntent({
+        client:queryClient,
+        model:queryModel,
+        question,
+        directory:directoryBuild.directory,
+        log:(type,payload) => append(queryLog,type,payload)
+      });
+
       let rawResponse = await investigateQuery({
         question,
         client:queryClient,
         model:queryModel,
-        arcs:projection.workflows,
-        navigationArcs:projection.navigationArcs,
+        arcs:directoryArcs,
+        navigationArcs:[],
         snapshot,
         mapStateForArc,
+        intentPlan:intentParsed.intent,
+        preferredEntityNames:intentParsed.preferredEntities,
         pathHints:(query) => relevantPathHints(query,8),
         log:(type,payload) => append(queryLog,type,payload)
       });
+      const walkUsage = normalizedUsage(rawResponse?.investigation?.usage || {});
+      const preprocessingUsage = combinedUsage(directoryBuild.usage, intentParsed.usage);
+      if (rawResponse?.investigation) {
+        rawResponse.investigation.logicalRequest = intentParsed.intent;
+        rawResponse.investigation.directory = {
+          reused:directoryBuild.reused,
+          groupCount:arr(directoryBuild.directory?.groups).length,
+          relevantGroups:intentParsed.intent.relevantGroups,
+          preferredEntityCount:intentParsed.preferredEntities.length
+        };
+        rawResponse.investigation.preprocessingUsage = preprocessingUsage;
+        rawResponse.investigation.walkUsage = walkUsage;
+        rawResponse.investigation.usage = combinedUsage(preprocessingUsage, walkUsage);
+      }
       if (!rawResponse?.answer) {
         const fallback = fallbackFromInvestigation(question, rawResponse?.investigation || {});
         rawResponse = { ...fallback, investigation:rawResponse?.investigation || {} };

@@ -55,12 +55,9 @@ export function graphQueryProjection(graph = []) {
     });
   }
   const schemaRelationships=edges.filter((edge)=>edge.data?.relationshipKind==='schema_fk').map((edge)=>relationshipDetail(edge,nodes)).filter(Boolean);
-  const schemaEntityIds=new Set(schemaRelationships.flatMap((relationship)=>{
-    const ids=[];for(const node of entityNodes)if(node.name===relationship.from||node.name===relationship.to)ids.push(node.id);return ids;
-  }));
   const navigationArc={
     id:'__schema_graph_navigation__',title:'Schema graph navigation',hiddenFromWorkflows:true,entities:[],persistentObjects:[],
-    entityDetails:[...schemaEntityIds].map((id)=>detailsById.get(id)).filter(Boolean),relationshipDetails:schemaRelationships
+    entityDetails:entityNodes.map((node)=>detailsById.get(node.id)).filter(Boolean),relationshipDetails:schemaRelationships
   };
-  return { workflows, navigationArcs:schemaRelationships.length?[navigationArc]:[] };
+  return { workflows, navigationArcs:entityNodes.length?[navigationArc]:[] };
 }
