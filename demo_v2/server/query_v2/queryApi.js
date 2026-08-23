@@ -9,6 +9,7 @@ const key = (value) => String(value || '').normalize('NFKC').toLowerCase().repla
 const text = (value, max = 120) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
 const MAX_RELATED_GROUPS = 6;
 const MAX_BRIDGES_PER_GROUP_PAIR = 4;
+const CLUSTER_SUFFIX_WORDS = new Set(['management','billing','processing','tracking','administration','operations']);
 
 function clusterStrength({ pairCount, leftCoverage, rightCoverage }) {
   const minCoverage = Math.min(leftCoverage, rightCoverage);
@@ -17,10 +18,89 @@ function clusterStrength({ pairCount, leftCoverage, rightCoverage }) {
   return 'light';
 }
 
+function abstractParentIndex(graph) {
+  const nodes = new Map(arr(graph).filter((node) => node?.id).map((node) => [String(node.id), node]));
+  const entities = new Map();
+  const entityNameById = new Map();
+  for (const node of nodes.values()) {
+    if (node?.type !== 'entity' || !node?.name) continue;
+    const name = String(node.name);
+    entities.set(key(name), { name, pk:new Set() });
+    entityNameById.set(String(node.id), name);
+  }
+  for (const node of nodes.values()) {
+    if (node?.type !== 'entity' || !node?.name) continue;
+    const entity = entities.get(key(node.name));
+    for (const link of arr(node.links)) {
+      if (String(link?.relationship || '') !== 'has field') continue;
+      const fieldNode = nodes.get(String(link?.nodeId || ''));
+      if (fieldNode?.type !== 'field' || !fieldNode.data?.isPk) continue;
+      const fieldName = text(fieldNode.data?.physicalFieldName || fieldNode.data?.fieldName || String(fieldNode.name || '').split('.').at(-1), 120);
+      if (fieldName) entity.pk.add(key(fieldName));
+    }
+  }
+
+  const childrenByParent = new Map();
+  for (const node of nodes.values()) {
+    if (node?.type !== 'entity' || !node?.name) continue;
+    const fromName = String(node.name);
+    const fromEntity = entities.get(key(fromName));
+    if (!fromEntity?.pk.size) continue;
+    for (const link of arr(node.links)) {
+      if (link?.data?.relationshipKind !== 'schema_fk' || link?.data?.evidenced === false) continue;
+      if (String(link?.cardinality || '').toLowerCase() !== 'one') continue;
+      const toName = entityNameById.get(String(link?.nodeId || ''));
+      const toEntity = entities.get(key(toName));
+      if (!toEntity?.pk.size) continue;
+      const keyMaps = arr(link?.data?.keyMaps);
+      if (!keyMaps.length) continue;
+      const mappedFrom = new Set(keyMaps.map((map) => key(map?.fieldName)));
+      const mappedTo = new Set(keyMaps.map((map) => key(map?.relatedFieldName || map?.fieldName)));
+      const sharesWholePk = [...fromEntity.pk].every((name) => mappedFrom.has(name)) && [...toEntity.pk].every((name) => mappedTo.has(name));
+      if (!sharesWholePk) continue;
+      const parentKey = key(toName);
+      if (!childrenByParent.has(parentKey)) childrenByParent.set(parentKey, new Map());
+      childrenByParent.get(parentKey).set(key(fromName), fromName);
+    }
+  }
+
+  const result = new Map();
+  for (const [parentKey, children] of childrenByParent) {
+    if (children.size < 2) continue;
+    result.set(parentKey, {
+      name:entities.get(parentKey)?.name || '',
+      concreteInstances:[...children.values()].sort()
+    });
+  }
+  return result;
+}
+
+function clusterCoreKey(groupName) {
+  const words = String(groupName || '').trim().split(/\s+/).filter(Boolean);
+  while (words.length > 1 && CLUSTER_SUFFIX_WORDS.has(words.at(-1).toLowerCase())) words.pop();
+  return key(words.join(' '));
+}
+
+function clusterRole(group, abstractParents) {
+  const coreKey = clusterCoreKey(group?.name);
+  const parent = abstractParents.get(coreKey);
+  const hasParentMember = !!parent && arr(group?.members).some((member) => key(member?.entity) === coreKey);
+  if (hasParentMember) {
+    return {
+      role:'umbrella',
+      abstractParent:parent.name,
+      concreteConcepts:parent.concreteInstances,
+      reason:`cluster is organized around abstract parent ${parent.name}`
+    };
+  }
+  return { role:'business_area', abstractParent:'', concreteConcepts:[], reason:'cluster is not centered on an abstract parent' };
+}
+
 function directoryWithClusterGraph(directory, graph) {
   const groups = arr(directory?.groups);
   if (!groups.length) return directory;
 
+  const abstractParents = abstractParentIndex(graph);
   const groupByKey = new Map(groups.map((group) => [key(group.name), group]));
   const groupSizes = new Map(groups.map((group) => [key(group.name), Math.max(arr(group.members).length, 1)]));
   const groupsByEntity = new Map();
@@ -106,18 +186,24 @@ function directoryWithClusterGraph(directory, graph) {
   }
 
   const enrichedGroups = groups.map((group) => {
+    const role = clusterRole(group, abstractParents);
     const related = arr(relatedByGroup.get(key(group.name)))
       .sort((a, b) => b.score - a.score || b.pairCount - a.pairCount || a.group.localeCompare(b.group))
       .slice(0, MAX_RELATED_GROUPS)
       .map(({ score, ...item }) => item);
-    if (!related.length) return { ...group };
+    const roleSummary = role.role === 'umbrella'
+      ? `Cluster role: umbrella over abstract parent ${role.abstractParent}; concrete concepts include ${role.concreteConcepts.join(', ')}.`
+      : 'Cluster role: concrete business area.';
     const relationSummary = related.map((item) => {
       const via = item.bridges.length ? ` via ${item.bridges.join(', ')}` : '';
       return `${item.group} (${item.strength}, ${item.pairCount} evidenced entity links${via})`;
     }).join('; ');
     return {
       ...group,
-      description:`${String(group.description || '').trim()} Related business areas: ${relationSummary}.`.trim(),
+      clusterRole:role.role,
+      abstractParent:role.abstractParent,
+      concreteConcepts:role.concreteConcepts,
+      description:`${String(group.description || '').trim()} ${roleSummary}${relationSummary ? ` Related business areas: ${relationSummary}.` : ''}`.trim(),
       relatedGroups:related
     };
   });
@@ -148,9 +234,10 @@ export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dat
       if (!directory?.groups?.length) return res.status(409).json({ error:'The entity directory is not ready yet. Run/finish LeMap learning or directory maintenance first.' });
       const queryDirectory = directoryWithClusterGraph(directory, graph);
       const clusterLinkCount = queryDirectory.groups.reduce((sum, group) => sum + arr(group.relatedGroups).length, 0) / 2;
+      const umbrellaCount = queryDirectory.groups.filter((group) => group.clusterRole === 'umbrella').length;
 
       console.log(`\n[lemap query-v2] ${question}`);
-      console.log(`[lemap query-v2] graph ${entityCount} entities; directory ${directory.groups.length} groups; ${Math.round(clusterLinkCount)} derived cluster links; no iterative walker`);
+      console.log(`[lemap query-v2] graph ${entityCount} entities; directory ${directory.groups.length} groups (${umbrellaCount} umbrella); ${Math.round(clusterLinkCount)} derived cluster links; no iterative walker`);
       append(queryLog, 'query_v2_start', {
         question,
         repoUrl:snapshot.repoUrl || '',
@@ -158,6 +245,7 @@ export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dat
         graphEntityCount:entityCount,
         directoryFile:file,
         directoryGroupCount:directory.groups.length,
+        umbrellaClusterCount:umbrellaCount,
         derivedClusterLinkCount:Math.round(clusterLinkCount)
       });
 
