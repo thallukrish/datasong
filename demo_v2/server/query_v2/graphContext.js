@@ -171,8 +171,8 @@ export function acceptedGraph(accepted, traversedJoins, index) {
     if (!entity) return null;
     return {
       name:entity.name,
-      description:entity.description,
-      fields:entity.fields
+      description:text(entity.description, ENTITY_DESC_MAX),
+      selectAllFields:true
     };
   }).filter(Boolean);
   return { entities, joins };
