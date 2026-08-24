@@ -7,6 +7,12 @@ const EDGE_SYSTEM = `You are considering one direct evidenced schema link from a
 function confidence(dimensions) {
   return Math.max(0, ...arr(dimensions).map((item) => Number(item?.confidence || 0)));
 }
+function fmtDims(dimensions) {
+  return arr(dimensions).map((item) => `${item.dimension}=${Number(item.confidence || 0).toFixed(2)}`).join(', ') || '-';
+}
+function fmtPath(path) {
+  return arr(path).map((part) => part.name || part).filter(Boolean).join(' → ') || 'LINK ROOT';
+}
 
 function normalizeDimensions(items, allowed) {
   const allowedByKey = new Map(arr(allowed).map((name) => [key(name), name]));
@@ -77,6 +83,13 @@ function joinSummary(joins) {
 function callTrace(step, phase, callUsage, usage) {
   console.log(`[lemap query-v2][LINK ${step}] ${phase} tokens: prompt ${callUsage.prompt} | output ${callUsage.completion} | call ${callUsage.total} | cumulative ${usage.total}`);
 }
+function choiceTrace(step, path, assessments) {
+  const candidates = ranked(assessments);
+  console.log(`[lemap query-v2][LINK ${step}] PATH ${fmtPath(path)}`);
+  if (candidates[0]) console.log(`  CURRENT: ${candidates[0].name} | ${fmtDims(candidates[0].dimensions)} | score ${candidates[0].confidence.toFixed(2)}`);
+  for (const item of candidates.slice(1)) console.log(`  ALT: ${item.name} | ${fmtDims(item.dimensions)} | score ${item.confidence.toFixed(2)}`);
+  for (const item of assessments.filter((entry) => entry.decision === 'reject')) console.log(`  REJECT: ${item.name}`);
+}
 
 async function score({ question, dimensions, sourceEntity, path, options, trail, globalContext, client, model, log, usage, step }) {
   const payload = {
@@ -94,6 +107,7 @@ async function score({ question, dimensions, sourceEntity, path, options, trail,
   addUsage(usage, call.usage);
   callTrace(step, 'SCORE', call.usage, usage);
   const assessments = normalizeAssessments(call.parsed, options, dimensions);
+  choiceTrace(step, path, assessments);
   log('query_v2_link_model', { step, phase:'score', assessments, usage:call.usage, cumulativeUsage:{ ...usage } });
   return assessments;
 }
@@ -172,7 +186,7 @@ export async function exploreLinkedEntities({
         question, dimensions, sourceEntity, targetEntity:current.entityName, joins:link.joins,
         globalContext, client, model, log, usage, step:++step
       });
-      console.log(`[lemap query-v2][LINK ${step}] ${sourceEntity} → ${current.entityName} ${edge.decision.toUpperCase()} | score ${edge.confidence.toFixed(2)} | cumulative ${usage.total}`);
+      console.log(`[lemap query-v2][LINK ${step}] ${sourceEntity} → ${current.entityName} ${edge.decision.toUpperCase()} | ${fmtDims(edge.dimensions)} | score ${edge.confidence.toFixed(2)} | cumulative ${usage.total}`);
       if (edge.decision === 'follow') {
         return { choice:{ entity:current.entityName, joins:link.joins, dimensions:edge.dimensions, confidence:edge.confidence }, rejectedEntityKeys, step };
       }
