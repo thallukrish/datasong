@@ -2,10 +2,11 @@ import { addUsage, arr, key, modelJson, text } from './modelJson.js';
 import { leafEvidence, linkedNeighbours } from './graphContext.js';
 import { exploreLinkedEntities } from './linkedExplorer.js';
 import { decisionPayload, decodeSparseDecision, dimensionCodec, acceptedSummary, uncoveredDimensionIndexes } from './decisionProtocol.js';
+import { partitionCandidates, remainingWarmAlternativeCount, WARM_ALTERNATIVE_MIN_CONFIDENCE } from './alternativePolicy.js';
 
 const MAX_DFS_STEPS = 64;
-const OPTION_SYSTEM = `Score the supplied visible semantic options for confidence-ordered DFS. d maps dimension index to meaning; u lists uncovered dimension indexes; a lists already accepted entities and covered dimension indexes; o is [optionIndex,name,shortDescription]. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Put in c EVERY option that may matter at all, even weakly. Put in r ONLY options that can be explicitly ruled out from the supplied name/description. Omitted options remain unassessed and eligible. No reasons, names, zero scores, or extra keys.`;
-const LEAF_SYSTEM = `Judge one entity leaf. d maps dimension indexes; u lists uncovered indexes; a lists accepted entities; e contains entity name, short description and up to five semantic field hints. Return JSON only: {"x":"a|l|r","d":[[dimensionIndex,confidence]]}. a=accept now, l=plausible alternative, r=explicit reject. Field hints are semantic evidence only; all entity fields remain available. Do not select fields or joins.`;
+const OPTION_SYSTEM = `Score the supplied visible semantic options for confidence-ordered DFS. d maps dimension index to meaning; u lists uncovered dimension indexes; a lists already accepted entities and covered dimension indexes; o is [optionIndex,name,shortDescription]. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Put in c ONLY options having meaningful confidence >= 0.5 on at least one supplied dimension. Put in r ONLY options that can be explicitly ruled out from the supplied name/description. Omitted options remain unassessed and eligible in LeMap internal state. No reasons, names, zero scores, weak 0.1/0.2 guesses, or extra keys.`;
+const LEAF_SYSTEM = `Judge one entity leaf. d maps dimension indexes; u lists uncovered indexes; a lists accepted entities; e contains entity name, short description and up to five semantic field hints; q is the count of warm alternatives LeMap can try next. Return JSON only: {"x":"a|n|r","d":[[dimensionIndex,confidence]]}. a=accept this entity now; n=do not use it now and let LeMap try the next internal alternative if q>0; r=explicitly reject this entity. Field hints are semantic evidence only; all entity fields remain available. Do not select fields or joins. Do not ask for or name alternatives.`;
 
 const fmtTokens = (u) => `prompt ${Number(u?.prompt||0)} | output ${Number(u?.completion||0)} | call ${Number(u?.total||0)}`;
 const fmtCum = (u) => `cumulative ${Number(u?.total||0)}`;
@@ -24,14 +25,19 @@ function normalizeDimensionPairs(pairs, codec) {
 function compactAssessment(item) { return item ? { id:item.id, name:item.name, score:item.confidence, dimensions:item.dimensions } : null; }
 function compactFrame(frame) {
   if (frame.kind === 'link') return { kind:'link', from:frame.fromEntity, to:frame.toEntity };
-  return { kind:'hierarchy', current:compactAssessment(frame.current), alternatives:arr(frame.alternatives).map(compactAssessment), deferred:arr(frame.deferred).map(compactAssessment) };
+  return {
+    kind:'hierarchy',
+    current:compactAssessment(frame.current),
+    alternativeCount:arr(frame.alternatives).length,
+    deferredCount:arr(frame.deferred).length,
+    coldCount:arr(frame.cold).length
+  };
 }
 function traceFrame(step, path, frame, usage) {
   console.log(`[lemap query-v2][DFS ${step}] PATH ${fmtPath(path)}`);
   if (frame.current) console.log(`  CURRENT: ${frame.current.name} | ${fmtDims(frame.current.dimensions)} | score ${Number(frame.current.confidence||0).toFixed(2)}`);
-  for (const item of arr(frame.alternatives)) console.log(`  ALT: ${item.name} | ${fmtDims(item.dimensions)} | score ${Number(item.confidence||0).toFixed(2)}`);
-  for (const item of arr(frame.rejected)) console.log(`  REJECT: ${item.name}`);
-  console.log(`  ${fmtCum(usage)} | alternatives ${arr(frame.alternatives).length}`);
+  console.log(`  WARM ALTERNATIVES: ${arr(frame.alternatives).length} | COLD <${WARM_ALTERNATIVE_MIN_CONFIDENCE.toFixed(1)}: ${arr(frame.cold).length} | REJECTED: ${arr(frame.rejected).length}`);
+  console.log(`  ${fmtCum(usage)}`);
 }
 function pathForNode(nodeId, hierarchy) {
   const path=[]; let id=nodeId;
@@ -56,28 +62,46 @@ function joinSignature(join){ return `${key(join?.from)}|${key(join?.to)}|${key(
 async function assessOptions({ intent, dimensions, accepted, options, client, model, log, usage, step }) {
   const coded=decisionPayload({intent,dimensions,accepted,options,descriptionMax:80});
   log('query_v2_dfs_payload',{step,phase:'score_options',payload:coded.payload});
-  const call=await modelJson(client,model,OPTION_SYSTEM,coded.payload,{maxTokens:650});
+  const call=await modelJson(client,model,OPTION_SYSTEM,coded.payload,{maxTokens:420});
   addUsage(usage,call.usage);
   console.log(`[lemap query-v2][DFS ${step}] SCORE tokens: ${fmtTokens(call.usage)} | ${fmtCum(usage)}`);
   const assessments=decodeSparseDecision(call.parsed,options,dimensions,coded.optionMap,coded.dimensionMap,{omittedDecision:'unassessed'});
   log('query_v2_dfs_model',{step,phase:'score_options',assessments,usage:call.usage,cumulativeUsage:{...usage}});
   return assessments;
 }
-function makeHierarchyFrame(assessments){ const candidates=arr(assessments).filter((i)=>i.decision==='candidate').sort((a,b)=>b.confidence-a.confidence||a.name.localeCompare(b.name)); return {kind:'hierarchy',current:candidates[0]||null,alternatives:candidates.slice(1),deferred:[],rejected:arr(assessments).filter((i)=>i.decision==='reject')}; }
+function makeHierarchyFrame(assessments){
+  const { warm, cold }=partitionCandidates(assessments);
+  return {
+    kind:'hierarchy',
+    current:warm[0]||null,
+    alternatives:warm.slice(1),
+    deferred:[],
+    cold,
+    unassessed:arr(assessments).filter((i)=>i.decision==='unassessed'),
+    rejected:arr(assessments).filter((i)=>i.decision==='reject')
+  };
+}
 function recordRejected(frame,rejected){ for(const item of arr(frame.rejected)) rejected.set(item.id,{id:item.id,name:item.name}); }
 function promoteAlternative(stack,hierarchy,usage){
-  while(stack.length){ const top=stack.at(-1); if(top.kind==='link'){console.log(`[lemap query-v2][DFS POP] link ${top.fromEntity} → ${top.toEntity} | ${fmtCum(usage)}`);stack.pop();continue;} if(top.alternatives.length){const next=top.alternatives.shift();top.current=next;console.log(`[lemap query-v2][DFS RESUME] ${next.name} | score ${Number(next.confidence||0).toFixed(2)} | ${fmtCum(usage)}`);return hierarchy.byId.get(next.id)||null;} const deferred=top.deferred.find((i)=>Number(i.revisits||0)<1); if(deferred){deferred.revisits=Number(deferred.revisits||0)+1;top.current=deferred;return hierarchy.byId.get(deferred.id)||null;} stack.pop(); }
+  while(stack.length){
+    const top=stack.at(-1);
+    if(top.kind==='link'){console.log(`[lemap query-v2][DFS POP] link ${top.fromEntity} → ${top.toEntity} | ${fmtCum(usage)}`);stack.pop();continue;}
+    if(top.alternatives.length){const next=top.alternatives.shift();top.current=next;console.log(`[lemap query-v2][DFS RESUME] next internal alternative | remaining ${top.alternatives.length} | score ${Number(next.confidence||0).toFixed(2)} | ${fmtCum(usage)}`);return hierarchy.byId.get(next.id)||null;}
+    const deferred=top.deferred.find((i)=>Number(i.revisits||0)<1&&Number(i.confidence||0)>=WARM_ALTERNATIVE_MIN_CONFIDENCE);
+    if(deferred){deferred.revisits=Number(deferred.revisits||0)+1;top.current=deferred;console.log(`[lemap query-v2][DFS RESUME] deferred internal alternative | ${fmtCum(usage)}`);return hierarchy.byId.get(deferred.id)||null;}
+    stack.pop();
+  }
   return null;
 }
-async function inspectLeaf({ intent, dimensions, accepted, node, index, semanticHints, client, model, log, usage, step }) {
+async function inspectLeaf({ intent, dimensions, accepted, alternativeCount, node, index, semanticHints, client, model, log, usage, step }) {
   const codec=dimensionCodec(dimensions);
-  const payload={ i:text(intent,140), d:codec.names.map((name,i)=>[i,name]), u:uncoveredDimensionIndexes(accepted,dimensions,codec), a:acceptedSummary(accepted,codec), e:leafEvidence(node.entityName,index,semanticHints) };
+  const payload={ i:text(intent,140), d:codec.names.map((name,i)=>[i,name]), u:uncoveredDimensionIndexes(accepted,dimensions,codec), a:acceptedSummary(accepted,codec), q:Number(alternativeCount||0), e:leafEvidence(node.entityName,index,semanticHints) };
   log('query_v2_dfs_payload',{step,phase:'leaf',payload});
-  const call=await modelJson(client,model,LEAF_SYSTEM,payload,{maxTokens:220}); addUsage(usage,call.usage);
+  const call=await modelJson(client,model,LEAF_SYSTEM,payload,{maxTokens:160}); addUsage(usage,call.usage);
   console.log(`[lemap query-v2][DFS ${step}] LEAF tokens: ${fmtTokens(call.usage)} | ${fmtCum(usage)}`);
   const dims=normalizeDimensionPairs(call.parsed?.d,codec);
-  const map={a:'accept',l:'alternative',r:'reject'};
-  const result={decision:map[String(call.parsed?.x||'')]||'alternative',dimensions:dims,confidence:confidenceOf(dims),reason:''};
+  const map={a:'accept',n:'next',r:'reject'};
+  const result={decision:map[String(call.parsed?.x||'')]||'next',dimensions:dims,confidence:confidenceOf(dims),reason:''};
   log('query_v2_dfs_model',{step,phase:'leaf',entity:node.entityName,result,usage:call.usage,cumulativeUsage:{...usage}}); return result;
 }
 
@@ -96,13 +120,25 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
   while(current&&step<MAX_DFS_STEPS){
     const path=pathForNode(current.id,hierarchy);
     if(current.type!=='entity'){
-      assessments=await assessOptions({intent:logicalRequest.intent,dimensions,accepted,options:current.children,client,model,log,usage,step:++step}); frame=makeHierarchyFrame(assessments); recordRejected(frame,rejected); stack.push(frame); traceFrame(step,path,frame,usage); events.push({step,action:'expand',path:path.map((p)=>p.name),current:frame.current,alternatives:frame.alternatives}); current=frame.current?hierarchy.byId.get(frame.current.id):promoteAlternative(stack,hierarchy,usage); continue;
+      assessments=await assessOptions({intent:logicalRequest.intent,dimensions,accepted,options:current.children,client,model,log,usage,step:++step});
+      frame=makeHierarchyFrame(assessments); recordRejected(frame,rejected); stack.push(frame); traceFrame(step,path,frame,usage);
+      events.push({step,action:'expand',path:path.map((p)=>p.name),current:frame.current,alternativeCount:frame.alternatives.length,coldCount:frame.cold.length,rejectedCount:frame.rejected.length});
+      current=frame.current?hierarchy.byId.get(frame.current.id):promoteAlternative(stack,hierarchy,usage); continue;
     }
     exploredEntityKeys.add(key(current.entityName));
-    const result=await inspectLeaf({intent:logicalRequest.intent,dimensions,accepted,node:current,index,semanticHints,client,model,log,usage,step:++step});
+    const result=await inspectLeaf({intent:logicalRequest.intent,dimensions,accepted,alternativeCount:remainingWarmAlternativeCount(stack),node:current,index,semanticHints,client,model,log,usage,step:++step});
     console.log(`[lemap query-v2][DFS ${step}] LEAF ${fmtPath(path)} → ${result.decision.toUpperCase()} | ${fmtDims(result.dimensions)} | score ${result.confidence.toFixed(2)} | ${fmtCum(usage)}`);
-    if(result.decision==='reject'){rejected.set(current.id,{id:current.id,name:current.name});rejectedEntityKeys.add(key(current.entityName));events.push({step,action:'reject_leaf',entity:current.name});current=promoteAlternative(stack,hierarchy,usage);continue;}
-    if(result.decision==='alternative'){const parent=[...stack].reverse().find((i)=>i.kind==='hierarchy');if(parent&&!parent.deferred.some((i)=>i.id===current.id)){parent.deferred.push({id:current.id,name:current.name,dimensions:result.dimensions,confidence:result.confidence,revisits:0});parent.deferred.sort((a,b)=>b.confidence-a.confidence||a.name.localeCompare(b.name));}events.push({step,action:'defer_leaf',entity:current.name,confidence:result.confidence});current=promoteAlternative(stack,hierarchy,usage);continue;}
+    if(result.decision==='reject'){
+      rejected.set(current.id,{id:current.id,name:current.name}); rejectedEntityKeys.add(key(current.entityName)); events.push({step,action:'reject_leaf',entity:current.name}); current=promoteAlternative(stack,hierarchy,usage); continue;
+    }
+    if(result.decision==='next'){
+      const parent=[...stack].reverse().find((i)=>i.kind==='hierarchy');
+      if(parent&&result.confidence>=WARM_ALTERNATIVE_MIN_CONFIDENCE&&!parent.deferred.some((i)=>i.id===current.id)){
+        parent.deferred.push({id:current.id,name:current.name,dimensions:result.dimensions,confidence:result.confidence,revisits:0});
+        parent.deferred.sort((a,b)=>b.confidence-a.confidence||a.name.localeCompare(b.name));
+      }
+      events.push({step,action:'next_alternative',entity:current.name,confidence:result.confidence}); current=promoteAlternative(stack,hierarchy,usage); continue;
+    }
     accepted.set(key(current.entityName),{entity:current.entityName,path:path.map((p)=>p.name),dimensions:result.dimensions,confidence:result.confidence,reason:''}); events.push({step,action:'accept_leaf',entity:current.name,dimensions:result.dimensions}); console.log(`[lemap query-v2][DFS ACCEPT] ${current.entityName} | accepted ${accepted.size} | ${fmtCum(usage)}`);
     const blocked=new Set([...exploredEntityKeys,...rejectedEntityKeys,...accepted.keys()]);blocked.delete(key(current.entityName)); const linked=linkedNeighbours(current.entityName,index,{blockedEntityKeys:blocked});
     for(const connection of linked.connections){if(!accepted.has(key(connection.entity)))continue;traversedJoins.set(joinSignature(connection.join),connection.join);events.push({step,action:'connect_existing',from:current.entityName,to:connection.entity});}
