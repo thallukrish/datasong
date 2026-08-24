@@ -203,16 +203,13 @@ function queryEndpointRoles(index) {
     const children = subtypeChildren.get(k) || new Map();
     if (children.size >= 2) {
       roles.set(k, {
-        role:'abstract_parent',
-        querySelectable:false,
+        role:'abstract_parent', querySelectable:false,
         concreteInstances:[...children.values()].sort(),
         reason:`shared PK parent of ${children.size} concrete subtype entities`
       });
     } else if (!hasConcreteValueField(entity) && Number(degree.get(k) || 0) > 0) {
       roles.set(k, {
-        role:'association_entity',
-        querySelectable:true,
-        concreteInstances:[],
+        role:'association_entity', querySelectable:true, concreteInstances:[],
         reason:'identifier-centric relationship/association entity; may carry business meaning through the association itself'
       });
     } else {
@@ -228,19 +225,13 @@ function groupsForIntent(directory) {
     description:group.baseDescription || group.description || '',
     composition:group.composition || null,
     abstractEntities:arr(group.abstractEntities).map((item) => ({
-      name:item?.name || '',
-      description:item?.description || '',
-      concreteInstances:arr(item?.concreteInstances)
+      name:item?.name || '', description:item?.description || '', concreteInstances:arr(item?.concreteInstances)
     })).filter((item) => item.name),
     representativeConcreteEntities:arr(group.representativeConcreteEntities).map((item) => ({
-      name:item?.name || '',
-      description:item?.description || ''
+      name:item?.name || '', description:item?.description || ''
     })).filter((item) => item.name),
     relatedGroups:arr(group.relatedGroups).map((item) => ({
-      group:item?.group || '',
-      strength:item?.strength || '',
-      pairCount:Number(item?.pairCount || 0),
-      bridges:arr(item?.bridges)
+      group:item?.group || '', strength:item?.strength || '', pairCount:Number(item?.pairCount || 0), bridges:arr(item?.bridges)
     })).filter((item) => item.group)
   }));
 }
@@ -258,10 +249,7 @@ function directoryCandidateEntities(directory, relevantGroups, graphEntities, se
       const endpoint = endpointRoles.get(key(graphEntity.name)) || { role:'concrete_entity', querySelectable:true, concreteInstances:[], reason:'' };
       if (!endpoint.querySelectable) {
         excluded.set(key(graphEntity.name), {
-          name:graphEntity.name,
-          role:endpoint.role,
-          concreteInstances:endpoint.concreteInstances,
-          reason:endpoint.reason
+          name:graphEntity.name, role:endpoint.role, concreteInstances:endpoint.concreteInstances, reason:endpoint.reason
         });
         continue;
       }
@@ -273,9 +261,7 @@ function directoryCandidateEntities(directory, relevantGroups, graphEntities, se
           semanticRole:endpoint.role,
           groups:[],
           semanticFields:arr(semanticHints.get(key(graphEntity.name))).map((hint) => ({
-            term:hint.term,
-            field:hint.field,
-            evidence:hint.evidence
+            term:hint.term, field:hint.field, evidence:hint.evidence
           }))
         };
         byEntity.set(key(graphEntity.name), item);
@@ -382,81 +368,65 @@ function compactEntityForBrowser(candidate) {
     semanticFields:candidate.semanticFields
   };
 }
-function buildHierarchy(candidates) {
-  const root = { id:'entity:root', label:'All candidate entities', prefixParts:[], candidates:[...candidates].sort((a, b) => a.name.localeCompare(b.name)) };
-  const nodes = new Map([[root.id, root]]);
-  const leafPaths = [];
-
-  const build = (node, isRoot = false) => {
-    if (node.candidates.length <= ENTITY_BROWSER_LEAF_SIZE) {
-      leafPaths.push(node.id);
-      return {
-        path:node.id,
-        label:node.label,
-        count:node.candidates.length,
-        entities:node.candidates.map((item) => item.name)
-      };
-    }
-    const children = isRoot ? initialEntityBranches(node.candidates) : subdivideEntityBranch(node);
-    if (!children.length) {
-      leafPaths.push(node.id);
-      return {
-        path:node.id,
-        label:node.label,
-        count:node.candidates.length,
-        entities:node.candidates.map((item) => item.name)
-      };
-    }
-    for (const child of children) nodes.set(child.id, child);
-    return {
-      path:node.id,
-      label:node.label,
-      count:node.candidates.length,
-      children:children.map((child) => build(child, false))
-    };
+function branchForRefinement(branch) {
+  const leaf = branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE;
+  return {
+    id:branch.id,
+    label:branch.label,
+    entityCount:branch.candidates.length,
+    ...(leaf ? {
+      kind:'entity_set',
+      entities:branch.candidates.map(compactEntityForBrowser)
+    } : {
+      kind:'branch',
+      examples:branch.candidates.slice(0, 4).map((item) => item.name)
+    })
   };
-
-  return { tree:build(root, true), nodes, leafPaths };
+}
+function expandRetainedBranch(branch) {
+  if (branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE) return [];
+  const children = subdivideEntityBranch(branch);
+  return children.length ? children : lexicalChunks(branch);
 }
 
 async function browseCandidateEntities({ question, intent, candidates, client, model, log, usage }) {
   const candidateNames = new Map(candidates.map((item) => [key(item.name), item]));
-  const hierarchy = buildHierarchy(candidates);
-  const validLeafPaths = new Set(hierarchy.leafPaths);
-  const visitedPaths = new Set();
   const selected = new Map();
-  let newlyRevealed = [];
+  let frontier = initialEntityBranches(candidates);
   let uncoveredRequirements = arr(intent?.requirements).map((item) => item.concept).filter(Boolean);
   const rounds = [];
+  let totalDroppedBranches = 0;
 
-  const browserSystem = 'Explore a complete compact hierarchy of candidate entity names and choose entities that can answer the logical request. LeMap has not semantically filtered candidates; the hierarchy is deterministic name/subword organization only. The completeHierarchy is always visible and unchanged. inspectPaths must contain exact inspectable leaf path IDs from remainingUnvisitedPaths; revisitPaths may contain previously visited leaf paths when new context justifies another look. Newly revealed path details contain entity descriptions and semantic field evidence. selectEntities adds relevant entities to a GLOBAL PINNED selection; those entities stay selected even though their hierarchy path is marked visited. dropEntities removes pinned selections explicitly. A visited path means only that its evidence has been inspected, never that entities selected from it are irrelevant. Ask to inspect more paths until the pinned selected entities appear sufficient for every logical requirement. Set done=true only when the pinned selected set appears sufficient and no further path evidence is plausibly needed. Field-name resemblance alone is insufficient; use business meaning and contradictory evidence is disqualifying. Return {"inspectPaths":["unvisited leaf path ids"],"revisitPaths":["visited leaf path ids if needed"],"selectEntities":[{"entity":"exact entity name from newlyRevealedPaths","covers":["requirement concepts"],"reason":"short semantic reason"}],"dropEntities":["exact currently selected entity names"],"uncoveredRequirements":["still uncovered or uncertain concepts"],"done":true|false,"reason":"short search decision"}.';
+  const browserSystem = 'Progressively refine candidate entity-name branches until enough semantic entity evidence is visible to choose an answerable entity set. LeMap only organizes names mechanically; YOU own every semantic keep/drop decision. currentBranches is the entire active frontier for this round. For a kind=branch item, retain its exact id only if that name branch plausibly corresponds to an unresolved requirement; retained large branches will be expanded by exactly one hierarchy level next round. Branches you do not retain are discarded because of your semantic decision, not by LeMap. For a kind=entity_set item, full entity descriptions and semantic field hints are already visible: select relevant entities now using exact names. Selected entities are GLOBAL PINNED selections and persist across later refinement rounds unless you explicitly drop them. Do not retain an entity_set merely to see the same evidence again. You may continue refining other branches after selecting entities. Set done=true only when pinned selections appear sufficient for every logical requirement. If unresolved requirements remain, retain only the branches that plausibly address those requirements. Do not keep branches merely because they might contain something; use the names as semantic signals and narrow deliberately. Field-name resemblance alone is insufficient when selecting actual entities; use their descriptions/evidence and reject contradictory evidence. Return {"retainBranchIds":["exact ids of kind=branch items to refine"],"selectEntities":[{"entity":"exact entity name from visible entity_set","covers":["requirement concepts"],"reason":"short semantic reason"}],"dropEntities":["exact pinned entity names to remove"],"uncoveredRequirements":["still uncovered or uncertain concepts"],"done":true|false,"reason":"short refinement decision"}.';
 
   const staticPayload = {
-    task:'query_v2_global_entity_hierarchy',
+    task:'query_v2_progressive_entity_refinement',
     question,
     logicalRequest:intent,
-    completeHierarchy:hierarchy.tree,
-    inspectableLeafPaths:hierarchy.leafPaths,
     responseContract:{
-      inspectPaths:'unvisited leaf paths to reveal',
-      revisitPaths:'visited leaf paths to reveal again only if needed',
-      selectEntities:'new relevant entities from revealed path details',
-      dropEntities:'pinned entities to remove explicitly',
+      retainBranchIds:'kind=branch ids to expand one level',
+      selectEntities:'relevant entities from visible kind=entity_set branches',
+      dropEntities:'currently pinned entities to remove explicitly',
       uncoveredRequirements:'still uncovered or uncertain concepts',
       done:'boolean',
-      reason:'short search decision'
+      reason:'short refinement decision'
     }
   };
 
   for (let round = 1; round <= ENTITY_BROWSER_MAX_ROUNDS; round++) {
-    const remainingUnvisitedPaths = hierarchy.leafPaths.filter((id) => !visitedPaths.has(id));
+    const visible = frontier.map(branchForRefinement);
+    const visibleEntityKeys = new Set(
+      frontier
+        .filter((branch) => branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE)
+        .flatMap((branch) => branch.candidates.map((candidate) => key(candidate.name)))
+    );
+    const branchById = new Map(frontier.map((branch) => [branch.id, branch]));
+
     const dynamicPayload = {
-      searchState:{
-        visitedPaths:[...visitedPaths],
-        remainingUnvisitedPaths,
+      refinementState:{
+        currentBranches:visible,
         selectedEntities:[...selected.values()],
-        uncoveredRequirements,
-        newlyRevealedPaths:newlyRevealed
+        uncoveredRequirements
       }
     };
 
@@ -465,17 +435,15 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
       staticPrefix:staticPayload,
       dynamicSuffix:dynamicPayload
     });
-    console.log(`[lemap query-v2] entity hierarchy round ${round}: visited ${visitedPaths.size}/${hierarchy.leafPaths.length} leaf paths, selected ${selected.size}, newly revealed ${newlyRevealed.length}`);
+    console.log(`[lemap query-v2] entity refinement round ${round}: ${frontier.length} active branches, ${visible.filter((item) => item.kind === 'entity_set').length} entity sets, ${selected.size} pinned selections`);
 
     const call = await modelJsonWithStaticPrefix(client, model, browserSystem, staticPayload, dynamicPayload);
     addUsage(usage, call.usage);
 
     for (const name of arr(call.parsed?.dropEntities)) selected.delete(key(name));
-
-    const revealedEntityKeys = new Set(newlyRevealed.flatMap((record) => arr(record.entities).map((item) => key(item.name))));
     for (const item of arr(call.parsed?.selectEntities)) {
       const candidate = candidateNames.get(key(item?.entity));
-      if (!candidate || !revealedEntityKeys.has(key(candidate.name))) continue;
+      if (!candidate || !visibleEntityKeys.has(key(candidate.name))) continue;
       selected.set(key(candidate.name), {
         entity:candidate.name,
         covers:arr(item?.covers).map(String),
@@ -484,32 +452,20 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
     }
     uncoveredRequirements = arr(call.parsed?.uncoveredRequirements).map(String);
 
-    const requested = [];
-    for (const id of uniq(arr(call.parsed?.inspectPaths).map(String))) {
-      if (validLeafPaths.has(id) && !visitedPaths.has(id)) requested.push(id);
-    }
-    for (const id of uniq(arr(call.parsed?.revisitPaths).map(String))) {
-      if (validLeafPaths.has(id) && visitedPaths.has(id)) requested.push(id);
-    }
-
-    newlyRevealed = [];
-    for (const id of uniq(requested)) {
-      const node = hierarchy.nodes.get(id);
-      if (!node) continue;
-      visitedPaths.add(id);
-      newlyRevealed.push({
-        path:id,
-        label:node.label,
-        entities:node.candidates.map(compactEntityForBrowser)
-      });
-    }
+    const retainIds = uniq(arr(call.parsed?.retainBranchIds).map(String))
+      .filter((id) => branchById.has(id) && branchById.get(id).candidates.length > ENTITY_BROWSER_LEAF_SIZE);
+    const retained = retainIds.map((id) => branchById.get(id));
+    const nextFrontier = retained.flatMap(expandRetainedBranch);
+    const droppedThisRound = frontier.filter((branch) => branch.candidates.length > ENTITY_BROWSER_LEAF_SIZE && !retainIds.includes(branch.id)).length;
+    totalDroppedBranches += droppedThisRound;
 
     const record = {
       round,
-      requestedPaths:uniq(requested),
-      revealedPathCount:newlyRevealed.length,
-      visitedPathCount:visitedPaths.size,
-      remainingUnvisitedPathCount:Math.max(hierarchy.leafPaths.length - visitedPaths.size, 0),
+      activeBranchCount:frontier.length,
+      visibleEntitySetCount:visible.filter((item) => item.kind === 'entity_set').length,
+      retainedBranchIds:retainIds,
+      nextBranchCount:nextFrontier.length,
+      droppedBranchCount:droppedThisRound,
       selectedEntities:[...selected.values()],
       uncoveredRequirements,
       done:!!call.parsed?.done,
@@ -520,10 +476,11 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
     log('query_v2_entity_browser_round', record);
 
     if (!!call.parsed?.done) break;
-    if (!requested.length) {
-      console.log('[lemap query-v2] entity hierarchy explorer stopped without requesting any path');
+    if (!nextFrontier.length) {
+      console.log('[lemap query-v2] entity refinement stopped: no retained branch remains to refine');
       break;
     }
+    frontier = nextFrontier;
   }
 
   return {
@@ -531,9 +488,8 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
     selectedEntities:[...selected.values()].map((item) => item.entity).slice(0, 8),
     uncoveredRequirements,
     rounds,
-    visitedPaths:[...visitedPaths],
-    remainingUnvisitedPaths:hierarchy.leafPaths.filter((id) => !visitedPaths.has(id)),
-    hierarchyLeafCount:hierarchy.leafPaths.length
+    finalFrontier:frontier.map((branch) => ({ id:branch.id, label:branch.label, entityCount:branch.candidates.length })),
+    totalDroppedBranches
   };
 }
 
@@ -742,9 +698,7 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   const validGroups = new Map(groups.map((group) => [key(group.name), group.name]));
   const relevantGroups = uniq(arr(pass1.parsed?.relevantGroups).map((name) => validGroups.get(key(name))).filter(Boolean));
   const requirements = arr(pass1.parsed?.requirements).slice(0, 12).map((item) => ({
-    concept:text(item?.concept, 100),
-    role:text(item?.role, 30),
-    value:text(item?.value, 120)
+    concept:text(item?.concept, 100), role:text(item?.role, 30), value:text(item?.value, 120)
   })).filter((item) => item.concept);
   const intent = {
     intent:text(pass1.parsed?.intent, 160),
@@ -761,13 +715,13 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   const excluded = candidateSet.excluded;
   const abstractCount = excluded.filter((item) => item.role === 'abstract_parent').length;
   console.log(`[lemap query-v2] cluster candidate filter: ${excluded.length} abstract parents omitted from model (${abstractCount} abstract parents)`);
-  console.log(`[lemap query-v2] pass 2 global entity hierarchy: ${candidates.length} selectable concrete/association entities remain reachable`);
+  console.log(`[lemap query-v2] pass 2 progressive entity refinement: ${candidates.length} selectable concrete/association entities remain reachable`);
 
   const browser = await browseCandidateEntities({ question, intent, candidates, client, model, log, usage });
   const selectedEntities = browser.selectedEntities;
   const selections = browser.selections;
 
-  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; hierarchy rounds ${browser.rounds.length}; visited paths ${browser.visitedPaths.length}/${browser.hierarchyLeafCount}`);
+  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; refinement rounds ${browser.rounds.length}; final frontier ${browser.finalFrontier.length}`);
   log('query_v2_entities', {
     selectedEntities:selections,
     uncoveredRequirements:browser.uncoveredRequirements,
@@ -775,9 +729,8 @@ export async function runTwoPassQuery({ question, client, model, graph, director
     excludedCandidateCount:excluded.length,
     excludedCandidates:excluded,
     browserRounds:browser.rounds.length,
-    hierarchyLeafCount:browser.hierarchyLeafCount,
-    visitedPaths:browser.visitedPaths,
-    remainingUnvisitedPaths:browser.remainingUnvisitedPaths
+    totalDroppedBranches:browser.totalDroppedBranches,
+    finalFrontier:browser.finalFrontier
   });
 
   const connection = connectSelectedEntities(index, selectedEntities);
@@ -805,7 +758,7 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   return {
     ...finalCall.parsed,
     investigation:{
-      mode:'two-pass-structured-clusters-global-cacheable-entity-hierarchy-local-paths',
+      mode:'two-pass-structured-clusters-progressive-model-refinement-local-paths',
       logicalRequest:intent,
       relevantGroups,
       candidateEntityCount:candidates.length,
@@ -813,9 +766,8 @@ export async function runTwoPassQuery({ question, client, model, graph, director
       excludedCandidates:excluded,
       entityBrowser:{
         rounds:browser.rounds.length,
-        hierarchyLeafCount:browser.hierarchyLeafCount,
-        visitedPaths:browser.visitedPaths,
-        remainingUnvisitedPaths:browser.remainingUnvisitedPaths,
+        totalDroppedBranches:browser.totalDroppedBranches,
+        finalFrontier:browser.finalFrontier,
         uncoveredRequirements:browser.uncoveredRequirements
       },
       selectedEntities:selections,
