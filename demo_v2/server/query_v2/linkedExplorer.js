@@ -3,13 +3,12 @@ import { filterHierarchyForEntities } from './semanticHierarchy.js';
 import { decisionPayload, decodeSparseDecision, dimensionCodec, acceptedSummary, uncoveredDimensionIndexes } from './decisionProtocol.js';
 import { partitionCandidates, WARM_ALTERNATIVE_MIN_CONFIDENCE } from './alternativePolicy.js';
 
-const SCORE_SYSTEM = `Score ONLY the supplied hierarchy branches of directly linked still-eligible entities. d maps dimension indexes; u lists uncovered indexes; a lists accepted entities; o is [optionIndex,name,shortDescription]. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Put in c ONLY branches with meaningful confidence >= 0.5 on at least one supplied dimension. Put in r ONLY branches that can be explicitly ruled out. Omitted branches remain unassessed/eligible in LeMap internal state. No reasons, names, weak 0.1/0.2 guesses, zero scores, or extra keys.`;
-const EDGE_SYSTEM = `Judge one evidenced direct schema link. d maps dimension indexes; u lists uncovered indexes; s is source entity; t is target entity; j contains exact evidenced joins; q is the count of warm linked alternatives LeMap can try next. Return JSON only: {"x":"f|n|r","d":[[dimensionIndex,confidence]]}. f=follow now, n=do not follow this link now and let LeMap try its next internal alternative if q>0, r=explicit reject. Never invent joins and do not ask for alternative names.`;
+const SCORE_SYSTEM = `Score NAVIGATION RELEVANCE only for the supplied hierarchy branches of directly linked still-eligible entities. d maps dimension indexes; u lists dimensions still uncovered by accepted leaves; a lists accepted entities; o is [optionIndex,name,shortDescription]. A score means confidence that useful linked entities for that dimension may exist somewhere under this branch; it does NOT mean the dimension is covered. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Put in c branches with non-trivial plausibility for at least one supplied dimension; scores MAY be below 0.5. Do not emit tiny guesses merely to mention every option. Put in r ONLY branches that can be explicitly ruled out from the supplied name/description. Omitted branches remain unassessed/eligible in LeMap internal state. No reasons, names, zero scores, or extra keys.`;
+const EDGE_SYSTEM = `Judge one evidenced direct schema link as a NAVIGATION decision. d maps dimension indexes; u lists uncovered indexes; s is source entity; t is target entity; j contains exact evidenced joins; q is the count of warm linked alternatives LeMap can try next. Return JSON only: {"x":"f|n|r","d":[[dimensionIndex,confidence]]}. d expresses how promising the target is for finding the uncovered dimensions; it does NOT mark those dimensions covered. f=follow now, n=do not follow this link now and let LeMap try its next internal alternative if q>0, r=explicit reject. Never invent joins and do not ask for alternative names.`;
 
 const confidence=(dims)=>Math.max(0,...arr(dims).map((d)=>Number(d?.confidence||0)));
 const fmtDims=(dims)=>arr(dims).map((d)=>`${d.dimension}=${Number(d.confidence||0).toFixed(2)}`).join(', ')||'-';
 function normalizePairs(pairs,codec){return arr(pairs).map((p)=>{if(!Array.isArray(p))return null;const name=codec.byIndex.get(String(p[0]));const c=Math.max(0,Math.min(1,Number(p[1]||0)));return name&&c>0?{dimension:name,confidence:c}:null;}).filter(Boolean);}
-function pathForNode(nodeId,hierarchy){const path=[];let id=nodeId;while(id){const node=hierarchy.byId.get(id);if(!node)break;path.push({id:node.id,type:node.type,name:node.name});id=hierarchy.parentById.get(id);}return path.reverse();}
 function joinSummary(joins){return arr(joins).map((j)=>({from:j.from,to:j.to,relationship:j.relationship,cardinality:j.cardinality,keyMaps:j.keyMaps}));}
 
 async function score({intent,dimensions,accepted,options,client,model,log,usage,step}){
@@ -20,7 +19,7 @@ async function score({intent,dimensions,accepted,options,client,model,log,usage,
   const assessments=decodeSparseDecision(call.parsed,options,dimensions,coded.optionMap,coded.dimensionMap,{omittedDecision:'unassessed'});
   const {warm,cold}=partitionCandidates(assessments);
   if(warm[0])console.log(`  CURRENT: ${warm[0].name} | ${fmtDims(warm[0].dimensions)} | score ${warm[0].confidence.toFixed(2)}`);
-  console.log(`  WARM ALTERNATIVES: ${Math.max(0,warm.length-1)} | COLD <${WARM_ALTERNATIVE_MIN_CONFIDENCE.toFixed(1)}: ${cold.length} | REJECTED: ${assessments.filter((x)=>x.decision==='reject').length}`);
+  console.log(`  WARM ALTERNATIVES: ${Math.max(0,warm.length-1)} | COLD <${WARM_ALTERNATIVE_MIN_CONFIDENCE.toFixed(1)}: ${cold.length} | UNASSESSED: ${assessments.filter((x)=>x.decision==='unassessed').length} | REJECTED: ${assessments.filter((x)=>x.decision==='reject').length}`);
   log('query_v2_link_model',{step,phase:'score',assessments,usage:call.usage,cumulativeUsage:{...usage}}); return assessments;
 }
 
@@ -43,7 +42,7 @@ export async function exploreLinkedEntities({intent,dimensions,accepted,sourceEn
   while(options.length){
     const assessments=await score({intent,dimensions,accepted,options,client,model,log,usage,step:++step});
     const {warm,cold}=partitionCandidates(assessments); if(!warm.length)break;
-    const frame={current:warm[0],alternatives:warm.slice(1),cold}; stack.push(frame); let current=linkedHierarchy.byId.get(frame.current.id);
+    const frame={current:warm[0],alternatives:warm.slice(1),cold,unassessed:assessments.filter((x)=>x.decision==='unassessed')}; stack.push(frame); let current=linkedHierarchy.byId.get(frame.current.id);
     while(current){
       if(current.type!=='entity'){options=current.children;break;}
       const link=byEntity.get(key(current.entityName)); if(!link)break;
