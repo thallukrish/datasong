@@ -162,12 +162,30 @@ export function leafEvidence(entityName, index, semanticHints, hierarchy) {
   };
 }
 
+function acceptedFieldNames(acceptedItem, joins) {
+  const names = new Set(arr(acceptedItem?.fields).map(key));
+  for (const join of joins) {
+    if (key(join.from) === key(acceptedItem.entity)) {
+      for (const map of arr(join.keyMaps)) if (map.fieldName) names.add(key(map.fieldName));
+    }
+    if (key(join.to) === key(acceptedItem.entity)) {
+      for (const map of arr(join.keyMaps)) if (map.relatedFieldName || map.fieldName) names.add(key(map.relatedFieldName || map.fieldName));
+    }
+  }
+  return names;
+}
+
 export function acceptedGraph(accepted, traversedJoins, index) {
-  const names = [...accepted.values()].map((item) => item.entity);
-  const entities = names.map((name) => index.entities.get(key(name))).filter(Boolean).map((entity) => ({
-    name:entity.name,
-    description:entity.description,
-    fields:entity.fields
-  }));
-  return { entities, joins:[...traversedJoins.values()] };
+  const joins = [...traversedJoins.values()];
+  const entities = [...accepted.values()].map((acceptedItem) => {
+    const entity = index.entities.get(key(acceptedItem.entity));
+    if (!entity) return null;
+    const fieldNames = acceptedFieldNames(acceptedItem, joins);
+    return {
+      name:entity.name,
+      description:entity.description,
+      fields:entity.fields.filter((field) => fieldNames.has(key(field.name)))
+    };
+  }).filter(Boolean);
+  return { entities, joins };
 }
