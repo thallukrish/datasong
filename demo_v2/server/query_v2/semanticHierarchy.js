@@ -1,5 +1,9 @@
 import { arr, key, text } from './modelJson.js';
 
+const ENTITY_DESC_MAX = 180;
+const CLUSTER_DESC_MAX = 180;
+const TOPIC_DESC_MAX = 150;
+
 function entityNameParts(name) {
   return String(name || '')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -17,8 +21,8 @@ function topicDescription(entityNames, graphEntities) {
     .map((name) => graphEntities.get(key(name))?.description)
     .filter(Boolean)
     .slice(0, 2)
-    .map((value) => text(value, 150));
-  return descriptions.length ? descriptions.join(' / ') : `Entity family containing ${entityNames.length} related names.`;
+    .map((value) => text(value, 70));
+  return descriptions.length ? text(descriptions.join(' / '), TOPIC_DESC_MAX) : `Entity family containing ${entityNames.length} related names.`;
 }
 
 function makeTopicNode({ clusterId, parts, entries, graphEntities }) {
@@ -40,7 +44,7 @@ function makeTopicNode({ clusterId, parts, entries, graphEntities }) {
       id:`${id}/entity:${idPart(entry.name)}`,
       type:'entity',
       name:entry.name,
-      description:text(entity?.description || '', 260),
+      description:text(entity?.description || '', ENTITY_DESC_MAX),
       entityName:entry.name,
       children:[]
     });
@@ -89,7 +93,7 @@ function buildCluster(group, graphEntities) {
     id:clusterId,
     type:'cluster',
     name:String(group.name || ''),
-    description:text(group.baseDescription || group.description || '', 320),
+    description:text(group.baseDescription || group.description || '', CLUSTER_DESC_MAX),
     children
   };
 }
@@ -119,6 +123,19 @@ export function buildSemanticHierarchy(directory, graphEntities) {
     .filter((group) => group?.name)
     .map((group) => buildCluster(group, graphEntities))
     .sort((a, b) => a.name.localeCompare(b.name));
+  return { clusters, ...indexTree(clusters) };
+}
+
+function filteredNode(node, allowedEntityKeys) {
+  if (node.type === 'entity') return allowedEntityKeys.has(key(node.entityName)) ? { ...node, children:[] } : null;
+  const children = arr(node.children).map((child) => filteredNode(child, allowedEntityKeys)).filter(Boolean);
+  if (!children.length) return null;
+  return { ...node, children };
+}
+
+export function filterHierarchyForEntities(hierarchy, entityNames) {
+  const allowed = new Set(arr(entityNames).map(key));
+  const clusters = arr(hierarchy?.clusters).map((node) => filteredNode(node, allowed)).filter(Boolean);
   return { clusters, ...indexTree(clusters) };
 }
 
