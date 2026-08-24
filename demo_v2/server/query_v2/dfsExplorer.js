@@ -106,17 +106,6 @@ function pathForNode(nodeId, hierarchy) {
   return path.reverse();
 }
 
-function descendantEntityKeys(node) {
-  const result = new Set();
-  const walk = (current) => {
-    if (!current) return;
-    if (current.type === 'entity') result.add(key(current.entityName));
-    else for (const child of arr(current.children)) walk(child);
-  };
-  walk(node);
-  return result;
-}
-
 async function assessOptions({ question, dimensions, parentPath, options, state, client, model, log, usage, step }) {
   const payload = {
     task:'semantic_dfs_score_visible_options',
@@ -146,12 +135,8 @@ function makeHierarchyFrame(assessments) {
   };
 }
 
-function recordRejected(frame, rejected, rejectedEntityKeys, hierarchy) {
-  for (const item of arr(frame.rejected)) {
-    rejected.set(item.id, { id:item.id, name:item.name });
-    const node = hierarchy.byId.get(item.id);
-    for (const entityKey of descendantEntityKeys(node)) rejectedEntityKeys.add(entityKey);
-  }
+function recordRejected(frame, rejected) {
+  for (const item of arr(frame.rejected)) rejected.set(item.id, { id:item.id, name:item.name });
 }
 
 function promoteAlternative(stack, hierarchy, usage) {
@@ -185,10 +170,7 @@ function coverage(accepted, dimensions) {
   for (const item of accepted.values()) {
     for (const dimension of arr(item.dimensions)) if (Number(dimension.confidence || 0) > 0) covered.add(key(dimension.dimension));
   }
-  return {
-    covered:[...covered],
-    missing:arr(dimensions).filter((dimension) => !covered.has(key(dimension)))
-  };
+  return { covered:[...covered], missing:arr(dimensions).filter((dimension) => !covered.has(key(dimension))) };
 }
 
 function acceptedConnected(accepted, traversedJoins) {
@@ -220,14 +202,7 @@ function joinSignature(join) {
 
 async function inspectLeaf({ question, dimensions, node, path, state, index, semanticHints, client, model, log, usage, step }) {
   const evidence = leafEvidence(node.entityName, index, semanticHints);
-  const payload = {
-    task:'semantic_dfs_inspect_leaf_entity',
-    question,
-    dimensions,
-    currentPath:compactPath(path),
-    leaf:evidence,
-    globalContext:state
-  };
+  const payload = { task:'semantic_dfs_inspect_leaf_entity', question, dimensions, currentPath:compactPath(path), leaf:evidence, globalContext:state };
   log('query_v2_dfs_payload', { step, phase:'leaf', payload });
   const call = await modelJson(client, model, LEAF_SYSTEM, payload, { maxTokens:600 });
   addUsage(usage, call.usage);
@@ -270,7 +245,7 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
     state:globalState({ dimensions, accepted, stack }), client, model, log, usage, step:++step
   });
   let frame = makeHierarchyFrame(assessments);
-  recordRejected(frame, rejected, rejectedEntityKeys, hierarchy);
+  recordRejected(frame, rejected);
   stack.push(frame);
   traceFrame(step, [], frame, usage);
   let current = frame.current ? hierarchy.byId.get(frame.current.id) : null;
@@ -280,12 +255,9 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
     const state = globalState({ dimensions, accepted, stack });
 
     if (current.type !== 'entity') {
-      assessments = await assessOptions({
-        question, dimensions, parentPath:path, options:current.children,
-        state, client, model, log, usage, step:++step
-      });
+      assessments = await assessOptions({ question, dimensions, parentPath:path, options:current.children, state, client, model, log, usage, step:++step });
       frame = makeHierarchyFrame(assessments);
-      recordRejected(frame, rejected, rejectedEntityKeys, hierarchy);
+      recordRejected(frame, rejected);
       stack.push(frame);
       traceFrame(step, path, frame, usage);
       events.push({ step, action:'expand', path:path.map((part) => part.name), current:frame.current, alternatives:frame.alternatives });
@@ -294,10 +266,7 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
     }
 
     exploredEntityKeys.add(key(current.entityName));
-    const result = await inspectLeaf({
-      question, dimensions, node:current, path, state,
-      index, semanticHints, client, model, log, usage, step:++step
-    });
+    const result = await inspectLeaf({ question, dimensions, node:current, path, state, index, semanticHints, client, model, log, usage, step:++step });
     console.log(`[lemap query-v2][DFS ${step}] LEAF ${fmtPath(path)} → ${result.decision.toUpperCase()} | ${fmtDims(result.dimensions)} | score ${result.confidence.toFixed(2)} | ${fmtCumulative(usage)}`);
 
     if (result.decision === 'reject') {
@@ -347,6 +316,7 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
         sourceEntity:current.entityName,
         eligibleLinks:linked.eligible,
         hierarchy,
+        excludedNodeIds:new Set(rejected.keys()),
         globalContext:globalState({ dimensions, accepted, stack }),
         client,
         model,
@@ -357,7 +327,8 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
       step = linkedResult.step;
       for (const entityKey of linkedResult.rejectedEntityKeys) rejectedEntityKeys.add(entityKey);
       if (linkedResult.choice && !exploredEntityKeys.has(key(linkedResult.choice.entity)) && !rejectedEntityKeys.has(key(linkedResult.choice.entity))) {
-        const targetPaths = arr(hierarchy.pathsByEntity.get(key(linkedResult.choice.entity)));
+        const targetPaths = arr(hierarchy.pathsByEntity.get(key(linkedResult.choice.entity)))
+          .filter((item) => !item.path.some((part) => rejected.has(part.id)));
         const targetPath = targetPaths[0];
         const targetNode = targetPath ? hierarchy.byId.get(targetPath.pathId) : null;
         if (targetNode) {
