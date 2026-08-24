@@ -78,7 +78,9 @@ function frameSummary(frame) {
     parentPath:frame.parentPath,
     current:frame.current ? assessmentSummary(frame.current) : null,
     alternatives:arr(frame.alternatives).map(assessmentSummary),
-    rejected:arr(frame.rejected).map((item) => ({ id:item.id, name:item.name }))
+    deferred:arr(frame.deferred).map(assessmentSummary),
+    rejected:arr(frame.rejected).map((item) => ({ id:item.id, name:item.name })),
+    unassessed:arr(frame.unassessed).map((item) => ({ id:item.id, name:item.name }))
   };
 }
 
@@ -122,6 +124,7 @@ function makeHierarchyFrame(parentPath, assessments) {
     parentPath:compactPath(parentPath),
     current,
     alternatives:candidates.slice(1),
+    deferred:[],
     rejected:assessments.filter((item) => item.decision === 'reject'),
     unassessed:assessments.filter((item) => item.decision === 'unassessed')
   };
@@ -162,6 +165,12 @@ function promoteAlternative(stack, hierarchy) {
       const next = top.alternatives.shift();
       top.current = next;
       return hierarchy.byId.get(next.id) || null;
+    }
+    const deferred = top.deferred.find((item) => Number(item.revisits || 0) < 1);
+    if (deferred) {
+      deferred.revisits = Number(deferred.revisits || 0) + 1;
+      top.current = deferred;
+      return hierarchy.byId.get(deferred.id) || null;
     }
     stack.pop();
   }
@@ -230,10 +239,11 @@ async function inspectLeaf({ question, dimensions, node, path, state, index, sem
   addUsage(usage, call.usage);
   const decision = ['accept','alternative','reject'].includes(call.parsed?.decision) ? call.parsed.decision : 'alternative';
   const fieldNames = new Set(arr(evidence?.semanticFields).map((field) => key(field.field)));
+  const normalizedDimensions = normalizeDimensions(call.parsed?.dimensions, dimensions);
   const result = {
     decision,
-    dimensions:normalizeDimensions(call.parsed?.dimensions, dimensions),
-    confidence:confidenceOf({ dimensions:normalizeDimensions(call.parsed?.dimensions, dimensions) }),
+    dimensions:normalizedDimensions,
+    confidence:confidenceOf({ dimensions:normalizedDimensions }),
     fields:uniq(arr(call.parsed?.fields).filter((field) => fieldNames.has(key(field)))),
     followRelatedPathId:String(call.parsed?.followRelatedPathId || ''),
     reason:text(call.parsed?.reason, 180),
@@ -333,16 +343,17 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
 
     if (result.decision === 'alternative') {
       const parentFrame = [...stack].reverse().find((frame) => frame.kind === 'hierarchy');
-      if (parentFrame && !parentFrame.alternatives.some((item) => item.id === current.id)) {
-        parentFrame.alternatives.push({
+      if (parentFrame && !parentFrame.deferred.some((item) => item.id === current.id)) {
+        parentFrame.deferred.push({
           id:current.id,
           name:current.name,
           decision:'candidate',
           dimensions:result.dimensions,
           confidence:result.confidence,
-          reason:result.reason
+          reason:result.reason,
+          revisits:0
         });
-        parentFrame.alternatives.sort((a, b) => b.confidence - a.confidence || a.name.localeCompare(b.name));
+        parentFrame.deferred.sort((a, b) => b.confidence - a.confidence || a.name.localeCompare(b.name));
       }
       events.push({ step, action:'defer_leaf', entity:current.name, confidence:result.confidence });
       current = promoteAlternative(stack, hierarchy);
