@@ -1,5 +1,9 @@
 import { arr, key, text } from './modelJson.js';
 
+const ENTITY_DESC_MAX = 180;
+const CLUSTER_DESC_MAX = 180;
+const TOPIC_DESC_MAX = 150;
+
 function entityNameParts(name) {
   return String(name || '')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -17,8 +21,8 @@ function topicDescription(entityNames, graphEntities) {
     .map((name) => graphEntities.get(key(name))?.description)
     .filter(Boolean)
     .slice(0, 2)
-    .map((value) => text(value, 150));
-  return descriptions.length ? descriptions.join(' / ') : `Entity family containing ${entityNames.length} related names.`;
+    .map((value) => text(value, 70));
+  return descriptions.length ? text(descriptions.join(' / '), TOPIC_DESC_MAX) : `Entity family containing ${entityNames.length} related names.`;
 }
 
 function makeTopicNode({ clusterId, parts, entries, graphEntities }) {
@@ -40,7 +44,7 @@ function makeTopicNode({ clusterId, parts, entries, graphEntities }) {
       id:`${id}/entity:${idPart(entry.name)}`,
       type:'entity',
       name:entry.name,
-      description:text(entity?.description || '', 260),
+      description:text(entity?.description || '', ENTITY_DESC_MAX),
       entityName:entry.name,
       children:[]
     });
@@ -78,18 +82,13 @@ function buildCluster(group, graphEntities) {
 
   const children = [...grouped.values()]
     .sort((a, b) => a.token.localeCompare(b.token))
-    .map(({ token, entries:topicEntries }) => makeTopicNode({
-      clusterId,
-      parts:[token],
-      entries:topicEntries,
-      graphEntities
-    }));
+    .map(({ token, entries:topicEntries }) => makeTopicNode({ clusterId, parts:[token], entries:topicEntries, graphEntities }));
 
   return {
     id:clusterId,
     type:'cluster',
     name:String(group.name || ''),
-    description:text(group.baseDescription || group.description || '', 320),
+    description:text(group.baseDescription || group.description || '', CLUSTER_DESC_MAX),
     children
   };
 }
@@ -98,7 +97,6 @@ function indexTree(rootNodes) {
   const byId = new Map();
   const parentById = new Map();
   const pathsByEntity = new Map();
-
   const walk = (node, parent = null, path = []) => {
     byId.set(node.id, node);
     if (parent) parentById.set(node.id, parent.id);
@@ -122,13 +120,23 @@ export function buildSemanticHierarchy(directory, graphEntities) {
   return { clusters, ...indexTree(clusters) };
 }
 
+function filteredNode(node, allowedEntityKeys, excludedNodeIds) {
+  if (excludedNodeIds.has(node.id)) return null;
+  if (node.type === 'entity') return allowedEntityKeys.has(key(node.entityName)) ? { ...node, children:[] } : null;
+  const children = arr(node.children).map((child) => filteredNode(child, allowedEntityKeys, excludedNodeIds)).filter(Boolean);
+  if (!children.length) return null;
+  return { ...node, children };
+}
+
+export function filterHierarchyForEntities(hierarchy, entityNames, excludedNodeIds = new Set()) {
+  const allowed = new Set(arr(entityNames).map(key));
+  const excluded = excludedNodeIds instanceof Set ? excludedNodeIds : new Set(arr(excludedNodeIds).map(String));
+  const clusters = arr(hierarchy?.clusters).map((node) => filteredNode(node, allowed, excluded)).filter(Boolean);
+  return { clusters, ...indexTree(clusters) };
+}
+
 export function compactOptions(nodes) {
-  return arr(nodes).map((node) => ({
-    id:node.id,
-    type:node.type,
-    name:node.name,
-    description:node.description
-  }));
+  return arr(nodes).map((node) => ({ id:node.id, type:node.type, name:node.name, description:node.description }));
 }
 
 export function compactPath(path) {

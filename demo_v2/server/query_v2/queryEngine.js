@@ -3,7 +3,7 @@ import { deriveQueryDimensions, exploreSemanticDfs } from './dfsExplorer.js';
 import { buildSemanticHierarchy } from './semanticHierarchy.js';
 import { addUsage, modelJson } from './modelJson.js';
 
-const FINAL_SYSTEM = `Answer using ONLY the accepted semantic DFS trail and evidenced joins supplied. Never invent a field or join. If exploration is incomplete, say that exploration is incomplete and name the still-uncovered query dimensions; do not claim the schema lacks them. Return {"answer":"concise","dataView":{"grain":"","select":[{"entity":"","field":"","role":"measure|dimension|time|filter|attribute|derived"}],"joins":[{"left":"Entity.field","right":"Entity.field","relation":"","evidenced":true}],"groupBy":[],"orderBy":[],"filters":[],"derived":[],"missing":[]},"nextStep":"optional"}.`;
+const FINAL_SYSTEM = `Answer using ONLY the accepted semantic DFS trail and evidenced joins supplied. Every accepted entity contributes all of its fields to the data view, so represent it with field="*" and do not request or invent individual non-join fields. Join fields may appear only from supplied evidenced keyMaps. If exploration is incomplete, say so and name still-uncovered query dimensions; do not claim the schema lacks them. Return {"answer":"concise","dataView":{"grain":"","select":[{"entity":"","field":"*","role":"dimension|measure|time|filter|attribute|derived"}],"joins":[{"left":"Entity.joinField","right":"Entity.joinField","relation":"","evidenced":true}],"missing":[]},"nextStep":"optional"}.`;
 
 function finalPayload(question, logicalRequest, exploration, graph) {
   return {
@@ -62,7 +62,7 @@ export async function runSemanticDfsQuery({ question, client, model, graph, dire
     index
   );
 
-  const finalCall = await modelJson(client, model, FINAL_SYSTEM, finalPayload(question, logicalRequest, exploration, grounded), { maxTokens:1400 });
+  const finalCall = await modelJson(client, model, FINAL_SYSTEM, finalPayload(question, logicalRequest, exploration, grounded), { maxTokens:1000 });
   addUsage(usage, finalCall.usage);
   log('query_v2_answer', { response:finalCall.parsed, usage:finalCall.usage, cumulativeUsage:usage });
 

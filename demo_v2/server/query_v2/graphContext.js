@@ -1,5 +1,7 @@
 import { arr, key, text } from './modelJson.js';
 
+const ENTITY_DESC_MAX = 180;
+const FIELD_DESC_MAX = 100;
 const STOP_WORDS = new Set([
   'a','an','and','are','as','at','be','by','can','for','from','has','have','in','is','it','its','of','on','or','that','the','their','this','to','used','using','was','were','which','with',
   'field','fields','entity','record','records','value','values','identifier','identifies','identification','description','type','types','code','codes','date','time'
@@ -18,7 +20,7 @@ export function buildGraphIndex(graph = []) {
   for (const node of nodes.values()) {
     if (node?.type !== 'entity' || !node?.name) continue;
     const name = String(node.name);
-    entities.set(key(name), { name, description:text(node.data?.description, 320), fields:[] });
+    entities.set(key(name), { name, description:text(node.data?.description, ENTITY_DESC_MAX), fields:[] });
     entityNameById.set(String(node.id), name);
   }
 
@@ -63,21 +65,20 @@ export function buildGraphIndex(graph = []) {
         relationship:text(link?.relationship || 'related to', 120),
         cardinality:text(link?.cardinality || 'unknown', 60),
         keyMaps,
-        description:text(link?.data?.description, 220),
         evidenced:true
       });
     }
   }
 
   const adjacency = new Map();
-  const add = (from, to, edge, reversed) => {
+  const add = (from, to, edge) => {
     const k = key(from);
     if (!adjacency.has(k)) adjacency.set(k, []);
-    adjacency.get(k).push({ from, to, edge, reversed });
+    adjacency.get(k).push({ from, to, edge });
   };
   for (const edge of relationships) {
-    add(edge.from, edge.to, edge, false);
-    add(edge.to, edge.from, edge, true);
+    add(edge.from, edge.to, edge);
+    add(edge.to, edge.from, edge);
   }
 
   return { entities, relationships, adjacency };
@@ -113,7 +114,7 @@ export function buildSemanticFieldHints(entities) {
       const tf = count / total;
       const idf = Math.log((n + 1) / ((df.get(word) || 0) + 1)) + 1;
       const ev = doc.evidence.get(word) || {};
-      scored.push({ term:word, score:Number((tf * idf).toFixed(4)), field:ev.field || '', description:ev.description || '' });
+      scored.push({ term:word, score:Number((tf * idf).toFixed(4)), field:ev.field || '', description:text(ev.description || '', FIELD_DESC_MAX) });
     }
     scored.sort((a, b) => b.score - a.score || a.term.localeCompare(b.term));
     result.set(key(entity.name), scored.slice(0, 5));
@@ -133,46 +134,34 @@ function joinEvidence(step) {
   };
 }
 
-export function leafEvidence(entityName, index, semanticHints, hierarchy) {
+export function leafEvidence(entityName, index, semanticHints) {
   const entity = index.entities.get(key(entityName));
   if (!entity) return null;
-
-  const relatedEntities = arr(index.adjacency.get(key(entityName))).map((step) => {
-    const related = index.entities.get(key(step.to));
-    return {
-      entity:step.to,
-      description:text(related?.description || '', 220),
-      hierarchyPaths:arr(hierarchy.pathsByEntity.get(key(step.to))).map((item) => ({
-        pathId:item.pathId,
-        path:item.path.map((part) => part.name)
-      })),
-      join:joinEvidence(step)
-    };
-  });
-
   return {
-    entity:{ name:entity.name, description:entity.description },
+    entity:{ name:entity.name, description:text(entity.description, ENTITY_DESC_MAX) },
     semanticFields:arr(semanticHints.get(key(entity.name))).map((hint) => ({
       field:hint.field,
       term:hint.term,
       score:hint.score,
-      description:hint.description
-    })),
-    relatedEntities
+      description:text(hint.description, FIELD_DESC_MAX)
+    }))
   };
 }
 
-function acceptedFieldNames(acceptedItem, joins) {
-  const names = new Set(arr(acceptedItem?.fields).map(key));
-  for (const join of joins) {
-    if (key(join.from) === key(acceptedItem.entity)) {
-      for (const map of arr(join.keyMaps)) if (map.fieldName) names.add(key(map.fieldName));
+export function linkedNeighbours(entityName, index, { blockedEntityKeys = new Set() } = {}) {
+  const byEntity = new Map();
+  const connections = [];
+  for (const step of arr(index.adjacency.get(key(entityName)))) {
+    const targetKey = key(step.to);
+    const join = joinEvidence(step);
+    if (blockedEntityKeys.has(targetKey)) {
+      connections.push({ entity:step.to, join });
+      continue;
     }
-    if (key(join.to) === key(acceptedItem.entity)) {
-      for (const map of arr(join.keyMaps)) if (map.relatedFieldName || map.fieldName) names.add(key(map.relatedFieldName || map.fieldName));
-    }
+    if (!byEntity.has(targetKey)) byEntity.set(targetKey, { entity:step.to, joins:[] });
+    byEntity.get(targetKey).joins.push(join);
   }
-  return names;
+  return { eligible:[...byEntity.values()], connections };
 }
 
 export function acceptedGraph(accepted, traversedJoins, index) {
@@ -180,11 +169,10 @@ export function acceptedGraph(accepted, traversedJoins, index) {
   const entities = [...accepted.values()].map((acceptedItem) => {
     const entity = index.entities.get(key(acceptedItem.entity));
     if (!entity) return null;
-    const fieldNames = acceptedFieldNames(acceptedItem, joins);
     return {
       name:entity.name,
-      description:entity.description,
-      fields:entity.fields.filter((field) => fieldNames.has(key(field.name)))
+      description:text(entity.description, ENTITY_DESC_MAX),
+      selectAllFields:true
     };
   }).filter(Boolean);
   return { entities, joins };
