@@ -1,8 +1,8 @@
 import { addUsage, arr, key, modelJson, text } from './modelJson.js';
 import { compactOptions, compactPath, filterHierarchyForEntities } from './semanticHierarchy.js';
 
-const SCORE_SYSTEM = `Navigate ONLY the supplied hierarchy of directly linked, still-eligible entities. For every visible option, map query dimensions it may help and confidence 0..1. candidate means it may matter; reject means the name+description is enough to rule out this whole branch for this query. Never reject only because another option scores higher. Return {"assessments":[{"id":"exact id","decision":"candidate|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}]}]}.`;
-const EDGE_SYSTEM = `You are considering one direct evidenced schema link from an accepted entity to a new linked entity. Use the target name and exact join evidence only. Return {"decision":"follow|alternative|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}],"reason":"short"}. follow means push the target into DFS now; alternative means keep it available but try another linked path first; reject means this linked target is not useful for the query. Never invent joins.`;
+const SCORE_SYSTEM = `Navigate ONLY the supplied hierarchy of directly linked, still-eligible entities. For every visible option, map query dimensions it may help and confidence 0..1. candidate means it may matter; reject means the name+description is enough to rule out this branch for this linked exploration. Never reject only because another option scores higher. Return {"assessments":[{"id":"exact id","decision":"candidate|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}]}]}.`;
+const EDGE_SYSTEM = `You are considering one direct evidenced schema link from an accepted entity to a new linked entity. Use the target name and exact join evidence only. Return {"decision":"follow|alternative|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}],"reason":"short"}. follow means push the target into DFS now; alternative means keep it available but try another linked path first; reject means this linked entity itself is not useful for the query. Never invent joins.`;
 
 function confidence(dimensions) {
   return Math.max(0, ...arr(dimensions).map((item) => Number(item?.confidence || 0)));
@@ -59,20 +59,9 @@ function pathForNode(nodeId, hierarchy) {
 
 function compactTrail(stack) {
   return stack.map((frame) => ({
-    at:frame.at,
     current:frame.current ? { id:frame.current.id, name:frame.current.name, score:frame.current.confidence } : null,
     alternatives:arr(frame.alternatives).map((item) => ({ id:item.id, name:item.name, score:item.confidence }))
   }));
-}
-
-function descendantEntityKeys(node) {
-  const out = new Set();
-  const walk = (current) => {
-    if (current.type === 'entity') out.add(key(current.entityName));
-    else for (const child of arr(current.children)) walk(child);
-  };
-  if (node) walk(node);
-  return out;
 }
 
 function joinSummary(joins) {
@@ -140,6 +129,7 @@ export async function exploreLinkedEntities({
   sourceEntity,
   eligibleLinks,
   hierarchy,
+  excludedNodeIds = new Set(),
   globalContext,
   client,
   model,
@@ -148,7 +138,7 @@ export async function exploreLinkedEntities({
   startStep = 0
 }) {
   const byEntity = new Map(arr(eligibleLinks).map((item) => [key(item.entity), item]));
-  const linkedHierarchy = filterHierarchyForEntities(hierarchy, arr(eligibleLinks).map((item) => item.entity));
+  const linkedHierarchy = filterHierarchyForEntities(hierarchy, arr(eligibleLinks).map((item) => item.entity), excludedNodeIds);
   const rejectedEntityKeys = new Set();
   const deferred = [];
   const stack = [];
@@ -163,13 +153,9 @@ export async function exploreLinkedEntities({
       question, dimensions, sourceEntity, path, options, trail:stack, globalContext,
       client, model, log, usage, step:++step
     });
-    for (const item of assessments.filter((entry) => entry.decision === 'reject')) {
-      const node = linkedHierarchy.byId.get(item.id);
-      for (const entityKey of descendantEntityKeys(node)) rejectedEntityKeys.add(entityKey);
-    }
     const candidates = ranked(assessments);
     if (!candidates.length) break;
-    const frame = { at:path.map((part) => part.name), current:candidates[0], alternatives:candidates.slice(1) };
+    const frame = { current:candidates[0], alternatives:candidates.slice(1) };
     stack.push(frame);
     let current = linkedHierarchy.byId.get(frame.current.id);
 
