@@ -5,8 +5,9 @@ import { decisionPayload, decodeSparseDecision, dimensionCodec, acceptedSummary,
 import { partitionCandidates, remainingWarmAlternativeCount, WARM_ALTERNATIVE_MIN_CONFIDENCE } from './alternativePolicy.js';
 
 const MAX_DFS_STEPS = 64;
-const OPTION_SYSTEM = `Score the supplied visible semantic options for confidence-ordered DFS. d maps dimension index to meaning; u lists uncovered dimension indexes; a lists already accepted entities and covered dimension indexes; o is [optionIndex,name,shortDescription]. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Put in c ONLY options having meaningful confidence >= 0.5 on at least one supplied dimension. Put in r ONLY options that can be explicitly ruled out from the supplied name/description. Omitted options remain unassessed and eligible in LeMap internal state. No reasons, names, zero scores, weak 0.1/0.2 guesses, or extra keys.`;
-const LEAF_SYSTEM = `Judge one entity leaf. d maps dimension indexes; u lists uncovered indexes; a lists accepted entities; e contains entity name, short description and up to five semantic field hints; q is the count of warm alternatives LeMap can try next. Return JSON only: {"x":"a|n|r","d":[[dimensionIndex,confidence]]}. a=accept this entity now; n=do not use it now and let LeMap try the next internal alternative if q>0; r=explicitly reject this entity. Field hints are semantic evidence only; all entity fields remain available. Do not select fields or joins. Do not ask for or name alternatives.`;
+const COVERAGE_MIN_CONFIDENCE = 0.5;
+const OPTION_SYSTEM = `Score NAVIGATION RELEVANCE only for the supplied semantic branches. d maps dimension index to meaning; u lists dimensions still uncovered by accepted leaves; a lists accepted entities; o is [optionIndex,name,shortDescription]. A score means confidence that useful entities for that dimension may exist somewhere under this branch; it does NOT mean the dimension is covered. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Put in c branches with non-trivial plausibility for at least one supplied dimension; scores MAY be below 0.5. Do not emit tiny token guesses merely to mention every option. Put in r ONLY branches whose supplied name/description is sufficient to rule them out. Omitted options remain unassessed and eligible in LeMap internal state. No reasons, names, zero scores, or extra keys.`;
+const LEAF_SYSTEM = `Judge ACTUAL QUERY COVERAGE for one entity leaf. d maps dimension indexes; u lists ONLY dimensions still uncovered; a lists accepted entities; e contains entity name, short description and up to five semantic field hints; q is the count of warm alternatives LeMap can try next. Return JSON only: {"x":"a|n|r","d":[[dimensionIndex,confidence]]}. Claim ONLY indexes present in u, and ONLY when the supplied entity description or field hints directly support that dimension. Do not infer coverage merely because the entity might connect elsewhere. Use confidence >=0.5 for a dimension you claim as actual coverage. a=accept this entity because it directly contributes at least one uncovered dimension; n=do not use it now and let LeMap try the next internal alternative if q>0; r=explicitly reject this entity. Field hints are evidence only; all entity fields remain available. Do not select fields or joins. Do not ask for or name alternatives.`;
 
 const fmtTokens = (u) => `prompt ${Number(u?.prompt||0)} | output ${Number(u?.completion||0)} | call ${Number(u?.total||0)}`;
 const fmtCum = (u) => `cumulative ${Number(u?.total||0)}`;
@@ -14,12 +15,14 @@ const fmtDims = (ds) => arr(ds).map((d)=>`${d.dimension}=${Number(d.confidence||
 const fmtPath = (path) => arr(path).map((p)=>p.name||p).filter(Boolean).join(' → ') || 'ROOT';
 const confidenceOf = (ds) => Math.max(0, ...arr(ds).map((d)=>Number(d?.confidence||0)));
 
-function normalizeDimensionPairs(pairs, codec) {
+function normalizeDimensionPairs(pairs, codec, allowedIndexes = null) {
   return arr(pairs).map((pair) => {
     if (!Array.isArray(pair)) return null;
-    const name = codec.byIndex.get(String(pair[0]));
+    const idx = String(pair[0]);
+    if (allowedIndexes && !allowedIndexes.has(idx)) return null;
+    const name = codec.byIndex.get(idx);
     const confidence = Math.max(0, Math.min(1, Number(pair[1]||0)));
-    return name && confidence > 0 ? { dimension:name, confidence } : null;
+    return name && confidence >= COVERAGE_MIN_CONFIDENCE ? { dimension:name, confidence } : null;
   }).filter(Boolean);
 }
 function compactAssessment(item) { return item ? { id:item.id, name:item.name, score:item.confidence, dimensions:item.dimensions } : null; }
@@ -36,7 +39,7 @@ function compactFrame(frame) {
 function traceFrame(step, path, frame, usage) {
   console.log(`[lemap query-v2][DFS ${step}] PATH ${fmtPath(path)}`);
   if (frame.current) console.log(`  CURRENT: ${frame.current.name} | ${fmtDims(frame.current.dimensions)} | score ${Number(frame.current.confidence||0).toFixed(2)}`);
-  console.log(`  WARM ALTERNATIVES: ${arr(frame.alternatives).length} | COLD <${WARM_ALTERNATIVE_MIN_CONFIDENCE.toFixed(1)}: ${arr(frame.cold).length} | REJECTED: ${arr(frame.rejected).length}`);
+  console.log(`  WARM ALTERNATIVES: ${arr(frame.alternatives).length} | COLD <${WARM_ALTERNATIVE_MIN_CONFIDENCE.toFixed(1)}: ${arr(frame.cold).length} | UNASSESSED: ${arr(frame.unassessed).length} | REJECTED: ${arr(frame.rejected).length}`);
   console.log(`  ${fmtCum(usage)}`);
 }
 function pathForNode(nodeId, hierarchy) {
@@ -46,7 +49,7 @@ function pathForNode(nodeId, hierarchy) {
 }
 function coverage(accepted, dimensions) {
   const covered=new Set();
-  for (const item of accepted.values()) for (const d of arr(item.dimensions)) if(Number(d.confidence||0)>0) covered.add(key(d.dimension));
+  for (const item of accepted.values()) for (const d of arr(item.dimensions)) if(Number(d.confidence||0)>=COVERAGE_MIN_CONFIDENCE) covered.add(key(d.dimension));
   return { covered:[...covered], missing:arr(dimensions).filter((d)=>!covered.has(key(d))) };
 }
 function acceptedConnected(accepted, traversedJoins) {
@@ -95,13 +98,16 @@ function promoteAlternative(stack,hierarchy,usage){
 }
 async function inspectLeaf({ intent, dimensions, accepted, alternativeCount, node, index, semanticHints, client, model, log, usage, step }) {
   const codec=dimensionCodec(dimensions);
-  const payload={ i:text(intent,140), d:codec.names.map((name,i)=>[i,name]), u:uncoveredDimensionIndexes(accepted,dimensions,codec), a:acceptedSummary(accepted,codec), q:Number(alternativeCount||0), e:leafEvidence(node.entityName,index,semanticHints) };
+  const uncovered=uncoveredDimensionIndexes(accepted,dimensions,codec);
+  const payload={ i:text(intent,140), d:codec.names.map((name,i)=>[i,name]), u:uncovered, a:acceptedSummary(accepted,codec), q:Number(alternativeCount||0), e:leafEvidence(node.entityName,index,semanticHints) };
   log('query_v2_dfs_payload',{step,phase:'leaf',payload});
   const call=await modelJson(client,model,LEAF_SYSTEM,payload,{maxTokens:160}); addUsage(usage,call.usage);
   console.log(`[lemap query-v2][DFS ${step}] LEAF tokens: ${fmtTokens(call.usage)} | ${fmtCum(usage)}`);
-  const dims=normalizeDimensionPairs(call.parsed?.d,codec);
+  const dims=normalizeDimensionPairs(call.parsed?.d,codec,new Set(uncovered.map(String)));
   const map={a:'accept',n:'next',r:'reject'};
-  const result={decision:map[String(call.parsed?.x||'')]||'next',dimensions:dims,confidence:confidenceOf(dims),reason:''};
+  let decision=map[String(call.parsed?.x||'')]||'next';
+  if(decision==='accept'&&!dims.length) decision='next';
+  const result={decision,dimensions:dims,confidence:confidenceOf(dims),reason:''};
   log('query_v2_dfs_model',{step,phase:'leaf',entity:node.entityName,result,usage:call.usage,cumulativeUsage:{...usage}}); return result;
 }
 
@@ -122,7 +128,7 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
     if(current.type!=='entity'){
       assessments=await assessOptions({intent:logicalRequest.intent,dimensions,accepted,options:current.children,client,model,log,usage,step:++step});
       frame=makeHierarchyFrame(assessments); recordRejected(frame,rejected); stack.push(frame); traceFrame(step,path,frame,usage);
-      events.push({step,action:'expand',path:path.map((p)=>p.name),current:frame.current,alternativeCount:frame.alternatives.length,coldCount:frame.cold.length,rejectedCount:frame.rejected.length});
+      events.push({step,action:'expand',path:path.map((p)=>p.name),current:frame.current,alternativeCount:frame.alternatives.length,coldCount:frame.cold.length,unassessedCount:frame.unassessed.length,rejectedCount:frame.rejected.length});
       current=frame.current?hierarchy.byId.get(frame.current.id):promoteAlternative(stack,hierarchy,usage); continue;
     }
     exploredEntityKeys.add(key(current.entityName));
@@ -140,6 +146,14 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
       events.push({step,action:'next_alternative',entity:current.name,confidence:result.confidence}); current=promoteAlternative(stack,hierarchy,usage); continue;
     }
     accepted.set(key(current.entityName),{entity:current.entityName,path:path.map((p)=>p.name),dimensions:result.dimensions,confidence:result.confidence,reason:''}); events.push({step,action:'accept_leaf',entity:current.name,dimensions:result.dimensions}); console.log(`[lemap query-v2][DFS ACCEPT] ${current.entityName} | accepted ${accepted.size} | ${fmtCum(usage)}`);
+
+    const preLinkCoverage=coverage(accepted,dimensions);
+    const preLinkConnected=acceptedConnected(accepted,traversedJoins);
+    if(!preLinkCoverage.missing.length&&preLinkConnected){
+      console.log(`[lemap query-v2][DFS DONE] all dimensions covered and trail connected before linked expansion | ${fmtCum(usage)}`);
+      break;
+    }
+
     const blocked=new Set([...exploredEntityKeys,...rejectedEntityKeys,...accepted.keys()]);blocked.delete(key(current.entityName)); const linked=linkedNeighbours(current.entityName,index,{blockedEntityKeys:blocked});
     for(const connection of linked.connections){if(!accepted.has(key(connection.entity)))continue;traversedJoins.set(joinSignature(connection.join),connection.join);events.push({step,action:'connect_existing',from:current.entityName,to:connection.entity});}
     if(linked.eligible.length){
