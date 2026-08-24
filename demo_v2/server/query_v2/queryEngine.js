@@ -407,19 +407,22 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
   const candidateNames = new Map(candidates.map((item) => [key(item.name), item]));
   const selected = new Map();
   const detailLevels = new Map();
+  const dormant = new Map();
   let frontier = initialEntityBranches(candidates);
   let uncoveredRequirements = arr(intent?.requirements).map((item) => item.concept).filter(Boolean);
   const rounds = [];
   let totalDroppedBranches = 0;
+  let totalRevivedItems = 0;
 
-  const browserSystem = 'Progressively refine candidate entity-name branches until enough semantic entity evidence is visible to choose an answerable entity set. LeMap only organizes names mechanically; YOU own every semantic keep/drop decision. currentItems is the entire active frontier for this round. For kind=branch, retain its exact id only if that name branch plausibly corresponds to an unresolved requirement; retained large branches expand by exactly one hierarchy level next round. For kind=entity_set at detailLevel=0, compact entity descriptions and semantic hints are visible; you may either select relevant entities now OR retain that entity-set id once to request deeper evidence. A retained detailLevel=0 entity set stays alive and returns next round at detailLevel=1 with concrete fields and field descriptions. For kind=entity_set at detailLevel=1, no richer evidence remains, so select relevant entities or let the set go; do not retain it again. Selected entities are GLOBAL PINNED selections and persist across later rounds unless explicitly dropped. Items not retained are discarded because of your semantic decision, not by LeMap. You may continue refining other branches after selecting entities. Set done=true only when pinned selections appear sufficient for every logical requirement. If unresolved requirements remain, retain only frontier items that plausibly address them. Field-name resemblance alone is insufficient when selecting entities; use descriptions, semantic hints, and when available concrete fields, and reject contradictory evidence. Return {"retainItemIds":["exact ids of kind=branch or detailLevel=0 entity_set items to refine/deepen"],"selectEntities":[{"entity":"exact entity name from visible entity_set","covers":["requirement concepts"],"reason":"short semantic reason"}],"dropEntities":["exact pinned entity names to remove"],"uncoveredRequirements":["still uncovered or uncertain concepts"],"done":true|false,"reason":"short refinement decision"}.';
+  const browserSystem = 'Progressively refine candidate entity-name branches until enough semantic entity evidence is visible to choose an answerable entity set. LeMap only organizes names mechanically; YOU own every semantic keep/drop decision. currentItems is the entire active frontier for this round. revivableItems contains ONLY compact id/label/count references for items you previously saw and dropped; it contains no semantic evidence. Use reviveItemIds when later evidence makes one of those previously dropped areas relevant again. For kind=branch, retain its exact id only if that name branch plausibly corresponds to an unresolved requirement; retained large branches expand by exactly one hierarchy level next round. For kind=entity_set at detailLevel=0, compact entity descriptions and semantic hints are visible; you may either select relevant entities now OR retain that entity-set id once to request deeper evidence. A retained detailLevel=0 entity set stays alive and returns next round at detailLevel=1 with concrete fields and field descriptions. For kind=entity_set at detailLevel=1, no richer evidence remains, so select relevant entities or let the set go; do not retain it again. Selected entities are GLOBAL PINNED selections and persist across later rounds unless explicitly dropped. Items not retained are parked as revivable references because of your semantic decision, not permanently removed by LeMap. Reviving an item only makes that same item active again; it does not reveal its descendants or evidence automatically. Set done=true only when pinned selections appear sufficient for every logical requirement. Field-name resemblance alone is insufficient when selecting entities; use descriptions, semantic hints, and when available concrete fields, and reject contradictory evidence. Return {"retainItemIds":["exact ids of active kind=branch or detailLevel=0 entity_set items to refine/deepen"],"reviveItemIds":["exact ids from revivableItems to reactivate"],"selectEntities":[{"entity":"exact entity name from visible entity_set","covers":["requirement concepts"],"reason":"short semantic reason"}],"dropEntities":["exact pinned entity names to remove"],"uncoveredRequirements":["still uncovered or uncertain concepts"],"done":true|false,"reason":"short refinement decision"}.';
 
   const staticPayload = {
     task:'query_v2_progressive_entity_refinement',
     question,
     logicalRequest:intent,
     responseContract:{
-      retainItemIds:'kind=branch ids to expand or detailLevel=0 entity_set ids to deepen once',
+      retainItemIds:'active branch ids to expand or detailLevel=0 entity_set ids to deepen once',
+      reviveItemIds:'previously seen dropped item ids from revivableItems to reactivate',
       selectEntities:'relevant entities from visible entity sets',
       dropEntities:'currently pinned entities to remove explicitly',
       uncoveredRequirements:'still uncovered or uncertain concepts',
@@ -436,10 +439,14 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
         .flatMap((branch) => branch.candidates.map((candidate) => key(candidate.name)))
     );
     const itemById = new Map(frontier.map((branch) => [branch.id, branch]));
+    const revivableItems = [...dormant.values()]
+      .map((branch) => ({ id:branch.id, label:branch.label, entityCount:branch.candidates.length, detailLevel:Number(detailLevels.get(branch.id) || 0) }))
+      .sort((a, b) => a.id.localeCompare(b.id));
 
     const dynamicPayload = {
       refinementState:{
         currentItems:visible,
+        revivableItems,
         selectedEntities:[...selected.values()],
         uncoveredRequirements
       }
@@ -450,7 +457,7 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
       staticPrefix:staticPayload,
       dynamicSuffix:dynamicPayload
     });
-    console.log(`[lemap query-v2] entity refinement round ${round}: ${frontier.length} active items, ${visible.filter((item) => item.kind === 'entity_set').length} entity sets, ${visible.filter((item) => item.kind === 'entity_set' && item.detailLevel > 0).length} deep entity sets, ${selected.size} pinned selections`);
+    console.log(`[lemap query-v2] entity refinement round ${round}: ${frontier.length} active items, ${visible.filter((item) => item.kind === 'entity_set').length} entity sets, ${visible.filter((item) => item.kind === 'entity_set' && item.detailLevel > 0).length} deep entity sets, ${dormant.size} revivable items, ${selected.size} pinned selections`);
 
     const call = await modelJsonWithStaticPrefix(client, model, browserSystem, staticPayload, dynamicPayload);
     addUsage(usage, call.usage);
@@ -468,8 +475,16 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
     uncoveredRequirements = arr(call.parsed?.uncoveredRequirements).map(String);
 
     const requestedIds = uniq(arr(call.parsed?.retainItemIds).map(String)).filter((id) => itemById.has(id));
+    const requestedReviveIds = uniq(arr(call.parsed?.reviveItemIds).map(String)).filter((id) => dormant.has(id));
     const validRetainIds = [];
+    const validReviveIds = [];
     const nextFrontier = [];
+    const nextIds = new Set();
+    const pushNext = (branch) => {
+      if (!branch || nextIds.has(branch.id)) return;
+      nextIds.add(branch.id);
+      nextFrontier.push(branch);
+    };
 
     for (const id of requestedIds) {
       const branch = itemById.get(id);
@@ -477,14 +492,30 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
       const detailLevel = Number(detailLevels.get(id) || 0);
       if (!leaf) {
         validRetainIds.push(id);
-        nextFrontier.push(...expandRetainedBranch(branch));
+        for (const child of expandRetainedBranch(branch)) pushNext(child);
         continue;
       }
       if (detailLevel < 1) {
         validRetainIds.push(id);
         detailLevels.set(id, 1);
-        nextFrontier.push(branch);
+        pushNext(branch);
       }
+    }
+
+    for (const id of requestedReviveIds) {
+      const branch = dormant.get(id);
+      if (!branch) continue;
+      validReviveIds.push(id);
+      dormant.delete(id);
+      pushNext(branch);
+    }
+    totalRevivedItems += validReviveIds.length;
+
+    for (const branch of frontier) {
+      if (validRetainIds.includes(branch.id)) continue;
+      const detailLevel = Number(detailLevels.get(branch.id) || 0);
+      const leaf = branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE;
+      if (!leaf || detailLevel < 1) dormant.set(branch.id, branch);
     }
 
     const droppedThisRound = frontier.filter((branch) => !validRetainIds.includes(branch.id)).length;
@@ -495,7 +526,9 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
       activeItemCount:frontier.length,
       visibleEntitySetCount:visible.filter((item) => item.kind === 'entity_set').length,
       deepEntitySetCount:visible.filter((item) => item.kind === 'entity_set' && item.detailLevel > 0).length,
+      revivableItemCount:dormant.size,
       retainedItemIds:validRetainIds,
+      revivedItemIds:validReviveIds,
       nextItemCount:nextFrontier.length,
       droppedItemCount:droppedThisRound,
       selectedEntities:[...selected.values()],
@@ -509,7 +542,7 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
 
     if (!!call.parsed?.done) break;
     if (!nextFrontier.length) {
-      console.log('[lemap query-v2] entity refinement stopped: no retained item remains to refine or deepen');
+      console.log('[lemap query-v2] entity refinement stopped: no retained or revived item remains active');
       break;
     }
     frontier = nextFrontier;
@@ -526,7 +559,9 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
       entityCount:branch.candidates.length,
       detailLevel:Number(detailLevels.get(branch.id) || 0)
     })),
-    totalDroppedBranches
+    revivableItems:[...dormant.values()].map((branch) => ({ id:branch.id, label:branch.label, entityCount:branch.candidates.length, detailLevel:Number(detailLevels.get(branch.id) || 0) })),
+    totalDroppedBranches,
+    totalRevivedItems
   };
 }
 
@@ -758,7 +793,7 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   const selectedEntities = browser.selectedEntities;
   const selections = browser.selections;
 
-  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; refinement rounds ${browser.rounds.length}; final frontier ${browser.finalFrontier.length}`);
+  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; refinement rounds ${browser.rounds.length}; final frontier ${browser.finalFrontier.length}; revived ${browser.totalRevivedItems}`);
   log('query_v2_entities', {
     selectedEntities:selections,
     uncoveredRequirements:browser.uncoveredRequirements,
@@ -767,6 +802,8 @@ export async function runTwoPassQuery({ question, client, model, graph, director
     excludedCandidates:excluded,
     browserRounds:browser.rounds.length,
     totalDroppedBranches:browser.totalDroppedBranches,
+    totalRevivedItems:browser.totalRevivedItems,
+    revivableItems:browser.revivableItems,
     finalFrontier:browser.finalFrontier
   });
 
@@ -795,7 +832,7 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   return {
     ...finalCall.parsed,
     investigation:{
-      mode:'two-pass-structured-clusters-progressive-model-refinement-deep-entity-evidence-local-paths',
+      mode:'two-pass-structured-clusters-progressive-model-refinement-deep-evidence-compact-revival-local-paths',
       logicalRequest:intent,
       relevantGroups,
       candidateEntityCount:candidates.length,
@@ -804,6 +841,8 @@ export async function runTwoPassQuery({ question, client, model, graph, director
       entityBrowser:{
         rounds:browser.rounds.length,
         totalDroppedBranches:browser.totalDroppedBranches,
+        totalRevivedItems:browser.totalRevivedItems,
+        revivableItems:browser.revivableItems,
         finalFrontier:browser.finalFrontier,
         uncoveredRequirements:browser.uncoveredRequirements
       },
