@@ -5,7 +5,7 @@ import { exploreLinkedEntities } from './linkedExplorer.js';
 
 const MAX_DFS_STEPS = 64;
 
-const OPTION_SYSTEM = `You are navigating a hierarchical enterprise semantic graph with confidence-ordered DFS. The query has stable dimensions. For EVERY visible option, map any query dimensions it may help satisfy and assign confidence 0..1. Use decision="candidate" if it may matter at all, even weakly; use decision="reject" ONLY when the visible name+description is sufficient to conclude it does not help the query. Never reject merely because another option scores higher. Lower-confidence candidates are alternate DFS paths. Return {"assessments":[{"id":"exact visible id","decision":"candidate|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}]}]}.`;
+const OPTION_SYSTEM = `You are navigating a hierarchical enterprise semantic graph with confidence-ordered DFS. The query has stable dimensions. Return SPARSE compact JSON only: {"c":[{"id":"exact visible id","d":{"exact supplied dimension":0.0}}],"r":["exact visible id"]}. Put in c EVERY visible option that may matter at all, even weakly, with only dimensions having confidence > 0. Omit irrelevant dimensions. Put in r ONLY options whose supplied name+description is sufficient to explicitly rule out for this query. Never reject merely because another option scores higher. Any visible option omitted from both c and r remains unassessed and eligible; LeMap will not reject it. Do not include reasons, names, decision strings, or zero-confidence dimensions.`;
 
 const LEAF_SYSTEM = `You are at one entity leaf in a confidence-ordered DFS. Decide whether the entity contributes to the query using ONLY its short description and top five TF-IDF field-description hints. The hints are semantic evidence only; all fields of an accepted entity remain available to the final data view. Return {"decision":"accept|alternative|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}],"reason":"short"}. accept means the entity contributes now; alternative means plausible but weaker and should remain revisit-able; reject means the evidence is enough to rule it out. Do not select fields and do not reason about joins here.`;
 
@@ -26,9 +26,39 @@ function normalizeDimensions(items, allowed) {
   })).filter((item) => item.dimension);
 }
 
+function dimensionsFromSparse(value, allowed) {
+  const allowedByKey = new Map(arr(allowed).map((name) => [key(name), name]));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.entries(value).map(([name, confidence]) => ({
+    dimension:allowedByKey.get(key(name)) || '',
+    confidence:Math.max(0, Math.min(1, Number(confidence || 0)))
+  })).filter((item) => item.dimension && item.confidence > 0);
+}
+
 function normalizeAssessments(parsed, options, dimensions) {
   const visible = new Map(arr(options).map((option) => [String(option.id), option]));
   const byId = new Map();
+
+  // New compact sparse protocol.
+  for (const item of arr(parsed?.c)) {
+    const id = String(item?.id || '');
+    if (!visible.has(id) || byId.has(id)) continue;
+    const normalized = {
+      id,
+      name:visible.get(id).name,
+      decision:'candidate',
+      dimensions:dimensionsFromSparse(item?.d, dimensions)
+    };
+    normalized.confidence = confidenceOf(normalized);
+    byId.set(id, normalized);
+  }
+  for (const rawId of arr(parsed?.r)) {
+    const id = String(rawId || '');
+    if (!visible.has(id) || byId.has(id)) continue;
+    byId.set(id, { id, name:visible.get(id).name, decision:'reject', dimensions:[], confidence:0 });
+  }
+
+  // Backward compatibility for any model response using the old shape.
   for (const item of arr(parsed?.assessments)) {
     const id = String(item?.id || '');
     if (!visible.has(id) || byId.has(id)) continue;
@@ -41,6 +71,7 @@ function normalizeAssessments(parsed, options, dimensions) {
     normalized.confidence = confidenceOf(normalized);
     byId.set(id, normalized);
   }
+
   return arr(options).map((option) => byId.get(String(option.id)) || {
     id:option.id,
     name:option.name,
@@ -116,7 +147,7 @@ async function assessOptions({ question, dimensions, parentPath, options, state,
     globalContext:state
   };
   log('query_v2_dfs_payload', { step, phase:'score_options', payload });
-  const call = await modelJson(client, model, OPTION_SYSTEM, payload, { maxTokens:1600 });
+  const call = await modelJson(client, model, OPTION_SYSTEM, payload, { maxTokens:900 });
   addUsage(usage, call.usage);
   traceCall(step, 'SCORE', call.usage, usage);
   const assessments = normalizeAssessments(call.parsed, options, dimensions);
