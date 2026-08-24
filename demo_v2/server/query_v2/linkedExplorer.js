@@ -1,219 +1,58 @@
-import { addUsage, arr, key, modelJson, text } from './modelJson.js';
-import { compactOptions, compactPath, filterHierarchyForEntities } from './semanticHierarchy.js';
+import { addUsage, arr, key, modelJson } from './modelJson.js';
+import { filterHierarchyForEntities } from './semanticHierarchy.js';
+import { decisionPayload, decodeSparseDecision, dimensionCodec, acceptedSummary, uncoveredDimensionIndexes } from './decisionProtocol.js';
 
-const SCORE_SYSTEM = `Navigate ONLY the supplied hierarchy of directly linked, still-eligible entities. For every visible option, map query dimensions it may help and confidence 0..1. candidate means it may matter; reject means the name+description is enough to rule out this branch for this linked exploration. Never reject only because another option scores higher. Return {"assessments":[{"id":"exact id","decision":"candidate|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}]}]}.`;
-const EDGE_SYSTEM = `You are considering one direct evidenced schema link from an accepted entity to a new linked entity. Use the target name and exact join evidence only. Return {"decision":"follow|alternative|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}],"reason":"short"}. follow means push the target into DFS now; alternative means keep it available but try another linked path first; reject means this linked entity itself is not useful for the query. Never invent joins.`;
+const SCORE_SYSTEM = `Score ONLY the supplied hierarchy branches of directly linked still-eligible entities. d maps dimension indexes; u lists uncovered indexes; a lists accepted entities; o is [optionIndex,name,shortDescription]. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Put in c EVERY branch that may matter at all, even weakly. Put in r ONLY branches that can be explicitly ruled out. Omitted branches remain eligible. No reasons, names, zero scores, or extra keys.`;
+const EDGE_SYSTEM = `Judge one evidenced direct schema link. d maps dimension indexes; u lists uncovered indexes; s is source entity; t is target entity; j contains exact evidenced joins. Return JSON only: {"x":"f|l|r","d":[[dimensionIndex,confidence]]}. f=follow now, l=keep as alternative, r=explicit reject. Never invent joins.`;
 
-function confidence(dimensions) {
-  return Math.max(0, ...arr(dimensions).map((item) => Number(item?.confidence || 0)));
-}
-function fmtDims(dimensions) {
-  return arr(dimensions).map((item) => `${item.dimension}=${Number(item.confidence || 0).toFixed(2)}`).join(', ') || '-';
-}
-function fmtPath(path) {
-  return arr(path).map((part) => part.name || part).filter(Boolean).join(' → ') || 'LINK ROOT';
-}
+const confidence=(dims)=>Math.max(0,...arr(dims).map((d)=>Number(d?.confidence||0)));
+const fmtDims=(dims)=>arr(dims).map((d)=>`${d.dimension}=${Number(d.confidence||0).toFixed(2)}`).join(', ')||'-';
+function normalizePairs(pairs,codec){return arr(pairs).map((p)=>{if(!Array.isArray(p))return null;const name=codec.byIndex.get(String(p[0]));const c=Math.max(0,Math.min(1,Number(p[1]||0)));return name&&c>0?{dimension:name,confidence:c}:null;}).filter(Boolean);}
+function ranked(items){return arr(items).filter((i)=>i.decision==='candidate').sort((a,b)=>b.confidence-a.confidence||a.name.localeCompare(b.name));}
+function pathForNode(nodeId,hierarchy){const path=[];let id=nodeId;while(id){const node=hierarchy.byId.get(id);if(!node)break;path.push({id:node.id,type:node.type,name:node.name});id=hierarchy.parentById.get(id);}return path.reverse();}
+function joinSummary(joins){return arr(joins).map((j)=>({from:j.from,to:j.to,relationship:j.relationship,cardinality:j.cardinality,keyMaps:j.keyMaps}));}
 
-function normalizeDimensions(items, allowed) {
-  const allowedByKey = new Map(arr(allowed).map((name) => [key(name), name]));
-  return arr(items).map((item) => ({
-    dimension:allowedByKey.get(key(item?.dimension)) || '',
-    confidence:Math.max(0, Math.min(1, Number(item?.confidence || 0)))
-  })).filter((item) => item.dimension);
-}
-
-function normalizeAssessments(parsed, options, dimensions) {
-  const visible = new Map(arr(options).map((option) => [String(option.id), option]));
-  const returned = new Map();
-  for (const item of arr(parsed?.assessments)) {
-    const id = String(item?.id || '');
-    if (!visible.has(id) || returned.has(id)) continue;
-    const dims = normalizeDimensions(item?.dimensions, dimensions);
-    returned.set(id, {
-      id,
-      name:visible.get(id).name,
-      decision:item?.decision === 'reject' ? 'reject' : 'candidate',
-      dimensions:dims,
-      confidence:confidence(dims)
-    });
-  }
-  return arr(options).map((option) => returned.get(String(option.id)) || {
-    id:option.id,
-    name:option.name,
-    decision:'candidate',
-    dimensions:[],
-    confidence:0
-  });
+async function score({intent,dimensions,accepted,options,client,model,log,usage,step}){
+  const coded=decisionPayload({intent,dimensions,accepted,options,descriptionMax:70});
+  log('query_v2_link_payload',{step,phase:'score',payload:coded.payload});
+  const call=await modelJson(client,model,SCORE_SYSTEM,coded.payload,{maxTokens:550}); addUsage(usage,call.usage);
+  console.log(`[lemap query-v2][LINK ${step}] SCORE tokens: prompt ${call.usage.prompt} | output ${call.usage.completion} | call ${call.usage.total} | cumulative ${usage.total}`);
+  const assessments=decodeSparseDecision(call.parsed,options,dimensions,coded.optionMap,coded.dimensionMap,{omittedDecision:'unassessed'});
+  const candidates=ranked(assessments); if(candidates[0])console.log(`  CURRENT: ${candidates[0].name} | ${fmtDims(candidates[0].dimensions)} | score ${candidates[0].confidence.toFixed(2)}`); for(const i of candidates.slice(1))console.log(`  ALT: ${i.name} | ${fmtDims(i.dimensions)} | score ${i.confidence.toFixed(2)}`); for(const i of assessments.filter((x)=>x.decision==='reject'))console.log(`  REJECT: ${i.name}`);
+  log('query_v2_link_model',{step,phase:'score',assessments,usage:call.usage,cumulativeUsage:{...usage}}); return assessments;
 }
 
-function ranked(items) {
-  return arr(items).filter((item) => item.decision === 'candidate')
-    .sort((a, b) => b.confidence - a.confidence || a.name.localeCompare(b.name));
+async function inspectEdge({intent,dimensions,accepted,sourceEntity,targetEntity,joins,client,model,log,usage,step}){
+  const codec=dimensionCodec(dimensions);
+  const payload={i:intent,d:codec.names.map((name,i)=>[i,name]),u:uncoveredDimensionIndexes(accepted,dimensions,codec),a:acceptedSummary(accepted,codec),s:sourceEntity,t:targetEntity,j:joinSummary(joins)};
+  log('query_v2_link_payload',{step,phase:'edge',payload});
+  const call=await modelJson(client,model,EDGE_SYSTEM,payload,{maxTokens:180}); addUsage(usage,call.usage);
+  console.log(`[lemap query-v2][LINK ${step}] EDGE tokens: prompt ${call.usage.prompt} | output ${call.usage.completion} | call ${call.usage.total} | cumulative ${usage.total}`);
+  const dims=normalizePairs(call.parsed?.d,codec), map={f:'follow',l:'alternative',r:'reject'}; const result={decision:map[String(call.parsed?.x||'')]||'alternative',dimensions:dims,confidence:confidence(dims)};
+  log('query_v2_link_model',{step,phase:'edge',sourceEntity,targetEntity,result,usage:call.usage,cumulativeUsage:{...usage}}); return result;
 }
 
-function pathForNode(nodeId, hierarchy) {
-  const path = [];
-  let id = nodeId;
-  while (id) {
-    const node = hierarchy.byId.get(id);
-    if (!node) break;
-    path.push({ id:node.id, type:node.type, name:node.name });
-    id = hierarchy.parentById.get(id);
-  }
-  return path.reverse();
-}
-
-function compactTrail(stack) {
-  return stack.map((frame) => ({
-    current:frame.current ? { id:frame.current.id, name:frame.current.name, score:frame.current.confidence } : null,
-    alternatives:arr(frame.alternatives).map((item) => ({ id:item.id, name:item.name, score:item.confidence }))
-  }));
-}
-
-function joinSummary(joins) {
-  return arr(joins).map((join) => ({
-    from:join.from,
-    to:join.to,
-    relationship:join.relationship,
-    cardinality:join.cardinality,
-    keyMaps:join.keyMaps
-  }));
-}
-
-function callTrace(step, phase, callUsage, usage) {
-  console.log(`[lemap query-v2][LINK ${step}] ${phase} tokens: prompt ${callUsage.prompt} | output ${callUsage.completion} | call ${callUsage.total} | cumulative ${usage.total}`);
-}
-function choiceTrace(step, path, assessments) {
-  const candidates = ranked(assessments);
-  console.log(`[lemap query-v2][LINK ${step}] PATH ${fmtPath(path)}`);
-  if (candidates[0]) console.log(`  CURRENT: ${candidates[0].name} | ${fmtDims(candidates[0].dimensions)} | score ${candidates[0].confidence.toFixed(2)}`);
-  for (const item of candidates.slice(1)) console.log(`  ALT: ${item.name} | ${fmtDims(item.dimensions)} | score ${item.confidence.toFixed(2)}`);
-  for (const item of assessments.filter((entry) => entry.decision === 'reject')) console.log(`  REJECT: ${item.name}`);
-}
-
-async function score({ question, dimensions, sourceEntity, path, options, trail, globalContext, client, model, log, usage, step }) {
-  const payload = {
-    task:'linked_entity_hierarchy_score',
-    question,
-    dimensions,
-    sourceEntity,
-    currentPath:compactPath(path),
-    visibleOptions:compactOptions(options),
-    linkTrail:compactTrail(trail),
-    globalContext
-  };
-  log('query_v2_link_payload', { step, phase:'score', payload });
-  const call = await modelJson(client, model, SCORE_SYSTEM, payload, { maxTokens:1200 });
-  addUsage(usage, call.usage);
-  callTrace(step, 'SCORE', call.usage, usage);
-  const assessments = normalizeAssessments(call.parsed, options, dimensions);
-  choiceTrace(step, path, assessments);
-  log('query_v2_link_model', { step, phase:'score', assessments, usage:call.usage, cumulativeUsage:{ ...usage } });
-  return assessments;
-}
-
-async function inspectEdge({ question, dimensions, sourceEntity, targetEntity, joins, globalContext, client, model, log, usage, step }) {
-  const payload = {
-    task:'linked_entity_edge_decision',
-    question,
-    dimensions,
-    sourceEntity,
-    targetEntity,
-    joins:joinSummary(joins),
-    globalContext
-  };
-  log('query_v2_link_payload', { step, phase:'edge', payload });
-  const call = await modelJson(client, model, EDGE_SYSTEM, payload, { maxTokens:500 });
-  addUsage(usage, call.usage);
-  callTrace(step, 'EDGE', call.usage, usage);
-  const dims = normalizeDimensions(call.parsed?.dimensions, dimensions);
-  const result = {
-    decision:['follow','alternative','reject'].includes(call.parsed?.decision) ? call.parsed.decision : 'alternative',
-    dimensions:dims,
-    confidence:confidence(dims),
-    reason:text(call.parsed?.reason, 100)
-  };
-  log('query_v2_link_model', { step, phase:'edge', sourceEntity, targetEntity, result, usage:call.usage, cumulativeUsage:{ ...usage } });
-  return result;
-}
-
-export async function exploreLinkedEntities({
-  question,
-  dimensions,
-  sourceEntity,
-  eligibleLinks,
-  hierarchy,
-  excludedNodeIds = new Set(),
-  globalContext,
-  client,
-  model,
-  log,
-  usage,
-  startStep = 0
-}) {
-  const byEntity = new Map(arr(eligibleLinks).map((item) => [key(item.entity), item]));
-  const linkedHierarchy = filterHierarchyForEntities(hierarchy, arr(eligibleLinks).map((item) => item.entity), excludedNodeIds);
-  const rejectedEntityKeys = new Set();
-  const deferred = [];
-  const stack = [];
-  let step = startStep;
-
-  if (!linkedHierarchy.clusters.length) return { choice:null, rejectedEntityKeys, step };
-
-  let options = linkedHierarchy.clusters;
-  let path = [];
-  while (options.length) {
-    const assessments = await score({
-      question, dimensions, sourceEntity, path, options, trail:stack, globalContext,
-      client, model, log, usage, step:++step
-    });
-    const candidates = ranked(assessments);
-    if (!candidates.length) break;
-    const frame = { current:candidates[0], alternatives:candidates.slice(1) };
-    stack.push(frame);
-    let current = linkedHierarchy.byId.get(frame.current.id);
-
-    while (current) {
-      if (current.type !== 'entity') {
-        path = pathForNode(current.id, linkedHierarchy);
-        options = current.children;
-        break;
-      }
-
-      const link = byEntity.get(key(current.entityName));
-      if (!link) break;
-      const edge = await inspectEdge({
-        question, dimensions, sourceEntity, targetEntity:current.entityName, joins:link.joins,
-        globalContext, client, model, log, usage, step:++step
-      });
+export async function exploreLinkedEntities({intent,dimensions,accepted,sourceEntity,eligibleLinks,hierarchy,excludedNodeIds=new Set(),client,model,log,usage,startStep=0}){
+  const byEntity=new Map(arr(eligibleLinks).map((i)=>[key(i.entity),i]));
+  const linkedHierarchy=filterHierarchyForEntities(hierarchy,arr(eligibleLinks).map((i)=>i.entity),excludedNodeIds);
+  const rejectedEntityKeys=new Set(), deferred=[], stack=[]; let step=startStep;
+  if(!linkedHierarchy.clusters.length)return{choice:null,rejectedEntityKeys,step};
+  let options=linkedHierarchy.clusters;
+  while(options.length){
+    const assessments=await score({intent,dimensions,accepted,options,client,model,log,usage,step:++step});
+    const candidates=ranked(assessments); if(!candidates.length)break;
+    const frame={current:candidates[0],alternatives:candidates.slice(1)}; stack.push(frame); let current=linkedHierarchy.byId.get(frame.current.id);
+    while(current){
+      if(current.type!=='entity'){options=current.children;break;}
+      const link=byEntity.get(key(current.entityName)); if(!link)break;
+      const edge=await inspectEdge({intent,dimensions,accepted,sourceEntity,targetEntity:current.entityName,joins:link.joins,client,model,log,usage,step:++step});
       console.log(`[lemap query-v2][LINK ${step}] ${sourceEntity} → ${current.entityName} ${edge.decision.toUpperCase()} | ${fmtDims(edge.dimensions)} | score ${edge.confidence.toFixed(2)} | cumulative ${usage.total}`);
-      if (edge.decision === 'follow') {
-        return { choice:{ entity:current.entityName, joins:link.joins, dimensions:edge.dimensions, confidence:edge.confidence }, rejectedEntityKeys, step };
-      }
-      if (edge.decision === 'reject') rejectedEntityKeys.add(key(current.entityName));
-      else deferred.push({ entity:current.entityName, joins:link.joins, dimensions:edge.dimensions, confidence:edge.confidence });
-
-      let next = null;
-      while (stack.length && !next) {
-        const top = stack.at(-1);
-        if (top.alternatives.length) {
-          top.current = top.alternatives.shift();
-          next = linkedHierarchy.byId.get(top.current.id);
-        } else stack.pop();
-      }
-      if (!next) {
-        const bestDeferred = deferred.sort((a, b) => b.confidence - a.confidence)[0] || null;
-        return { choice:bestDeferred, rejectedEntityKeys, step };
-      }
-      current = next;
-      if (current.type !== 'entity') {
-        path = pathForNode(current.id, linkedHierarchy);
-        options = current.children;
-        break;
-      }
+      if(edge.decision==='follow')return{choice:{entity:current.entityName,joins:link.joins,dimensions:edge.dimensions,confidence:edge.confidence},rejectedEntityKeys,step};
+      if(edge.decision==='reject')rejectedEntityKeys.add(key(current.entityName)); else deferred.push({entity:current.entityName,joins:link.joins,dimensions:edge.dimensions,confidence:edge.confidence});
+      let next=null; while(stack.length&&!next){const top=stack.at(-1);if(top.alternatives.length){top.current=top.alternatives.shift();next=linkedHierarchy.byId.get(top.current.id);}else stack.pop();}
+      if(!next){const best=deferred.sort((a,b)=>b.confidence-a.confidence)[0]||null;return{choice:best,rejectedEntityKeys,step};}
+      current=next; if(current.type!=='entity'){options=current.children;break;}
     }
   }
-
-  const bestDeferred = deferred.sort((a, b) => b.confidence - a.confidence)[0] || null;
-  return { choice:bestDeferred, rejectedEntityKeys, step };
+  return{choice:deferred.sort((a,b)=>b.confidence-a.confidence)[0]||null,rejectedEntityKeys,step};
 }
