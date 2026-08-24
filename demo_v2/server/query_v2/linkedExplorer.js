@@ -3,13 +3,35 @@ import { filterHierarchyForEntities } from './semanticHierarchy.js';
 import { decisionPayload, decodeSparseDecision, dimensionCodec, acceptedSummary, uncoveredDimensionIndexes } from './decisionProtocol.js';
 import { partitionCandidates, WARM_ALTERNATIVE_MIN_CONFIDENCE } from './alternativePolicy.js';
 
-const SCORE_SYSTEM = `Score NAVIGATION RELEVANCE only for the supplied hierarchy branches of directly linked still-eligible entities. d maps dimension indexes; u lists dimensions still uncovered by accepted leaves; a lists accepted entities; o is [optionIndex,name,shortDescription]. A score means confidence that useful linked entities for that dimension may exist somewhere under this branch; it does NOT mean the dimension is covered. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Return AT MOST 8 candidate branches total. Prefer the strongest 1-2 branches for each uncovered dimension and deduplicate branches that help multiple dimensions. Do NOT score every branch and do NOT emit tiny background guesses just because a branch is present. Scores may be below 0.5 when a branch is genuinely plausible but uncertain. Put in r ONLY branches that can be explicitly ruled out from the supplied name/description. Omitted branches remain unassessed/eligible in LeMap internal state; omission is not rejection. No reasons, names, zero scores, or extra keys.`;
+const NAVIGATION_MIN_CONFIDENCE = 0.5;
+const NAVIGATION_MAX_DROP = 0.2;
+const SCORE_SYSTEM = `Score NAVIGATION RELEVANCE only for the supplied hierarchy branches of directly linked still-eligible entities. d maps dimension indexes; u lists dimensions still uncovered by accepted leaves; a lists accepted entities; o is [optionIndex,name,shortDescription]. A score means confidence that useful linked entities for that dimension may exist somewhere under this branch; it does NOT mean the dimension is covered. Scores are continuation strengths and must stay comparable across hierarchy levels: do not inflate a child merely to keep a path alive. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Return AT MOST 8 candidate branches total. Prefer the strongest 1-2 branches for each uncovered dimension and deduplicate branches that help multiple dimensions. Do NOT score every branch and do NOT emit tiny background guesses just because a branch is present. Scores may be below 0.5 when a branch is genuinely plausible but uncertain. Put in r ONLY branches that can be explicitly ruled out from the supplied name/description. Omitted branches remain unassessed/eligible in LeMap internal state; omission is not rejection. No reasons, names, zero scores, or extra keys.`;
 const EDGE_SYSTEM = `Judge one evidenced direct schema link as a NAVIGATION decision. d maps dimension indexes; u lists uncovered indexes; s is source entity; t is target entity; j contains exact evidenced joins; q is the count of warm linked alternatives LeMap can try next. Return JSON only: {"x":"f|n|r","d":[[dimensionIndex,confidence]]}. d expresses how promising the target is for finding the uncovered dimensions; it does NOT mark those dimensions covered. f=follow now, n=do not follow this link now and let LeMap try its next internal alternative if q>0, r=explicit reject. Never invent joins and do not ask for alternative names.`;
 
 const confidence=(dims)=>Math.max(0,...arr(dims).map((d)=>Number(d?.confidence||0)));
 const fmtDims=(dims)=>arr(dims).map((d)=>`${d.dimension}=${Number(d.confidence||0).toFixed(2)}`).join(', ')||'-';
 function normalizePairs(pairs,codec){return arr(pairs).map((p)=>{if(!Array.isArray(p))return null;const name=codec.byIndex.get(String(p[0]));const c=Math.max(0,Math.min(1,Number(p[1]||0)));return name&&c>0?{dimension:name,confidence:c}:null;}).filter(Boolean);}
 function joinSummary(joins){return arr(joins).map((j)=>({from:j.from,to:j.to,relationship:j.relationship,cardinality:j.cardinality,keyMaps:j.keyMaps}));}
+function descentAllowed(parentScore,child){
+  if(!child)return false;
+  const childScore=Number(child.confidence||0);
+  if(childScore<NAVIGATION_MIN_CONFIDENCE)return false;
+  if(parentScore===null||parentScore===undefined||parentScore<=0)return true;
+  return parentScore-childScore<=NAVIGATION_MAX_DROP;
+}
+function resumeAlternative(stack,hierarchy){
+  while(stack.length){
+    const top=stack.at(-1);
+    if(top.alternatives.length){
+      top.current=top.alternatives.shift();
+      const node=hierarchy.byId.get(top.current.id)||null;
+      console.log(`[lemap query-v2][LINK RESUME] next internal alternative | remaining ${top.alternatives.length} | score ${Number(top.current.confidence||0).toFixed(2)}`);
+      return {node,score:Number(top.current.confidence||0)};
+    }
+    stack.pop();
+  }
+  return {node:null,score:null};
+}
 
 async function score({intent,dimensions,accepted,options,client,model,log,usage,step}){
   const coded=decisionPayload({intent,dimensions,accepted,options,descriptionMax:70});
@@ -38,25 +60,59 @@ export async function exploreLinkedEntities({intent,dimensions,accepted,sourceEn
   const linkedHierarchy=filterHierarchyForEntities(hierarchy,arr(eligibleLinks).map((i)=>i.entity),excludedNodeIds);
   const rejectedEntityKeys=new Set(), deferred=[], stack=[]; let step=startStep;
   if(!linkedHierarchy.clusters.length)return{choice:null,rejectedEntityKeys,step};
+
   let options=linkedHierarchy.clusters;
-  while(options.length){
-    const assessments=await score({intent,dimensions,accepted,options,client,model,log,usage,step:++step});
-    const {warm,cold}=partitionCandidates(assessments); if(!warm.length)break;
-    const frame={current:warm[0],alternatives:warm.slice(1),cold,unassessed:assessments.filter((x)=>x.decision==='unassessed')}; stack.push(frame); let current=linkedHierarchy.byId.get(frame.current.id);
-    while(current){
-      if(current.type!=='entity'){options=current.children;break;}
-      const link=byEntity.get(key(current.entityName)); if(!link)break;
-      const warmRemaining=stack.reduce((sum,f)=>sum+arr(f.alternatives).length,0)+deferred.filter((i)=>Number(i.confidence||0)>=WARM_ALTERNATIVE_MIN_CONFIDENCE).length;
-      const edge=await inspectEdge({intent,dimensions,accepted,sourceEntity,targetEntity:current.entityName,joins:link.joins,alternativeCount:warmRemaining,client,model,log,usage,step:++step});
-      console.log(`[lemap query-v2][LINK ${step}] ${sourceEntity} → ${current.entityName} ${edge.decision.toUpperCase()} | ${fmtDims(edge.dimensions)} | score ${edge.confidence.toFixed(2)} | cumulative ${usage.total}`);
-      if(edge.decision==='follow')return{choice:{entity:current.entityName,joins:link.joins,dimensions:edge.dimensions,confidence:edge.confidence},rejectedEntityKeys,step};
-      if(edge.decision==='reject')rejectedEntityKeys.add(key(current.entityName));
-      else if(edge.confidence>=WARM_ALTERNATIVE_MIN_CONFIDENCE)deferred.push({entity:current.entityName,joins:link.joins,dimensions:edge.dimensions,confidence:edge.confidence});
-      let next=null;
-      while(stack.length&&!next){const top=stack.at(-1);if(top.alternatives.length){top.current=top.alternatives.shift();next=linkedHierarchy.byId.get(top.current.id);console.log(`[lemap query-v2][LINK RESUME] next internal alternative | remaining ${top.alternatives.length}`);}else stack.pop();}
-      if(!next){const best=deferred.sort((a,b)=>b.confidence-a.confidence)[0]||null;return{choice:best,rejectedEntityKeys,step};}
-      current=next; if(current.type!=='entity'){options=current.children;break;}
+  let parentNavScore=null;
+  let current=null;
+
+  while(options.length||current){
+    if(!current){
+      const assessments=await score({intent,dimensions,accepted,options,client,model,log,usage,step:++step});
+      const {warm,cold}=partitionCandidates(assessments);
+      const best=warm[0]||null;
+      if(!descentAllowed(parentNavScore,best)){
+        console.log(`[lemap query-v2][LINK ${step}] BACKTRACK relevance decay | parent ${Number(parentNavScore||0).toFixed(2)} → child ${Number(best?.confidence||0).toFixed(2)} | min ${NAVIGATION_MIN_CONFIDENCE.toFixed(2)} | max drop ${NAVIGATION_MAX_DROP.toFixed(2)}`);
+        const resumed=resumeAlternative(stack,linkedHierarchy);
+        current=resumed.node;
+        parentNavScore=resumed.score;
+        options=[];
+        if(!current)break;
+      }else{
+        const frame={current:best,alternatives:warm.slice(1),cold,unassessed:assessments.filter((x)=>x.decision==='unassessed')};
+        stack.push(frame);
+        current=linkedHierarchy.byId.get(best.id)||null;
+        parentNavScore=Number(best.confidence||0);
+        options=[];
+      }
     }
+
+    if(!current)continue;
+    if(current.type!=='entity'){
+      options=current.children;
+      current=null;
+      continue;
+    }
+
+    const link=byEntity.get(key(current.entityName));
+    if(!link){
+      const resumed=resumeAlternative(stack,linkedHierarchy);
+      current=resumed.node;
+      parentNavScore=resumed.score;
+      continue;
+    }
+
+    const warmRemaining=stack.reduce((sum,f)=>sum+arr(f.alternatives).length,0)+deferred.filter((i)=>Number(i.confidence||0)>=WARM_ALTERNATIVE_MIN_CONFIDENCE).length;
+    const edge=await inspectEdge({intent,dimensions,accepted,sourceEntity,targetEntity:current.entityName,joins:link.joins,alternativeCount:warmRemaining,client,model,log,usage,step:++step});
+    console.log(`[lemap query-v2][LINK ${step}] ${sourceEntity} → ${current.entityName} ${edge.decision.toUpperCase()} | ${fmtDims(edge.dimensions)} | score ${edge.confidence.toFixed(2)} | cumulative ${usage.total}`);
+    if(edge.decision==='follow')return{choice:{entity:current.entityName,joins:link.joins,dimensions:edge.dimensions,confidence:edge.confidence},rejectedEntityKeys,step};
+    if(edge.decision==='reject')rejectedEntityKeys.add(key(current.entityName));
+    else if(edge.confidence>=WARM_ALTERNATIVE_MIN_CONFIDENCE)deferred.push({entity:current.entityName,joins:link.joins,dimensions:edge.dimensions,confidence:edge.confidence});
+
+    const resumed=resumeAlternative(stack,linkedHierarchy);
+    current=resumed.node;
+    parentNavScore=resumed.score;
+    if(!current)break;
   }
+
   return{choice:deferred.sort((a,b)=>b.confidence-a.confidence)[0]||null,rejectedEntityKeys,step};
 }

@@ -6,7 +6,9 @@ import { partitionCandidates, remainingWarmAlternativeCount, WARM_ALTERNATIVE_MI
 
 const MAX_DFS_STEPS = 64;
 const COVERAGE_MIN_CONFIDENCE = 0.5;
-const OPTION_SYSTEM = `Score NAVIGATION RELEVANCE only for the supplied semantic branches. d maps dimension index to meaning; u lists dimensions still uncovered by accepted leaves; a lists accepted entities; o is [optionIndex,name,shortDescription]. A score means confidence that useful entities for that dimension may exist somewhere under this branch; it does NOT mean the dimension is covered. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Return AT MOST 8 candidate branches total. Prefer the strongest 1-2 branches for each uncovered dimension and deduplicate branches that help multiple dimensions. Do NOT score every option and do NOT emit tiny background guesses just because an option is present. Scores may be below 0.5 when a branch is genuinely plausible but uncertain. Put in r ONLY branches whose supplied name/description is sufficient to rule them out. Omitted options remain unassessed and eligible in LeMap internal state; omission is not rejection. No reasons, names, zero scores, or extra keys.`;
+const NAVIGATION_MIN_CONFIDENCE = 0.5;
+const NAVIGATION_MAX_DROP = 0.2;
+const OPTION_SYSTEM = `Score NAVIGATION RELEVANCE only for the supplied semantic branches. d maps dimension index to meaning; u lists dimensions still uncovered by accepted leaves; a lists accepted entities; o is [optionIndex,name,shortDescription]. A score means confidence that useful entities for that dimension may exist somewhere under this branch; it does NOT mean the dimension is covered. Scores are continuation strengths and must stay comparable across hierarchy levels: do not inflate a child merely to keep a path alive. Return JSON only: {"c":[[optionIndex,[[dimensionIndex,confidence]]]],"r":[optionIndex]}. Return AT MOST 8 candidate branches total. Prefer the strongest 1-2 branches for each uncovered dimension and deduplicate branches that help multiple dimensions. Do NOT score every option and do NOT emit tiny background guesses just because an option is present. Scores may be below 0.5 when a branch is genuinely plausible but uncertain. Put in r ONLY branches whose supplied name/description is sufficient to rule them out. Omitted options remain unassessed and eligible in LeMap internal state; omission is not rejection. No reasons, names, zero scores, or extra keys.`;
 const LEAF_SYSTEM = `Judge ACTUAL QUERY COVERAGE for one entity leaf. d maps dimension indexes; u lists ONLY dimensions still uncovered; a lists accepted entities; e contains entity name, short description and up to five semantic field hints; q is the count of warm alternatives LeMap can try next. Return JSON only: {"x":"a|n|r","d":[[dimensionIndex,confidence]]}. Claim ONLY indexes present in u, and ONLY when the supplied entity description or field hints directly support that dimension. Do not infer coverage merely because the entity might connect elsewhere. Use confidence >=0.5 for a dimension you claim as actual coverage. a=accept this entity because it directly contributes at least one uncovered dimension; n=do not use it now and let LeMap try the next internal alternative if q>0; r=explicitly reject this entity. Field hints are evidence only; all entity fields remain available. Do not select fields or joins. Do not ask for or name alternatives.`;
 
 const fmtTokens = (u) => `prompt ${Number(u?.prompt||0)} | output ${Number(u?.completion||0)} | call ${Number(u?.total||0)}`;
@@ -61,6 +63,20 @@ function acceptedConnected(accepted, traversedJoins) {
   return [...wanted].every((n)=>seen.has(n));
 }
 function joinSignature(join){ return `${key(join?.from)}|${key(join?.to)}|${key(join?.relationship)}|${arr(join?.keyMaps).map((m)=>`${key(m.fieldName)}:${key(m.relatedFieldName)}`).join(',')}`; }
+function currentNavigationScore(stack,currentId){
+  for(let i=stack.length-1;i>=0;i-=1){
+    const frame=stack[i];
+    if(frame?.kind==='hierarchy'&&String(frame.current?.id||'')===String(currentId||'')) return Number(frame.current?.confidence||0);
+  }
+  return null;
+}
+function descentAllowed(parentScore, child){
+  if(!child) return false;
+  const childScore=Number(child.confidence||0);
+  if(childScore<NAVIGATION_MIN_CONFIDENCE) return false;
+  if(parentScore===null||parentScore===undefined||parentScore<=0) return true;
+  return parentScore-childScore<=NAVIGATION_MAX_DROP;
+}
 
 async function assessOptions({ intent, dimensions, accepted, options, client, model, log, usage, step }) {
   const coded=decisionPayload({intent,dimensions,accepted,options,descriptionMax:80});
@@ -126,10 +142,18 @@ export async function exploreSemanticDfs({ question, logicalRequest, hierarchy, 
   while(current&&step<MAX_DFS_STEPS){
     const path=pathForNode(current.id,hierarchy);
     if(current.type!=='entity'){
+      const parentNavScore=currentNavigationScore(stack,current.id);
       assessments=await assessOptions({intent:logicalRequest.intent,dimensions,accepted,options:current.children,client,model,log,usage,step:++step});
-      frame=makeHierarchyFrame(assessments); recordRejected(frame,rejected); stack.push(frame); traceFrame(step,path,frame,usage);
-      events.push({step,action:'expand',path:path.map((p)=>p.name),current:frame.current,alternativeCount:frame.alternatives.length,coldCount:frame.cold.length,unassessedCount:frame.unassessed.length,rejectedCount:frame.rejected.length});
-      current=frame.current?hierarchy.byId.get(frame.current.id):promoteAlternative(stack,hierarchy,usage); continue;
+      frame=makeHierarchyFrame(assessments); recordRejected(frame,rejected); traceFrame(step,path,frame,usage);
+      const allowed=descentAllowed(parentNavScore,frame.current);
+      events.push({step,action:allowed?'expand':'prune_decay',path:path.map((p)=>p.name),parentScore:parentNavScore,current:frame.current,alternativeCount:frame.alternatives.length,coldCount:frame.cold.length,unassessedCount:frame.unassessed.length,rejectedCount:frame.rejected.length});
+      if(!allowed){
+        console.log(`[lemap query-v2][DFS ${step}] BACKTRACK relevance decay | parent ${Number(parentNavScore||0).toFixed(2)} → child ${Number(frame.current?.confidence||0).toFixed(2)} | min ${NAVIGATION_MIN_CONFIDENCE.toFixed(2)} | max drop ${NAVIGATION_MAX_DROP.toFixed(2)}`);
+        current=promoteAlternative(stack,hierarchy,usage);
+        continue;
+      }
+      stack.push(frame);
+      current=hierarchy.byId.get(frame.current.id)||promoteAlternative(stack,hierarchy,usage); continue;
     }
     exploredEntityKeys.add(key(current.entityName));
     const result=await inspectLeaf({intent:logicalRequest.intent,dimensions,accepted,alternativeCount:remainingWarmAlternativeCount(stack),node:current,index,semanticHints,client,model,log,usage,step:++step});
