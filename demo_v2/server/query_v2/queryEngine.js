@@ -5,6 +5,9 @@ const uniq = (values) => [...new Set(arr(values).filter(Boolean).map(String))];
 const MAX_SEMANTIC_FIELDS = 5;
 const MAX_ISOLATED_NEIGHBOURS = 12;
 const MAX_PATH_HOPS = 7;
+const ENTITY_BROWSER_LEAF_SIZE = 8;
+const ENTITY_BROWSER_EXAMPLES = 4;
+const ENTITY_BROWSER_MAX_ROUNDS = 12;
 const STOP_WORDS = new Set([
   'a','an','and','are','as','at','be','by','can','for','from','has','have','in','is','it','its','of','on','or','that','the','their','this','to','used','using','was','were','which','with',
   'field','fields','entity','record','records','value','values','identifier','identifies','identification','description','type','types','code','codes','date','time'
@@ -237,6 +240,178 @@ function directoryCandidateEntities(directory, relevantGroups, graphEntities, se
   };
 }
 
+function entityNameParts(name) {
+  return String(name || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+}
+function groupIdPart(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'other';
+}
+function branchSummary(branch) {
+  const names = branch.candidates.map((item) => item.name).sort((a, b) => a.localeCompare(b));
+  return {
+    id:branch.id,
+    label:branch.label,
+    entityCount:names.length,
+    examples:names.slice(0, ENTITY_BROWSER_EXAMPLES),
+    sourceGroups:uniq(branch.candidates.flatMap((item) => arr(item.groups))).sort()
+  };
+}
+function initialEntityBranches(candidates) {
+  const grouped = new Map();
+  for (const candidate of candidates) {
+    const parts = entityNameParts(candidate.name);
+    const token = parts[0] || 'Other';
+    const k = key(token) || 'other';
+    if (!grouped.has(k)) grouped.set(k, { token, candidates:[] });
+    grouped.get(k).candidates.push(candidate);
+  }
+  return [...grouped.values()].map(({ token, candidates:items }) => ({
+    id:`entity:${groupIdPart(token)}`,
+    label:`${token}*`,
+    prefixParts:[token],
+    candidates:items.sort((a, b) => a.name.localeCompare(b.name))
+  })).sort((a, b) => a.label.localeCompare(b.label));
+}
+function lexicalChunks(branch) {
+  const sorted = [...branch.candidates].sort((a, b) => a.name.localeCompare(b.name));
+  const chunks = [];
+  for (let i = 0; i < sorted.length; i += ENTITY_BROWSER_LEAF_SIZE) {
+    const items = sorted.slice(i, i + ENTITY_BROWSER_LEAF_SIZE);
+    const first = items[0]?.name || 'A';
+    const last = items.at(-1)?.name || first;
+    chunks.push({
+      id:`${branch.id}/range-${Math.floor(i / ENTITY_BROWSER_LEAF_SIZE) + 1}`,
+      label:`${first} … ${last}`,
+      prefixParts:branch.prefixParts,
+      candidates:items
+    });
+  }
+  return chunks;
+}
+function subdivideEntityBranch(branch) {
+  if (branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE) return [];
+  let depth = branch.prefixParts.length;
+  const tokenized = branch.candidates.map((candidate) => ({ candidate, parts:entityNameParts(candidate.name) }));
+  const maxDepth = Math.max(...tokenized.map((item) => item.parts.length), depth);
+
+  while (depth < maxDepth) {
+    const grouped = new Map();
+    for (const item of tokenized) {
+      const token = item.parts[depth] || '(exact)';
+      const k = key(token) || 'exact';
+      if (!grouped.has(k)) grouped.set(k, { token, candidates:[] });
+      grouped.get(k).candidates.push(item.candidate);
+    }
+    if (grouped.size > 1) {
+      return [...grouped.values()].map(({ token, candidates:items }) => {
+        const exact = token === '(exact)';
+        const prefixParts = exact ? branch.prefixParts : [...branch.prefixParts, token];
+        return {
+          id:`${branch.id}/${groupIdPart(token)}`,
+          label:exact ? `${branch.prefixParts.join('')} (exact)` : `${prefixParts.join('')}*`,
+          prefixParts,
+          candidates:items.sort((a, b) => a.name.localeCompare(b.name))
+        };
+      }).sort((a, b) => a.label.localeCompare(b.label));
+    }
+    depth += 1;
+  }
+  return lexicalChunks(branch);
+}
+async function browseCandidateEntities({ question, intent, candidates, client, model, log, usage }) {
+  const candidateNames = new Map(candidates.map((item) => [key(item.name), item]));
+  const frontier = new Map(initialEntityBranches(candidates).map((branch) => [branch.id, branch]));
+  const visible = new Map();
+  let selections = [];
+  let uncoveredRequirements = arr(intent?.requirements).map((item) => item.concept).filter(Boolean);
+  const rounds = [];
+
+  for (let round = 1; round <= ENTITY_BROWSER_MAX_ROUNDS; round++) {
+    const availableGroups = [...frontier.values()].map(branchSummary).sort((a, b) => a.label.localeCompare(b.label));
+    const visibleEntities = [...visible.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const payload = {
+      question,
+      logicalRequest:intent,
+      round,
+      availableGroups,
+      visibleEntities,
+      currentSelections:selections,
+      uncoveredRequirements
+    };
+    log('query_v2_entity_browser_payload', { round, ...payload });
+    console.log(`[lemap query-v2] entity browser round ${round}: ${availableGroups.length} unopened subgroups, ${visibleEntities.length} visible entities`);
+
+    const call = await modelJson(client, model,
+      'Navigate the candidate entity directory and choose entities that can answer the logical request. LeMap has NOT semantically filtered the selectable candidates: every candidate remains reachable through availableGroups until you choose to inspect it. availableGroups are deterministic name/subword groupings only; examples are names, not semantic recommendations. To inspect a group, return its exact id in inspectGroupIds. If an inspected group is small, its full entities will become visible; otherwise it will be replaced by smaller name-based subgroups. visibleEntities are the only entities whose descriptions and semantic field evidence you have inspected, and selectedEntities MUST use exact names from visibleEntities. You may revise or remove previous selections. Set done=true only when the selected entities appear sufficient for every logical requirement and no unopened subgroup is plausibly necessary to resolve an uncovered or uncertain requirement. If uncertain, inspect more groups instead of guessing. Field-name resemblance alone is insufficient; use business meaning and treat contradictory evidence as disqualifying. Return {"inspectGroupIds":["exact available group ids"],"selectedEntities":[{"entity":"exact visible entity name","covers":["requirement concepts"],"reason":"short semantic reason"}],"uncoveredRequirements":["still uncovered or uncertain concepts"],"done":true|false,"reason":"short navigation decision"}.',
+      payload);
+    addUsage(usage, call.usage);
+
+    const inspectIds = uniq(arr(call.parsed?.inspectGroupIds).map(String)).filter((id) => frontier.has(id));
+    const nextSelections = [];
+    for (const item of arr(call.parsed?.selectedEntities)) {
+      const candidate = candidateNames.get(key(item?.entity));
+      if (!candidate || !visible.has(key(candidate.name))) continue;
+      nextSelections.push({
+        entity:candidate.name,
+        covers:arr(item?.covers).map(String),
+        reason:text(item?.reason, 220)
+      });
+    }
+    selections = nextSelections;
+    uncoveredRequirements = arr(call.parsed?.uncoveredRequirements).map(String);
+
+    const expanded = [];
+    for (const id of inspectIds) {
+      const branch = frontier.get(id);
+      if (!branch) continue;
+      frontier.delete(id);
+      if (branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE) {
+        for (const candidate of branch.candidates) visible.set(key(candidate.name), candidate);
+        expanded.push({ id, action:'revealed_entities', entityCount:branch.candidates.length });
+        continue;
+      }
+      const children = subdivideEntityBranch(branch);
+      for (const child of children) frontier.set(child.id, child);
+      expanded.push({ id, action:'subdivided', childCount:children.length, entityCount:branch.candidates.length });
+    }
+
+    const record = {
+      round,
+      inspectGroupIds:inspectIds,
+      expanded,
+      selectedEntities:selections,
+      uncoveredRequirements,
+      done:!!call.parsed?.done,
+      reason:text(call.parsed?.reason, 260),
+      usage:call.usage,
+      remainingGroupCount:frontier.size,
+      visibleEntityCount:visible.size
+    };
+    rounds.push(record);
+    log('query_v2_entity_browser_round', record);
+
+    const done = !!call.parsed?.done;
+    if (done) break;
+    if (!inspectIds.length) {
+      console.log('[lemap query-v2] entity browser stopped without further subgroup inspection');
+      break;
+    }
+  }
+
+  return {
+    selections,
+    selectedEntities:uniq(selections.map((item) => item.entity)).slice(0, 8),
+    uncoveredRequirements,
+    rounds,
+    visibleEntityCount:visible.size,
+    remainingGroupCount:frontier.size
+  };
+}
+
 function adjacency(index) {
   const map = new Map();
   const add = (from, to, edge, reversed) => {
@@ -435,16 +610,30 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   const candidates = candidateSet.candidates, excluded = candidateSet.excluded;
   const abstractCount = excluded.filter((item) => item.role === 'abstract_parent').length;
   console.log(`[lemap query-v2] cluster candidate filter: ${excluded.length} abstract parents omitted from model (${abstractCount} abstract parents)`);
-  console.log(`[lemap query-v2] pass 2 entity selection: ${candidates.length} selectable concrete/association entities from selected clusters`);
-  const pass2 = await modelJson(client, model,
-    'Select the smallest sufficient set of selectable physical entities that directly satisfy ALL canonical requirements. Candidates may be concrete value-bearing entities or association entities whose business meaning is carried by the association itself. Abstract/base parents are intentionally absent; LeMap can traverse them later. Choose an entity only when its OWN description or compact semantic field evidence supports the requirement in the business context of the question. Field-name resemblance alone is not enough, and contradictory semantic evidence must disqualify a candidate for that requirement. Do not choose joins and do not invent fields. Return {"selectedEntities":[{"entity":"exact candidate entity name","covers":["requirement concepts"],"reason":"short evidence-based semantic reason"}],"uncoveredRequirements":["concepts not directly represented by any candidate"]}.',
-    { question, logicalRequest:intent, candidates });
-  addUsage(usage, pass2.usage);
-  const candidateNames = new Map(candidates.map((item) => [key(item.name), item.name]));
-  const selectedEntities = uniq(arr(pass2.parsed?.selectedEntities).map((item) => candidateNames.get(key(item?.entity))).filter(Boolean)).slice(0, 8);
-  const selections = arr(pass2.parsed?.selectedEntities).map((item) => ({ entity:candidateNames.get(key(item?.entity)) || '', covers:arr(item?.covers).map(String), reason:text(item?.reason, 220) })).filter((item) => item.entity);
-  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; tokens ${pass2.usage.total}`);
-  log('query_v2_entities', { selectedEntities:selections, uncoveredRequirements:arr(pass2.parsed?.uncoveredRequirements), candidateCount:candidates.length, excludedCandidateCount:excluded.length, excludedCandidates:excluded, usage:pass2.usage });
+  console.log(`[lemap query-v2] pass 2 entity browser: ${candidates.length} selectable concrete/association entities remain reachable`);
+
+  const browser = await browseCandidateEntities({
+    question,
+    intent,
+    candidates,
+    client,
+    model,
+    log,
+    usage
+  });
+  const selectedEntities = browser.selectedEntities;
+  const selections = browser.selections;
+  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; browser rounds ${browser.rounds.length}; visible ${browser.visibleEntityCount}/${candidates.length}`);
+  log('query_v2_entities', {
+    selectedEntities:selections,
+    uncoveredRequirements:browser.uncoveredRequirements,
+    candidateCount:candidates.length,
+    excludedCandidateCount:excluded.length,
+    excludedCandidates:excluded,
+    browserRounds:browser.rounds.length,
+    browserVisibleEntityCount:browser.visibleEntityCount,
+    browserRemainingGroupCount:browser.remainingGroupCount
+  });
 
   const connection = connectSelectedEntities(index, selectedEntities);
   const slice = groundedSlice(index, semanticHints, endpointRoles, connection);
@@ -463,12 +652,18 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   return {
     ...finalCall.parsed,
     investigation:{
-      mode:'two-pass-structured-cluster-evidence-selectable-associations-local-paths-collapsed-abstract-parents',
+      mode:'two-pass-structured-clusters-model-controlled-name-browser-local-paths',
       logicalRequest:intent,
       relevantGroups,
       candidateEntityCount:candidates.length,
       excludedCandidateCount:excluded.length,
       excludedCandidates:excluded,
+      entityBrowser:{
+        rounds:browser.rounds.length,
+        visibleEntityCount:browser.visibleEntityCount,
+        remainingGroupCount:browser.remainingGroupCount,
+        uncoveredRequirements:browser.uncoveredRequirements
+      },
       selectedEntities:selections,
       localGraph:{
         entityCount:slice.entities.length,
