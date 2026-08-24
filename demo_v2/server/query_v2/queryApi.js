@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { graphFromSemanticObjects } from '../explorer/mapPersistence.js';
 import { loadEntityDirectory } from '../entityDirectory.js';
-import { runTwoPassQuery } from './queryEngine.js';
+import { runSemanticDfsQuery } from './queryEngine.js';
 
 export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
   const queryRunPath = () => {
@@ -45,7 +45,7 @@ export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dat
         mode:'confidence-ordered-semantic-dfs'
       });
 
-      const response = await runTwoPassQuery({
+      const response = await runSemanticDfsQuery({
         question,
         client:queryClient,
         model:queryModel,
