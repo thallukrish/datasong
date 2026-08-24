@@ -1,7 +1,7 @@
 import { addUsage, arr, key, modelJson, text } from './modelJson.js';
 import { compactOptions, compactPath, filterHierarchyForEntities } from './semanticHierarchy.js';
 
-const SCORE_SYSTEM = `Navigate ONLY the supplied hierarchy of directly linked, still-eligible entities. For every visible option, map query dimensions it may help and confidence 0..1. candidate means it may matter; reject means the name+description is enough to rule out this branch for this linked exploration. Never reject only because another option scores higher. Return {"assessments":[{"id":"exact id","decision":"candidate|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}]}]}.`;
+const SCORE_SYSTEM = `Navigate ONLY the supplied hierarchy of directly linked, still-eligible entities. Return SPARSE compact JSON only: {"c":[{"id":"exact visible id","d":{"exact supplied dimension":0.0}}],"r":["exact visible id"]}. Put in c EVERY visible option that may matter at all, even weakly, with only dimensions having confidence > 0. Omit irrelevant dimensions. Put in r ONLY options whose supplied name+description is sufficient to explicitly rule out this linked branch. Never reject because another option scores higher. Any visible option omitted from both c and r remains new/unassessed and eligible. Do not include reasons, names, decision strings, or zero-confidence dimensions.`;
 const EDGE_SYSTEM = `You are considering one direct evidenced schema link from an accepted entity to a new linked entity. Use the target name and exact join evidence only. Return {"decision":"follow|alternative|reject","dimensions":[{"dimension":"exact supplied dimension","confidence":0.0}],"reason":"short"}. follow means push the target into DFS now; alternative means keep it available but try another linked path first; reject means this linked entity itself is not useful for the query. Never invent joins.`;
 
 function confidence(dimensions) {
@@ -22,9 +22,38 @@ function normalizeDimensions(items, allowed) {
   })).filter((item) => item.dimension);
 }
 
+function dimensionsFromSparse(value, allowed) {
+  const allowedByKey = new Map(arr(allowed).map((name) => [key(name), name]));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.entries(value).map(([name, score]) => ({
+    dimension:allowedByKey.get(key(name)) || '',
+    confidence:Math.max(0, Math.min(1, Number(score || 0)))
+  })).filter((item) => item.dimension && item.confidence > 0);
+}
+
 function normalizeAssessments(parsed, options, dimensions) {
   const visible = new Map(arr(options).map((option) => [String(option.id), option]));
   const returned = new Map();
+
+  for (const item of arr(parsed?.c)) {
+    const id = String(item?.id || '');
+    if (!visible.has(id) || returned.has(id)) continue;
+    const dims = dimensionsFromSparse(item?.d, dimensions);
+    returned.set(id, {
+      id,
+      name:visible.get(id).name,
+      decision:'candidate',
+      dimensions:dims,
+      confidence:confidence(dims)
+    });
+  }
+  for (const rawId of arr(parsed?.r)) {
+    const id = String(rawId || '');
+    if (!visible.has(id) || returned.has(id)) continue;
+    returned.set(id, { id, name:visible.get(id).name, decision:'reject', dimensions:[], confidence:0 });
+  }
+
+  // Backward compatibility for old verbose responses.
   for (const item of arr(parsed?.assessments)) {
     const id = String(item?.id || '');
     if (!visible.has(id) || returned.has(id)) continue;
@@ -37,6 +66,7 @@ function normalizeAssessments(parsed, options, dimensions) {
       confidence:confidence(dims)
     });
   }
+
   return arr(options).map((option) => returned.get(String(option.id)) || {
     id:option.id,
     name:option.name,
@@ -103,7 +133,7 @@ async function score({ question, dimensions, sourceEntity, path, options, trail,
     globalContext
   };
   log('query_v2_link_payload', { step, phase:'score', payload });
-  const call = await modelJson(client, model, SCORE_SYSTEM, payload, { maxTokens:1200 });
+  const call = await modelJson(client, model, SCORE_SYSTEM, payload, { maxTokens:800 });
   addUsage(usage, call.usage);
   callTrace(step, 'SCORE', call.usage, usage);
   const assessments = normalizeAssessments(call.parsed, options, dimensions);
