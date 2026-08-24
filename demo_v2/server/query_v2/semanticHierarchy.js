@@ -4,8 +4,15 @@ const ENTITY_DESC_MAX = 180;
 const CLUSTER_DESC_MAX = 180;
 const TOPIC_DESC_MAX = 150;
 
+function semanticEntityLabel(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  const dotted = raw.split(/[.:/$]+/).filter(Boolean);
+  return dotted.length > 1 ? dotted.at(-1) : raw;
+}
+
 function entityNameParts(name) {
-  return String(name || '')
+  return semanticEntityLabel(name)
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .split(/[^A-Za-z0-9]+/)
@@ -43,7 +50,7 @@ function makeTopicNode({ clusterId, parts, entries, graphEntities }) {
     node.children.push({
       id:`${id}/entity:${idPart(entry.name)}`,
       type:'entity',
-      name:entry.name,
+      name:semanticEntityLabel(entry.name),
       description:text(entity?.description || '', ENTITY_DESC_MAX),
       entityName:entry.name,
       children:[]
