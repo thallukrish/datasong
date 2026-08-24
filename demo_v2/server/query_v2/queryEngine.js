@@ -20,7 +20,7 @@ function finalPayload(question, logicalRequest, exploration, graph) {
   };
 }
 
-export async function runTwoPassQuery({ question, client, model, graph, directory, log = () => {} }) {
+export async function runSemanticDfsQuery({ question, client, model, graph, directory, log = () => {} }) {
   const usage = { prompt:0, completion:0, total:0 };
   const index = buildGraphIndex(graph);
   const semanticHints = buildSemanticFieldHints(index.entities);
