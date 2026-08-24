@@ -82,12 +82,7 @@ function buildCluster(group, graphEntities) {
 
   const children = [...grouped.values()]
     .sort((a, b) => a.token.localeCompare(b.token))
-    .map(({ token, entries:topicEntries }) => makeTopicNode({
-      clusterId,
-      parts:[token],
-      entries:topicEntries,
-      graphEntities
-    }));
+    .map(({ token, entries:topicEntries }) => makeTopicNode({ clusterId, parts:[token], entries:topicEntries, graphEntities }));
 
   return {
     id:clusterId,
@@ -102,7 +97,6 @@ function indexTree(rootNodes) {
   const byId = new Map();
   const parentById = new Map();
   const pathsByEntity = new Map();
-
   const walk = (node, parent = null, path = []) => {
     byId.set(node.id, node);
     if (parent) parentById.set(node.id, parent.id);
@@ -126,26 +120,23 @@ export function buildSemanticHierarchy(directory, graphEntities) {
   return { clusters, ...indexTree(clusters) };
 }
 
-function filteredNode(node, allowedEntityKeys) {
+function filteredNode(node, allowedEntityKeys, excludedNodeIds) {
+  if (excludedNodeIds.has(node.id)) return null;
   if (node.type === 'entity') return allowedEntityKeys.has(key(node.entityName)) ? { ...node, children:[] } : null;
-  const children = arr(node.children).map((child) => filteredNode(child, allowedEntityKeys)).filter(Boolean);
+  const children = arr(node.children).map((child) => filteredNode(child, allowedEntityKeys, excludedNodeIds)).filter(Boolean);
   if (!children.length) return null;
   return { ...node, children };
 }
 
-export function filterHierarchyForEntities(hierarchy, entityNames) {
+export function filterHierarchyForEntities(hierarchy, entityNames, excludedNodeIds = new Set()) {
   const allowed = new Set(arr(entityNames).map(key));
-  const clusters = arr(hierarchy?.clusters).map((node) => filteredNode(node, allowed)).filter(Boolean);
+  const excluded = excludedNodeIds instanceof Set ? excludedNodeIds : new Set(arr(excludedNodeIds).map(String));
+  const clusters = arr(hierarchy?.clusters).map((node) => filteredNode(node, allowed, excluded)).filter(Boolean);
   return { clusters, ...indexTree(clusters) };
 }
 
 export function compactOptions(nodes) {
-  return arr(nodes).map((node) => ({
-    id:node.id,
-    type:node.type,
-    name:node.name,
-    description:node.description
-  }));
+  return arr(nodes).map((node) => ({ id:node.id, type:node.type, name:node.name, description:node.description }));
 }
 
 export function compactPath(path) {
