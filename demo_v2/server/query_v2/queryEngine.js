@@ -7,7 +7,7 @@ const MAX_ISOLATED_NEIGHBOURS = 12;
 const MAX_PATH_HOPS = 7;
 const ENTITY_BROWSER_LEAF_SIZE = 8;
 const ENTITY_BROWSER_EXAMPLES = 4;
-const ENTITY_BROWSER_MAX_ROUNDS = 12;
+const ENTITY_BROWSER_MAX_ROUNDS = 24;
 const STOP_WORDS = new Set([
   'a','an','and','are','as','at','be','by','can','for','from','has','have','in','is','it','its','of','on','or','that','the','their','this','to','used','using','was','were','which','with',
   'field','fields','entity','record','records','value','values','identifier','identifies','identification','description','type','types','code','codes','date','time'
@@ -294,67 +294,118 @@ function lexicalChunks(branch) {
 }
 function subdivideEntityBranch(branch) {
   if (branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE) return [];
-  let depth = branch.prefixParts.length;
   const tokenized = branch.candidates.map((candidate) => ({ candidate, parts:entityNameParts(candidate.name) }));
-  const maxDepth = Math.max(...tokenized.map((item) => item.parts.length), depth);
+  const maxDepth = Math.max(...tokenized.map((item) => item.parts.length), branch.prefixParts.length);
+  const workingPrefix = [...branch.prefixParts];
+  const skippedSharedParts = [];
+  let depth = workingPrefix.length;
 
   while (depth < maxDepth) {
-    const grouped = new Map();
-    for (const item of tokenized) {
-      const token = item.parts[depth] || '(exact)';
+    const tokens = tokenized.map((item) => item.parts[depth] || '(exact)');
+    const distinct = new Map();
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
       const k = key(token) || 'exact';
-      if (!grouped.has(k)) grouped.set(k, { token, candidates:[] });
-      grouped.get(k).candidates.push(item.candidate);
+      if (!distinct.has(k)) distinct.set(k, { token, candidates:[] });
+      distinct.get(k).candidates.push(tokenized[i].candidate);
     }
-    if (grouped.size > 1) {
-      return [...grouped.values()].map(({ token, candidates:items }) => {
-        const exact = token === '(exact)';
-        const prefixParts = exact ? branch.prefixParts : [...branch.prefixParts, token];
-        return {
-          id:`${branch.id}/${groupIdPart(token)}`,
-          label:exact ? `${branch.prefixParts.join('')} (exact)` : `${prefixParts.join('')}*`,
-          prefixParts,
-          candidates:items.sort((a, b) => a.name.localeCompare(b.name))
-        };
-      }).sort((a, b) => a.label.localeCompare(b.label));
+
+    if (distinct.size === 1) {
+      const only = [...distinct.values()][0];
+      if (only.token === '(exact)') break;
+      workingPrefix.push(only.token);
+      skippedSharedParts.push(only.token);
+      depth += 1;
+      continue;
     }
-    depth += 1;
+
+    return [...distinct.values()].map(({ token, candidates:items }) => {
+      const exact = token === '(exact)';
+      const prefixParts = exact ? workingPrefix : [...workingPrefix, token];
+      const idSuffixParts = [...skippedSharedParts, exact ? 'exact' : token].map(groupIdPart);
+      return {
+        id:`${branch.id}/${idSuffixParts.join('/')}`,
+        label:exact ? `${workingPrefix.join('')} (exact)` : `${prefixParts.join('')}*`,
+        prefixParts,
+        candidates:items.sort((a, b) => a.name.localeCompare(b.name))
+      };
+    }).sort((a, b) => a.label.localeCompare(b.label));
   }
-  return lexicalChunks(branch);
+
+  return lexicalChunks({ ...branch, prefixParts:workingPrefix });
+}
+function browserChildren(node, isRoot = false) {
+  if (node.candidates.length <= ENTITY_BROWSER_LEAF_SIZE) return [];
+  return isRoot ? initialEntityBranches(node.candidates) : subdivideEntityBranch(node);
+}
+function compactEntityForBrowser(candidate) {
+  return {
+    name:candidate.name,
+    description:candidate.description,
+    semanticRole:candidate.semanticRole,
+    groups:candidate.groups,
+    semanticFields:candidate.semanticFields
+  };
 }
 async function browseCandidateEntities({ question, intent, candidates, client, model, log, usage }) {
   const candidateNames = new Map(candidates.map((item) => [key(item.name), item]));
-  const frontier = new Map(initialEntityBranches(candidates).map((branch) => [branch.id, branch]));
-  const visible = new Map();
+  const root = {
+    id:'entity:root',
+    label:'All candidate entities',
+    prefixParts:[],
+    candidates:[...candidates].sort((a, b) => a.name.localeCompare(b.name))
+  };
+  const stack = [root];
+  const inspected = new Set();
   let selections = [];
   let uncoveredRequirements = arr(intent?.requirements).map((item) => item.concept).filter(Boolean);
   const rounds = [];
 
   for (let round = 1; round <= ENTITY_BROWSER_MAX_ROUNDS; round++) {
-    const availableGroups = [...frontier.values()].map(branchSummary).sort((a, b) => a.label.localeCompare(b.label));
-    const visibleEntities = [...visible.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const current = stack.at(-1);
+    const atLeaf = current.candidates.length <= ENTITY_BROWSER_LEAF_SIZE;
+    const children = atLeaf ? [] : browserChildren(current, stack.length === 1);
+    const childById = new Map(children.map((branch) => [branch.id, branch]));
+    const availableGroups = children.map(branchSummary);
+    const currentEntities = atLeaf ? current.candidates.map(compactEntityForBrowser) : [];
+    for (const entity of currentEntities) inspected.add(key(entity.name));
+    const breadcrumbs = stack.map((node, depth) => ({
+      depth,
+      id:node.id,
+      label:node.label,
+      entityCount:node.candidates.length
+    }));
     const payload = {
       question,
       logicalRequest:intent,
       round,
+      browser:{
+        breadcrumbs,
+        currentNode:{ id:current.id, label:current.label, entityCount:current.candidates.length },
+        canGoBack:stack.length > 1,
+        rootDepth:0
+      },
       availableGroups,
-      visibleEntities,
+      currentEntities,
       currentSelections:selections,
       uncoveredRequirements
     };
     log('query_v2_entity_browser_payload', { round, ...payload });
-    console.log(`[lemap query-v2] entity browser round ${round}: ${availableGroups.length} unopened subgroups, ${visibleEntities.length} visible entities`);
+    console.log(`[lemap query-v2] entity browser round ${round}: ${current.label}; ${availableGroups.length} immediate subgroups, ${currentEntities.length} current entities, depth ${stack.length - 1}`);
 
     const call = await modelJson(client, model,
-      'Navigate the candidate entity directory and choose entities that can answer the logical request. LeMap has NOT semantically filtered the selectable candidates: every candidate remains reachable through availableGroups until you choose to inspect it. availableGroups are deterministic name/subword groupings only; examples are names, not semantic recommendations. To inspect a group, return its exact id in inspectGroupIds. If an inspected group is small, its full entities will become visible; otherwise it will be replaced by smaller name-based subgroups. visibleEntities are the only entities whose descriptions and semantic field evidence you have inspected, and selectedEntities MUST use exact names from visibleEntities. You may revise or remove previous selections. Set done=true only when the selected entities appear sufficient for every logical requirement and no unopened subgroup is plausibly necessary to resolve an uncovered or uncertain requirement. If uncertain, inspect more groups instead of guessing. Field-name resemblance alone is insufficient; use business meaning and treat contradictory evidence as disqualifying. Return {"inspectGroupIds":["exact available group ids"],"selectedEntities":[{"entity":"exact visible entity name","covers":["requirement concepts"],"reason":"short semantic reason"}],"uncoveredRequirements":["still uncovered or uncertain concepts"],"done":true|false,"reason":"short navigation decision"}.',
+      'Navigate a hierarchical candidate-entity directory and choose entities that can answer the logical request. LeMap does not semantically remove candidates: every candidate is reachable by navigating from the root. availableGroups contains ONLY the immediate children of the current node, built deterministically from the shortest shared leading entity-name subwords. A child such as OrderItemSales* therefore remains under OrderItem*, which remains under Order*. currentEntities appears only when the current branch contains at most the leaf limit and includes the full entity semantic evidence for that branch. selectedEntities is the COMPLETE selected set for this round: you may retain, add, revise, or remove prior selections, but you may add only entities visible in currentEntities; prior selections may be retained from currentSelections. To descend, set openGroupId to one exact id from availableGroups. To leave the current branch and inspect another area, set backToDepth to a breadcrumb depth less than the current depth; depth 0 returns directly to the root. Do not request both openGroupId and backToDepth. Set done=true only when selected entities appear sufficient for all logical requirements and no unexplored branch is plausibly necessary. If uncertain, navigate instead of guessing. Field-name resemblance alone is insufficient; use business meaning and treat contradictory evidence as disqualifying. Return {"openGroupId":"exact immediate child id or empty","backToDepth":null|integer,"selectedEntities":[{"entity":"exact inspected entity name","covers":["requirement concepts"],"reason":"short semantic reason"}],"uncoveredRequirements":["still uncovered or uncertain concepts"],"done":true|false,"reason":"short navigation decision"}.',
       payload);
     addUsage(usage, call.usage);
 
-    const inspectIds = uniq(arr(call.parsed?.inspectGroupIds).map(String)).filter((id) => frontier.has(id));
+    const previousSelected = new Set(selections.map((item) => key(item.entity)));
+    const currentVisible = new Set(currentEntities.map((item) => key(item.name)));
     const nextSelections = [];
     for (const item of arr(call.parsed?.selectedEntities)) {
       const candidate = candidateNames.get(key(item?.entity));
-      if (!candidate || !visible.has(key(candidate.name))) continue;
+      if (!candidate) continue;
+      const candidateKey = key(candidate.name);
+      if (!previousSelected.has(candidateKey) && !currentVisible.has(candidateKey)) continue;
       nextSelections.push({
         entity:candidate.name,
         covers:arr(item?.covers).map(String),
@@ -364,40 +415,39 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
     selections = nextSelections;
     uncoveredRequirements = arr(call.parsed?.uncoveredRequirements).map(String);
 
-    const expanded = [];
-    for (const id of inspectIds) {
-      const branch = frontier.get(id);
-      if (!branch) continue;
-      frontier.delete(id);
-      if (branch.candidates.length <= ENTITY_BROWSER_LEAF_SIZE) {
-        for (const candidate of branch.candidates) visible.set(key(candidate.name), candidate);
-        expanded.push({ id, action:'revealed_entities', entityCount:branch.candidates.length });
-        continue;
-      }
-      const children = subdivideEntityBranch(branch);
-      for (const child of children) frontier.set(child.id, child);
-      expanded.push({ id, action:'subdivided', childCount:children.length, entityCount:branch.candidates.length });
+    const openGroupId = String(call.parsed?.openGroupId || '');
+    const requestedBackDepth = Number.isInteger(call.parsed?.backToDepth) ? call.parsed.backToDepth : null;
+    let navigation = { action:'none' };
+
+    if (requestedBackDepth !== null && requestedBackDepth >= 0 && requestedBackDepth < stack.length - 1) {
+      stack.splice(requestedBackDepth + 1);
+      navigation = { action:'back', depth:requestedBackDepth, to:stack.at(-1)?.label || 'root' };
+    } else if (openGroupId && childById.has(openGroupId)) {
+      const child = childById.get(openGroupId);
+      stack.push(child);
+      navigation = { action:'open', id:openGroupId, label:child.label, entityCount:child.candidates.length };
     }
 
     const record = {
       round,
-      inspectGroupIds:inspectIds,
-      expanded,
+      currentNode:{ id:current.id, label:current.label, entityCount:current.candidates.length },
+      breadcrumbs,
+      availableGroupCount:availableGroups.length,
+      currentEntityCount:currentEntities.length,
+      navigation,
       selectedEntities:selections,
       uncoveredRequirements,
       done:!!call.parsed?.done,
       reason:text(call.parsed?.reason, 260),
       usage:call.usage,
-      remainingGroupCount:frontier.size,
-      visibleEntityCount:visible.size
+      inspectedEntityCount:inspected.size
     };
     rounds.push(record);
     log('query_v2_entity_browser_round', record);
 
-    const done = !!call.parsed?.done;
-    if (done) break;
-    if (!inspectIds.length) {
-      console.log('[lemap query-v2] entity browser stopped without further subgroup inspection');
+    if (!!call.parsed?.done) break;
+    if (navigation.action === 'none') {
+      console.log('[lemap query-v2] entity browser stopped without a valid navigation action');
       break;
     }
   }
@@ -407,8 +457,9 @@ async function browseCandidateEntities({ question, intent, candidates, client, m
     selectedEntities:uniq(selections.map((item) => item.entity)).slice(0, 8),
     uncoveredRequirements,
     rounds,
-    visibleEntityCount:visible.size,
-    remainingGroupCount:frontier.size
+    inspectedEntityCount:inspected.size,
+    uninspectedEntityCount:Math.max(candidates.length - inspected.size, 0),
+    finalBreadcrumbs:stack.map((node, depth) => ({ depth, id:node.id, label:node.label, entityCount:node.candidates.length }))
   };
 }
 
@@ -610,7 +661,7 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   const candidates = candidateSet.candidates, excluded = candidateSet.excluded;
   const abstractCount = excluded.filter((item) => item.role === 'abstract_parent').length;
   console.log(`[lemap query-v2] cluster candidate filter: ${excluded.length} abstract parents omitted from model (${abstractCount} abstract parents)`);
-  console.log(`[lemap query-v2] pass 2 entity browser: ${candidates.length} selectable concrete/association entities remain reachable`);
+  console.log(`[lemap query-v2] pass 2 hierarchical entity browser: ${candidates.length} selectable concrete/association entities remain reachable`);
 
   const browser = await browseCandidateEntities({
     question,
@@ -623,7 +674,7 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   });
   const selectedEntities = browser.selectedEntities;
   const selections = browser.selections;
-  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; browser rounds ${browser.rounds.length}; visible ${browser.visibleEntityCount}/${candidates.length}`);
+  console.log(`[lemap query-v2] pass 2 selected: ${selectedEntities.join(', ') || '(none)'}; browser rounds ${browser.rounds.length}; inspected ${browser.inspectedEntityCount}/${candidates.length}`);
   log('query_v2_entities', {
     selectedEntities:selections,
     uncoveredRequirements:browser.uncoveredRequirements,
@@ -631,8 +682,9 @@ export async function runTwoPassQuery({ question, client, model, graph, director
     excludedCandidateCount:excluded.length,
     excludedCandidates:excluded,
     browserRounds:browser.rounds.length,
-    browserVisibleEntityCount:browser.visibleEntityCount,
-    browserRemainingGroupCount:browser.remainingGroupCount
+    browserInspectedEntityCount:browser.inspectedEntityCount,
+    browserUninspectedEntityCount:browser.uninspectedEntityCount,
+    browserFinalBreadcrumbs:browser.finalBreadcrumbs
   });
 
   const connection = connectSelectedEntities(index, selectedEntities);
@@ -652,7 +704,7 @@ export async function runTwoPassQuery({ question, client, model, graph, director
   return {
     ...finalCall.parsed,
     investigation:{
-      mode:'two-pass-structured-clusters-model-controlled-name-browser-local-paths',
+      mode:'two-pass-structured-clusters-model-controlled-hierarchical-trie-browser-local-paths',
       logicalRequest:intent,
       relevantGroups,
       candidateEntityCount:candidates.length,
@@ -660,8 +712,9 @@ export async function runTwoPassQuery({ question, client, model, graph, director
       excludedCandidates:excluded,
       entityBrowser:{
         rounds:browser.rounds.length,
-        visibleEntityCount:browser.visibleEntityCount,
-        remainingGroupCount:browser.remainingGroupCount,
+        inspectedEntityCount:browser.inspectedEntityCount,
+        uninspectedEntityCount:browser.uninspectedEntityCount,
+        finalBreadcrumbs:browser.finalBreadcrumbs,
         uncoveredRequirements:browser.uncoveredRequirements
       },
       selectedEntities:selections,
