@@ -1,7 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
-import { compactVector, deltaVector, scoreVector } from './pathScore.js';
+import { compactVector, scoreVector } from './pathScore.js';
 
-const PATH_SYSTEM = `Score candidate RESULTING PATHS against the query dimensions. The current path and its previous dimension score are supplied, plus candidate next states. A candidate may be a cluster, topic, entity, or schema-linked entity; treat all simply as states. Score what the full path would now promise for each dimension, using the names/descriptions/evidence and any evidenced edge. Scores must be comparable across levels: strengthen a dimension only when the new state adds semantic or structural evidence, weaken it when the path becomes less promising, and keep it stable when nothing changes. Return JSON only: {"c":[[candidateIndex,[[dimensionIndex,score]]]],"r":[candidateIndex]}. Return AT MOST 8 candidates, prioritizing the strongest resulting paths for dimensions still missing. Omitted candidates remain eligible but unscored. r means explicitly irrelevant from supplied evidence, not merely weak. No names, reasons, or extra keys.`;
+const PATH_SYSTEM = `Score candidate RESULTING PATHS against the query dimensions. The current path and its existing dimension score are supplied, plus candidate next states. A candidate may be a cluster, topic, entity, or schema-linked entity; treat all simply as states. Score the strength of evidence that THIS accumulated path currently provides for each dimension. Do not score hypothetical future reachability beyond the supplied candidate. Preserve a prior score only when the accumulated path still supports it; raise it only when the new state adds evidence; lower it when the path becomes less convincing. Use a graded scale: 1.0=direct or near-certain support, 0.8=strong, 0.6=good, 0.4=plausible, 0.2=weak, 0=no support. Avoid 1.0 unless the supplied path/evidence genuinely warrants it. Return JSON only: {"c":[[candidateIndex,[[dimensionIndex,score]]]],"r":[candidateIndex]}. Return AT MOST 8 candidates, prioritizing the strongest resulting paths for dimensions still missing. Omitted candidates remain eligible but unscored. r means explicitly irrelevant from supplied evidence, not merely weak. No names, reasons, or extra keys.`;
 
 function compactEvidence(state) {
   const evidence = state?.evidence;
@@ -53,13 +53,12 @@ export async function scoreNextStates({ intent, dimensions, missingDimensions, p
     const state = byIndex.get(idx);
     if (!state || rejected.has(idx)) continue;
     used.add(idx);
-    const vector = scoreVector(dimensions, item[1]);
-    scored.push({ state, score:vector, delta:deltaVector(path?.score || {}, vector) });
+    scored.push({ state, score:scoreVector(dimensions, item[1]) });
   }
   const omitted = candidates.filter((_state, index) => !used.has(String(index)) && !rejected.has(String(index)));
   log('query_v3_score_model', {
     step,
-    scored:scored.map((item) => ({ state:item.state.name, score:item.score, delta:item.delta })),
+    scored:scored.map((item) => ({ state:item.state.name, score:item.score })),
     omitted:omitted.map((state) => state.name),
     rejected:[...rejected],
     usage:call.usage,
