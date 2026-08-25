@@ -39,6 +39,16 @@ function selectedEntityKeys(path) {
   return new Set(path.states.filter((state) => state.type === 'entity' && state.entityName).map((state) => key(state.entityName)));
 }
 
+function nextPath(parent, item) {
+  const join = item.state.edge?.kind === 'schema_fk' ? item.state.edge.join : null;
+  return {
+    states:[...(parent.states || []), item.state],
+    score:item.score,
+    deltas:[...(parent.deltas || []), item.delta],
+    joins:join ? [...(parent.joins || []), join] : [...(parent.joins || [])]
+  };
+}
+
 function compactPath(path, missing) {
   return {
     states:path.states.map((state) => state.name),
@@ -47,6 +57,22 @@ function compactPath(path, missing) {
     deltas:path.deltas || [],
     joins:path.joins || []
   };
+}
+
+async function activateDormant({ frontier, logicalRequest, dimensions, missingDimensions, client, model, usage, log, stepRef }) {
+  const group = frontier.takeDormantGroup(8);
+  if (!group.length) return;
+  const parent = group[0].parentPath || { states:[], score:{}, deltas:[], joins:[] };
+  const candidates = group.map((item) => item.states.at(-1));
+  const result = await scoreNextStates({
+    intent:logicalRequest.intent,
+    dimensions,
+    missingDimensions,
+    path:parent,
+    candidates,
+    client, model, usage, log, step:++stepRef.value
+  });
+  frontier.add(result.scored.map((item) => nextPath(parent, item)));
 }
 
 export async function runSemanticBestFirstQuery({ question, client, model, graph, directory, log = () => {} }) {
@@ -60,34 +86,41 @@ export async function runSemanticBestFirstQuery({ question, client, model, graph
   const traversedJoins = new Map();
   const frontier = new Frontier();
   const events = [];
-  let step = 0;
+  const stepRef = { value:0 };
 
   const roots = rootStates(hierarchy);
+  const rootParent = { states:[], score:{}, deltas:[], joins:[] };
   const initial = await scoreNextStates({
     intent:logicalRequest.intent,
     dimensions,
     missingDimensions:dimensions,
-    path:{ states:[], score:{} },
+    path:rootParent,
     candidates:roots,
-    client, model, usage, log, step:++step
+    client, model, usage, log, step:++stepRef.value
   });
-  frontier.add(initial.scored.map((item) => ({ states:[item.state], score:item.score, deltas:[item.delta], joins:[] })));
+  frontier.add(initial.scored.map((item) => nextPath(rootParent, item)));
+  frontier.addDormant(rootParent, initial.omitted);
 
-  while (frontier.size && step < MAX_STEPS) {
+  while ((frontier.size || frontier.dormantSize) && stepRef.value < MAX_STEPS) {
     let coverage = coverageState(dimensions, accepted);
     let connected = acceptedConnected(accepted, traversedJoins);
     if (!coverage.missing.length && connected) break;
 
+    if (!frontier.size && frontier.dormantSize) {
+      await activateDormant({ frontier, logicalRequest, dimensions, missingDimensions:coverage.missing, client, model, usage, log, stepRef });
+      if (!frontier.size) continue;
+    }
+
     const path = frontier.popBest(coverage.missing);
-    if (!path) break;
+    if (!path) continue;
     const current = path.states.at(-1);
-    events.push({ step, action:'select_path', ...compactPath(path, coverage.missing), frontierSize:frontier.size });
-    console.log(`[lemap query-v3][${step}] ${path.states.map((state) => state.name).join(' → ')} | priority ${activeScore(path.score, coverage.missing).toFixed(2)} | missing ${coverage.missing.join(', ') || '-'} | frontier ${frontier.size}`);
+    events.push({ step:stepRef.value, action:'select_path', ...compactPath(path, coverage.missing), frontierSize:frontier.size, dormantSize:frontier.dormantSize });
+    console.log(`[lemap query-v3][${stepRef.value}] ${path.states.map((state) => state.name).join(' → ')} | priority ${activeScore(path.score, coverage.missing).toFixed(2)} | missing ${coverage.missing.join(', ') || '-'} | frontier ${frontier.size}+${frontier.dormantSize}`);
 
     for (const join of arr(path.joins)) traversedJoins.set(joinSignature(join), join);
 
     if (current.type === 'entity' && current.entityName) {
-      const covered = await evaluateEntityCoverage({ state:current, dimensions, missingDimensions:coverage.missing, client, model, usage, log, step:++step });
+      const covered = await evaluateEntityCoverage({ state:current, dimensions, missingDimensions:coverage.missing, client, model, usage, log, step:++stepRef.value });
       const entityKey = key(current.entityName);
       const existing = accepted.get(entityKey) || { entity:current.entityName, covered:[], paths:[] };
       const byDimension = new Map(arr(existing.covered).map((item) => [item.dimension, item]));
@@ -98,7 +131,7 @@ export async function runSemanticBestFirstQuery({ question, client, model, graph
       existing.covered = [...byDimension.values()];
       if (!existing.paths.some((p) => p.join('>') === path.states.map((state) => state.name).join('>'))) existing.paths.push(path.states.map((state) => state.name));
       accepted.set(entityKey, existing);
-      if (covered.length) events.push({ step, action:'coverage', entity:current.entityName, covered });
+      if (covered.length) events.push({ step:stepRef.value, action:'coverage', entity:current.entityName, covered });
       coverage = coverageState(dimensions, accepted);
       connected = acceptedConnected(accepted, traversedJoins);
       if (!coverage.missing.length && connected) break;
@@ -118,19 +151,20 @@ export async function runSemanticBestFirstQuery({ question, client, model, graph
       missingDimensions:coverage.missing,
       path,
       candidates,
-      client, model, usage, log, step:++step
+      client, model, usage, log, step:++stepRef.value
     });
-    const nextPaths = scored.scored.map((item) => {
-      const join = item.state.edge?.kind === 'schema_fk' ? item.state.edge.join : null;
-      return {
-        states:[...path.states, item.state],
-        score:item.score,
-        deltas:[...(path.deltas || []), item.delta],
-        joins:join ? [...(path.joins || []), join] : [...(path.joins || [])]
-      };
-    });
+    const nextPaths = scored.scored.map((item) => nextPath(path, item));
     frontier.add(nextPaths);
-    events.push({ step, action:'expand', from:current.name, candidates:nextPaths.map((item) => compactPath(item, coverage.missing)), frontierSize:frontier.size });
+    frontier.addDormant(path, scored.omitted);
+    events.push({
+      step:stepRef.value,
+      action:'expand',
+      from:current.name,
+      candidates:nextPaths.map((item) => compactPath(item, coverage.missing)),
+      omitted:scored.omitted.map((state) => state.name),
+      frontierSize:frontier.size,
+      dormantSize:frontier.dormantSize
+    });
   }
 
   const coverage = coverageState(dimensions, accepted);
@@ -146,7 +180,7 @@ export async function runSemanticBestFirstQuery({ question, client, model, graph
   const finalPayload = {
     question,
     logicalRequest,
-    status:{ complete, connected, missingDimensions:coverage.missing, steps:step },
+    status:{ complete, connected, missingDimensions:coverage.missing, steps:stepRef.value },
     acceptedEntities:[...accepted.values()].filter((item) => item.covered.length),
     evidencedGraph:grounded
   };
@@ -161,7 +195,7 @@ export async function runSemanticBestFirstQuery({ question, client, model, graph
       logicalRequest,
       complete,
       connected,
-      steps:step,
+      steps:stepRef.value,
       coverage,
       accepted:[...accepted.values()],
       frontier:frontier.snapshot(coverage.missing),
