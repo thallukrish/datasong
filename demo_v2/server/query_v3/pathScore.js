@@ -17,12 +17,9 @@ export function scoreVector(dimensions, pairs = []) {
 
 export function activeScore(vector, missingDimensions) {
   const names = missingDimensions.length ? missingDimensions : Object.keys(vector || {});
-  return Math.max(0, ...names.map((name) => clamp(vector?.[name])));
-}
-
-export function deltaVector(parent = {}, child = {}) {
-  const names = new Set([...Object.keys(parent), ...Object.keys(child)]);
-  return Object.fromEntries([...names].map((name) => [name, Number((clamp(child[name]) - clamp(parent[name])).toFixed(3))]));
+  if (!names.length) return 0;
+  const total = names.reduce((sum, name) => sum + clamp(vector?.[name]), 0);
+  return total / names.length;
 }
 
 export function compactVector(vector = {}, dimensions = []) {
