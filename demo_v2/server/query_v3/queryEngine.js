@@ -44,7 +44,6 @@ function nextPath(parent, item) {
   return {
     states:[...(parent.states || []), item.state],
     score:item.score,
-    deltas:[...(parent.deltas || []), item.delta],
     joins:join ? [...(parent.joins || []), join] : [...(parent.joins || [])]
   };
 }
@@ -54,7 +53,6 @@ function compactPath(path, missing) {
     states:path.states.map((state) => state.name),
     score:path.score,
     priority:activeScore(path.score, missing),
-    deltas:path.deltas || [],
     joins:path.joins || []
   };
 }
@@ -62,7 +60,7 @@ function compactPath(path, missing) {
 async function activateDormant({ frontier, logicalRequest, dimensions, missingDimensions, client, model, usage, log, stepRef }) {
   const group = frontier.takeDormantGroup(8);
   if (!group.length) return;
-  const parent = group[0].parentPath || { states:[], score:{}, deltas:[], joins:[] };
+  const parent = group[0].parentPath || { states:[], score:{}, joins:[] };
   const candidates = group.map((item) => item.states.at(-1));
   const result = await scoreNextStates({
     intent:logicalRequest.intent,
@@ -89,7 +87,7 @@ export async function runSemanticBestFirstQuery({ question, client, model, graph
   const stepRef = { value:0 };
 
   const roots = rootStates(hierarchy);
-  const rootParent = { states:[], score:{}, deltas:[], joins:[] };
+  const rootParent = { states:[], score:{}, joins:[] };
   const initial = await scoreNextStates({
     intent:logicalRequest.intent,
     dimensions,
