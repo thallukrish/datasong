@@ -12,16 +12,26 @@ export class Frontier {
   }
 
   addDormant(parentPath, states = []) {
+    const parentSignature = (parentPath?.states || []).map((state) => state.id).join('>');
     for (const state of states) {
-      const path = { states:[...(parentPath?.states || []), state], score:null, deltas:[...(parentPath?.deltas || [])], joins:[...(parentPath?.joins || [])], parentPath };
+      const path = { states:[...(parentPath?.states || []), state], score:null, deltas:[...(parentPath?.deltas || [])], joins:[...(parentPath?.joins || [])], parentPath, parentSignature };
       const signature = path.states.map((item) => item.id).join('>');
       if (this.items.some((item) => item.signature === signature) || this.dormant.some((item) => item.signature === signature)) continue;
       this.dormant.push({ ...path, signature });
     }
   }
 
-  takeDormant(limit = 8) {
-    return this.dormant.splice(0, Math.max(1, limit));
+  takeDormantGroup(limit = 8) {
+    if (!this.dormant.length) return [];
+    const parentSignature = this.dormant[0].parentSignature;
+    const taken = [];
+    const keep = [];
+    for (const item of this.dormant) {
+      if (item.parentSignature === parentSignature && taken.length < limit) taken.push(item);
+      else keep.push(item);
+    }
+    this.dormant = keep;
+    return taken;
   }
 
   popBest(missingDimensions = []) {
