@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { graphFromSemanticObjects } from '../explorer/mapPersistence.js';
 import { loadEntityDirectory } from '../entityDirectory.js';
+import { registerQueryV3Api } from '../query_v3/queryApi.js';
 import { runSemanticDfsQuery } from './queryEngine.js';
 
 export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
+  registerQueryV3Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog });
+
   const queryRunPath = () => {
     const dir = path.join(dataRoot, 'query-runs-v2');
     fs.mkdirSync(dir, { recursive:true });
