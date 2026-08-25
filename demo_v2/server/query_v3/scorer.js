@@ -45,20 +45,27 @@ export async function scoreNextStates({ intent, dimensions, missingDimensions, p
   addUsage(usage, call.usage);
 
   const rejected = new Set(arr(call.parsed?.r).map(String));
+  const used = new Set();
   const scored = [];
   for (const item of arr(call.parsed?.c)) {
     if (!Array.isArray(item)) continue;
-    const state = byIndex.get(String(item[0]));
-    if (!state || rejected.has(String(item[0]))) continue;
+    const idx = String(item[0]);
+    const state = byIndex.get(idx);
+    if (!state || rejected.has(idx)) continue;
+    used.add(idx);
     const vector = scoreVector(dimensions, item[1]);
-    scored.push({
-      state,
-      score:vector,
-      delta:deltaVector(path?.score || {}, vector)
-    });
+    scored.push({ state, score:vector, delta:deltaVector(path?.score || {}, vector) });
   }
-  log('query_v3_score_model', { step, scored:scored.map((item) => ({ state:item.state.name, score:item.score, delta:item.delta })), rejected:[...rejected], usage:call.usage, cumulativeUsage:{...usage} });
-  return { scored, rejected, usage:call.usage };
+  const omitted = candidates.filter((_state, index) => !used.has(String(index)) && !rejected.has(String(index)));
+  log('query_v3_score_model', {
+    step,
+    scored:scored.map((item) => ({ state:item.state.name, score:item.score, delta:item.delta })),
+    omitted:omitted.map((state) => state.name),
+    rejected:[...rejected],
+    usage:call.usage,
+    cumulativeUsage:{...usage}
+  });
+  return { scored, omitted, rejected, usage:call.usage };
 }
 
 export async function deriveDimensions({ question, client, model, usage, log }) {
