@@ -1,9 +1,8 @@
 import { addUsage, arr, key, modelJson, text } from '../query_v2/modelJson.js';
-import { COVERAGE_MIN } from './pathScore.js';
 
 const MAX_FIELDS = 12;
 const FIELDS_PER_DIMENSION = 3;
-const COVERAGE_SYSTEM = `Judge ACTUAL query-dimension coverage from one entity state's supplied evidence. Return JSON only: {"d":[[dimensionIndex,confidence,fieldIndex]]}. Claim ONLY dimensions still missing and ONLY when the cited supplied field directly supports that dimension. The fieldIndex MUST refer to a field in e.f. Do not infer coverage from the entity's business context, likely related entities, path, or possible future joins. IDs establish identity/connectivity only; quantity/count does not establish monetary sales amount; a generic ID does not establish region; a dimension needing date/time requires an actual date/time field. Use confidence >=0.5 only for direct evidence. No reasons, names, or extra keys.`;
+const COVERAGE_SYSTEM = `Judge ACTUAL query-dimension coverage from one entity state's supplied evidence. Return JSON only: {"d":[[dimensionIndex,fieldIndex]]}. Include a pair ONLY when the cited supplied field DIRECTLY evidences that missing dimension. Omit the dimension otherwise. The fieldIndex MUST refer to a field in e.f. Do not infer coverage from the entity's business context, likely related entities, path, possible future joins, or what an ID might point to. IDs establish identity/connectivity only; quantity/count does not establish monetary sales amount; a generic/store/product ID does not establish region or monetary amount; a dimension needing date/time requires an actual date/time field. This is a binary evidence assertion, not a relevance or confidence score. No reasons, names, confidence values, or extra keys.`;
 
 function words(value) {
   return String(value || '')
@@ -92,19 +91,18 @@ export async function evaluateEntityCoverage({ state, dimensions, missingDimensi
     }
   };
   log('query_v3_coverage_payload', { step, entity:state.entityName || state.name, payload });
-  const call = await modelJson(client, model, COVERAGE_SYSTEM, payload, { maxTokens:160 });
+  const call = await modelJson(client, model, COVERAGE_SYSTEM, payload, { maxTokens:120 });
   addUsage(usage, call.usage);
 
   const fieldIndexes = new Set(fields.map((field) => field.index));
   const covered = arr(call.parsed?.d).map((pair) => {
-    if (!Array.isArray(pair)) return null;
+    if (!Array.isArray(pair) || pair.length !== 2) return null;
     const index = Number(pair[0]);
     const dimension = dimensions[index];
-    const confidence = Math.max(0, Math.min(1, Number(pair[1] || 0)));
-    const fieldIndex = Number(pair[2]);
-    if (!dimension || !missing.has(dimension) || confidence < COVERAGE_MIN || !fieldIndexes.has(fieldIndex)) return null;
+    const fieldIndex = Number(pair[1]);
+    if (!dimension || !missing.has(dimension) || !fieldIndexes.has(fieldIndex)) return null;
     const field = fields.find((item) => item.index === fieldIndex);
-    return { dimension, confidence, field:field?.name || '' };
+    return { dimension, field:field?.name || '' };
   }).filter(Boolean);
 
   log('query_v3_coverage_model', { step, entity:state.entityName || state.name, covered, usage:call.usage, cumulativeUsage:{...usage} });
