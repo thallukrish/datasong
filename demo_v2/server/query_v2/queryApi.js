@@ -3,11 +3,14 @@ import path from 'node:path';
 import { graphFromSemanticObjects } from '../explorer/mapPersistence.js';
 import { loadEntityDirectory } from '../entityDirectory.js';
 import { registerQueryV3Api } from '../query_v3/queryApi.js';
+import { registerQueryV4Api } from '../query_v4/queryApi.js';
 import { runSemanticDfsQuery } from './queryEngine.js';
 
 export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
   registerQueryV3Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog });
   console.log('[DataSong v2] QUERY V3: semantic best-first state search with global confidence frontier → /api/query-map-v3');
+  registerQueryV4Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog });
+  console.log('[DataSong v2] QUERY V4: parallel workflow + directory seeding → shared global frontier → /api/query-map-v4');
 
   const queryRunPath = () => {
     const dir = path.join(dataRoot, 'query-runs-v2');
