@@ -231,7 +231,12 @@ async function runFocusedRepair({
         state:current,
         dimensions,
         missingDimensions:coverage.missing,
-        client, model, usage, log, step:++stepRef.value
+        client, model, usage, log, step:++stepRef.value,
+        repairContext:{
+          requirement:verification.requirement || '',
+          locked,
+          path:path.states.map((state) => state.name)
+        }
       });
       const allowed = new Set(reopen.map(key));
       const repairCovered = covered.filter((item) => allowed.has(key(item.dimension)));
@@ -348,8 +353,8 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       const covered = await evaluateEntityCoverage({ state:current, dimensions, missingDimensions:coverage.missing, client, model, usage, log, step:++stepRef.value });
       const entityKey = key(current.entityName);
       const existing = accepted.get(entityKey) || { entity:current.entityName, covered:[], paths:[] };
-      const byDimension = new Map(arr(existing.covered).map((item) => [key(item.dimension), item]));
-      for (const item of covered) if (!byDimension.has(key(item.dimension))) byDimension.set(key(item.dimension), item);
+      const byDimension = new Map(arr(existing.covered).map((item) => [item.dimension, item]));
+      for (const item of covered) if (!byDimension.has(item.dimension)) byDimension.set(item.dimension, item);
       existing.covered = [...byDimension.values()];
       if (!existing.paths.some((p) => p.join('>') === path.states.map((state) => state.name).join('>'))) existing.paths.push(path.states.map((state) => state.name));
       accepted.set(entityKey, existing);
@@ -400,20 +405,18 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
   }
 
-  let connected = !coverage.missing.length
-    ? !!connectivity?.connected
-    : acceptedConnected(accepted, traversedJoins);
-  let complete = !coverage.missing.length && connected;
-  let grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
-
-  if (complete) {
+  if (!coverage.missing.length && connectivity?.connected) {
+    let grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
     verification = await verifyAnswerability({
       question,
       logicalRequest,
       accepted,
       connectivity,
       evidencedGraph:grounded,
-      client, model, usage, log,
+      client,
+      model,
+      usage,
+      log,
       pass:1
     });
 
@@ -434,54 +437,44 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
         events,
         stepRef
       });
-
       coverage = coverageState(dimensions, accepted);
-      connectorEntities.clear();
-      connectivity = !coverage.missing.length
-        ? runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value, phase:'repair' })
-        : null;
-      connected = !coverage.missing.length ? !!connectivity?.connected : acceptedConnected(accepted, traversedJoins);
-      complete = !coverage.missing.length && connected;
-      grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
-
-      if (complete) {
-        verification = await verifyAnswerability({
-          question,
-          logicalRequest,
-          accepted,
-          connectivity,
-          evidencedGraph:grounded,
-          client, model, usage, log,
-          pass:2
-        });
-      } else {
-        verification = {
-          answerable:false,
-          reopen:repair.reopen,
-          anchors:repair.anchors,
-          requirement:verification.requirement,
-          reason:'Focused repair did not resolve and connect all reopened evidence.'
-        };
+      if (!coverage.missing.length) {
+        connectorEntities.clear();
+        connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value, phase:'repair' });
+        if (connectivity.connected) {
+          grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
+          verification = await verifyAnswerability({
+            question,
+            logicalRequest,
+            accepted,
+            connectivity,
+            evidencedGraph:grounded,
+            client,
+            model,
+            usage,
+            log,
+            pass:2
+          });
+        }
       }
     }
-  } else {
-    verification = {
-      answerable:false,
-      reopen:coverage.missing,
-      anchors:[],
-      requirement:'complete evidence and connectivity',
-      reason:'Initial exploration did not produce complete connected evidence.'
-    };
   }
+
+  coverage = coverageState(dimensions, accepted);
+  const connected = !coverage.missing.length
+    ? !!connectivity?.connected
+    : acceptedConnected(accepted, traversedJoins);
+  const complete = !coverage.missing.length && connected && verification?.answerable === true;
+  const grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
 
   log('query_v4_search_complete', {
     complete,
     connected,
     coverage,
-    verification,
-    repair,
     accepted:[...accepted.values()],
     connectivity,
+    verification,
+    repair,
     joins:[...traversedJoins.values()],
     frontier:frontier.snapshot(coverage.missing),
     events,
@@ -491,11 +484,11 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   const finalPayload = {
     question,
     logicalRequest,
-    status:{ complete, connected, answerable:verification?.answerable === true, missingDimensions:coverage.missing, steps:stepRef.value },
-    verification,
-    repair,
+    status:{ complete, connected, missingDimensions:coverage.missing, steps:stepRef.value },
     acceptedEntities:[...accepted.values()].filter((item) => item.covered.length),
     connectivity,
+    verification,
+    repair,
     evidencedGraph:grounded
   };
   const finalCall = await modelJson(client, model, FINAL_SYSTEM, finalPayload, { maxTokens:900 });
@@ -509,13 +502,12 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       logicalRequest,
       complete,
       connected,
-      answerable:verification?.answerable === true,
       steps:stepRef.value,
       coverage,
-      verification,
-      repair,
       accepted:[...accepted.values()],
       connectivity,
+      verification,
+      repair,
       frontier:frontier.snapshot(coverage.missing),
       localGraph:{ entities:grounded.entities.map((entity) => entity.name), joins:grounded.joins },
       events,
