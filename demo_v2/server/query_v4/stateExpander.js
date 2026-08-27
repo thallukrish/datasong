@@ -68,6 +68,30 @@ function workflowDescription(workflow) {
   ].filter(Boolean).join(' | '), 360);
 }
 
+function linkedStates(entityName, { hierarchy, index, semanticHints, visitedEntityKeys = new Set() }) {
+  const linked = [];
+  for (const step of arr(index.adjacency.get(key(entityName)))) {
+    if (visitedEntityKeys.has(key(step.to))) continue;
+    const join = {
+      from:step.edge.from,
+      to:step.edge.to,
+      relationship:step.edge.relationship,
+      cardinality:step.edge.cardinality,
+      keyMaps:step.edge.keyMaps,
+      evidenced:true
+    };
+    const linkedState = linkedEntityState(step.to, join, hierarchy, index, semanticHints);
+    if (linkedState) linked.push(linkedState);
+  }
+  const seen = new Set();
+  return linked.filter((item) => {
+    const sig = key(item.entityName || item.name);
+    if (!sig || seen.has(sig)) return false;
+    seen.add(sig);
+    return true;
+  });
+}
+
 export function rootStates(hierarchy, workflows = []) {
   const workflowRoots = arr(workflows).map((workflow) => ({
     id:`workflow:${workflow.id}`,
@@ -85,6 +109,12 @@ export function rootStates(hierarchy, workflows = []) {
   }));
 
   return [...workflowRoots, ...clusterRoots];
+}
+
+export function expandLinkedEntities(state, { hierarchy, index, semanticHints, visitedEntityKeys = new Set() }) {
+  const entityName = state?.entityName || '';
+  if (!entityName) return [];
+  return linkedStates(entityName, { hierarchy, index, semanticHints, visitedEntityKeys });
 }
 
 export function expandState(state, { hierarchy, index, semanticHints, visitedEntityKeys = new Set() }) {
@@ -117,23 +147,10 @@ export function expandState(state, { hierarchy, index, semanticHints, visitedEnt
       : next;
   }).filter(Boolean);
 
-  const linked = [];
   const entityName = state.entityName || canonical?.entityName || '';
-  if (entityName) {
-    for (const step of arr(index.adjacency.get(key(entityName)))) {
-      if (visitedEntityKeys.has(key(step.to))) continue;
-      const join = {
-        from:step.edge.from,
-        to:step.edge.to,
-        relationship:step.edge.relationship,
-        cardinality:step.edge.cardinality,
-        keyMaps:step.edge.keyMaps,
-        evidenced:true
-      };
-      const linkedState = linkedEntityState(step.to, join, hierarchy, index, semanticHints);
-      if (linkedState) linked.push(linkedState);
-    }
-  }
+  const linked = entityName
+    ? linkedStates(entityName, { hierarchy, index, semanticHints, visitedEntityKeys })
+    : [];
 
   const seen = new Set();
   return [...hierarchyChildren, ...linked].filter((item) => {
