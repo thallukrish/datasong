@@ -3,7 +3,7 @@ import { buildSemanticHierarchy } from '../query_v2/semanticHierarchy.js';
 import { addUsage, arr, key, modelJson } from '../query_v2/modelJson.js';
 import { Frontier } from '../query_v3/frontier.js';
 import { activeScore } from '../query_v3/pathScore.js';
-import { deriveDimensions, scoreNextStates } from '../query_v3/scorer.js';
+import { deriveDimensions, scoreNextStates } from './scorer.js';
 import { coverageState, evaluateEntityCoverage } from './coverage.js';
 import { expandState, rootStates } from './stateExpander.js';
 
