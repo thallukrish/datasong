@@ -1,6 +1,15 @@
 import { arr, key, text } from '../query_v2/modelJson.js';
 import { leafEvidence } from '../query_v2/graphContext.js';
 
+function schemaFields(entity) {
+  return arr(entity?.fields).map((field) => ({
+    name:text(field?.name, 120),
+    type:text(field?.type, 60),
+    isPk:!!field?.isPk,
+    description:text(field?.description, 180)
+  })).filter((field) => field.name);
+}
+
 function hierarchyState(node, edge = null) {
   return {
     id:node.id,
@@ -12,20 +21,29 @@ function hierarchyState(node, edge = null) {
   };
 }
 
+function groundEntityState(state, entityName, index, semanticHints) {
+  const entity = index.entities.get(key(entityName));
+  if (!entity) return state;
+  return {
+    ...state,
+    evidence:leafEvidence(entityName, index, semanticHints),
+    schemaFields:schemaFields(entity)
+  };
+}
+
 function linkedEntityState(entityName, join, hierarchy, index, semanticHints) {
   const entity = index.entities.get(key(entityName));
   const pathNode = arr(hierarchy.pathsByEntity.get(key(entityName)))[0];
   const node = pathNode ? hierarchy.byId.get(pathNode.pathId) : null;
-  return {
+  return groundEntityState({
     id:`link:${key(join.from)}:${key(join.to)}:${key(entityName)}`,
     canonicalId:node?.id || '',
     name:entity?.name || entityName,
     type:'entity',
     description:text(entity?.description, 180),
     entityName:entity?.name || entityName,
-    edge:{ kind:'schema_fk', join },
-    evidence:leafEvidence(entityName, index, semanticHints)
-  };
+    edge:{ kind:'schema_fk', join }
+  }, entityName, index, semanticHints);
 }
 
 export function rootStates(hierarchy) {
@@ -36,8 +54,9 @@ export function expandState(state, { hierarchy, index, semanticHints, visitedEnt
   const canonical = hierarchy.byId.get(state.canonicalId || state.id);
   const hierarchyChildren = arr(canonical?.children).map((node) => {
     const next = hierarchyState(node, { kind:'hierarchy', from:state.id, to:node.id });
-    if (node.type === 'entity') next.evidence = leafEvidence(node.entityName, index, semanticHints);
-    return next;
+    return node.type === 'entity'
+      ? groundEntityState(next, node.entityName, index, semanticHints)
+      : next;
   });
 
   const linked = [];
