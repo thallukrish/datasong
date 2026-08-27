@@ -3,6 +3,7 @@ import { buildSemanticHierarchy } from '../query_v2/semanticHierarchy.js';
 import { addUsage, arr, key, modelJson } from '../query_v2/modelJson.js';
 import { Frontier } from '../query_v3/frontier.js';
 import { activeScore } from '../query_v3/pathScore.js';
+import { connectEvidenceEntities } from './connectivity.js';
 import { deriveDimensions, scoreNextStates } from './scorer.js';
 import { coverageState, evaluateEntityCoverage } from './coverage.js';
 import { expandState, rootStates } from './stateExpander.js';
@@ -73,6 +74,29 @@ async function activateDormant({ frontier, logicalRequest, dimensions, missingDi
   frontier.add(result.scored.map((item) => nextPath(parent, item)));
 }
 
+function runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step }) {
+  const evidenceEntities = [...accepted.values()]
+    .filter((item) => arr(item.covered).length)
+    .map((item) => item.entity);
+  const result = connectEvidenceEntities(index, evidenceEntities);
+  for (const join of arr(result.joins)) traversedJoins.set(joinSignature(join), join);
+  for (const entity of arr(result.entities)) connectorEntities.add(key(entity));
+  const event = {
+    step,
+    action:'lemap_connectivity',
+    evidenceEntities,
+    connected:result.connected,
+    connectorEntities:result.entities,
+    paths:result.paths,
+    joins:result.joins,
+    unconnected:result.unconnected || []
+  };
+  events.push(event);
+  log('query_v4_connectivity', event);
+  console.log(`[lemap query-v4][${step}] connectivity ${result.connected ? 'complete' : 'incomplete'} | evidence ${evidenceEntities.join(', ')} | connector entities ${result.entities.length} | joins ${result.joins.length}`);
+  return result;
+}
+
 export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], log = () => {} }) {
   const usage = { prompt:0, completion:0, total:0 };
   const index = buildGraphIndex(graph);
@@ -82,9 +106,11 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   const dimensions = logicalRequest.dimensions.map((item) => item.name);
   const accepted = new Map();
   const traversedJoins = new Map();
+  const connectorEntities = new Set();
   const frontier = new Frontier();
   const events = [];
   const stepRef = { value:0 };
+  let connectivity = null;
 
   const roots = rootStates(hierarchy, workflows);
   const workflowRootCount = roots.filter((state) => state.type === 'workflow').length;
@@ -110,8 +136,10 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
 
   while ((frontier.size || frontier.dormantSize) && stepRef.value < MAX_STEPS) {
     let coverage = coverageState(dimensions, accepted);
-    let connected = acceptedConnected(accepted, traversedJoins);
-    if (!coverage.missing.length && connected) break;
+    if (!coverage.missing.length) {
+      connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
+      break;
+    }
 
     if (!frontier.size && frontier.dormantSize) {
       await activateDormant({ frontier, logicalRequest, dimensions, missingDimensions:coverage.missing, client, model, usage, log, stepRef });
@@ -137,8 +165,10 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       accepted.set(entityKey, existing);
       if (covered.length) events.push({ step:stepRef.value, action:'coverage', entity:current.entityName, covered });
       coverage = coverageState(dimensions, accepted);
-      connected = acceptedConnected(accepted, traversedJoins);
-      if (!coverage.missing.length && connected) break;
+      if (!coverage.missing.length) {
+        connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
+        break;
+      }
     }
 
     const candidates = expandState(current, {
@@ -155,7 +185,11 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       missingDimensions:coverage.missing,
       path,
       candidates,
-      client, model, usage, log, step:++stepRef.value
+      client,
+      model,
+      usage,
+      log,
+      step:++stepRef.value
     });
     const nextPaths = scored.scored.map((item) => nextPath(path, item));
     frontier.add(nextPaths);
@@ -172,20 +206,40 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   }
 
   const coverage = coverageState(dimensions, accepted);
-  const connected = acceptedConnected(accepted, traversedJoins);
+  if (!coverage.missing.length && !connectivity) {
+    connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
+  }
+  const connected = !coverage.missing.length
+    ? !!connectivity?.connected
+    : acceptedConnected(accepted, traversedJoins);
   const complete = !coverage.missing.length && connected;
-  const grounded = acceptedGraph(
-    new Map([...accepted].map(([k, item]) => [k, { entity:item.entity }])),
-    traversedJoins,
-    index
-  );
-  log('query_v4_search_complete', { complete, connected, coverage, accepted:[...accepted.values()], joins:[...traversedJoins.values()], frontier:frontier.snapshot(coverage.missing), events, cumulativeUsage:{...usage} });
+
+  const groundedAccepted = new Map([...accepted].map(([k, item]) => [k, { entity:item.entity }]));
+  for (const entityKey of connectorEntities) {
+    if (groundedAccepted.has(entityKey)) continue;
+    const entity = index.entities.get(entityKey);
+    if (entity) groundedAccepted.set(entityKey, { entity:entity.name });
+  }
+  const grounded = acceptedGraph(groundedAccepted, traversedJoins, index);
+
+  log('query_v4_search_complete', {
+    complete,
+    connected,
+    coverage,
+    accepted:[...accepted.values()],
+    connectivity,
+    joins:[...traversedJoins.values()],
+    frontier:frontier.snapshot(coverage.missing),
+    events,
+    cumulativeUsage:{...usage}
+  });
 
   const finalPayload = {
     question,
     logicalRequest,
     status:{ complete, connected, missingDimensions:coverage.missing, steps:stepRef.value },
     acceptedEntities:[...accepted.values()].filter((item) => item.covered.length),
+    connectivity,
     evidencedGraph:grounded
   };
   const finalCall = await modelJson(client, model, FINAL_SYSTEM, finalPayload, { maxTokens:900 });
@@ -202,6 +256,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       steps:stepRef.value,
       coverage,
       accepted:[...accepted.values()],
+      connectivity,
       frontier:frontier.snapshot(coverage.missing),
       localGraph:{ entities:grounded.entities.map((entity) => entity.name), joins:grounded.joins },
       events,
