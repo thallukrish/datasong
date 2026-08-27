@@ -7,6 +7,7 @@ import { runSemanticDfsQuery } from './queryEngine.js';
 
 export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
   registerQueryV3Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog });
+  console.log('[DataSong v2] QUERY V3: semantic best-first state search with global confidence frontier → /api/query-map-v3');
 
   const queryRunPath = () => {
     const dir = path.join(dataRoot, 'query-runs-v2');
