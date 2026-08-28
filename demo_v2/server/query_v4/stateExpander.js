@@ -33,6 +33,19 @@ function groundEntityState(state, entityName, index, semanticHints) {
   };
 }
 
+export function groundEntityForRepair(entityName, { index, semanticHints }) {
+  const entity = index.entities.get(key(entityName));
+  if (!entity) return null;
+  return groundEntityState({
+    id:`repair-anchor:${key(entityName)}`,
+    name:entity.name || entityName,
+    type:'entity',
+    description:text(entity.description, 180),
+    entityName:entity.name || entityName,
+    edge:{ kind:'repair_anchor' }
+  }, entityName, index, semanticHints);
+}
+
 function linkedEntityState(entityName, join, hierarchy, index, semanticHints) {
   const entity = index.entities.get(key(entityName));
   const pathNode = arr(hierarchy.pathsByEntity.get(key(entityName)))[0];

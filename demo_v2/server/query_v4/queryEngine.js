@@ -6,7 +6,7 @@ import { activeScore } from '../query_v3/pathScore.js';
 import { connectEvidenceEntities } from './connectivity.js';
 import { deriveDimensions, scoreNextStates } from './scorer.js';
 import { coverageState, evaluateEntityCoverage } from './coverage.js';
-import { expandLinkedEntities, expandState, rootStates } from './stateExpander.js';
+import { expandLinkedEntities, expandState, groundEntityForRepair, rootStates } from './stateExpander.js';
 import { verifyAnswerability } from './verifier.js';
 
 const MAX_STEPS = 64;
@@ -110,16 +110,6 @@ function groundedGraph({ accepted, connectorEntities, traversedJoins, index }) {
   return acceptedGraph(groundedAccepted, traversedJoins, index);
 }
 
-function repairAnchorState(entityName) {
-  return {
-    id:`repair-anchor:${key(entityName)}`,
-    name:entityName,
-    type:'entity',
-    entityName,
-    edge:{ kind:'repair_anchor' }
-  };
-}
-
 function reopenCoverage(accepted, reopenDimensions) {
   const reopenKeys = new Set(reopenDimensions.map(key));
   const priorProviders = [];
@@ -136,6 +126,24 @@ function reopenCoverage(accepted, reopenDimensions) {
     item.covered = kept;
   }
   return { priorProviders:[...new Set(priorProviders)], locked };
+}
+
+function mergeRepairCoverage({ accepted, entityName, covered, pathNames, reopen, locked, events, log, step }) {
+  const allowed = new Set(reopen.map(key));
+  const repairCovered = covered.filter((item) => allowed.has(key(item.dimension)));
+  const entityKey = key(entityName);
+  const existing = accepted.get(entityKey) || { entity:entityName, covered:[], paths:[] };
+  const byDimension = new Map(arr(existing.covered).map((item) => [key(item.dimension), item]));
+  for (const item of repairCovered) if (!byDimension.has(key(item.dimension))) byDimension.set(key(item.dimension), item);
+  existing.covered = [...byDimension.values()];
+  if (!existing.paths.some((p) => p.join('>') === pathNames.join('>'))) existing.paths.push(pathNames);
+  accepted.set(entityKey, existing);
+  if (repairCovered.length) {
+    const coverageEvent = { step, action:'repair_coverage', entity:entityName, covered:repairCovered, locked };
+    events.push(coverageEvent);
+    log('query_v4_repair_coverage', coverageEvent);
+  }
+  return repairCovered;
 }
 
 async function runFocusedRepair({
@@ -173,8 +181,51 @@ async function runFocusedRepair({
   log('query_v4_repair_start', repairEvent);
 
   for (const anchor of anchors) {
-    const parent = { states:[repairAnchorState(anchor)], score:{}, joins:[] };
-    const candidates = expandLinkedEntities(parent.states[0], {
+    const anchorState = groundEntityForRepair(anchor, { index, semanticHints });
+    if (!anchorState) continue;
+    const anchorPath = { states:[anchorState], score:{}, joins:[] };
+    let coverage = coverageState(dimensions, accepted);
+    const anchorCovered = await evaluateEntityCoverage({
+      state:anchorState,
+      dimensions,
+      missingDimensions:coverage.missing,
+      client,
+      model,
+      usage,
+      log,
+      step:++stepRef.value,
+      repairContext:{
+        requirement:verification.requirement || '',
+        locked,
+        path:[anchorState.name]
+      }
+    });
+    const acceptedHere = mergeRepairCoverage({
+      accepted,
+      entityName:anchorState.entityName,
+      covered:anchorCovered,
+      pathNames:[anchorState.name],
+      reopen,
+      locked,
+      events,
+      log,
+      step:stepRef.value
+    });
+    const anchorEvent = {
+      step:stepRef.value,
+      action:'repair_anchor_evaluation',
+      anchor:anchorState.entityName,
+      covered:acceptedHere,
+      requirement:verification.requirement || '',
+      locked
+    };
+    events.push(anchorEvent);
+    log('query_v4_repair_anchor', anchorEvent);
+
+    coverage = coverageState(dimensions, accepted);
+    if (!coverage.missing.length) continue;
+
+    const candidates = expandLinkedEntities(anchorState, {
       hierarchy,
       index,
       semanticHints,
@@ -184,13 +235,13 @@ async function runFocusedRepair({
     const scored = await scoreNextStates({
       intent:`Repair only: ${verification.requirement || reopen.join(', ')}. Preserve locked evidence.`,
       dimensions,
-      missingDimensions:coverageState(dimensions, accepted).missing,
-      path:parent,
+      missingDimensions:coverage.missing,
+      path:anchorPath,
       candidates,
       client, model, usage, log, step:++stepRef.value
     });
-    repairFrontier.add(scored.scored.map((item) => nextPath(parent, item)));
-    repairFrontier.addDormant(parent, scored.omitted);
+    repairFrontier.add(scored.scored.map((item) => nextPath(anchorPath, item)));
+    repairFrontier.addDormant(anchorPath, scored.omitted);
   }
 
   let selections = 0;
@@ -238,20 +289,17 @@ async function runFocusedRepair({
           path:path.states.map((state) => state.name)
         }
       });
-      const allowed = new Set(reopen.map(key));
-      const repairCovered = covered.filter((item) => allowed.has(key(item.dimension)));
-      const entityKey = key(current.entityName);
-      const existing = accepted.get(entityKey) || { entity:current.entityName, covered:[], paths:[] };
-      const byDimension = new Map(arr(existing.covered).map((item) => [key(item.dimension), item]));
-      for (const item of repairCovered) if (!byDimension.has(key(item.dimension))) byDimension.set(key(item.dimension), item);
-      existing.covered = [...byDimension.values()];
-      if (!existing.paths.some((p) => p.join('>') === path.states.map((state) => state.name).join('>'))) existing.paths.push(path.states.map((state) => state.name));
-      accepted.set(entityKey, existing);
-      if (repairCovered.length) {
-        const coverageEvent = { step:stepRef.value, action:'repair_coverage', entity:current.entityName, covered:repairCovered, locked };
-        events.push(coverageEvent);
-        log('query_v4_repair_coverage', coverageEvent);
-      }
+      mergeRepairCoverage({
+        accepted,
+        entityName:current.entityName,
+        covered,
+        pathNames:path.states.map((state) => state.name),
+        reopen,
+        locked,
+        events,
+        log,
+        step:stepRef.value
+      });
       coverage = coverageState(dimensions, accepted);
       if (!coverage.missing.length) break;
     }
@@ -269,7 +317,11 @@ async function runFocusedRepair({
       missingDimensions:coverageState(dimensions, accepted).missing,
       path,
       candidates,
-      client, model, usage, log, step:++stepRef.value
+      client,
+      model,
+      usage,
+      log,
+      step:++stepRef.value
     });
     repairFrontier.add(scored.scored.map((item) => nextPath(path, item)));
     repairFrontier.addDormant(path, scored.omitted);
