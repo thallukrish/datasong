@@ -138,7 +138,7 @@ export function expandState(state, { hierarchy, index, semanticHints, visitedEnt
       if (!k || visitedEntityKeys.has(k) || seen.has(k) || !index.entities.has(k)) return null;
       seen.add(k);
       const entity = index.entities.get(k);
-      const pathNode = arr(hierarchy.pathsByEntity.get(k)))[0];
+      const pathNode = arr(hierarchy.pathsByEntity.get(k))[0];
       const node = pathNode ? hierarchy.byId.get(pathNode.pathId) : null;
       return groundEntityState({
         id:`workflow-entity:${key(state.workflowId)}:${k}`,
