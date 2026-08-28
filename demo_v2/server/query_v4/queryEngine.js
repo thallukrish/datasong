@@ -10,32 +10,11 @@ import { expandLinkedEntities, expandState, groundEntityForRepair, rootStates } 
 import { verifyAnswerability } from './verifier.js';
 
 const MAX_STEPS = 64;
-const REPAIR_MAX_SELECTIONS = 10;
-const FINAL_SYSTEM = `Answer using ONLY the evidence-backed entities and evidenced joins supplied. Every selected entity contributes all fields, represented with field="*". Join fields may appear only from supplied keyMaps. The answerability verification is authoritative: if verification.answerable is false, do NOT claim the requested result is computable; concisely explain the unresolved requirement instead. If exploration is incomplete, say so and name missing dimensions or missing connectivity. Return {"answer":"concise","dataView":{"grain":"","select":[{"entity":"","field":"*","role":"dimension|measure|time|filter|attribute|derived"}],"joins":[{"left":"Entity.joinField","right":"Entity.joinField","relation":"","evidenced":true}],"missing":[]},"nextStep":"optional"}.`;
+const MAX_VERIFICATIONS = 2;
+const FINAL_SYSTEM = `Answer using ONLY the evidence-backed entities and evidenced joins supplied. Evidence bindings may be fields or simple expressions over supplied fields. Join fields may appear only from supplied keyMaps. The answerability verification is authoritative: if verification.answerable is false, do NOT claim the requested result is computable; concisely explain the unresolved requirement instead. If exploration is incomplete, say so and name missing requirements or missing connectivity. Return {"answer":"concise","dataView":{"grain":"","select":[{"entity":"","field":"field-or-expression","role":"dimension|measure|time|filter|attribute|derived"}],"joins":[{"left":"Entity.joinField","right":"Entity.joinField","relation":"","evidenced":true}],"missing":[]},"nextStep":"optional"}.`;
 
 function joinSignature(join) {
   return `${key(join?.from)}|${key(join?.to)}|${key(join?.relationship)}|${arr(join?.keyMaps).map((m) => `${key(m.fieldName)}:${key(m.relatedFieldName)}`).join(',')}`;
-}
-
-function acceptedConnected(accepted, joins) {
-  const names = [...accepted.values()].filter((item) => arr(item.covered).length).map((item) => item.entity);
-  if (names.length <= 1) return true;
-  const wanted = new Set(names.map(key));
-  const adjacency = new Map();
-  for (const join of joins.values()) {
-    const a = key(join.from), b = key(join.to);
-    if (!adjacency.has(a)) adjacency.set(a, new Set());
-    if (!adjacency.has(b)) adjacency.set(b, new Set());
-    adjacency.get(a).add(b); adjacency.get(b).add(a);
-  }
-  const seen = new Set(), queue = [key(names[0])];
-  while (queue.length) {
-    const current = queue.shift();
-    if (seen.has(current)) continue;
-    seen.add(current);
-    for (const next of adjacency.get(current) || []) if (!seen.has(next)) queue.push(next);
-  }
-  return [...wanted].every((name) => seen.has(name));
 }
 
 function selectedEntityKeys(path) {
@@ -101,7 +80,9 @@ function runConnectivity({ accepted, index, traversedJoins, connectorEntities, e
 }
 
 function groundedGraph({ accepted, connectorEntities, traversedJoins, index }) {
-  const groundedAccepted = new Map([...accepted].map(([k, item]) => [k, { entity:item.entity }]));
+  const groundedAccepted = new Map([...accepted]
+    .filter(([, item]) => arr(item.covered).length)
+    .map(([k, item]) => [k, { entity:item.entity }]));
   for (const entityKey of connectorEntities) {
     if (groundedAccepted.has(entityKey)) continue;
     const entity = index.entities.get(entityKey);
@@ -110,236 +91,41 @@ function groundedGraph({ accepted, connectorEntities, traversedJoins, index }) {
   return acceptedGraph(groundedAccepted, traversedJoins, index);
 }
 
-function reopenCoverage(accepted, reopenDimensions) {
-  const reopenKeys = new Set(reopenDimensions.map(key));
-  const priorProviders = [];
-  const locked = [];
-  for (const item of accepted.values()) {
-    const kept = [];
-    for (const coverage of arr(item.covered)) {
-      if (reopenKeys.has(key(coverage.dimension))) priorProviders.push(item.entity);
-      else {
-        kept.push(coverage);
-        locked.push({ entity:item.entity, dimension:coverage.dimension, field:coverage.field });
-      }
-    }
-    item.covered = kept;
-  }
-  return { priorProviders:[...new Set(priorProviders)], locked };
-}
-
-function mergeRepairCoverage({ accepted, entityName, covered, pathNames, reopen, locked, events, log, step }) {
-  const allowed = new Set(reopen.map(key));
-  const repairCovered = covered.filter((item) => allowed.has(key(item.dimension)));
+function mergeCoverage({ accepted, entityName, covered, pathNames, events, step, action = 'coverage' }) {
   const entityKey = key(entityName);
   const existing = accepted.get(entityKey) || { entity:entityName, covered:[], paths:[] };
   const byDimension = new Map(arr(existing.covered).map((item) => [key(item.dimension), item]));
-  for (const item of repairCovered) if (!byDimension.has(key(item.dimension))) byDimension.set(key(item.dimension), item);
+  for (const item of arr(covered)) if (!byDimension.has(key(item.dimension))) byDimension.set(key(item.dimension), item);
   existing.covered = [...byDimension.values()];
   if (!existing.paths.some((p) => p.join('>') === pathNames.join('>'))) existing.paths.push(pathNames);
   accepted.set(entityKey, existing);
-  if (repairCovered.length) {
-    const coverageEvent = { step, action:'repair_coverage', entity:entityName, covered:repairCovered, locked };
-    events.push(coverageEvent);
-    log('query_v4_repair_coverage', coverageEvent);
-  }
-  return repairCovered;
+  if (arr(covered).length) events.push({ step, action, entity:entityName, covered });
 }
 
-async function runFocusedRepair({
-  verification,
-  logicalRequest,
-  dimensions,
-  accepted,
-  hierarchy,
-  index,
-  semanticHints,
-  traversedJoins,
-  client,
-  model,
-  usage,
-  log,
-  events,
-  stepRef
-}) {
-  const reopen = arr(verification?.reopen).filter(Boolean);
-  if (!reopen.length) return { attempted:false, repaired:false, reopen:[], anchors:[], locked:[] };
-
-  const { priorProviders, locked } = reopenCoverage(accepted, reopen);
-  const suppliedAnchors = arr(verification?.anchors).filter((name) => index.entities.has(key(name)));
-  const anchors = [...new Set(suppliedAnchors.length ? suppliedAnchors : priorProviders)].filter((name) => index.entities.has(key(name)));
-  const repairFrontier = new Frontier();
-  const repairEvent = {
-    step:++stepRef.value,
-    action:'repair_start',
-    requirement:verification.requirement || '',
-    reopen,
-    anchors,
-    locked
-  };
-  events.push(repairEvent);
-  log('query_v4_repair_start', repairEvent);
-
-  for (const anchor of anchors) {
-    const anchorState = groundEntityForRepair(anchor, { index, semanticHints });
-    if (!anchorState) continue;
-    const anchorPath = { states:[anchorState], score:{}, joins:[] };
-    let coverage = coverageState(dimensions, accepted);
-    const anchorCovered = await evaluateEntityCoverage({
-      state:anchorState,
-      dimensions,
-      missingDimensions:coverage.missing,
-      client,
-      model,
-      usage,
-      log,
-      step:++stepRef.value,
-      repairContext:{
-        requirement:verification.requirement || '',
-        locked,
-        path:[anchorState.name]
-      }
-    });
-    const acceptedHere = mergeRepairCoverage({
-      accepted,
-      entityName:anchorState.entityName,
-      covered:anchorCovered,
-      pathNames:[anchorState.name],
-      reopen,
-      locked,
-      events,
-      log,
-      step:stepRef.value
-    });
-    const anchorEvent = {
-      step:stepRef.value,
-      action:'repair_anchor_evaluation',
-      anchor:anchorState.entityName,
-      covered:acceptedHere,
-      requirement:verification.requirement || '',
-      locked
-    };
-    events.push(anchorEvent);
-    log('query_v4_repair_anchor', anchorEvent);
-
-    coverage = coverageState(dimensions, accepted);
-    if (!coverage.missing.length) continue;
-
-    const candidates = expandLinkedEntities(anchorState, {
-      hierarchy,
-      index,
-      semanticHints,
-      visitedEntityKeys:new Set([key(anchor)])
-    });
-    if (!candidates.length) continue;
-    const scored = await scoreNextStates({
-      intent:`Repair only: ${verification.requirement || reopen.join(', ')}. Preserve locked evidence.`,
-      dimensions,
-      missingDimensions:coverage.missing,
-      path:anchorPath,
-      candidates,
-      client, model, usage, log, step:++stepRef.value
-    });
-    repairFrontier.add(scored.scored.map((item) => nextPath(anchorPath, item)));
-    repairFrontier.addDormant(anchorPath, scored.omitted);
+function reopenDimensions(accepted, dimensions) {
+  const wanted = new Set(arr(dimensions).map(key));
+  for (const item of accepted.values()) {
+    item.covered = arr(item.covered).filter((coverage) => !wanted.has(key(coverage.dimension)));
   }
+}
 
-  let selections = 0;
-  while ((repairFrontier.size || repairFrontier.dormantSize) && selections < REPAIR_MAX_SELECTIONS) {
-    let coverage = coverageState(dimensions, accepted);
-    if (!coverage.missing.length) break;
-
-    if (!repairFrontier.size && repairFrontier.dormantSize) {
-      await activateDormant({
-        frontier:repairFrontier,
-        logicalRequest:{ intent:`Repair only: ${verification.requirement || reopen.join(', ')}. Preserve locked evidence.` },
-        dimensions,
-        missingDimensions:coverage.missing,
-        client, model, usage, log, stepRef
-      });
-      if (!repairFrontier.size) continue;
-    }
-
-    const path = repairFrontier.popBest(coverage.missing);
-    if (!path) continue;
-    selections += 1;
-    const current = path.states.at(-1);
-    for (const join of arr(path.joins)) traversedJoins.set(joinSignature(join), join);
-    const selectedEvent = {
-      step:stepRef.value,
-      action:'repair_select',
-      requirement:verification.requirement || '',
-      locked,
-      ...compactPath(path, coverage.missing),
-      frontierSize:repairFrontier.size,
-      dormantSize:repairFrontier.dormantSize
-    };
-    events.push(selectedEvent);
-    log('query_v4_repair_select', selectedEvent);
-
-    if (current.type === 'entity' && current.entityName) {
-      const covered = await evaluateEntityCoverage({
-        state:current,
-        dimensions,
-        missingDimensions:coverage.missing,
-        client, model, usage, log, step:++stepRef.value,
-        repairContext:{
-          requirement:verification.requirement || '',
-          locked,
-          path:path.states.map((state) => state.name)
-        }
-      });
-      mergeRepairCoverage({
-        accepted,
-        entityName:current.entityName,
-        covered,
-        pathNames:path.states.map((state) => state.name),
-        reopen,
-        locked,
-        events,
-        log,
-        step:stepRef.value
-      });
-      coverage = coverageState(dimensions, accepted);
-      if (!coverage.missing.length) break;
-    }
-
-    const candidates = expandLinkedEntities(current, {
-      hierarchy,
-      index,
-      semanticHints,
-      visitedEntityKeys:selectedEntityKeys(path)
-    });
-    if (!candidates.length) continue;
-    const scored = await scoreNextStates({
-      intent:`Repair only: ${verification.requirement || reopen.join(', ')}. Preserve locked evidence.`,
-      dimensions,
-      missingDimensions:coverageState(dimensions, accepted).missing,
-      path,
-      candidates,
-      client,
-      model,
-      usage,
-      log,
-      step:++stepRef.value
-    });
-    repairFrontier.add(scored.scored.map((item) => nextPath(path, item)));
-    repairFrontier.addDormant(path, scored.omitted);
+function pruneUnconnectedEvidence(accepted, connectivity) {
+  const unconnected = new Set(arr(connectivity?.unconnected).map(key));
+  if (!unconnected.size) return [];
+  const reopened = [];
+  for (const item of accepted.values()) {
+    if (!unconnected.has(key(item.entity))) continue;
+    for (const coverage of arr(item.covered)) reopened.push(coverage.dimension);
+    item.covered = [];
   }
+  return [...new Set(reopened)];
+}
 
-  const finalCoverage = coverageState(dimensions, accepted);
-  const result = {
-    attempted:true,
-    repaired:reopen.every((dimension) => !finalCoverage.missing.some((missing) => key(missing) === key(dimension))),
-    reopen,
-    anchors,
-    locked,
-    selections,
-    remaining:finalCoverage.missing
-  };
-  log('query_v4_repair_complete', { ...result, cumulativeUsage:{...usage} });
-  events.push({ step:stepRef.value, action:'repair_complete', ...result });
-  return result;
+function anchorPath(entityName, index, semanticHints, reopen) {
+  const state = groundEntityForRepair(entityName, { index, semanticHints });
+  if (!state) return null;
+  const score = Object.fromEntries(arr(reopen).map((dimension) => [dimension, 1]));
+  return { states:[state], score, joins:[] };
 }
 
 export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], log = () => {} }) {
@@ -357,7 +143,9 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   const stepRef = { value:0 };
   let connectivity = null;
   let verification = null;
-  let repair = { attempted:false, repaired:false, reopen:[], anchors:[], locked:[] };
+  let verificationPass = 0;
+  let verificationExhausted = false;
+  let lastConnectivityCoverage = '';
 
   const roots = rootStates(hierarchy, workflows);
   const workflowRootCount = roots.filter((state) => state.type === 'workflow').length;
@@ -381,41 +169,145 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   frontier.add(initial.scored.map((item) => nextPath(rootParent, item)));
   frontier.addDormant(rootParent, initial.omitted);
 
-  while ((frontier.size || frontier.dormantSize) && stepRef.value < MAX_STEPS) {
+  while ((frontier.size || frontier.dormantSize) && stepRef.value < MAX_STEPS && !verificationExhausted) {
     let coverage = coverageState(dimensions, accepted);
+
     if (!coverage.missing.length) {
-      connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
-      break;
+      const signature = [...accepted.values()]
+        .filter((item) => arr(item.covered).length)
+        .map((item) => `${key(item.entity)}:${arr(item.covered).map((c) => key(c.dimension)).sort().join(',')}`)
+        .sort().join('|');
+      if (signature !== lastConnectivityCoverage) {
+        connectorEntities.clear();
+        connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
+        lastConnectivityCoverage = signature;
+      }
+
+      if (connectivity?.connected) {
+        const grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
+        verificationPass += 1;
+        verification = await verifyAnswerability({
+          question,
+          logicalRequest,
+          accepted,
+          connectivity,
+          evidencedGraph:grounded,
+          client,
+          model,
+          usage,
+          log,
+          pass:verificationPass
+        });
+        if (verification.answerable) break;
+        if (verificationPass >= MAX_VERIFICATIONS || !verification.reopen.length) {
+          verificationExhausted = true;
+          break;
+        }
+
+        reopenDimensions(accepted, verification.reopen);
+        const reopenEvent = {
+          step:++stepRef.value,
+          action:'verification_reopen',
+          reopen:verification.reopen,
+          anchors:verification.anchors,
+          requirement:verification.requirement,
+          reason:verification.reason
+        };
+        events.push(reopenEvent);
+        log('query_v4_verification_reopen', reopenEvent);
+        for (const anchor of arr(verification.anchors)) {
+          const path = anchorPath(anchor, index, semanticHints, verification.reopen);
+          if (path) frontier.add([path]);
+        }
+        connectivity = null;
+        lastConnectivityCoverage = '';
+        continue;
+      }
+
+      const structurallyReopened = pruneUnconnectedEvidence(accepted, connectivity);
+      if (structurallyReopened.length) {
+        const event = {
+          step:++stepRef.value,
+          action:'connectivity_reopen',
+          reopened:structurallyReopened,
+          unconnected:arr(connectivity?.unconnected)
+        };
+        events.push(event);
+        log('query_v4_connectivity_reopen', event);
+        connectivity = null;
+        lastConnectivityCoverage = '';
+        coverage = coverageState(dimensions, accepted);
+      }
     }
 
+    coverage = coverageState(dimensions, accepted);
+    const searchNeeds = coverage.missing.length ? coverage.missing : dimensions;
+
     if (!frontier.size && frontier.dormantSize) {
-      await activateDormant({ frontier, logicalRequest, dimensions, missingDimensions:coverage.missing, client, model, usage, log, stepRef });
+      await activateDormant({ frontier, logicalRequest, dimensions, missingDimensions:searchNeeds, client, model, usage, log, stepRef });
       if (!frontier.size) continue;
     }
 
-    const path = frontier.popBest(coverage.missing);
+    const path = frontier.popBest(searchNeeds);
     if (!path) continue;
     const current = path.states.at(-1);
-    events.push({ step:stepRef.value, action:'select_path', seedSource:path.states[0]?.type === 'workflow' ? 'workflow' : 'directory', ...compactPath(path, coverage.missing), frontierSize:frontier.size, dormantSize:frontier.dormantSize });
-    console.log(`[lemap query-v4][${stepRef.value}] ${path.states.map((state) => state.name).join(' → ')} | priority ${activeScore(path.score, coverage.missing).toFixed(2)} | missing ${coverage.missing.join(', ') || '-'} | frontier ${frontier.size}+${frontier.dormantSize}`);
+    events.push({
+      step:stepRef.value,
+      action:'select_path',
+      seedSource:path.states[0]?.type === 'workflow' ? 'workflow' : 'directory',
+      ...compactPath(path, searchNeeds),
+      frontierSize:frontier.size,
+      dormantSize:frontier.dormantSize
+    });
+    console.log(`[lemap query-v4][${stepRef.value}] ${path.states.map((state) => state.name).join(' → ')} | priority ${activeScore(path.score, searchNeeds).toFixed(2)} | missing ${coverage.missing.join(', ') || '-'} | frontier ${frontier.size}+${frontier.dormantSize}`);
 
     for (const join of arr(path.joins)) traversedJoins.set(joinSignature(join), join);
 
     if (current.type === 'entity' && current.entityName) {
-      const covered = await evaluateEntityCoverage({ state:current, dimensions, missingDimensions:coverage.missing, client, model, usage, log, step:++stepRef.value });
-      const entityKey = key(current.entityName);
-      const existing = accepted.get(entityKey) || { entity:current.entityName, covered:[], paths:[] };
-      const byDimension = new Map(arr(existing.covered).map((item) => [item.dimension, item]));
-      for (const item of covered) if (!byDimension.has(item.dimension)) byDimension.set(item.dimension, item);
-      existing.covered = [...byDimension.values()];
-      if (!existing.paths.some((p) => p.join('>') === path.states.map((state) => state.name).join('>'))) existing.paths.push(path.states.map((state) => state.name));
-      accepted.set(entityKey, existing);
-      if (covered.length) events.push({ step:stepRef.value, action:'coverage', entity:current.entityName, covered });
-      coverage = coverageState(dimensions, accepted);
-      if (!coverage.missing.length) {
-        connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
-        break;
+      const fkCandidates = expandLinkedEntities(current, {
+        hierarchy,
+        index,
+        semanticHints,
+        visitedEntityKeys:selectedEntityKeys(path)
+      });
+      const inspection = await evaluateEntityCoverage({
+        state:current,
+        dimensions,
+        missingDimensions:searchNeeds,
+        fkCandidates,
+        intent:logicalRequest.intent,
+        client,
+        model,
+        usage,
+        log,
+        step:++stepRef.value,
+        repairContext:verification && !verification.answerable ? {
+          requirement:verification.requirement || '',
+          locked:[...accepted.values()].flatMap((item) => arr(item.covered).map((coverage) => ({ entity:item.entity, dimension:coverage.dimension, field:coverage.field }))),
+          path:path.states.map((state) => state.name)
+        } : null
+      });
+
+      mergeCoverage({
+        accepted,
+        entityName:current.entityName,
+        covered:inspection.covered,
+        pathNames:path.states.map((state) => state.name),
+        events,
+        step:stepRef.value
+      });
+
+      const followed = inspection.follow.map((item) => nextPath(path, item));
+      frontier.add(followed);
+      if (followed.length) {
+        events.push({
+          step:stepRef.value,
+          action:'entity_follow',
+          from:current.name,
+          targets:followed.map((next) => ({ entity:next.states.at(-1).name, score:next.score }))
+        });
       }
+      continue;
     }
 
     const candidates = expandState(current, {
@@ -429,7 +321,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     const scored = await scoreNextStates({
       intent:logicalRequest.intent,
       dimensions,
-      missingDimensions:coverage.missing,
+      missingDimensions:searchNeeds,
       path,
       candidates,
       client,
@@ -445,77 +337,19 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       step:stepRef.value,
       action:'expand',
       from:current.name,
-      candidates:nextPaths.map((item) => compactPath(item, coverage.missing)),
+      candidates:nextPaths.map((item) => compactPath(item, searchNeeds)),
       omitted:scored.omitted.map((state) => state.name),
       frontierSize:frontier.size,
       dormantSize:frontier.dormantSize
     });
   }
 
-  let coverage = coverageState(dimensions, accepted);
+  const coverage = coverageState(dimensions, accepted);
   if (!coverage.missing.length && !connectivity) {
-    connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value });
+    connectorEntities.clear();
+    connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value, phase:'final' });
   }
-
-  if (!coverage.missing.length && connectivity?.connected) {
-    let grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
-    verification = await verifyAnswerability({
-      question,
-      logicalRequest,
-      accepted,
-      connectivity,
-      evidencedGraph:grounded,
-      client,
-      model,
-      usage,
-      log,
-      pass:1
-    });
-
-    if (!verification.answerable && verification.reopen.length) {
-      repair = await runFocusedRepair({
-        verification,
-        logicalRequest,
-        dimensions,
-        accepted,
-        hierarchy,
-        index,
-        semanticHints,
-        traversedJoins,
-        client,
-        model,
-        usage,
-        log,
-        events,
-        stepRef
-      });
-      coverage = coverageState(dimensions, accepted);
-      if (!coverage.missing.length) {
-        connectorEntities.clear();
-        connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value, phase:'repair' });
-        if (connectivity.connected) {
-          grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
-          verification = await verifyAnswerability({
-            question,
-            logicalRequest,
-            accepted,
-            connectivity,
-            evidencedGraph:grounded,
-            client,
-            model,
-            usage,
-            log,
-            pass:2
-          });
-        }
-      }
-    }
-  }
-
-  coverage = coverageState(dimensions, accepted);
-  const connected = !coverage.missing.length
-    ? !!connectivity?.connected
-    : acceptedConnected(accepted, traversedJoins);
+  const connected = !coverage.missing.length && !!connectivity?.connected;
   const complete = !coverage.missing.length && connected && verification?.answerable === true;
   const grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
 
@@ -526,9 +360,8 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     accepted:[...accepted.values()],
     connectivity,
     verification,
-    repair,
     joins:[...traversedJoins.values()],
-    frontier:frontier.snapshot(coverage.missing),
+    frontier:frontier.snapshot(coverage.missing.length ? coverage.missing : dimensions),
     events,
     cumulativeUsage:{...usage}
   });
@@ -540,7 +373,6 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     acceptedEntities:[...accepted.values()].filter((item) => item.covered.length),
     connectivity,
     verification,
-    repair,
     evidencedGraph:grounded
   };
   const finalCall = await modelJson(client, model, FINAL_SYSTEM, finalPayload, { maxTokens:900 });
@@ -550,7 +382,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   return {
     ...finalCall.parsed,
     investigation:{
-      mode:'semantic-best-first-parallel-workflow-directory-v4',
+      mode:'semantic-best-first-workflow-fk-guided-v4',
       logicalRequest,
       complete,
       connected,
@@ -559,8 +391,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       accepted:[...accepted.values()],
       connectivity,
       verification,
-      repair,
-      frontier:frontier.snapshot(coverage.missing),
+      frontier:frontier.snapshot(coverage.missing.length ? coverage.missing : dimensions),
       localGraph:{ entities:grounded.entities.map((entity) => entity.name), joins:grounded.joins },
       events,
       usage
