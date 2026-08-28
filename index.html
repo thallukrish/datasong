@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>lemap — the learning enterprise map</title>
-<meta name="description" content="lemap continuously learns from enterprise data, applications, code, workflows, documents, emails and conversations to build a living semantic map of how the business works.">
+<meta name="description" content="lemap automatically learns enterprise data relationships and workflows into a living semantic map that can be explored and queried for analytics, ML, operations and decision-making.">
 <style>
-:root{--black:#111;--text:#292929;--muted:#6e6e73;--line:#d2d2d7;--soft:#f5f5f7;--max:980px}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#fff;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}.page{max-width:var(--max);margin:auto;padding:0 32px}header{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.brand{font-size:20px;font-weight:600;letter-spacing:-.03em;color:var(--black)}a{color:inherit}.contact{text-decoration:none;color:var(--muted);font-size:14px}.intro{padding:92px 0 100px;max-width:800px}.intro h1{font-size:18px;font-weight:500;margin:0 0 28px;color:var(--black)}.intro .lead{font-size:clamp(32px,5vw,54px);line-height:1.08;letter-spacing:-.045em;font-weight:600;color:var(--black);margin:0 0 30px}.intro p{font-size:20px;line-height:1.5;color:var(--muted);max-width:760px;margin:0}.section{padding:72px 0;border-top:1px solid var(--line)}.label{font-size:14px;font-weight:600;color:var(--muted);text-transform:lowercase;margin:0 0 30px}.section p{font-size:20px;line-height:1.55;max-width:800px;margin:0 0 20px}.section p:last-child{margin-bottom:0}.strong{font-size:28px!important;line-height:1.35!important;letter-spacing:-.025em;color:var(--black);font-weight:500}.mapline{margin:42px 0 8px;padding:30px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;gap:12px;color:var(--muted);font-size:15px}.mapline b{color:var(--black);font-weight:500}.arrow{color:#aaa}.uses{margin-top:34px;color:var(--muted);font-size:15px}.how{margin-top:40px;display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.how div{padding:22px 18px 22px 0;font-size:15px;color:var(--muted)}.how div+div{padding-left:18px;border-left:1px solid var(--line)}.how span{display:block;font-size:12px;color:#aaa;margin-bottom:8px}.demo{margin-top:36px;background:var(--soft);padding:34px 36px;border-radius:18px}.demo p{font-size:17px}.demo .flows{font-size:14px;color:var(--muted);margin-top:24px}.demo-link{display:inline-block;margin-top:12px;color:var(--black);font-weight:500;text-decoration:none;border-bottom:1px solid #777}.pilot{padding:72px 0 90px;border-top:1px solid var(--line)}.pilot p{font-size:20px;max-width:760px}.email{display:inline-block;margin-top:16px;text-decoration:none;border-bottom:1px solid #777}footer{padding:24px 0 34px;border-top:1px solid var(--line);display:flex;justify-content:space-between;color:#999;font-size:12px}@media(max-width:760px){.page{padding:0 20px}.intro{padding:68px 0 74px}.section{padding:56px 0}.section p{font-size:18px}.strong{font-size:24px!important}.how{grid-template-columns:1fr}.how div,.how div+div{padding:17px 0;border-left:0;border-top:1px solid var(--line)}.how div:first-child{border-top:0}.demo{padding:26px 22px}footer{display:block}footer span{display:block;margin-top:5px}}
+:root{--black:#111;--text:#292929;--muted:#6e6e73;--line:#d2d2d7;--soft:#f5f5f7;--soft2:#fafafa;--max:980px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#fff;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}.page{max-width:var(--max);margin:auto;padding:0 32px}header{height:64px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.brand{font-size:20px;font-weight:600;letter-spacing:-.03em;color:var(--black)}a{color:inherit}.contact{text-decoration:none;color:var(--muted);font-size:14px}.intro{padding:88px 0 82px;max-width:850px}.intro h1{font-size:18px;font-weight:500;margin:0 0 26px;color:var(--black)}.intro .lead{font-size:clamp(34px,5.4vw,58px);line-height:1.06;letter-spacing:-.05em;font-weight:600;color:var(--black);margin:0 0 28px}.intro p{font-size:20px;line-height:1.5;color:var(--muted);max-width:790px;margin:0}.hero-actions{display:flex;gap:20px;align-items:center;margin-top:34px}.primary-link{display:inline-block;background:var(--black);color:#fff;text-decoration:none;padding:11px 16px;border-radius:999px;font-size:15px;font-weight:500}.secondary-link{font-size:15px;text-decoration:none;border-bottom:1px solid #999;color:var(--text)}.section{padding:70px 0;border-top:1px solid var(--line)}.label{font-size:14px;font-weight:600;color:var(--muted);text-transform:lowercase;margin:0 0 28px}.section p{font-size:20px;line-height:1.55;max-width:810px;margin:0 0 20px}.section p:last-child{margin-bottom:0}.strong{font-size:28px!important;line-height:1.35!important;letter-spacing:-.025em;color:var(--black);font-weight:500}.demo-stage{background:var(--black);color:#fff;border-radius:24px;padding:42px 44px;margin-top:34px}.demo-stage .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:#aaa;margin-bottom:18px}.demo-stage h3{font-size:30px;line-height:1.25;letter-spacing:-.03em;margin:0 0 18px;font-weight:550}.demo-stage p{font-size:17px;line-height:1.55;color:#c7c7c7;max-width:760px}.proofline{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#333;border:1px solid #333;border-radius:14px;overflow:hidden;margin:30px 0}.proofline div{background:#191919;padding:22px}.proofline span{display:block;font-size:11px;color:#888;margin-bottom:8px;text-transform:uppercase;letter-spacing:.06em}.proofline b{font-size:14px;font-weight:500;color:#fff}.demo-cta{display:inline-block;margin-top:8px;color:#fff;text-decoration:none;border-bottom:1px solid #888;font-weight:500}.note{font-size:13px!important;color:#999!important;margin-top:12px!important}.mapline{margin:40px 0 8px;padding:30px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;gap:12px;color:var(--muted);font-size:15px}.mapline b{color:var(--black);font-weight:500}.arrow{color:#aaa}.uses{margin-top:34px;color:var(--muted);font-size:15px}.how{margin-top:38px;display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.how div{padding:22px 18px 22px 0;font-size:15px;color:var(--muted)}.how div+div{padding-left:18px;border-left:1px solid var(--line)}.how span{display:block;font-size:12px;color:#aaa;margin-bottom:8px}.usegrid{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);border:1px solid var(--line);margin-top:36px}.usegrid div{background:#fff;padding:26px}.usegrid b{display:block;font-size:16px;margin-bottom:8px;color:var(--black)}.usegrid span{font-size:14px;line-height:1.5;color:var(--muted)}.contact-section{padding:72px 0 90px;border-top:1px solid var(--line)}.contact-section p{font-size:20px;max-width:760px}.email{display:inline-block;margin-top:14px;text-decoration:none;border-bottom:1px solid #777}footer{padding:24px 0 34px;border-top:1px solid var(--line);display:flex;justify-content:space-between;color:#999;font-size:12px}@media(max-width:760px){.page{padding:0 20px}.intro{padding:66px 0 62px}.section{padding:54px 0}.section p{font-size:18px}.strong{font-size:24px!important}.hero-actions{align-items:flex-start;flex-direction:column;gap:14px}.demo-stage{padding:30px 24px;border-radius:18px}.demo-stage h3{font-size:25px}.proofline{grid-template-columns:1fr}.how{grid-template-columns:1fr}.how div,.how div+div{padding:17px 0;border-left:0;border-top:1px solid var(--line)}.how div:first-child{border-top:0}.usegrid{grid-template-columns:1fr}footer{display:block}footer span{display:block;margin-top:5px}}
 </style>
 </head>
 <body><div class="page">
@@ -17,55 +17,61 @@
 <section class="intro">
 <h1>the learning enterprise map</h1>
 <p class="lead">A living map of how the enterprise works.</p>
-<p>Enterprise knowledge is scattered across data, applications, code, workflows, documents, emails and conversations. lemap continuously learns what these pieces mean and how they relate, building a shared enterprise mind for ML, analytics, decision-making, operations, support and engineering teams.</p>
+<p>lemap learns the relationships between enterprise data and the workflows that give that data business meaning — then makes the resulting map explorable and queryable for ML, analytics, operations, engineering and decision-making.</p>
+<div class="hero-actions"><a class="primary-link" href="#demo">see the working case ↓</a><a class="secondary-link" href="#what">what is lemap?</a></div>
 </section>
 
-<section class="section">
-<div class="label">why</div>
-<p class="strong">Using enterprise information usually begins with rediscovering what it means and how the business fits together.</p>
-<p>Data relationships live in databases. Processes live in applications and workflows. Exceptions and operational knowledge live in documents, emails, conversations and people's heads.</p>
-<p>Enormous time goes into repeatedly reconstructing this meaning — building data pipelines and views for analytics and ML, combining data across systems for questions such as sales, shipments or customers, tracing the impact of process and application changes, understanding how business workflows actually operate, and rediscovering tribal knowledge buried in documents, emails, conversations and people's heads.</p>
-<p>Much of this work starts with the same problem: understanding what things mean and how they connect.</p>
+<section class="section" id="demo">
+<div class="label">working experiment</div>
+<p class="strong">We gave lemap an unfamiliar open-source ecommerce application and let it figure out how the business works.</p>
+<p>No hand-built semantic model. lemap inspected the application's executable structure and data relationships, discovered business workflows, and built a persistent semantic map connecting the two.</p>
+<div class="demo-stage">
+<div class="eyebrow">moqui / popcommerce</div>
+<h3>From unfamiliar software → to a business map → to a business question.</h3>
+<p>The experiment uses an open-source ecommerce application with real entities, relationships, services and executable workflows. lemap learns the map first. A query then navigates that learned map to find the entities and workflow context relevant to the question.</p>
+<div class="proofline"><div><span>01 · learn</span><b>discover entities, relationships and workflows</b></div><div><span>02 · map</span><b>persist how data and business flows connect</b></div><div><span>03 · query</span><b>navigate only the relevant part of the map</b></div></div>
+<p>checkout · product search and cart · orders · payments · customer profile · inventory · returns · shipping · accounting</p>
+<a class="demo-cta" href="#query-demo">see what the query is doing →</a>
+<p class="note">The query UI is working for the first bounded case; the public interactive endpoint will be linked here when exposed.</p>
+</div>
 </section>
 
-<section class="section">
+<section class="section" id="query-demo">
+<div class="label">why the query matters</div>
+<p class="strong">The useful part is not finding a table. It is finding the business context around the data.</p>
+<p>A conventional catalog can tell you that fields and tables exist. lemap also learns how those entities participate in workflows — how an order is created, how a customer is connected to it, what gets persisted, and which surrounding relationships matter.</p>
+<p>So a query can start with business intent and navigate toward the relevant entities, relationships and learned workflows instead of forcing the user to reconstruct the application first.</p>
+</section>
+
+<section class="section" id="what">
 <div class="label">what</div>
-<p>lemap learns that meaning, keeps it current, and makes it available as a shared enterprise mind.</p>
-<div class="mapline"><span>data</span><span class="arrow">+</span><span>workflows</span><span class="arrow">+</span><span>code</span><span class="arrow">+</span><span>documents</span><span class="arrow">+</span><span>conversations</span><span class="arrow">→</span><b>enterprise semantic map</b></div>
-<p>The map connects business concepts, entities, relationships, data, workflows, systems, persistent objects and operational knowledge.</p>
+<p class="strong">The enterprise already contains its own map. It is just scattered across systems.</p>
+<p>Relationships live in schemas and persistent objects. Business behaviour lives in applications and workflows. Operational meaning accumulates in documents, messages and people's heads.</p>
+<div class="mapline"><span>data</span><span class="arrow">+</span><span>workflows</span><span class="arrow">+</span><span>applications</span><span class="arrow">+</span><span>documents</span><span class="arrow">+</span><span>conversations</span><span class="arrow">→</span><b>enterprise semantic map</b></div>
+<p>lemap is intended to learn that structure continuously rather than requiring people to remodel the enterprise manually every time they need a new view or answer.</p>
 <p class="uses">One shared map → data views for ML and analytics · business questions · operational tracing · support context · engineering understanding</p>
 </section>
 
 <section class="section">
 <div class="label">how</div>
 <p class="strong">It learns much like a new engineer joining the company.</p>
-<p>Inspect what is already there. Follow workflows and relationships. Form hypotheses about what the business is doing. Check them against more evidence. Keep updating the map.</p>
-<div class="how"><div><span>01</span>inspect evidence</div><div><span>02</span>follow relationships</div><div><span>03</span>form hypotheses</div><div><span>04</span>check evidence</div><div><span>05</span>update the map</div></div>
-<p style="margin-top:34px">New code, data or captured knowledge becomes new evidence. The map evolves instead of being manually remodelled.</p>
-</section>
-
-<section class="section" id="demo">
-<div class="label">see it learn</div>
-<p class="strong">We gave lemap an unfamiliar open-source ecommerce application repository.</p>
-<p>It reads the executable structure, works out candidate business flows, follows the evidence and progressively reconstructs the business map.</p>
-<div class="demo">
-<p>As it runs, lemap discovers business flows and connects their steps, entities, persistent objects, relationships and outcomes.</p>
-<p class="flows">checkout · product search and cart · orders · payments · customer profile · inventory · returns · shipping · accounting</p>
-<p><a class="demo-link" href="#">live demo coming here →</a></p>
-</div>
+<p>Inspect what is already there. Follow relationships and executable paths. Form a view of what the business is doing. Check it against more evidence. Keep updating the map.</p>
+<div class="how"><div><span>01</span>inspect evidence</div><div><span>02</span>follow relationships</div><div><span>03</span>understand workflows</div><div><span>04</span>check evidence</div><div><span>05</span>update the map</div></div>
+<p style="margin-top:34px">Today the working experiment learns from application structure, data relationships and executable workflows. The larger map is designed to absorb more enterprise evidence over time.</p>
 </section>
 
 <section class="section">
 <div class="label">use</div>
 <p class="strong">Ask for the business view instead of first reconstructing the technology underneath it.</p>
-<p>An analyst can ask for a combined data view. An ML engineer can ask for the data needed for a model. A decision maker can ask a business question. Operations and support can trace a process, customer or transaction across systems.</p>
+<div class="usegrid"><div><b>ML & analytics</b><span>Find and combine the data that represents a business concept or outcome, with workflow context explaining what the fields mean.</span></div><div><b>Business decisions</b><span>Ask questions in business terms and navigate toward the data and processes that support the answer.</span></div><div><b>Operations & support</b><span>Trace a customer, order, shipment or other process across the entities and workflows involved.</span></div><div><b>Engineering</b><span>Understand how business behaviour spans services, persistent objects and application flows before changing it.</span></div></div>
 </section>
 
-<section class="pilot">
-<div class="label">pilot</div>
-<p>Start with one bounded enterprise domain. Let lemap learn from the evidence already there and compare the resulting map with what your experts know.</p>
-<a class="email" href="mailto:hello@datasong.app?subject=lemap%20pilot">hello@datasong.app</a>
+<section class="contact-section">
+<div class="label">explore</div>
+<p>The first end-to-end case is working. The next step is to expose the query experience publicly and keep widening what the map can learn and answer.</p>
+<p>If this is a problem you are working on too, I'd be interested to compare notes.</p>
+<a class="email" href="mailto:hello@datasong.app?subject=lemap">hello@datasong.app</a>
 </section>
 </main>
-<footer><span>lemap · working name</span><span>datasong.app · 2026</span></footer>
+<footer><span>lemap · learning enterprise map</span><span>datasong.app · 2026</span></footer>
 </div></body></html>
