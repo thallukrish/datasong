@@ -1,7 +1,11 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { compactVector, scoreVector } from '../query_v3/pathScore.js';
 
-const PATH_SYSTEM = `Score candidate RESULTING PATHS against the query dimensions AND the analytical relationships described in the supplied intent context. The current path and its existing dimension score are supplied, plus candidate next states. A candidate may be a workflow, cluster, topic, entity, workflow-member entity, or schema-linked entity; treat all simply as states. A workflow is a learned business process whose supplied description summarizes business intent/outcome; it is a semantic starting hypothesis, not proof that every query dimension is present. Score the strength of evidence that THIS accumulated path currently provides for each dimension, but prefer paths where the dimensions participate in the REQUIRED analytical relationships/grain. A generic field that matches a dimension but is unrelated to the already-supported measure/grain should score lower than a field/path that completes a required relationship. For example, if sales_amount must be observed over transaction_time, a product introduction date should not strengthen time merely because it is a date; prefer transaction/order time connected to the sales grain. Likewise prefer product/region evidence associated with the same sale/measure grain rather than unrelated identifiers. Do not score hypothetical future reachability beyond the supplied candidate. Preserve a prior score only when the accumulated path still supports it; raise it only when the new state adds evidence or strengthens a required relationship; lower it when the path becomes less analytically coherent. Use a graded scale: 1.0=direct or near-certain support, 0.8=strong, 0.6=good, 0.4=plausible, 0.2=weak, 0=no support. Avoid 1.0 unless the supplied path/evidence genuinely warrants it. Return JSON only: {"c":[[candidateIndex,[[dimensionIndex,score]]]],"r":[candidateIndex]}. Return AT MOST 8 candidates, prioritizing the strongest resulting paths for dimensions still missing AND required relationships still incomplete. Omitted candidates remain eligible but unscored. r means explicitly irrelevant from supplied evidence, not merely weak. No names, reasons, or extra keys.`;
+const PATH_SYSTEM = `Score candidate RESULTING PATHS against the ORDERED ANSWER PLAN in the supplied intent context. The answer-plan steps are authoritative; dimensions are only the searchable concepts needed by those steps. Prefer candidates that advance the earliest unresolved analytical step while preserving already-supported prior steps. Workflow, cluster, topic, entity, workflow-member entity, and schema-linked entity are all simply candidate states. A workflow is a learned business-process hypothesis: score it by how strongly it appears to implement one or more answer-plan steps, especially a coherent contiguous portion of the early unresolved plan. Do not require one workflow to implement the whole plan. Directory seeds remain valid alternatives when they better advance the plan.
+
+Score the accumulated path for each supplied concept, but use the answer-plan relationships/grain to decide whether apparent concept support is actually useful. A generic field that matches a concept but does not participate in the required step should score lower than evidence that completes the required relationship. Example: when the step is to associate a sales observation with transaction time, a product introduction date should not strengthen transaction_time; an order/event time attached to the same sale should. Likewise, product or region evidence should be associated with the same sale/observation grain when the plan requires that.
+
+Do not score hypothetical future reachability beyond the supplied candidate. Preserve a prior score only when the accumulated path still supports it; raise it when the new state adds evidence or advances a required answer-plan step; lower it when the path becomes less analytically coherent. Use 1.0=direct/near-certain, 0.8=strong, 0.6=good, 0.4=plausible, 0.2=weak, 0=no support. Avoid 1.0 unless warranted. Return JSON only: {"c":[[candidateIndex,[[dimensionIndex,score]]]],"r":[candidateIndex]}. Return AT MOST 8 candidates, prioritizing paths that best advance the earliest unresolved plan steps. Omitted candidates remain eligible but unscored. r means explicitly irrelevant from supplied evidence, not merely weak. No names, reasons, or extra keys.`;
 
 function compactEvidence(state) {
   const evidence = state?.evidence;
@@ -33,7 +37,7 @@ export async function scoreNextStates({ intent, dimensions, missingDimensions, p
   });
   const missing = new Set(missingDimensions);
   const payload = {
-    i:text(intent, 700),
+    i:text(intent, 1400),
     d:dimensions.map((name, index) => [index, name]),
     u:dimensions.map((name, index) => missing.has(name) ? index : null).filter((v) => v !== null),
     p:path?.states?.map((state) => state.name) || [],
@@ -83,31 +87,84 @@ function derivedText(item) {
   return `${name}${expression ? ` = ${expression}` : ''}${dependsOn.length ? ` [depends on ${dependsOn.join(', ')}]` : ''}`;
 }
 
+function stepText(step, index) {
+  const action = text(step?.action, 180);
+  const requires = arr(step?.requires).map((v) => text(v, 80)).filter(Boolean);
+  const relation = text(step?.relation, 180);
+  if (!action) return '';
+  return `${index + 1}. ${action}${requires.length ? ` [needs ${requires.join(', ')}]` : ''}${relation ? ` [${relation}]` : ''}`;
+}
+
+function canonicalConcept(value) {
+  return text(value, 80).trim();
+}
+
+function addConcept(map, name, role = 'attribute') {
+  const clean = canonicalConcept(name);
+  if (!clean) return;
+  const k = clean.toLowerCase();
+  if (!map.has(k)) map.set(k, { name:clean, role:text(role, 24) || 'attribute' });
+}
+
 export async function deriveDimensions({ question, client, model, usage, log }) {
-  const system = `Translate the query into a compact analytical requirement graph. Identify stable business dimensions/measures/time/filter concepts, the relationships that MUST hold among them for the requested result to be computable, and any derived calculation/ranking. Do not choose workflows, states, entities, clusters, fields, or joins. Return {"intent":"short","dimensions":[{"name":"canonical concept","role":"measure|dimension|time|filter|attribute|derived"}],"relations":[{"from":"dimension-or-grain","relation":"short semantic relationship","to":"dimension-or-grain"}],"derived":[{"name":"derived result","expression":"short analytical expression","dependsOn":["dimension"]}],"grain":"short description of the observation grain"}. Relations should express analytical dependence, not implementation joins. Example: sales_amount observed_over transaction_time; sales_amount belongs_to product; sale occurs_in region. Use transaction/event time rather than a generic time concept when the query requires change over time.`;
-  const call = await modelJson(client, model, system, { question }, { maxTokens:520 });
+  const system = `Translate the query into an ORDERED ANSWER PLAN describing the semantic steps required to compute the user's result. The ordered steps are authoritative. Also return the concepts referenced by those steps, the analytical relationships that must hold among them, any derived calculations/ranking, and the observation grain. Do not choose workflows, states, entities, clusters, fields, or joins.
+
+Return {"intent":"short","steps":[{"action":"semantic step needed to answer the query","requires":["canonical concept"],"relation":"optional relationship this step must establish"}],"dimensions":[{"name":"canonical concept","role":"measure|dimension|time|filter|attribute|derived"}],"relations":[{"from":"concept-or-grain","relation":"short semantic relationship","to":"concept-or-grain"}],"derived":[{"name":"derived result","expression":"short analytical expression","dependsOn":["canonical concept"]}],"grain":"short description of the observation grain"}.
+
+Steps should describe WHAT must be established, not implementation details. Example for growth: identify sales observations; associate each observation with product; associate that same observation with transaction/event time; associate it with region; aggregate at product x region x period; derive growth across periods; rank by growth. Every base concept referenced by a step, relation, or derived dependency must be represented as a searchable concept. Use transaction/event time rather than generic time when change over time is required.`;
+  const call = await modelJson(client, model, system, { question }, { maxTokens:760 });
   addUsage(usage, call.usage);
 
-  const dimensions = arr(call.parsed?.dimensions).slice(0, 12)
-    .map((item) => ({ name:text(item?.name, 80), role:text(item?.role, 24) }))
+  const rawDimensions = arr(call.parsed?.dimensions).slice(0, 16)
+    .map((item) => ({ name:canonicalConcept(item?.name), role:text(item?.role, 24) }))
     .filter((item) => item.name);
-  const dimensionKeys = new Set(dimensions.map((item) => item.name.toLowerCase()));
-  const relations = arr(call.parsed?.relations).slice(0, 12)
-    .map((item) => ({ from:text(item?.from, 80), relation:text(item?.relation, 80), to:text(item?.to, 80) }))
+  const relations = arr(call.parsed?.relations).slice(0, 16)
+    .map((item) => ({ from:canonicalConcept(item?.from), relation:text(item?.relation, 80), to:canonicalConcept(item?.to) }))
     .filter((item) => item.from && item.relation && item.to);
-  const derived = arr(call.parsed?.derived).slice(0, 8)
+  const rawDerived = arr(call.parsed?.derived).slice(0, 10)
     .map((item) => ({
-      name:text(item?.name, 80),
+      name:canonicalConcept(item?.name),
       expression:text(item?.expression, 180),
-      dependsOn:arr(item?.dependsOn).map((v) => text(v, 80)).filter((v) => dimensionKeys.has(v.toLowerCase())).slice(0, 8)
+      dependsOn:arr(item?.dependsOn).map(canonicalConcept).filter(Boolean).slice(0, 10)
     }))
     .filter((item) => item.name);
+  const steps = arr(call.parsed?.steps).slice(0, 12)
+    .map((item) => ({
+      action:text(item?.action, 200),
+      requires:arr(item?.requires).map(canonicalConcept).filter(Boolean).slice(0, 10),
+      relation:text(item?.relation, 200)
+    }))
+    .filter((item) => item.action);
+
+  // Requirement closure: searchable concepts are derived from the authoritative plan,
+  // not trusted solely from a separately returned dimensions list.
+  const conceptMap = new Map();
+  for (const item of rawDimensions) addConcept(conceptMap, item.name, item.role);
+  for (const step of steps) for (const name of step.requires) addConcept(conceptMap, name);
+  for (const rel of relations) {
+    addConcept(conceptMap, rel.from);
+    addConcept(conceptMap, rel.to);
+  }
+  for (const item of rawDerived) for (const name of item.dependsOn) addConcept(conceptMap, name);
+
+  const derivedNames = new Set(rawDerived.map((item) => item.name.toLowerCase()));
+  const dimensions = [...conceptMap.values()]
+    .filter((item) => !derivedNames.has(item.name.toLowerCase()))
+    .slice(0, 16);
+  const searchableKeys = new Set(dimensions.map((item) => item.name.toLowerCase()));
+  const derived = rawDerived.map((item) => ({
+    ...item,
+    dependsOn:item.dependsOn.filter((v) => searchableKeys.has(v.toLowerCase()))
+  }));
+
   const grain = text(call.parsed?.grain, 180);
   const baseIntent = text(call.parsed?.intent, 180);
+  const stepSummary = steps.map(stepText).filter(Boolean).join(' | ');
   const relationSummary = relations.map(relationText).filter(Boolean).join('; ');
   const derivedSummary = derived.map(derivedText).filter(Boolean).join('; ');
   const scoringIntent = [
     baseIntent,
+    stepSummary ? `ANSWER PLAN: ${stepSummary}` : '',
     grain ? `required grain: ${grain}` : '',
     relationSummary ? `required relationships: ${relationSummary}` : '',
     derivedSummary ? `derived: ${derivedSummary}` : ''
@@ -116,6 +173,7 @@ export async function deriveDimensions({ question, client, model, usage, log }) 
   const logicalRequest = {
     intent:scoringIntent,
     baseIntent,
+    steps,
     dimensions,
     relations,
     derived,
