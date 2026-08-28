@@ -18,6 +18,7 @@ import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 import { withSchemaEntityRelationships } from './explorer/schemaEntityRelationships.js';
 import { withCompactRunLogging } from './explorer/compactRunLogging.js';
+import { withResumeLearning } from './explorer/resumeLearning.js';
 
 const ExplorerWithModelCall = withLightweightModelCall(ModelDirectedExplorerV2);
 const ExplorerWithPass1State = withPass1State(ExplorerWithModelCall);
@@ -38,7 +39,8 @@ const ExplorerWithBusinessPriority = withBusinessPriorityScout(ExplorerWithSeman
 const ExplorerWithReconciliation = withEntityReconciliation(ExplorerWithBusinessPriority);
 const ExplorerWithSchemaEntityRelationships = withSchemaEntityRelationships(ExplorerWithReconciliation);
 const ExplorerWithCompactRunLogging = withCompactRunLogging(ExplorerWithSchemaEntityRelationships);
+const ExplorerWithResumeLearning = withResumeLearning(ExplorerWithCompactRunLogging);
 
-export class RepositoryExplorer extends ExplorerWithCompactRunLogging {}
+export class RepositoryExplorer extends ExplorerWithResumeLearning {}
 
 export default RepositoryExplorer;
