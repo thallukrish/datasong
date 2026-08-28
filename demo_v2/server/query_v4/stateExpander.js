@@ -116,12 +116,12 @@ export function rootStates(hierarchy, workflows = []) {
     edge:{ kind:'root', source:'workflow' }
   })).filter((state) => state.workflowEntities.length);
 
-  const clusterRoots = arr(hierarchy.clusters).map((node) => ({
+  if (workflowRoots.length) return workflowRoots;
+
+  return arr(hierarchy.clusters).map((node) => ({
     ...hierarchyState(node, { kind:'root', source:'directory' }),
     seedSource:'directory'
   }));
-
-  return [...workflowRoots, ...clusterRoots];
 }
 
 export function expandLinkedEntities(state, { hierarchy, index, semanticHints, visitedEntityKeys = new Set() }) {
