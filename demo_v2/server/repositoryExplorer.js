@@ -17,6 +17,7 @@ import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 import { withSchemaEntityRelationships } from './explorer/schemaEntityRelationships.js';
+import { withCompactRunLogging } from './explorer/compactRunLogging.js';
 
 const ExplorerWithModelCall = withLightweightModelCall(ModelDirectedExplorerV2);
 const ExplorerWithPass1State = withPass1State(ExplorerWithModelCall);
@@ -36,7 +37,8 @@ const ExplorerWithSemanticModel = withSemanticModel(ExplorerWithStructuredWorkfl
 const ExplorerWithBusinessPriority = withBusinessPriorityScout(ExplorerWithSemanticModel);
 const ExplorerWithReconciliation = withEntityReconciliation(ExplorerWithBusinessPriority);
 const ExplorerWithSchemaEntityRelationships = withSchemaEntityRelationships(ExplorerWithReconciliation);
+const ExplorerWithCompactRunLogging = withCompactRunLogging(ExplorerWithSchemaEntityRelationships);
 
-export class RepositoryExplorer extends ExplorerWithSchemaEntityRelationships {}
+export class RepositoryExplorer extends ExplorerWithCompactRunLogging {}
 
 export default RepositoryExplorer;
