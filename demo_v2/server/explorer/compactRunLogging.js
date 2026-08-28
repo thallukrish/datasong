@@ -104,10 +104,20 @@ function compactRecord(record = {}) {
   return out;
 }
 
+function printProgress(compact) {
+  if (compact?.type !== 'llm_call_applied') return;
+  const workflow = compact.workflow || {};
+  const active = workflow.active;
+  const activeText = active ? `${active.title || active.id} ${active.progress}%` : 'none';
+  const next = compact.decision?.next?.type || '—';
+  console.log(`[lemap learn #${compact.explorationStep}] active: ${activeText} | closed ${workflow.closed || 0}/${workflow.total || 0} | incomplete ${workflow.incomplete || 0} | at 0% ${workflow.zeroProgress || 0} | next ${next}`);
+}
+
 export const withCompactRunLogging = (Base) => class CompactRunLoggingExplorer extends Base {
   async appendRunLog(record) {
     const compact = compactRecord(record);
     if (!compact) return;
+    printProgress(compact);
     return super.appendRunLog(compact);
   }
 };
