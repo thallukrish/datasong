@@ -19,6 +19,7 @@ import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 import { withSchemaEntityRelationships } from './explorer/schemaEntityRelationships.js';
 import { withCompactRunLogging } from './explorer/compactRunLogging.js';
 import { withResumeLearning } from './explorer/resumeLearning.js';
+import { withPersistedWorkflowResumeGuard } from './explorer/persistedWorkflowResumeGuard.js';
 
 const ExplorerWithModelCall = withLightweightModelCall(ModelDirectedExplorerV2);
 const ExplorerWithPass1State = withPass1State(ExplorerWithModelCall);
@@ -40,7 +41,8 @@ const ExplorerWithReconciliation = withEntityReconciliation(ExplorerWithBusiness
 const ExplorerWithSchemaEntityRelationships = withSchemaEntityRelationships(ExplorerWithReconciliation);
 const ExplorerWithCompactRunLogging = withCompactRunLogging(ExplorerWithSchemaEntityRelationships);
 const ExplorerWithResumeLearning = withResumeLearning(ExplorerWithCompactRunLogging);
+const ExplorerWithPersistedWorkflowResumeGuard = withPersistedWorkflowResumeGuard(ExplorerWithResumeLearning);
 
-export class RepositoryExplorer extends ExplorerWithResumeLearning {}
+export class RepositoryExplorer extends ExplorerWithPersistedWorkflowResumeGuard {}
 
 export default RepositoryExplorer;
