@@ -29,8 +29,9 @@ function removeExistingPostRoute(app, routePath) {
 }
 
 function uiProjection(response = {}) {
-  const select = arr(response?.dataView?.select);
-  const joins = arr(response?.dataView?.joins);
+  const dataView = response?.dataView || null;
+  const select = arr(dataView?.select);
+  const joins = arr(dataView?.joins);
   const relevantEntities = [...new Set(select.map((item) => item?.entity).filter(Boolean))];
   const mapping = select.map((item) => ({
     scenario:item?.role || 'mapping',
@@ -43,9 +44,16 @@ function uiProjection(response = {}) {
   const scenarios = [
     ...mapping,
     ...(joinText.length ? [{ scenario:'How the entities connect', why:joinText.join(' · ') }] : []),
-    ...(arr(response?.dataView?.missing).length ? [{ scenario:'Still missing', why:arr(response.dataView.missing).join(' · ') }] : [])
+    ...(arr(dataView?.missing).length ? [{ scenario:'Still missing', why:arr(dataView.missing).join(' · ') }] : [])
   ];
-  return { ...response, relevantEntities, scenarios };
+
+  return {
+    answer:response?.answer || '',
+    dataView,
+    relevantEntities,
+    scenarios,
+    nextStep:response?.nextStep || ''
+  };
 }
 
 export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
@@ -94,8 +102,14 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
         workflows,
         log:(type, payload) => append(queryLog, type, payload)
       });
+
+      append(queryLog, 'query_v4_complete', {
+        question,
+        response:rawResponse,
+        cumulativeUsage:rawResponse?.investigation?.usage || {}
+      });
+
       const response = uiProjection(rawResponse);
-      append(queryLog, 'query_v4_complete', { question, response, cumulativeUsage:response?.investigation?.usage || {} });
       return res.json(response);
     } catch (error) {
       append(queryLog, 'query_v4_error', { error:error.message || String(error) });
