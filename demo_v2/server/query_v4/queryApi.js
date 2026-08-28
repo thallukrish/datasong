@@ -14,6 +14,40 @@ function isBusinessWorkflow(workflow) {
   return true;
 }
 
+function removeExistingPostRoute(app, routePath) {
+  const stack = app?.router?.stack || app?._router?.stack;
+  if (!Array.isArray(stack)) return false;
+  let removed = false;
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    const route = stack[index]?.route;
+    if (route?.path === routePath && route?.methods?.post) {
+      stack.splice(index, 1);
+      removed = true;
+    }
+  }
+  return removed;
+}
+
+function uiProjection(response = {}) {
+  const select = arr(response?.dataView?.select);
+  const joins = arr(response?.dataView?.joins);
+  const relevantEntities = [...new Set(select.map((item) => item?.entity).filter(Boolean))];
+  const mapping = select.map((item) => ({
+    scenario:item?.role || 'mapping',
+    why:[item?.entity, item?.field].filter(Boolean).join('.')
+  }));
+  const joinText = joins.map((join) => {
+    const relation = join?.relation ? ` (${join.relation})` : '';
+    return `${join?.left || ''} → ${join?.right || ''}${relation}`;
+  }).filter(Boolean);
+  const scenarios = [
+    ...mapping,
+    ...(joinText.length ? [{ scenario:'How the entities connect', why:joinText.join(' · ') }] : []),
+    ...(arr(response?.dataView?.missing).length ? [{ scenario:'Still missing', why:arr(response.dataView.missing).join(' · ') }] : [])
+  ];
+  return { ...response, relevantEntities, scenarios };
+}
+
 export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
   const queryRunPath = () => {
     const dir = path.join(dataRoot, 'query-runs-v4');
@@ -22,7 +56,7 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
   };
   const append = (file, type, payload = {}) => fs.appendFileSync(file, `${JSON.stringify({ type, timestamp:new Date().toISOString(), ...payload })}\n`, 'utf8');
 
-  app.post('/api/query-map-v4', async (req, res) => {
+  const handleQueryV4 = async (req, res) => {
     const queryLog = queryRunPath();
     onLatestLog(queryLog);
     try {
@@ -39,7 +73,7 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       const workflows = arr(snapshot?.pass1Arcs).filter(isBusinessWorkflow);
 
       console.log(`\n[lemap query-v4] ${question}`);
-      console.log(`[lemap query-v4] parallel workflow + directory seeding over ${workflows.length} workflows, ${directory.groups.length} clusters and ${entityCount} entities`);
+      console.log(`[lemap query-v4] workflow-first semantic search over ${workflows.length} workflows and ${entityCount} entities`);
       append(queryLog, 'query_v4_start', {
         question,
         repoUrl:snapshot.repoUrl || '',
@@ -48,10 +82,10 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
         workflowCount:workflows.length,
         directoryFile:file,
         directoryGroupCount:directory.groups.length,
-        mode:'semantic-best-first-parallel-workflow-directory-v4'
+        mode:'semantic-best-first-workflow-first-v4'
       });
 
-      const response = await runSemanticBestFirstQueryV4({
+      const rawResponse = await runSemanticBestFirstQueryV4({
         question,
         client:queryClient,
         model:queryModel,
@@ -60,6 +94,7 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
         workflows,
         log:(type, payload) => append(queryLog, type, payload)
       });
+      const response = uiProjection(rawResponse);
       append(queryLog, 'query_v4_complete', { question, response, cumulativeUsage:response?.investigation?.usage || {} });
       return res.json(response);
     } catch (error) {
@@ -67,5 +102,11 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       console.error(`[lemap query-v4] ${error.message || error}`);
       return res.status(500).json({ error:error.message || 'Query v4 failed' });
     }
-  });
+  };
+
+  app.post('/api/query-map-v4', handleQueryV4);
+
+  const replacedLegacyRoute = removeExistingPostRoute(app, '/api/query-map');
+  app.post('/api/query-map', handleQueryV4);
+  console.log(`[DataSong v2] QUERY UI: /api/query-map → v4${replacedLegacyRoute ? ' (legacy route replaced)' : ''}`);
 }
