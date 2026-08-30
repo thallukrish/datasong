@@ -190,6 +190,17 @@ export async function evaluateEntityCoverage({
   addUsage(usage, call.usage);
   const decision = normalizeCoverageResponse(call.parsed);
 
+  log('query_v4_entity_raw_model', {
+    step,
+    entity:state.entityName || state.name,
+    raw:call.raw,
+    parsed:call.parsed,
+    normalized:decision,
+    attempts:call.attempts,
+    usage:call.usage,
+    cumulativeUsage:{...usage}
+  });
+
   const covered = [];
   const rejectedFkEvidence = [];
   const seenDimensions = new Set();
