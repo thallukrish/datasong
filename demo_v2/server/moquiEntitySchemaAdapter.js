@@ -19,6 +19,8 @@ function uniqBy(values, keyFn) {
 }
 function repoKey(url=''){return crypto.createHash('sha1').update(String(url)).digest('hex').slice(0,16)}
 
+const MOQUI_FRAMEWORK_REPO = 'https://github.com/moqui/moqui-framework';
+
 // Moqui component names are not necessarily GitHub repository names. Keep this
 // mapping inside the Moqui-specific adapter; generic repository discovery stays
 // unaware of Moqui packaging conventions.
@@ -82,14 +84,24 @@ export function extractMoquiEntitySchemas(sourcePath, xml, component='') {
 export class MoquiEntitySchemaAdapter {
   constructor(topology){ this.topology=topology; }
 
-  async ensureDependencyRepo(name){
-    const url=KNOWN_COMPONENT_REPOS[name]; if(!url)return null;
+  async ensureRepo(url){
+    if(!url)return null;
     const root=path.join(this.topology.cacheRoot,'moqui-schema-deps'); await fs.mkdir(root,{recursive:true});
     const dir=path.join(root,repoKey(url));
     const gitDir=path.join(dir,'.git');
     try{await fs.stat(gitDir);const git=simpleGit(dir);await git.fetch(['origin','--depth','1']);await git.reset(['--hard','FETCH_HEAD']);}
     catch{await fs.rm(dir,{recursive:true,force:true});await simpleGit().clone(url,dir,['--depth','1']);}
     return dir;
+  }
+
+  async ensureDependencyRepo(name){
+    const url=KNOWN_COMPONENT_REPOS[name]; if(!url)return null;
+    return this.ensureRepo(url);
+  }
+
+  async frameworkRoot(){
+    const dir=await this.ensureRepo(MOQUI_FRAMEWORK_REPO).catch(()=>null);
+    return dir ? {name:'moqui-framework',dir} : null;
   }
 
   async dependencyRoots(){
@@ -104,8 +116,8 @@ export class MoquiEntitySchemaAdapter {
     const git=simpleGit(rootDir); return (await git.raw(['ls-files'])).split(/\r?\n/).map(x=>x.trim()).filter(f=>/\.xml$/i.test(f));
   }
 
-  async schemasFromRoot(rootDir, component, prefix=''){
-    const schemas=[]; const files=await this.xmlFilesUnder(rootDir).catch(()=>[]);
+  async schemasFromRoot(rootDir, component, prefix='', includeFile=()=>true){
+    const schemas=[]; const files=(await this.xmlFilesUnder(rootDir).catch(()=>[])).filter(includeFile);
     for(const rel of files){const xml=await fs.readFile(path.join(rootDir,rel),'utf8').catch(()=> '');if(!xml||!/<(?:entity|view-entity|extend-entity)\b/i.test(xml))continue;schemas.push(...extractMoquiEntitySchemas(`${prefix}${rel}`,xml,component));}
     return schemas;
   }
@@ -124,12 +136,17 @@ export class MoquiEntitySchemaAdapter {
     const localSchemas=[];
     for(const sourcePath of localTracked.filter(f=>/\.xml$/i.test(f))){const xml=await fs.readFile(path.join(this.topology.repoDir,sourcePath),'utf8').catch(()=> '');if(!xml||!/<(?:entity|view-entity|extend-entity)\b/i.test(xml))continue;localSchemas.push(...extractMoquiEntitySchemas(sourcePath,xml,'local'))}
 
+    const framework=await this.frameworkRoot();
+    const frameworkSchemas=framework
+      ? await this.schemasFromRoot(framework.dir,framework.name,'framework-repo/',rel=>/^framework\/entity\/.*\.xml$/i.test(rel))
+      : [];
+
     const deps=await this.dependencyRoots(); const dependencySchemas=[];
     for(const dep of deps) dependencySchemas.push(...await this.schemasFromRoot(dep.dir,dep.name,`dependency/${dep.name}/`));
-    const schemas=this.mergeSchemas([...localSchemas,...dependencySchemas]);
+    const schemas=this.mergeSchemas([...frameworkSchemas,...localSchemas,...dependencySchemas]);
     const byName=new Map();
     for(const s of schemas){for(const key of [s.name,s.fullName].filter(Boolean))if(!byName.has(key))byName.set(key,s);if(s.fullName?.includes('.')){const leaf=s.fullName.split('.').at(-1);if(!byName.has(leaf))byName.set(leaf,s)}}
     this.topology.entitySchemas=schemas; this.topology.entitySchemaByName=byName;
-    return {adapter:'moqui-entity-schema-v2',entities:schemas.length,fields:schemas.reduce((n,s)=>n+(s.fields?.length||0),0),dependencyComponents:deps.map(d=>d.name)};
+    return {adapter:'moqui-entity-schema-v3',entities:schemas.length,fields:schemas.reduce((n,s)=>n+(s.fields?.length||0),0),frameworkComponent:framework?.name||'',frameworkEntities:frameworkSchemas.length,dependencyComponents:deps.map(d=>d.name)};
   }
 }
