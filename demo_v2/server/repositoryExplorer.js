@@ -20,6 +20,7 @@ import { withSchemaEntityRelationships } from './explorer/schemaEntityRelationsh
 import { withCompactRunLogging } from './explorer/compactRunLogging.js';
 import { withResumeLearning } from './explorer/resumeLearning.js';
 import { withPersistedWorkflowResumeGuard } from './explorer/persistedWorkflowResumeGuard.js';
+import { withSemanticCompletionGuard } from './explorer/semanticCompletionGuard.js';
 
 const ExplorerWithModelCall = withLightweightModelCall(ModelDirectedExplorerV2);
 const ExplorerWithPass1State = withPass1State(ExplorerWithModelCall);
@@ -42,7 +43,8 @@ const ExplorerWithSchemaEntityRelationships = withSchemaEntityRelationships(Expl
 const ExplorerWithCompactRunLogging = withCompactRunLogging(ExplorerWithSchemaEntityRelationships);
 const ExplorerWithResumeLearning = withResumeLearning(ExplorerWithCompactRunLogging);
 const ExplorerWithPersistedWorkflowResumeGuard = withPersistedWorkflowResumeGuard(ExplorerWithResumeLearning);
+const ExplorerWithSemanticCompletionGuard = withSemanticCompletionGuard(ExplorerWithPersistedWorkflowResumeGuard);
 
-export class RepositoryExplorer extends ExplorerWithPersistedWorkflowResumeGuard {}
+export class RepositoryExplorer extends ExplorerWithSemanticCompletionGuard {}
 
 export default RepositoryExplorer;
