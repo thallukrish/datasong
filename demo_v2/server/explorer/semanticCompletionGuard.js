@@ -3,9 +3,18 @@ const arr = (value) => Array.isArray(value) ? value : [];
 const SEMANTIC_STATUSES = new Set(['forming', 'broadly_complete', 'unresolved']);
 
 export const withSemanticCompletionGuard = (Base) => class SemanticCompletionGuardExplorer extends Base {
+  persistSemanticMap() {
+    if (this._deferPersistenceDuringApply) return;
+    return super.persistSemanticMap();
+  }
+
   applyDelta(parsed, observation) {
-    if (parsed?._wholeFlowPass2) {
-      const arcId = String(parsed?.arcUpdate?.arcId || this.pass1?.().activeArcId?.() || '');
+    const isWholeFlow = !!parsed?._wholeFlowPass2;
+    const arcId = isWholeFlow
+      ? String(parsed?.arcUpdate?.arcId || this.pass1?.().activeArcId?.() || '')
+      : '';
+
+    if (isWholeFlow) {
       const arc = this.pass1?.().arcByReference?.(arcId);
       const semanticStatus = String(parsed?.arcUpdate?.status || '');
       if (arc) {
@@ -14,7 +23,19 @@ export const withSemanticCompletionGuard = (Base) => class SemanticCompletionGua
         arc._pass2UnresolvedBranchCount = arr(parsed?.unresolvedBranches).length;
       }
     }
-    return super.applyDelta(parsed, observation);
+
+    const started = Date.now();
+    this._deferPersistenceDuringApply = true;
+    try {
+      return super.applyDelta(parsed, observation);
+    } finally {
+      this._deferPersistenceDuringApply = false;
+      if (isWholeFlow) {
+        const arc = this.pass1?.().arcByReference?.(arcId);
+        const next = this.pass1?.().activeArc?.();
+        console.log(`[lemap learn apply] ${arc?.title || arcId || 'workflow'} applied in ${Date.now() - started}ms | progress ${Number(arc?.progress || 0)}% | closure ${arc?.closureState || 'open'} | next ${next?.title || 'none'}`);
+      }
+    }
   }
 
   closeCompletedArcs() {
