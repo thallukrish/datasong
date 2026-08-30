@@ -72,6 +72,15 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       const question = String(req.body?.question || '').trim();
       if (!question) return res.status(400).json({ error:'question is required' });
 
+      // A persisted semantic map may have been loaded before the runtime source
+      // schema catalog was prepared. Refresh/materialize it before taking the
+      // immutable query snapshot so newly available framework/dependency edges
+      // are queryable and are written back to the map on disk.
+      const schemaRepair = typeof explorer.refreshSchemaCatalogForCurrentMap === 'function'
+        ? await explorer.refreshSchemaCatalogForCurrentMap()
+        : null;
+      if (schemaRepair) append(queryLog, 'query_v4_schema_repair', schemaRepair);
+
       const snapshot = explorer.snapshot();
       const graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
       const entityCount = graph.filter((node) => node?.type === 'entity').length;
