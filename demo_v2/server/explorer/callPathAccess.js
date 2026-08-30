@@ -8,7 +8,20 @@ export const withCallPathAccess = (Base) => class CallPathAccessExplorer extends
   groupedPathForArc(arc) {
     if (!arc) return null;
     const top = typeof this.topology?.topCallPaths === 'function' ? this.topology.topCallPaths(50) : [];
-    if (arc.callPathId) return top.find((path) => path.id === arc.callPathId) || this.rankedPathById(arc.callPathId);
+    const byId = (id) => id ? (top.find((path) => path.id === id) || this.rankedPathById(id)) : null;
+
+    // Persisted workflow state may retain any one of these evidenced path ids.
+    // Treat them all as valid deterministic Pass-2 seeds instead of requiring
+    // callPathId specifically.
+    for (const id of [
+      arc.callPathId,
+      ...arr(arc.callPathVariantIds),
+      ...arr(arc.containedCallPathIds),
+      ...arr(arc.relatedCallPathIds)
+    ]) {
+      const grouped = byId(id);
+      if (grouped) return grouped;
+    }
 
     const artifactId = arc.scoutArtifactId || arc.seedArtifactId || '';
     if (!artifactId) return null;
