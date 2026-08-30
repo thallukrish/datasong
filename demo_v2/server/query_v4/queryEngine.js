@@ -6,12 +6,14 @@ import { activeScore } from '../query_v3/pathScore.js';
 import { connectEvidenceEntities } from './connectivity.js';
 import { deriveDimensions, scoreNextStates } from './scorer.js';
 import { coverageState, evaluateEntityCoverage } from './coverage.js';
-import { expandLinkedEntities, expandState, groundEntityForRepair, rootStates } from './stateExpander.js';
-import { verifyAnswerability } from './verifier.js';
+import { expandLinkedEntities, expandState, rootStates } from './stateExpander.js';
 
 const MAX_STEPS = 64;
-const MAX_VERIFICATIONS = 2;
-const FINAL_SYSTEM = `Answer using ONLY the evidence-backed entities and evidenced joins supplied. Evidence bindings may be fields or simple expressions over supplied fields. Join fields may appear only from supplied keyMaps. The answerability verification is authoritative: if verification.answerable is false, do NOT claim the requested result is computable; concisely explain the unresolved requirement instead. If exploration is incomplete, say so and name missing requirements or missing connectivity. Return {"answer":"concise","dataView":{"grain":"","select":[{"entity":"","field":"field-or-expression","role":"dimension|measure|time|filter|attribute|derived"}],"joins":[{"left":"Entity.joinField","right":"Entity.joinField","relation":"","evidenced":true}],"missing":[]},"nextStep":"optional"}.`;
+const FINAL_SYSTEM = `Answer using ONLY the evidence-backed entities and evidenced joins supplied. Evidence bindings may be fields or simple expressions over supplied fields. Join fields may appear only from supplied keyMaps. LeMap's supplied connectivity paths and joins are structurally evidenced and authoritative; do not second-guess whether connected entities are related.
+
+Your job is to construct the best executable answer from the grounded evidence and state semantic uncertainty explicitly. If a required concept is not explicitly confirmed but there is one best-supported coherent evidence choice and no stronger contradictory evidence, use it and add a qualifier instead of rejecting the answer. This includes a business-event attribute on an evidenced parent/header entity when it coherently characterizes the child/detail observation, for example an order header placedDate used as the transaction date for its order items. Do not invent fields, joins, constants, or business logic. A generic lifecycle timestamp should not be treated as business-event time unless the supplied evidence supports that meaning.
+
+Use qualifier confidence "confirmed" when the semantics are explicit and "probable" when the interpretation is the strongest coherent available evidence but inferred. If exploration is incomplete or deterministic connectivity is incomplete, say so and put genuinely unsupported requirements in dataView.missing. Return {"answer":"concise","dataView":{"grain":"","select":[{"entity":"","field":"field-or-expression","role":"dimension|measure|time|filter|attribute|derived"}],"joins":[{"left":"Entity.joinField","right":"Entity.joinField","relation":"","evidenced":true}],"missing":[]},"qualifiers":[{"concept":"","field":"Entity.field-or-expression","confidence":"confirmed|probable","note":"short user-facing qualification"}],"nextStep":"optional"}.`;
 
 function joinSignature(join) {
   return `${key(join?.from)}|${key(join?.to)}|${key(join?.relationship)}|${arr(join?.keyMaps).map((m) => `${key(m.fieldName)}:${key(m.relatedFieldName)}`).join(',')}`;
@@ -120,13 +122,6 @@ function mergeCoverage({ accepted, entityName, covered, pathNames, events, step,
   if (arr(covered).length) events.push({ step, action, entity:entityName, covered });
 }
 
-function reopenDimensions(accepted, dimensions) {
-  const wanted = new Set(arr(dimensions).map(key));
-  for (const item of accepted.values()) {
-    item.covered = arr(item.covered).filter((coverage) => !wanted.has(key(coverage.dimension)));
-  }
-}
-
 function pruneUnconnectedEvidence(accepted, connectivity) {
   const unconnected = new Set(arr(connectivity?.unconnected).map(key));
   if (!unconnected.size) return [];
@@ -137,13 +132,6 @@ function pruneUnconnectedEvidence(accepted, connectivity) {
     item.covered = [];
   }
   return [...new Set(reopened)];
-}
-
-function anchorPath(entityName, index, semanticHints, reopen) {
-  const state = groundEntityForRepair(entityName, { index, semanticHints });
-  if (!state) return null;
-  const score = Object.fromEntries(arr(reopen).map((dimension) => [dimension, 1]));
-  return { states:[state], score, joins:[] };
 }
 
 export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], log = () => {} }) {
@@ -160,9 +148,6 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   const events = [];
   const stepRef = { value:0 };
   let connectivity = null;
-  let verification = null;
-  let verificationPass = 0;
-  let verificationExhausted = false;
   let lastConnectivityCoverage = '';
 
   const roots = rootStates(hierarchy, workflows);
@@ -187,7 +172,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
   frontier.add(initial.scored.map((item) => nextPath(rootParent, item)));
   frontier.addDormant(rootParent, initial.omitted);
 
-  while ((frontier.size || frontier.dormantSize) && stepRef.value < MAX_STEPS && !verificationExhausted) {
+  while ((frontier.size || frontier.dormantSize) && stepRef.value < MAX_STEPS) {
     let coverage = coverageState(dimensions, accepted);
 
     if (!coverage.missing.length) {
@@ -201,46 +186,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
         lastConnectivityCoverage = signature;
       }
 
-      if (connectivity?.connected) {
-        const grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
-        verificationPass += 1;
-        verification = await verifyAnswerability({
-          question,
-          logicalRequest,
-          accepted,
-          connectivity,
-          evidencedGraph:grounded,
-          client,
-          model,
-          usage,
-          log,
-          pass:verificationPass
-        });
-        if (verification.answerable) break;
-        if (verificationPass >= MAX_VERIFICATIONS || !verification.reopen.length) {
-          verificationExhausted = true;
-          break;
-        }
-
-        reopenDimensions(accepted, verification.reopen);
-        const reopenEvent = {
-          step:++stepRef.value,
-          action:'verification_reopen',
-          reopen:verification.reopen,
-          anchors:verification.anchors,
-          requirement:verification.requirement,
-          reason:verification.reason
-        };
-        events.push(reopenEvent);
-        log('query_v4_verification_reopen', reopenEvent);
-        for (const anchor of arr(verification.anchors)) {
-          const path = anchorPath(anchor, index, semanticHints, verification.reopen);
-          if (path) frontier.add([path]);
-        }
-        connectivity = null;
-        lastConnectivityCoverage = '';
-        continue;
-      }
+      if (connectivity?.connected) break;
 
       const structurallyReopened = pruneUnconnectedEvidence(accepted, connectivity);
       if (structurallyReopened.length) {
@@ -309,11 +255,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
         usage,
         log,
         step:++stepRef.value,
-        repairContext:verification && !verification.answerable ? {
-          requirement:verification.requirement || '',
-          locked:[...accepted.values()].flatMap((item) => arr(item.covered).map((coverage) => ({ entity:item.entity, dimension:coverage.dimension, field:coverage.field }))),
-          path:path.states.map((state) => state.name)
-        } : null
+        repairContext:null
       });
 
       mergeCoverage({
@@ -378,7 +320,7 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     connectivity = runConnectivity({ accepted, index, traversedJoins, connectorEntities, events, log, step:++stepRef.value, phase:'final' });
   }
   const connected = !coverage.missing.length && !!connectivity?.connected;
-  const complete = !coverage.missing.length && connected && verification?.answerable === true;
+  const complete = !coverage.missing.length && connected;
   const grounded = groundedGraph({ accepted, connectorEntities, traversedJoins, index });
 
   log('query_v4_search_complete', {
@@ -387,7 +329,6 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     coverage,
     accepted:[...accepted.values()],
     connectivity,
-    verification,
     joins:[...traversedJoins.values()],
     frontier:frontier.snapshot(coverage.missing.length ? coverage.missing : dimensions),
     events,
@@ -400,7 +341,6 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     status:{ complete, connected, missingDimensions:coverage.missing, steps:stepRef.value },
     acceptedEntities:[...accepted.values()].filter((item) => item.covered.length),
     connectivity,
-    verification,
     evidencedGraph:grounded
   };
   const finalCall = await modelJson(client, model, FINAL_SYSTEM, finalPayload, { maxTokens:900 });
@@ -418,7 +358,6 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
       coverage,
       accepted:[...accepted.values()],
       connectivity,
-      verification,
       frontier:frontier.snapshot(coverage.missing.length ? coverage.missing : dimensions),
       localGraph:{ entities:grounded.entities.map((entity) => entity.name), joins:grounded.joins },
       events,
