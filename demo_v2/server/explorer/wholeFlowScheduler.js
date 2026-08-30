@@ -27,8 +27,37 @@ export const withWholeFlowScheduler = (Base) => class WholeFlowSchedulerExplorer
     } else {
       this._wholeFlowNextArcId = '';
       this.state.lastMessage = completed
-        ? `Pass 1 completed ${completed.title}; all currently admitted arcs have been interpreted.`
-        : 'All currently admitted arcs have been interpreted.';
+        ? `Pass 1 completed ${completed.title}; all currently admitted arcs with executable flow evidence have been interpreted.`
+        : 'All currently admitted arcs with executable flow evidence have been interpreted.';
+    }
+    this.pass1().syncStories();
+    return next;
+  }
+
+  deferArcWithoutFlow(arc) {
+    if (!arc) return;
+    const flow = this.flowState(arc);
+    if (flow) {
+      flow.started = false;
+      flow.completed = false;
+      flow.pendingBranchIndexes = [];
+    }
+    arc.pass2Unavailable = true;
+    arc.status = 'unresolved';
+    arc.closureState = 'needs_call_path';
+    arc.closureReason = 'no recoverable deterministic compressed call path is currently available';
+    arc.opportunityScore = 0;
+    console.log(`[lemap learn] defer ${arc.title}: no recoverable compressed call path; leaving incomplete`);
+  }
+
+  scheduleNextRunnable(excludeArcId = '') {
+    const scheduler = this.pass1().ensureState();
+    const next = this.unfinishedWholeFlowArcs(excludeArcId).find((arc) => !arc.pass2Unavailable) || null;
+    scheduler.activeArcId = next?.id || '';
+    this._wholeFlowNextArcId = next?.id || '';
+    if (next) {
+      next.lastScheduledStep = Number(this.state.step || 0);
+      this.state.lastMessage = `Scheduling ${next.title}.`;
     }
     this.pass1().syncStories();
     return next;
@@ -46,23 +75,37 @@ export const withWholeFlowScheduler = (Base) => class WholeFlowSchedulerExplorer
   }
 
   async resolveNextAction(action, candidates) {
-    if (this._wholeFlowNextArcId) {
+    while (this._wholeFlowNextArcId) {
       const nextId = this._wholeFlowNextArcId;
       this._wholeFlowNextArcId = '';
+      const arc = this.pass1().arcByReference(nextId);
       const observation = await this.resumePass2Arc(nextId);
       if (observation) return observation;
-      const flow = this.flowState(this.pass1().arcByReference(nextId));
-      if (flow) flow.completed = true;
-      this.scheduleNextWholeFlow(nextId);
-      if (this._wholeFlowNextArcId) return this.resolveNextAction(action, candidates);
+
+      const flow = this.flowState(arc);
+      if (flow?.completed) {
+        this.scheduleNextWholeFlow(nextId);
+        continue;
+      }
+
+      // No deterministic compressed flow could be produced. This is not
+      // completion; leave the workflow incomplete and continue with another
+      // runnable admitted workflow.
+      this.deferArcWithoutFlow(arc);
+      this.scheduleNextRunnable(nextId);
     }
 
     const active = this.pass1().activeArc();
     if (active) {
       const flow = this.flowState(active);
-      if (!flow?.completed) {
+      if (!flow?.completed && !active.pass2Unavailable) {
         const observation = await this.resumePass2Arc(active.id);
         if (observation) return observation;
+        if (!flow?.completed) {
+          this.deferArcWithoutFlow(active);
+          this.scheduleNextRunnable(active.id);
+          if (this._wholeFlowNextArcId) return this.resolveNextAction(action, candidates);
+        }
       }
     }
     return super.resolveNextAction(action, candidates);
