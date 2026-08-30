@@ -39,6 +39,24 @@ function compactPath(path, missing) {
   };
 }
 
+function entityArrival(path, current, missingDimensions) {
+  const states = arr(path?.states);
+  const parent = states.length > 1 ? states[states.length - 2] : null;
+  const score = { ...(path?.score || {}) };
+  return {
+    entity:current?.entityName || current?.name || '',
+    path:states.map((state) => state.name),
+    parent:parent?.name || '',
+    arrivalEdge:current?.edge || null,
+    inheritedScore:score,
+    unresolvedScores:Object.fromEntries(arr(missingDimensions)
+      .filter((dimension) => Number.isFinite(Number(score?.[dimension])))
+      .map((dimension) => [dimension, Number(score[dimension])])),
+    priority:activeScore(score, missingDimensions),
+    missingDimensions:arr(missingDimensions)
+  };
+}
+
 async function activateDormant({ frontier, logicalRequest, dimensions, missingDimensions, client, model, usage, log, stepRef }) {
   const group = frontier.takeDormantGroup(8);
   if (!group.length) return;
@@ -270,6 +288,16 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
         semanticHints,
         visitedEntityKeys:selectedEntityKeys(path)
       });
+      const arrival = {
+        step:stepRef.value + 1,
+        action:'entity_arrival',
+        ...entityArrival(path, current, searchNeeds),
+        fkCandidateCount:fkCandidates.length
+      };
+      events.push(arrival);
+      log('query_v4_entity_arrival', arrival);
+      console.log(`[lemap query-v4][${arrival.step}] inspect ${arrival.entity} | arrived from ${arrival.parent || 'root'} | inherited ${JSON.stringify(arrival.unresolvedScores)} | FKs ${arrival.fkCandidateCount}`);
+
       const inspection = await evaluateEntityCoverage({
         state:current,
         dimensions,
