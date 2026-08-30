@@ -33,20 +33,27 @@ export const withResumeLearning = (Base) => class ResumeLearningExplorer extends
         };
         continue;
       }
-      const checkpoint = arc.pass2Checkpoint;
-      if (checkpoint && typeof checkpoint === 'object') {
-        flows[arc.id] = { ...defaultFlowState(), ...clone(checkpoint) };
-      } else if (!flows[arc.id]) {
-        flows[arc.id] = defaultFlowState();
-      }
+
+      // Runtime Pass-2 state is not durable semantic truth. If a workflow is still
+      // incomplete after restore, restart its bounded compressed-flow interpretation
+      // rather than preserving started=true/completed=true and silently skipping it.
+      const checkpoint = arc.pass2Checkpoint && typeof arc.pass2Checkpoint === 'object'
+        ? clone(arc.pass2Checkpoint)
+        : {};
+      flows[arc.id] = {
+        ...defaultFlowState(),
+        wholeFlowCalls:Number(checkpoint.wholeFlowCalls || 0),
+        branchCalls:Number(checkpoint.branchCalls || 0),
+        started:false,
+        completed:false,
+        pendingBranchIndexes:[],
+        interpretedBranchIndexes:[]
+      };
     }
 
     const eligible = this.unfinishedWholeFlowArcs?.('') || [];
-    const activeId = String(this.state?.pass1Scheduler?.activeArcId || '');
-    const active = arr(this.state?.pass1Arcs).find((arc) => arc?.id === activeId);
-    if (!active || active.closureState === 'closed' || flows[activeId]?.completed) {
-      if (this.state?.pass1Scheduler) this.state.pass1Scheduler.activeArcId = eligible[0]?.id || '';
-    }
+    if (this.state?.pass1Scheduler) this.state.pass1Scheduler.activeArcId = eligible[0]?.id || '';
+    this._wholeFlowNextArcId = eligible[0]?.id || '';
 
     const partial = eligible.filter((arc) => Number(arc.progress || 0) > 0).length;
     const zero = eligible.filter((arc) => Number(arc.progress || 0) === 0).length;
