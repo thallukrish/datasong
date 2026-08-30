@@ -34,6 +34,12 @@ export const withResumeLearning = (Base) => class ResumeLearningExplorer extends
         continue;
       }
 
+      // A previous run may have been unable to recover a deterministic call path.
+      // Retry that lookup on every fresh restore because the path index/lookup code
+      // may now be able to resolve persisted variant/contained/related path ids.
+      delete arc.pass2Unavailable;
+      if (arc.closureState === 'needs_call_path') arc.closureState = '';
+
       // Runtime Pass-2 state is not durable semantic truth. If a workflow is still
       // incomplete after restore, restart its bounded compressed-flow interpretation
       // rather than preserving started=true/completed=true and silently skipping it.
@@ -79,7 +85,7 @@ export const withResumeLearning = (Base) => class ResumeLearningExplorer extends
 
   unfinishedWholeFlowArcs(excludeArcId = '') {
     const base = super.unfinishedWholeFlowArcs(excludeArcId)
-      .filter((arc) => arc?.closureState !== 'closed' && !this.flowState(arc)?.completed);
+      .filter((arc) => arc?.closureState !== 'closed' && !arc?.pass2Unavailable && !this.flowState(arc)?.completed);
     return base.sort((a, b) => {
       const aPartial = Number(a.progress || 0) > 0 ? 1 : 0;
       const bPartial = Number(b.progress || 0) > 0 ? 1 : 0;
