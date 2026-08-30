@@ -17,6 +17,7 @@ import { withSemanticModel } from './explorer/semanticModel.js';
 import { withBusinessPriorityScout } from './explorer/businessPriorityScout.js';
 import { withEntityReconciliation } from './explorer/entityReconciliation.js';
 import { withSchemaEntityRelationships } from './explorer/schemaEntityRelationships.js';
+import { withSchemaCatalogMaterialization } from './explorer/schemaCatalogMaterialization.js';
 import { withCompactRunLogging } from './explorer/compactRunLogging.js';
 import { withResumeLearning } from './explorer/resumeLearning.js';
 import { withPersistedWorkflowResumeGuard } from './explorer/persistedWorkflowResumeGuard.js';
@@ -40,7 +41,8 @@ const ExplorerWithSemanticModel = withSemanticModel(ExplorerWithStructuredWorkfl
 const ExplorerWithBusinessPriority = withBusinessPriorityScout(ExplorerWithSemanticModel);
 const ExplorerWithReconciliation = withEntityReconciliation(ExplorerWithBusinessPriority);
 const ExplorerWithSchemaEntityRelationships = withSchemaEntityRelationships(ExplorerWithReconciliation);
-const ExplorerWithCompactRunLogging = withCompactRunLogging(ExplorerWithSchemaEntityRelationships);
+const ExplorerWithSchemaCatalogMaterialization = withSchemaCatalogMaterialization(ExplorerWithSchemaEntityRelationships);
+const ExplorerWithCompactRunLogging = withCompactRunLogging(ExplorerWithSchemaCatalogMaterialization);
 const ExplorerWithResumeLearning = withResumeLearning(ExplorerWithCompactRunLogging);
 const ExplorerWithPersistedWorkflowResumeGuard = withPersistedWorkflowResumeGuard(ExplorerWithResumeLearning);
 const ExplorerWithSemanticCompletionGuard = withSemanticCompletionGuard(ExplorerWithPersistedWorkflowResumeGuard);
