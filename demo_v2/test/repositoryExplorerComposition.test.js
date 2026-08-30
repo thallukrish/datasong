@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { RepositoryExplorer } from '../server/repositoryExplorer.js';
 
 const requiredMethods = [
@@ -62,6 +64,15 @@ test('canonical RepositoryExplorer retains extracted behavior contracts', () => 
 });
 
 test('canonical RepositoryExplorer is composed from focused explorer layers', () => {
-  const source = RepositoryExplorer.toString();
-  assert.match(source, /extends ExplorerWithReconciliation/);
+  const sourcePath = fileURLToPath(new URL('../server/repositoryExplorer.js', import.meta.url));
+  const source = fs.readFileSync(sourcePath, 'utf8');
+  for (const layer of [
+    'withEntityReconciliation',
+    'withSchemaEntityRelationships',
+    'withSchemaCatalogMaterialization',
+    'withSemanticCompletionGuard'
+  ]) {
+    assert.match(source, new RegExp(`\\b${layer}\\b`), `${layer} must remain in the explorer composition`);
+  }
+  assert.match(RepositoryExplorer.toString(), /extends ExplorerWithSemanticCompletionGuard/);
 });
