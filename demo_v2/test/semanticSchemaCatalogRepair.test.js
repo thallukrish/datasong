@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { withSemanticModel } from '../server/explorer/semanticModel.js';
+import { withSchemaCatalogMaterialization } from '../server/explorer/schemaCatalogMaterialization.js';
 
 class BaseExplorer {
   constructor({ topology, state }) {
@@ -14,7 +15,7 @@ class BaseExplorer {
   }
 }
 
-const SemanticExplorer = withSemanticModel(BaseExplorer);
+const SemanticExplorer = withSchemaCatalogMaterialization(withSemanticModel(BaseExplorer));
 
 test('persist repairs missing schema catalog nodes without replacing learned workflow objects', () => {
   const workflow = {
