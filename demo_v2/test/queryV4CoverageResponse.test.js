@@ -22,6 +22,12 @@ test('accepts legacy array coverage response', () => {
   assert.deepEqual(normalizeCoverageResponse(input), input);
 });
 
+test('normalizes array follow response with nested scores wrapper', () => {
+  const input = { e: [], f: [[8, { scores:[[2, 0.8]] }]] };
+  const expected = { e:[], f:[[8, [[2, 0.8]]]] };
+  assert.deepEqual(normalizeCoverageResponse(input), expected);
+});
+
 test('logs raw and normalized entity model decisions without changing coverage behavior', async () => {
   const events = [];
   const response = { e: [], f: [{ fk:0, scores:[{ dimension:0, score:0.8 }] }] };

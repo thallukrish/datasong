@@ -61,13 +61,26 @@ function descriptiveFollow(value) {
   }).filter(Boolean);
 }
 
+function normalizeFollowArray(value) {
+  return arr(value).map((item) => {
+    if (!Array.isArray(item) || item.length < 2) return item;
+    const fk = Number(item[0]);
+    const rawScores = item[1];
+    if (!Number.isInteger(fk) || fk < 0) return item;
+    if (rawScores && typeof rawScores === 'object' && !Array.isArray(rawScores) && Array.isArray(rawScores.scores)) {
+      return [fk, rawScores.scores];
+    }
+    return item;
+  });
+}
+
 export function normalizeCoverageResponse(parsed) {
   const source = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   const evidence = Array.isArray(source.e)
     ? (source.e.some((item) => item && typeof item === 'object' && !Array.isArray(item)) ? descriptiveEvidence(source.e) : source.e)
     : numericEntries(source.e).map(([dimensionIndex, expression]) => [dimensionIndex, expression]);
   const follow = Array.isArray(source.f)
-    ? (source.f.some((item) => item && typeof item === 'object' && !Array.isArray(item)) ? descriptiveFollow(source.f) : source.f)
+    ? (source.f.some((item) => item && typeof item === 'object' && !Array.isArray(item)) ? descriptiveFollow(source.f) : normalizeFollowArray(source.f))
     : numericEntries(source.f).map(([fkIndex, scores]) => [
         fkIndex,
         numericEntries(scores).map(([dimensionIndex, score]) => [dimensionIndex, Number(score)])
@@ -113,8 +126,6 @@ function validEvidenceExpression(expression, fields, dimension, fkFieldTargets) 
 
   const fkTokens = tokens.filter((token) => fkFieldTargets.has(key(token)));
   if (fkTokens.length) {
-    // FK fields are navigation handles. The only direct evidence they may provide is
-    // identity of the referenced entity, and only as a single-field binding.
     if (tokens.length !== 1 || fkTokens.length !== 1) return '';
     const targets = fkFieldTargets.get(key(fkTokens[0]));
     if (!isIdentityRequirement(dimension, targets)) return '';
