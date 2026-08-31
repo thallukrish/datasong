@@ -38,6 +38,21 @@
     return`Learning workflows · ${complete} complete · ${remaining} remaining`;
   }
 
+  function installBranding(){
+    if(typeof document==='undefined')return;
+    const install=()=>{
+      document.title='LeMap';
+      const brand=document.querySelector('.brand');
+      if(brand)brand.textContent='LeMap';
+      const queryTitle=document.querySelector('#queryScreen h1');
+      if(queryTitle&&queryTitle.textContent.trim()==='Ask lemap.')queryTitle.textContent='Ask LeMap.';
+      const queryIntro=document.querySelector('#queryScreen .small');
+      if(queryIntro&&queryIntro.textContent.includes('lemap uses'))queryIntro.textContent=queryIntro.textContent.replace('lemap uses','LeMap uses');
+    };
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});
+    else install();
+  }
+
   function installStopFeedback(){
     if(typeof document==='undefined')return;
     const install=()=>{
@@ -74,6 +89,7 @@
     else install();
   }
 
+  installBranding();
   installStopFeedback();
-  return{workflowState,activity,installStopFeedback};
+  return{workflowState,activity,installBranding,installStopFeedback};
 });
