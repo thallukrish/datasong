@@ -70,9 +70,11 @@ test('canonical RepositoryExplorer is composed from focused explorer layers', ()
     'withEntityReconciliation',
     'withSchemaEntityRelationships',
     'withSchemaCatalogMaterialization',
-    'withSemanticCompletionGuard'
+    'withSemanticCompletionGuard',
+    'withCompactMapPersistence'
   ]) {
     assert.match(source, new RegExp(`\\b${layer}\\b`), `${layer} must remain in the explorer composition`);
   }
-  assert.match(RepositoryExplorer.toString(), /extends ExplorerWithSemanticCompletionGuard/);
+  assert.match(source, /const ExplorerWithCompactMapPersistence = withCompactMapPersistence\(ExplorerWithSemanticCompletionGuard\)/);
+  assert.match(RepositoryExplorer.toString(), /extends ExplorerWithCompactMapPersistence/);
 });
