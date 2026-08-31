@@ -4,11 +4,78 @@ import { MAP_VERSION, semanticObjectsFromGraph, workflowArcsFromGraph } from './
 
 const arr = (value) => Array.isArray(value) ? value : [];
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const repoKey = (value) => String(value || '').trim().replace(/\/$/, '').toLowerCase();
 
 export const withPersistedMap = (Base) => class PersistedMapExplorer extends Base {
-  constructor(args) { super(args); this.loadMostRecentPersistedMap(); }
+  constructor(args) {
+    super(args);
+    const restored = this.loadMostRecentPersistedMap();
+    this.startupHydration = restored
+      ? Promise.resolve().then(() => this.hydratePersistedRuntime()).catch((error) => {
+          this.state.runtimeHydration = { status: 'error', error: error.message || String(error) };
+          console.warn(`[lemap startup] persisted-map runtime hydration failed: ${error.message || error}`);
+          return { hydrated: false, reason: 'error', error: error.message || String(error) };
+        })
+      : Promise.resolve({ hydrated: false, reason: 'no_persisted_map' });
+  }
 
-  async run(repoUrl) { this._mapRestoreAttempted = false; this._mapRestored = false; this._stoppedByUser = false; return super.run(repoUrl); }
+  emptyState() {
+    const fresh = super.emptyState();
+    if (!this._preserveVisibleMapOnReset || !this.state) return fresh;
+    this._preserveVisibleMapOnReset = false;
+    const preserved = clone(this.state);
+    return {
+      ...preserved,
+      status: 'preparing',
+      stopRequested: false,
+      currentArtifact: null,
+      frontier: [],
+      executionStack: [],
+      tokenUsage: clone(fresh.tokenUsage || preserved.tokenUsage || {}),
+      lastMessage: 'Preparing repository runtime; keeping the existing learned map visible.'
+    };
+  }
+
+  async run(repoUrl) {
+    const sameRepo = repoKey(repoUrl) && repoKey(repoUrl) === repoKey(this.state?.repoUrl);
+    const hasLearnedMap = arr(this.state?.pass1Arcs).length > 0 || Object.keys(this.state?.semanticObjects || {}).length > 0;
+    const hydration = sameRepo && this.startupHydration ? await this.startupHydration : null;
+    const matchingRevision = hydration?.reason !== 'commit_mismatch';
+    this._preserveVisibleMapOnReset = !!(sameRepo && hasLearnedMap && matchingRevision);
+    this._mapRestoreAttempted = false;
+    this._mapRestored = false;
+    this._stoppedByUser = false;
+    return super.run(repoUrl);
+  }
+
+  async hydratePersistedRuntime() {
+    const repoUrl = String(this.state?.repoUrl || '').trim();
+    const expectedCommit = String(this.state?.commit || '').trim();
+    if (!repoUrl || !expectedCommit) return { hydrated: false, reason: 'missing_map_identity' };
+
+    this.state.runtimeHydration = { status: 'preparing', repoUrl, commit: expectedCommit };
+    let result = null;
+    if (typeof this.refreshSchemaCatalogForCurrentMap === 'function') {
+      result = await this.refreshSchemaCatalogForCurrentMap();
+      if (result?.reason === 'commit_mismatch') {
+        this.state.runtimeHydration = { status: 'stale', repoUrl, commit: expectedCommit, preparedCommit: result.preparedCommit || '' };
+        return { hydrated: false, reason: 'commit_mismatch', ...result };
+      }
+    } else if (typeof this.topology?.prepare === 'function') {
+      const prepared = await this.topology.prepare(repoUrl);
+      const preparedCommit = String(prepared?.commit || this.topology?.commit || '').trim();
+      if (preparedCommit && preparedCommit !== expectedCommit) {
+        this.state.runtimeHydration = { status: 'stale', repoUrl, commit: expectedCommit, preparedCommit };
+        return { hydrated: false, reason: 'commit_mismatch', expectedCommit, preparedCommit };
+      }
+      result = { refreshed: true, preparedCommit };
+    }
+
+    this.state.runtimeHydration = { status: 'ready', repoUrl, commit: expectedCommit };
+    this.state.lastMessage = 'Loaded the existing learned semantic graph and prepared its repository runtime.';
+    this.emit?.();
+    return { hydrated: true, ...(result || {}) };
+  }
 
   persistedMaps() {
     const dir = this.mapDirectory(); if (!fs.existsSync(dir)) return [];
