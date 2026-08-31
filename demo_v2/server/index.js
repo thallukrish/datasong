@@ -74,13 +74,17 @@ function arcSummary(arc, snapshot) {
 function arcDetail(arc, snapshot) {
   return {
     ...arcSummary(arc, snapshot),
+    businessActor: compactText(arc.businessActor, 180),
+    businessIntent: compactText(arc.businessIntent, 320),
+    businessOutcome: compactText(arc.businessOutcome, 320),
     trigger: compactText(arc.trigger, 260),
     workflowSteps: arr(arc.workflowSteps).slice(0, 30).map((step) => ({
       name: compactText(step?.name, 180),
       description: compactText(step?.description, 520),
       entities: uniq(step?.entities).slice(0, 12),
       persistentObjects: uniq(step?.persistentObjects).slice(0, 12),
-      effect: compactText(step?.effect, 320)
+      effect: compactText(step?.effect, 320),
+      sourcePath: compactText(step?.sourcePath, 320)
     })),
     entityDetails: arr(arc.entityDetails).slice(0, 24).map((entity) => ({
       name: compactText(entity?.name, 160),
@@ -102,8 +106,9 @@ function arcDetail(arc, snapshot) {
     })),
     relationshipDetails: arr(arc.relationshipDetails).slice(0, 30).map((rel) => ({
       from: compactText(rel?.from, 180), relation: compactText(rel?.relation, 180), to: compactText(rel?.to, 180),
-      description: compactText(rel?.description, 520)
+      description: compactText(rel?.description, 520), keyMaps: arr(rel?.keyMaps).slice(0, 8), relationshipKind: compactText(rel?.relationshipKind, 80)
     })),
+    majorStages: arr(arc.majorStages).map((v) => compactText(v, 220)),
     stages: arr(arc.majorStages).map((v) => compactText(v, 220)),
     entities: arr(arc.entities).map((v) => compactText(v, 140)),
     persistentObjects: arr(arc.persistentObjects).map((v) => compactText(v, 160)),
@@ -113,6 +118,41 @@ function arcDetail(arc, snapshot) {
   };
 }
 function businessArcs(snapshot) { return arr(snapshot?.pass1Arcs).filter(isBusinessArc); }
+function uiState(snapshot = explorer.snapshot()) {
+  const arcs = businessArcs(snapshot);
+  const flowState = {};
+  for (const arc of arcs) {
+    const flow = snapshot?.pass2WholeFlowByArc?.[arc.id];
+    if (!flow) continue;
+    flowState[arc.id] = {
+      started: !!flow.started,
+      completed: !!flow.completed,
+      pendingBranchIndexes: arr(flow.pendingBranchIndexes),
+      wholeFlowCalls: Number(flow.wholeFlowCalls || 0),
+      branchCalls: Number(flow.branchCalls || 0)
+    };
+  }
+  return {
+    status: snapshot?.status || 'idle',
+    repoUrl: snapshot?.repoUrl || '',
+    commit: snapshot?.commit || '',
+    stopRequested: !!snapshot?.stopRequested,
+    lastMessage: compactText(snapshot?.lastMessage, 420),
+    mapPersistence: snapshot?.mapPersistence ? {
+      restored: !!snapshot.mapPersistence.restored,
+      savedAt: snapshot.mapPersistence.savedAt || '',
+      repoUrl: snapshot.mapPersistence.repoUrl || '',
+      commit: snapshot.mapPersistence.commit || '',
+      version: snapshot.mapPersistence.version || 0
+    } : null,
+    runtimeHydration: snapshot?.runtimeHydration || null,
+    pass1Scheduler: { activeArcId: snapshot?.pass1Scheduler?.activeArcId || '' },
+    pass2WholeFlowByArc: flowState,
+    pass1Arcs: arcs.map((arc) => arcDetail(arc, snapshot)),
+    learningCoverage: coverageSummary(snapshot),
+    visibleBusinessArcIds: arcs.map((arc) => arc.id)
+  };
+}
 function allGroupedPaths() {
   if (!topology.callPathIndex) return [];
   const n = Math.min(2500, Math.max(1, Number(topology.callPathIndex.rankedPathCount || 1200)));
@@ -221,7 +261,13 @@ function prioritizeArc(arc, message = '') {
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'public'), { etag: false, lastModified: false, setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); } }));
 
-app.get('/api/state', (_req, res) => { const snapshot = explorer.snapshot(); res.json({ ...snapshot, learningCoverage: coverageSummary(snapshot), visibleBusinessArcIds: businessArcs(snapshot).map((a) => a.id) }); });
+app.get('/api/state', (_req, res) => { const snapshot = explorer.snapshot(); res.json(uiState(snapshot)); });
+app.get('/api/workflow/:id', (req, res) => {
+  const snapshot = explorer.snapshot();
+  const arc = businessArcs(snapshot).find((item) => String(item.id) === String(req.params.id));
+  if (!arc) return res.status(404).json({ error: 'Workflow not found' });
+  return res.json(arcDetail(arc, snapshot));
+});
 app.get('/api/map', (_req, res) => {
   explorer.persistSemanticMap?.(); const snapshot = explorer.snapshot(); const arcs = businessArcs(snapshot);
   res.json({ repoUrl: snapshot.repoUrl || '', commit: snapshot.commit || '', savedAt: snapshot.mapPersistence?.savedAt || '', restored: !!snapshot.mapPersistence?.restored, coverage: coverageSummary(snapshot), workflows: arcs.map((arc) => arcDetail(arc, snapshot)) });
@@ -295,7 +341,7 @@ app.get('/api/run-log', (_req, res) => explorer.runLogPath ? res.download(explor
 app.get('/api/query-log', (_req, res) => latestQueryLogPath && fs.existsSync(latestQueryLogPath) ? res.download(latestQueryLogPath, path.basename(latestQueryLogPath)) : res.status(404).json({ error: 'No query run log is available yet' }));
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive'); res.flushHeaders();
-  clients.add(res); const snapshot = explorer.snapshot(); res.write(`data: ${JSON.stringify({ ...snapshot, learningCoverage: coverageSummary(snapshot), visibleBusinessArcIds: businessArcs(snapshot).map((a) => a.id) })}\n\n`);
+  clients.add(res); const snapshot = explorer.snapshot(); res.write(`data: ${JSON.stringify(uiState(snapshot))}\n\n`);
   req.on('close', () => clients.delete(res));
 });
 
@@ -334,7 +380,7 @@ registerQueryV2Api({
 
 function broadcast(state) {
   const snapshot = state || explorer.snapshot();
-  const payload = `data: ${JSON.stringify({ ...snapshot, learningCoverage: coverageSummary(snapshot), visibleBusinessArcIds: businessArcs(snapshot).map((a) => a.id) })}\n\n`;
+  const payload = `data: ${JSON.stringify(uiState(snapshot))}\n\n`;
   for (const client of clients) client.write(payload);
 }
 
