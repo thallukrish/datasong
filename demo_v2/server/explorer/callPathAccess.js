@@ -5,9 +5,22 @@ export const withCallPathAccess = (Base) => class CallPathAccessExplorer extends
     return arr(this.topology?.callPathIndexer?.rankedPaths).find((path) => path?.id === id) || null;
   }
 
+  groupedCallPaths() {
+    const indexer = this.topology?.callPathIndexer || null;
+    if (this._groupedCallPathCache?.indexer === indexer) return this._groupedCallPathCache.paths;
+    const paths = typeof this.topology?.topCallPaths === 'function' ? this.topology.topCallPaths(50) : [];
+    this._groupedCallPathCache = { indexer, paths:arr(paths) };
+    return this._groupedCallPathCache.paths;
+  }
+
   groupedPathForArc(arc) {
     if (!arc) return null;
-    const top = typeof this.topology?.topCallPaths === 'function' ? this.topology.topCallPaths(50) : [];
+    // Grouping call paths is deterministic for a prepared topology but expensive:
+    // CallPathIndexerV3.top() compares the full ranked path set before slicing.
+    // Reuse that grouping across workflow handoffs instead of recomputing it for
+    // every Pass-2 arc. The cache invalidates automatically when the indexer
+    // instance changes on a fresh repository prepare.
+    const top = this.groupedCallPaths();
     const byId = (id) => id ? (top.find((path) => path.id === id) || this.rankedPathById(id)) : null;
 
     // Persisted workflow state may retain any one of these evidenced path ids.
