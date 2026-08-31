@@ -1,8 +1,8 @@
 import { addUsage, arr, key, modelJson, text } from '../query_v2/modelJson.js';
 
-const ENTITY_SYSTEM = `Inspect ONE selected entity as a coherent evidence package for the unresolved analytical requirements. You are given the entity's COMPLETE schema plus ONLY real schema FK edges that LeMap can traverse from this entity. Return JSON only: {"e":[{"dimension":dimensionIndex,"field":"field-or-expression"}],"f":[{"fk":fkIndex,"scores":[{"dimension":dimensionIndex,"score":0.8}]}]}. e = direct evidence available on THIS entity. Evidence may be one real data field or a simple expression composed only from supplied NON-FK data fields (for example quantity * unitAmount). FK/ID fields are navigation handles, not business-attribute values. An FK field may directly satisfy a requirement only when that requirement explicitly asks for the referenced object's identifier or identity. A broader business-facing entity/dimension requirement is NOT satisfied merely because the FK points to an entity with that conceptual name; when the referenced entity can provide the richer business meaning, put that relationship in f and let LeMap traverse it. An FK must NEVER satisfy an attribute of the referenced entity such as region, price, name, category, date, amount, etc. If an FK looks useful for an unresolved concept beyond explicit identity, put that relationship in f so LeMap traverses to the referenced entity and the model inspects that entity's real fields before making a firm evidence decision. Do not invent fields, joins, constants, or business logic. A time requirement needs a supplied real date/time field with the correct event meaning. A monetary measure may be a valid arithmetic expression over supplied non-FK numeric fields when the requested business measure requires it. f = real FK edges worth following because their target entity is promising for one or more STILL unresolved requirements. Use only supplied fkIndex values. Score semantic promise on 1.0 direct/near-certain, .8 strong, .6 good, .4 plausible, .2 weak. Do not follow edges merely for generic connectivity; select them because they can help answer unresolved plan requirements. Omit unsupported evidence and unhelpful FKs. No reasons or extra keys.`;
+const ENTITY_SYSTEM = `Inspect ONE selected entity as a coherent evidence package for the unresolved analytical requirements. You are given the entity's COMPLETE schema plus ONLY real schema FK edges that LeMap can traverse from this entity. Return JSON only: {"e":[{"dimension":"dimensionName","field":"field-or-expression"}],"f":[{"target":"ReferencedEntity","relationship":"relationshipName","scores":[{"dimension":"dimensionName","score":0.8}]}]}. Use the supplied semantic NAMES exactly; do not use numeric indexes. e = direct evidence available on THIS entity. Evidence may be one real data field or a simple expression composed only from supplied NON-FK data fields (for example quantity * unitAmount). FK/ID fields are navigation handles, not business-attribute values. An FK field may directly satisfy a requirement only when that requirement explicitly asks for the referenced object's identifier or identity. A broader business-facing entity/dimension requirement is NOT satisfied merely because the FK points to an entity with that conceptual name; when the referenced entity can provide the richer business meaning, put that relationship in f and let LeMap traverse it. An FK must NEVER satisfy an attribute of the referenced entity such as region, price, name, category, date, amount, etc. If an FK looks useful for an unresolved concept beyond explicit identity, put that relationship in f so LeMap traverses to the referenced entity and the model inspects that entity's real fields before making a firm evidence decision. Do not invent fields, joins, constants, or business logic. A time requirement needs a supplied real date/time field with the correct event meaning. A monetary measure may be a valid arithmetic expression over supplied non-FK numeric fields when the requested business measure requires it. f = real FK edges worth following because their target entity is promising for one or more STILL unresolved requirements. Identify an FK using its supplied target and relationship names. Score semantic promise on 1.0 direct/near-certain, .8 strong, .6 good, .4 plausible, .2 weak. Do not follow edges merely for generic connectivity; select them because they can help answer unresolved plan requirements. Omit unsupported evidence and unhelpful FKs. No reasons or extra keys.`;
 
-const REPAIR_ENTITY_SYSTEM = `Inspect ONE repair anchor/entity as a coherent evidence package for the reopened analytical requirements. You are given the entity's COMPLETE schema plus ONLY real FK edges LeMap can traverse, together with the authoritative repair requirement and locked evidence. Return JSON only: {"e":[{"dimension":dimensionIndex,"field":"field-or-expression"}],"f":[{"fk":fkIndex,"scores":[{"dimension":dimensionIndex,"score":0.8}]}]}. e may use one supplied real data field or a simple expression composed only from supplied NON-FK data fields, but it must directly and semantically satisfy the reopened requirement. FK/ID fields are navigation handles and may directly satisfy only a requirement that explicitly asks for the referenced object's identifier or identity. A broader business-facing entity/dimension requirement must traverse the FK so the target entity can provide its richer meaning. FK fields must never be accepted as attributes of the referenced entity. If an FK may lead to the reopened concept beyond explicit identity, return it in f and let LeMap traverse before deciding from the target entity's real fields. Repair context can narrow valid evidence but can never make an invalid primitive field valid. A generic lifecycle timestamp is not transaction/event time unless its meaning matches. Locked evidence must not be reinterpreted or replaced. f may select only supplied real FK edges that are promising for the reopened requirement, scored 1/.8/.6/.4/.2. Do not follow edges merely for connectivity. No reasons or extra keys.`;
+const REPAIR_ENTITY_SYSTEM = `Inspect ONE repair anchor/entity as a coherent evidence package for the reopened analytical requirements. You are given the entity's COMPLETE schema plus ONLY real FK edges LeMap can traverse, together with the authoritative repair requirement and locked evidence. Return JSON only: {"e":[{"dimension":"dimensionName","field":"field-or-expression"}],"f":[{"target":"ReferencedEntity","relationship":"relationshipName","scores":[{"dimension":"dimensionName","score":0.8}]}]}. Use the supplied semantic NAMES exactly; do not use numeric indexes. e may use one supplied real data field or a simple expression composed only from supplied NON-FK data fields, but it must directly and semantically satisfy the reopened requirement. FK/ID fields are navigation handles and may directly satisfy only a requirement that explicitly asks for the referenced object's identifier or identity. A broader business-facing entity/dimension requirement must traverse the FK so the target entity can provide its richer meaning. FK fields must never be accepted as attributes of the referenced entity. If an FK may lead to the reopened concept beyond explicit identity, return it in f and let LeMap traverse before deciding from the target entity's real fields. Repair context can narrow valid evidence but can never make an invalid primitive field valid. A generic lifecycle timestamp is not transaction/event time unless its meaning matches. Locked evidence must not be reinterpreted or replaced. f may select only supplied real FK edges that are promising for the reopened requirement, identified by supplied target and relationship names and scored 1/.8/.6/.4/.2. Do not follow edges merely for connectivity. No reasons or extra keys.`;
 
 function completeFields(state) {
   return arr(state?.schemaFields).map((field, index) => ({
@@ -36,25 +36,58 @@ function numericEntries(value) {
     .sort((a, b) => a[0] - b[0]);
 }
 
-function descriptiveEvidence(value) {
+function dimensionIndex(value, dimensions) {
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  const wanted = key(value);
+  if (!wanted) return -1;
+  return arr(dimensions).findIndex((dimension) => key(dimension) === wanted);
+}
+
+function sameKeyMaps(left, right) {
+  const signature = (maps) => arr(maps)
+    .map((m) => `${key(m?.fieldName)}:${key(m?.relatedFieldName)}`)
+    .sort().join('|');
+  return signature(left) === signature(right);
+}
+
+function semanticFkIndex(item, fks) {
+  const numeric = Number(item?.fk);
+  if (Number.isInteger(numeric) && numeric >= 0) return numeric;
+  const target = key(item?.target);
+  if (!target) return -1;
+  const relationship = key(item?.relationship);
+  const candidates = arr(fks)
+    .map((fk, index) => ({ fk, index }))
+    .filter(({ fk }) => key(fk?.target) === target)
+    .filter(({ fk }) => !relationship || key(fk?.relationship) === relationship);
+  if (candidates.length === 1) return candidates[0].index;
+  if (candidates.length > 1 && arr(item?.keyMaps).length) {
+    const exact = candidates.find(({ fk }) => sameKeyMaps(fk?.keyMaps, item.keyMaps));
+    if (exact) return exact.index;
+  }
+  return -1;
+}
+
+function descriptiveEvidence(value, dimensions) {
   return arr(value).map((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-    const dimension = Number(item.dimension);
-    if (!Number.isInteger(dimension) || dimension < 0) return null;
+    const dimension = dimensionIndex(item.dimension, dimensions);
+    if (dimension < 0) return null;
     return [dimension, item.field];
   }).filter(Boolean);
 }
 
-function descriptiveFollow(value) {
+function descriptiveFollow(value, dimensions, fks) {
   return arr(value).map((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-    const fk = Number(item.fk);
-    if (!Number.isInteger(fk) || fk < 0) return null;
+    const fk = semanticFkIndex(item, fks);
+    if (fk < 0) return null;
     const scores = arr(item.scores).map((score) => {
       if (!score || typeof score !== 'object' || Array.isArray(score)) return null;
-      const dimension = Number(score.dimension);
+      const dimension = dimensionIndex(score.dimension, dimensions);
       const value = Number(score.score);
-      if (!Number.isInteger(dimension) || dimension < 0 || !Number.isFinite(value)) return null;
+      if (dimension < 0 || !Number.isFinite(value)) return null;
       return [dimension, value];
     }).filter(Boolean);
     return [fk, scores];
@@ -74,16 +107,16 @@ function normalizeFollowArray(value) {
   });
 }
 
-export function normalizeCoverageResponse(parsed) {
+export function normalizeCoverageResponse(parsed, dimensions = [], fks = []) {
   const source = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   const evidence = Array.isArray(source.e)
-    ? (source.e.some((item) => item && typeof item === 'object' && !Array.isArray(item)) ? descriptiveEvidence(source.e) : source.e)
-    : numericEntries(source.e).map(([dimensionIndex, expression]) => [dimensionIndex, expression]);
+    ? (source.e.some((item) => item && typeof item === 'object' && !Array.isArray(item)) ? descriptiveEvidence(source.e, dimensions) : source.e)
+    : numericEntries(source.e).map(([dimensionIdx, expression]) => [dimensionIdx, expression]);
   const follow = Array.isArray(source.f)
-    ? (source.f.some((item) => item && typeof item === 'object' && !Array.isArray(item)) ? descriptiveFollow(source.f) : normalizeFollowArray(source.f))
+    ? (source.f.some((item) => item && typeof item === 'object' && !Array.isArray(item)) ? descriptiveFollow(source.f, dimensions, fks) : normalizeFollowArray(source.f))
     : numericEntries(source.f).map(([fkIndex, scores]) => [
         fkIndex,
-        numericEntries(scores).map(([dimensionIndex, score]) => [dimensionIndex, Number(score)])
+        numericEntries(scores).map(([dimensionIdx, score]) => [dimensionIdx, Number(score)])
       ]);
   return { e:evidence, f:follow };
 }
@@ -167,7 +200,9 @@ export async function evaluateEntityCoverage({
   }
 
   const missingSet = new Set(missingDimensions.map(key));
-  const unresolved = dimensions.map((name, index) => missingSet.has(key(name)) ? [index, name] : null).filter(Boolean);
+  const unresolved = dimensions
+    .filter((name) => missingSet.has(key(name)))
+    .map((name) => ({ name }));
   const fks = fkCandidates.map(compactFk);
   const fkFieldTargets = fkTargetsByLocalField(fks);
   const payload = {
@@ -177,8 +212,18 @@ export async function evaluateEntityCoverage({
       name:state.evidence?.entity?.name || state.entityName || state.name,
       description:text(state.evidence?.entity?.description, 260)
     },
-    fields:fields.map((field) => [field.index, field.name, field.type, field.isPk ? 1 : 0, field.description]),
-    fks:fks.map((fk) => [fk.index, fk.target, fk.relationship, fk.cardinality, fk.keyMaps])
+    fields:fields.map((field) => ({
+      name:field.name,
+      type:field.type,
+      isPk:field.isPk,
+      description:field.description
+    })),
+    fks:fks.map((fk) => ({
+      target:fk.target,
+      relationship:fk.relationship,
+      cardinality:fk.cardinality,
+      keyMaps:fk.keyMaps
+    }))
   };
   if (repairContext) {
     payload.repair = {
@@ -199,7 +244,7 @@ export async function evaluateEntityCoverage({
   });
   const call = await modelJson(client, model, repairContext ? REPAIR_ENTITY_SYSTEM : ENTITY_SYSTEM, payload, { maxTokens:420 });
   addUsage(usage, call.usage);
-  const decision = normalizeCoverageResponse(call.parsed);
+  const decision = normalizeCoverageResponse(call.parsed, dimensions, fks);
 
   log('query_v4_entity_raw_model', {
     step,
