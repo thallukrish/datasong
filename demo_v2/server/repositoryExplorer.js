@@ -22,6 +22,7 @@ import { withCompactRunLogging } from './explorer/compactRunLogging.js';
 import { withResumeLearning } from './explorer/resumeLearning.js';
 import { withPersistedWorkflowResumeGuard } from './explorer/persistedWorkflowResumeGuard.js';
 import { withSemanticCompletionGuard } from './explorer/semanticCompletionGuard.js';
+import { withCompactMapPersistence } from './explorer/compactMapPersistence.js';
 
 const ExplorerWithModelCall = withLightweightModelCall(ModelDirectedExplorerV2);
 const ExplorerWithPass1State = withPass1State(ExplorerWithModelCall);
@@ -46,7 +47,8 @@ const ExplorerWithCompactRunLogging = withCompactRunLogging(ExplorerWithSchemaCa
 const ExplorerWithResumeLearning = withResumeLearning(ExplorerWithCompactRunLogging);
 const ExplorerWithPersistedWorkflowResumeGuard = withPersistedWorkflowResumeGuard(ExplorerWithResumeLearning);
 const ExplorerWithSemanticCompletionGuard = withSemanticCompletionGuard(ExplorerWithPersistedWorkflowResumeGuard);
+const ExplorerWithCompactMapPersistence = withCompactMapPersistence(ExplorerWithSemanticCompletionGuard);
 
-export class RepositoryExplorer extends ExplorerWithSemanticCompletionGuard {}
+export class RepositoryExplorer extends ExplorerWithCompactMapPersistence {}
 
 export default RepositoryExplorer;
