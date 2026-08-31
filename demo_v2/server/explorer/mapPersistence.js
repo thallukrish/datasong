@@ -29,11 +29,9 @@ function writeSavedMap(file, value) {
   const json = JSON.stringify(value, null, 2);
   try {
     fs.writeFileSync(temporary, json);
-    // Validate the completed temporary file before it can replace the active map.
     JSON.parse(fs.readFileSync(temporary, 'utf8'));
     if (fs.existsSync(file)) {
       try { JSON.parse(fs.readFileSync(file, 'utf8')); fs.copyFileSync(file, backup); } catch {}
-      // Windows does not consistently replace an existing destination with rename.
       fs.rmSync(file, { force: true });
     }
     fs.renameSync(temporary, file);
@@ -286,9 +284,10 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
   }
 
   enrichTraceability() {
+    const groupedPaths = typeof this.groupedCallPaths === 'function' ? this.groupedCallPaths() : [];
     for (const arc of arr(this.state?.pass1Arcs)) {
       const callPathId = String(arc.callPathId || ''); if (!callPathId) continue;
-      const grouped = this.rankedPathById?.(callPathId) || this.topology.topCallPaths?.(500)?.find((item) => item.id === callPathId) || null;
+      const grouped = this.rankedPathById?.(callPathId) || groupedPaths.find((item) => item.id === callPathId) || null;
       if (!grouped) continue;
       const compact = this.compactCallPath?.(grouped) || null;
       arc.traceability = { callPathId, variantCallPathIds: arr(arc.callPathVariantIds), entrySymbolId: grouped.entrySymbolId || '', sourcePaths: arr(grouped.sourcePaths), pathFingerprint: crypto.createHash('sha1').update(JSON.stringify(compact || grouped)).digest('hex') };
