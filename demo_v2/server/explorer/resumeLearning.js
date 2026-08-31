@@ -6,6 +6,48 @@ function defaultFlowState() {
 }
 
 export const withResumeLearning = (Base) => class ResumeLearningExplorer extends Base {
+  async run(repoUrl) {
+    // Startup hydration may still be preparing the persisted repository runtime.
+    // Let it finish before intercepting the normal repository-root observation.
+    if (this.startupHydration) await this.startupHydration;
+
+    const topology = this.topology;
+    const originalPrepare = topology?.prepare;
+    if (typeof originalPrepare !== 'function') return super.run(repoUrl);
+
+    let intercepted = false;
+    topology.prepare = async (...args) => {
+      const prep = await originalPrepare.apply(topology, args);
+      if (intercepted) return prep;
+      intercepted = true;
+
+      // During SemanticExplorer.run(), persisted-map restoration happens in the
+      // initial emit before topology.prepare(). At this point Pass 1 has already
+      // selected the next unfinished workflow. Use that bounded whole-flow as
+      // the first observation instead of forcing an unrelated repository-root
+      // semantic call before pending work can begin.
+      const pendingId = String(this._wholeFlowNextArcId || this.pass1?.().activeArcId?.() || '');
+      if (!pendingId) return prep;
+
+      const arc = this.pass1?.().arcByReference?.(pendingId);
+      if (!arc || arc.closureState === 'closed' || arc.pass2Unavailable) return prep;
+
+      const observation = await this.resumePass2Arc?.(pendingId);
+      if (!observation) return prep;
+
+      this._wholeFlowNextArcId = '';
+      this.state.lastMessage = `Pass 1 resuming pending workflow ${arc.title}.`;
+      console.log(`[lemap learn resume] starting pending workflow ${arc.title} before repository root exploration`);
+      return { ...prep, root: observation };
+    };
+
+    try {
+      return await super.run(repoUrl);
+    } finally {
+      topology.prepare = originalPrepare;
+    }
+  }
+
   capturePass2Checkpoints() {
     const flows = this.state?.pass2WholeFlowByArc || {};
     for (const arc of arr(this.state?.pass1Arcs)) {
