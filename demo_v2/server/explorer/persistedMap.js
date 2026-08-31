@@ -39,8 +39,9 @@ export const withPersistedMap = (Base) => class PersistedMapExplorer extends Bas
   async run(repoUrl) {
     const sameRepo = repoKey(repoUrl) && repoKey(repoUrl) === repoKey(this.state?.repoUrl);
     const hasLearnedMap = arr(this.state?.pass1Arcs).length > 0 || Object.keys(this.state?.semanticObjects || {}).length > 0;
-    if (sameRepo && this.startupHydration) await this.startupHydration;
-    this._preserveVisibleMapOnReset = !!(sameRepo && hasLearnedMap);
+    const hydration = sameRepo && this.startupHydration ? await this.startupHydration : null;
+    const matchingRevision = hydration?.reason !== 'commit_mismatch';
+    this._preserveVisibleMapOnReset = !!(sameRepo && hasLearnedMap && matchingRevision);
     this._mapRestoreAttempted = false;
     this._mapRestored = false;
     this._stoppedByUser = false;
