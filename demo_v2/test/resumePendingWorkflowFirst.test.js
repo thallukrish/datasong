@@ -5,18 +5,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const base = fs.readFileSync(path.join(here, '../server/explorer.js'), 'utf8');
 const resume = fs.readFileSync(path.join(here, '../server/explorer/resumeLearning.js'), 'utf8');
 
-test('exploration startup is overridable instead of always forcing repository root', () => {
-  assert.match(base, /async initialObservation\(prep\)/);
-  assert.match(base, /let observation = await this\.initialObservation\(prep\)/);
-  assert.doesNotMatch(base, /let observation = prep\.root/);
+test('persisted learning dispatches the scheduler-selected unfinished whole-flow as the prepared root observation', () => {
+  assert.match(resume, /async run\(repoUrl\)/);
+  assert.match(resume, /this\._wholeFlowNextArcId/);
+  assert.match(resume, /resumePass2Arc\?\.\(pendingId\)/);
+  assert.match(resume, /return \{ \.\.\.prep, root: observation \}/);
+  assert.match(resume, /return await super\.run\(repoUrl\)/);
 });
 
-test('persisted learning resumes the scheduler-selected unfinished whole-flow before root exploration', () => {
-  assert.match(resume, /async initialObservation\(prep\)/);
-  assert.match(resume, /this\._wholeFlowNextArcId/);
-  assert.match(resume, /resumePass2Arc\(/);
-  assert.match(resume, /return super\.initialObservation\(prep\)/);
+test('fresh learning still falls through to the repository root when no unfinished workflow is scheduled', () => {
+  assert.match(resume, /if \(!pendingId\) return prep/);
+  assert.match(resume, /if \(!observation\) return prep/);
 });
