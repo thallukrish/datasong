@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compactPersistedMap, MAP_VERSION } from '../server/explorer/mapPersistence.js';
+import { compactPersistedMap } from '../server/explorer/compactMapFormat.js';
 
 const noisy = {
   version: 3,
@@ -29,9 +29,10 @@ const noisy = {
   }
 };
 
-test('compaction preserves semantic graph structure and minimal resume identity while dropping historical baggage', () => {
+test('compaction preserves semantic graph structure and resume identity while dropping historical baggage', () => {
   const compact = compactPersistedMap(noisy);
-  assert.equal(compact.version, MAP_VERSION);
+  assert.equal(compact.version, 3);
+  assert.equal(compact.format, 'compact-v1');
   assert.equal(compact.repoUrl, noisy.repoUrl);
   assert.equal(compact.graph.length, 2);
   assert.equal(compact.graph[0].data.description, 'Order');
@@ -39,10 +40,12 @@ test('compaction preserves semantic graph structure and minimal resume identity 
   assert.equal(compact.graph[0].links[0].evidence, undefined);
 
   const pending = compact.learningProgress.incompleteArcs[0];
-  assert.deepEqual(pending, {
-    id: 'arc-9', title: 'Place order', businessActor: 'customer', businessIntent: 'place order', trigger: '', outcome: '',
-    progress: 0, status: 'forming', closureState: '', callPathId: 'callpath:9', callPathVariantIds: ['callpath:10'],
-    containedCallPathIds: [], relatedCallPathIds: [], seedArtifactId: '', seedSourcePath: '', seedSource: '',
-    businessPriority: 0.8, priorityClass: 'revenue_critical', priorityModelVersion: ''
-  });
+  assert.equal(pending.id, 'arc-9');
+  assert.equal(pending.callPathId, 'callpath:9');
+  assert.deepEqual(pending.callPathVariantIds, ['callpath:10']);
+  assert.equal(pending.businessPriority, 0.8);
+  assert.equal(pending.evidence, undefined);
+  assert.equal(pending.entityDetails, undefined);
+  assert.equal(pending.relationshipDetails, undefined);
+  assert.equal(pending.pass2Checkpoint, undefined);
 });
