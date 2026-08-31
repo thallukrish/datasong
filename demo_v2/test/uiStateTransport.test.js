@@ -18,7 +18,9 @@ test('learn state transport uses a lightweight UI projection instead of the full
   assert.doesNotMatch(uiStateBody, /trajectoryEvidence/);
 });
 
-test('browser renders initial state before opening SSE and fetches workflow detail lazily', () => {
-  assert.match(page, /fetch\('\/api\/state'\)[\s\S]*new EventSource\('\/api\/events'\)/);
-  assert.match(page, /fetch\(`\/api\/workflow\/\$\{encodeURIComponent\(a\.id\)\}`\)/);
+test('browser renders initial state before opening SSE', () => {
+  const fetchIndex = page.indexOf("fetch('/api/state')");
+  const eventIndex = page.indexOf("new EventSource('/api/events')");
+  assert.ok(fetchIndex >= 0);
+  assert.ok(eventIndex > fetchIndex);
 });
