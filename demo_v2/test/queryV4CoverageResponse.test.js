@@ -28,6 +28,89 @@ test('normalizes array follow response with nested scores wrapper', () => {
   assert.deepEqual(normalizeCoverageResponse(input), expected);
 });
 
+test('does not let an FK identifier complete a richer referenced-entity business dimension', async () => {
+  const response = {
+    e:[{ dimension:0, field:'thingId' }],
+    f:[{ fk:0, scores:[{ dimension:0, score:1 }] }]
+  };
+  const client = {
+    chat:{ completions:{ create:async () => ({
+      choices:[{ message:{ content:JSON.stringify(response) } }],
+      usage:{ prompt_tokens:10, completion_tokens:4, total_tokens:14 }
+    }) } }
+  };
+  const usage = { prompt:0, completion:0, total:0 };
+  const state = {
+    type:'entity',
+    name:'Line',
+    entityName:'Line',
+    evidence:{ entity:{ name:'Line', description:'Business line item' } },
+    schemaFields:[{ name:'thingId', type:'id', isPk:false, description:'' }]
+  };
+  const fkCandidates = [{
+    name:'Thing',
+    entityName:'Thing',
+    edge:{ kind:'schema_fk', join:{ from:'Line', to:'Thing', relationship:'thing', cardinality:'one', keyMaps:[{ fieldName:'thingId', relatedFieldName:'thingId' }] } }
+  }];
+
+  const result = await evaluateEntityCoverage({
+    state,
+    dimensions:['thing'],
+    missingDimensions:['thing'],
+    fkCandidates,
+    intent:'rank things by value',
+    client,
+    model:'fake',
+    usage,
+    log:() => {},
+    step:1
+  });
+
+  assert.deepEqual(result.covered, []);
+  assert.equal(result.follow.length, 1);
+  assert.equal(result.follow[0].state.entityName, 'Thing');
+  assert.deepEqual(result.follow[0].score, { thing:1 });
+});
+
+test('still allows an FK identifier when the requirement explicitly asks for identity', async () => {
+  const response = { e:[{ dimension:0, field:'thingId' }], f:[] };
+  const client = {
+    chat:{ completions:{ create:async () => ({
+      choices:[{ message:{ content:JSON.stringify(response) } }],
+      usage:{ prompt_tokens:10, completion_tokens:4, total_tokens:14 }
+    }) } }
+  };
+  const usage = { prompt:0, completion:0, total:0 };
+  const state = {
+    type:'entity',
+    name:'Line',
+    entityName:'Line',
+    evidence:{ entity:{ name:'Line', description:'Business line item' } },
+    schemaFields:[{ name:'thingId', type:'id', isPk:false, description:'' }]
+  };
+  const fkCandidates = [{
+    name:'Thing',
+    entityName:'Thing',
+    edge:{ kind:'schema_fk', join:{ from:'Line', to:'Thing', relationship:'thing', cardinality:'one', keyMaps:[{ fieldName:'thingId', relatedFieldName:'thingId' }] } }
+  }];
+
+  const result = await evaluateEntityCoverage({
+    state,
+    dimensions:['thing_id'],
+    missingDimensions:['thing_id'],
+    fkCandidates,
+    intent:'count distinct thing ids',
+    client,
+    model:'fake',
+    usage,
+    log:() => {},
+    step:1
+  });
+
+  assert.deepEqual(result.covered, [{ dimension:'thing_id', field:'thingId' }]);
+  assert.deepEqual(result.follow, []);
+});
+
 test('logs raw and normalized entity model decisions without changing coverage behavior', async () => {
   const events = [];
   const response = { e: [], f: [{ fk:0, scores:[{ dimension:0, score:0.8 }] }] };
