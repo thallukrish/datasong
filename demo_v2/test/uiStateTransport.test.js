@@ -19,8 +19,6 @@ test('learn state transport uses a lightweight UI projection instead of the full
 });
 
 test('browser renders initial state before opening SSE', () => {
-  const fetchIndex = page.indexOf("fetch('/api/state')");
-  const eventIndex = page.indexOf("new EventSource('/api/events')");
-  assert.ok(fetchIndex >= 0);
-  assert.ok(eventIndex > fetchIndex);
+  assert.match(page, /function startEvents\(\)\{const es=new EventSource\('\/api\/events'\)/);
+  assert.match(page, /fetch\('\/api\/state'\)\.then\(r=>r\.json\(\)\)\.then\(s=>\{state=s;controls\(\);renderLearn\(\);if\(screen==='map'\)renderMap\(\);startEvents\(\)\}\)/);
 });
