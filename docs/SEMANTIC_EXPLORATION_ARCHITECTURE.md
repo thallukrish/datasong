@@ -2,23 +2,50 @@
 
 ## Status
 
-This document captures the current exploration architecture for DataSong.
+This document captures the **foundational, source-agnostic semantic-exploration model** that led to the current LeMap implementation.
 
-The earlier workflow-first design is no longer the primary discovery model. DataSong does not begin by assuming that every artifact is a workflow, business concept, rule, or persistent dataset.
+It remains valid as the conceptual model for heterogeneous evidence, topology, semantic continuity, information gain and vertical-slice closure.
 
-The current objective is:
+The current concrete implementation has evolved beyond the original single-slice demo described by earlier versions of this document:
 
-> **Discover and close end-to-end vertical slices of enterprise use cases from heterogeneous evidence.**
+- `demo_v2` now learns multiple business workflows through Scout, deterministic call-path preprocessing, Pass 1 and Pass 2;
+- persistent entities and schema relationships are reconciled into a reusable semantic map;
+- map state is persisted and learning can resume over an existing map;
+- `demo_v2/server/query_v4` is the current working query path over that persistent map.
 
-A vertical slice is a coherent chain of behavior that starts from a meaningful trigger, intent, input, event, schedule, or request; crosses the relevant implementation, data, configuration, and policy boundaries; and reaches a meaningful outcome or produced state.
+The canonical current system architecture is therefore:
 
-The nature of the slice is allowed to emerge from evidence. A slice may ultimately be understood as a customer workflow, employee workflow, ETL/data pipeline, algorithmic process, service interaction, operational procedure, policy-driven process, or something else.
+```text
+docs/LEMAP_ARCHITECTURE.md
+```
+
+The concrete learning architecture is:
+
+```text
+demo_v2/ARCHITECTURE.md
+```
+
+This document should be read as the broader exploration principles underneath those implementations.
 
 ---
 
-## 1. The enterprise is an evidence world
+## 1. Objective: evidence-backed vertical slices
 
-An enterprise contains many kinds of artifacts:
+DataSong/LeMap does not assume that every artifact is itself a workflow, business concept, rule or persistent dataset.
+
+The objective is:
+
+> **Discover and close end-to-end vertical slices of enterprise use cases from heterogeneous evidence, then retain those slices and their persistent-data relationships in a reusable semantic map.**
+
+A vertical slice is a coherent chain of behavior that starts from a meaningful trigger, intent, input, event, schedule or request; crosses relevant implementation, data, configuration and policy boundaries; and reaches a meaningful outcome or produced state.
+
+The nature of the slice is allowed to emerge from evidence. It may ultimately represent a customer workflow, employee workflow, ETL/data pipeline, algorithmic process, service interaction, operational procedure, policy-driven process or something else.
+
+---
+
+## 2. The enterprise is an evidence world
+
+An enterprise can contain many kinds of evidence:
 
 - source code
 - configuration
@@ -27,23 +54,24 @@ An enterprise contains many kinds of artifacts:
 - sample rows and metadata
 - logs and traces
 - documents and policies
-- Slack conversations
-- email threads
+- conversations
 - agreements and contracts
 - tickets and operational notes
 
 No single artifact type is assumed to contain the whole truth.
 
-Code may implement behavior without explaining business intent. A policy document may explain intent that is only partially implemented. A Slack thread may explain a temporary exception. A table may reveal durable state that code refers to indirectly.
+Code may implement behavior without explaining business intent. A policy document may explain intent that is only partially implemented. A table may reveal durable state that code refers to indirectly.
 
-DataSong therefore operates over two fundamental layers:
+LeMap therefore distinguishes:
 
-1. **Evidence world** — raw artifacts plus the topology that makes them navigable.
-2. **Emerging semantic world** — evidence-backed statements connected into end-to-end vertical slices.
+1. **Evidence world** — raw artifacts plus deterministic/source-specific topology.
+2. **Semantic world** — evidence-backed workflows, entities, relationships and claims.
+
+The evidence world is not discarded. Provenance is retained beneath the semantic world so claims can be grounded and later reconciled.
 
 ---
 
-## 2. Topology layer
+## 3. Topology layer
 
 Artifacts should not be presented to the semantic explorer randomly.
 
@@ -51,13 +79,13 @@ The topology layer exposes the structure already present in each source or const
 
 Its question is:
 
-> **What artifacts are reasonably reachable from where I am now?**
+> **What artifacts or semantic objects are reasonably reachable from where I am now?**
 
 It does not decide what those artifacts mean.
 
-### Code
+### Code and executable configuration
 
-Code already provides strong topology:
+Code provides strong topology:
 
 - repository → directory → file → symbol
 - callers and callees
@@ -67,61 +95,33 @@ Code already provides strong topology:
 - entity/table references
 - configuration references
 - component dependencies
-- tests
 
-### Slack and email
-
-Conversation sources provide:
-
-- channel/thread/reply hierarchy
-- participants
-- attachments
-- referenced links/documents
-- time relationships
-- semantic subclusters when a thread is large
-
-### Documents
-
-Documents can expose:
-
-- corpus → cluster → document → section → paragraph
-- headings
-- references
-- hyperlinks
-- defined terms
-- semantic similarity
-
-Hierarchical clustering can make a large English-text corpus navigable much like a source repository.
+Framework-specific executable formats need deterministic adapters. The current implementation includes Moqui-specific execution/schema handling rather than assuming generic XML carries universal execution semantics.
 
 ### Tables and structured data
 
 Data topology can include:
 
-- database → schema → table → column
+- database → schema → table/entity → column/field
 - foreign keys
-- value relationships
+- cardinality
 - lineage
 - query/view dependencies
 - source/derived relationships
-- timestamp relationships
-- semantic clusters of datasets and columns
+- temporal relationships
 
-### Logs and traces
+In the current `demo_v2`, real entity relationships are materialized into the semantic graph and later used by Query-v4 as authoritative traversal/connectivity evidence.
 
-Runtime evidence can expose:
+### Documents and conversations
 
-- trace → span
-- request/session chains
-- event correlation
-- service transitions
-- temporal neighborhoods
+Documents and conversations can expose hierarchy, references, time relationships, links and semantic clusters. When native topology is weak, search/clustering can manufacture useful candidate neighborhoods before semantic exploration.
 
-The common abstraction is:
+The common abstraction remains:
 
 ```text
-RAW ARTIFACTS
+RAW EVIDENCE
       ↓
-SOURCE-SPECIFIC STRUCTURING
+SOURCE-SPECIFIC STRUCTURING / ADAPTERS
       ↓
 HIERARCHIES + EDGES + CLUSTERS
       ↓
@@ -130,9 +130,31 @@ LOCAL CANDIDATE NEIGHBORHOODS
 
 ---
 
-## 3. Orientation is not a vertical slice
+## 4. Deterministic structure versus semantic interpretation
 
-Some artifacts are extremely useful for navigation without being part of an end-to-end use case.
+The current implementation sharpened a principle implicit in the original design:
+
+> **Use the model only where meaning must be inferred. Use deterministic structure wherever the graph can prove the relationship.**
+
+Examples:
+
+```text
+function A calls function B        → deterministic
+OrderItem FK → OrderHeader         → deterministic
+path A is contained inside path B  → deterministic
+
+"this path is Place Order"         → semantic
+"this step validates the order"    → semantic
+"business continuity ends here"    → semantic
+```
+
+This reduces wandering, token use and avoidable model error.
+
+---
+
+## 5. Orientation is not a vertical slice
+
+Some artifacts are useful for navigation without being part of an end-to-end use case.
 
 Examples:
 
@@ -140,19 +162,15 @@ Examples:
 - directory structure
 - README
 - build files
-- component descriptors
-- ignore files
 - framework bootstrap/configuration
 
-These should update **orientation context**, not create semantic stories such as "Repository overview" or "Configuration".
+These should update orientation context rather than become artificial business stories.
 
-Likewise, a test artifact can reveal a real use case, but the slice is the behavior under test, not "JMeter tests" or "test suite".
-
-Orientation helps the explorer find meaningful entry points. It is not itself the target semantic model.
+Likewise, a test artifact may reveal a use case, but the target slice is the behavior under test, not the test suite itself.
 
 ---
 
-## 4. The target object: an end-to-end vertical slice
+## 6. The target object: an end-to-end vertical slice
 
 A useful vertical slice normally has a semantic progression such as:
 
@@ -172,294 +190,288 @@ Examples:
 
 ```text
 Customer places an order
-UI intent → validation → order placement → persistence → approval branch → order outcome
+UI intent → validation → order placement → persistence → payment/approval branch → outcome
 ```
 
 ```text
 Nightly sales aggregation
-schedule → extract transactions → transform → aggregate → reporting dataset
+schedule → extract → transform → aggregate → reporting dataset
 ```
 
-```text
-Refund approval
-refund request → policy check → approval branch → refund execution → recorded result
-```
+The explorer does not need to know the complete slice identity at the beginning. It crystallizes as evidence accumulates.
 
-The explorer is not required to know the slice identity at the beginning. It crystallizes as evidence accumulates.
+In the current implementation, deterministic executable-path discovery can provide strong candidate slices before semantic exploration begins, while Scout remains useful for discovering materially different missing directions.
 
 ---
 
-## 5. Compact LLM semantic contract
+## 7. Semantic deltas, not regenerated world models
 
-The inner loop should not ask the LLM to regenerate the full world model on every turn.
+The inner loop should not ask the model to regenerate the entire semantic world on every turn.
 
-For each newly observed artifact the LLM only needs to determine:
+For newly observed evidence the model should return only the semantic decisions required at that point, for example:
 
-1. **Meaning** — what does this artifact represent semantically?
-2. **Role** — orientation, story evidence, or unattached evidence?
-3. **Path identity** — which existing vertical slice does it continue, or does it begin a new one?
-4. **Continuity** — how strongly does it belong to that slice?
-5. **Semantic bridge** — how exactly does it advance or relate to that slice?
-6. **Relative placement** — where does it fit relative to already-known steps?
-7. **Structural signal** — continuation, branch, or reusable sub-flow?
-8. **Next evidence** — which available artifact is expected to produce the greatest information gain toward closing a vertical slice?
+- meaning
+- role in a workflow
+- continuity
+- boundary
+- relative placement
+- branch/subflow signal
+- expected value of next evidence
 
-A compact response can look like:
+LeMap owns accumulated state.
 
-```json
-{
-  "meaning": "Validates stock and totals before order submission.",
-  "semanticRole": "story",
-  "pathId": "customer-places-order",
-  "continuity": 0.91,
-  "bridge": "Adds the validation step between cart review and order placement.",
-  "relation": "continue",
-  "placement": {
-    "type": "between",
-    "afterStepId": "review-cart",
-    "beforeStepId": "place-order",
-    "confidence": 0.88
-  },
-  "coherenceGain": 0.86,
-  "next": {
-    "type": "artifact",
-    "artifactId": "service:place-order",
-    "expectedGain": 0.93,
-    "reason": "Direct continuation toward the order outcome."
-  }
-}
-```
-
-DataSong owns the accumulated state. The model returns only the delta.
+This principle now also appears on the query side: Query-v4 asks the model to evaluate one selected state/entity against unresolved query requirements while LeMap owns the frontier, graph, coverage and connectivity.
 
 ---
 
-## 6. Discovery order is not story order
+## 8. Discovery order is not story order
 
-An artifact found later may belong earlier in the slice.
+Evidence found later may belong earlier in the workflow.
 
-Therefore steps should be positioned relatively:
+Semantic structure should therefore be represented by relationships rather than merely by discovery sequence.
 
-- before
-- after
-- between
-- branch from
-- parallel to
-- unknown
+Useful signals include:
 
-Absolute step numbers should not be used as the primary representation because they become brittle as new evidence is inserted.
+- continuity — does the evidence belong to the workflow?
+- placement confidence — do we know where it belongs?
+- coherence gain — how much does it improve the workflow structure?
 
-A vertical slice is therefore best represented as an ordered semantic DAG rather than a discovery transcript.
-
-Three different signals are useful:
-
-- **continuity** — does this evidence belong to the slice?
-- **placement confidence** — do we know where it belongs?
-- **coherence gain** — how much does inserting it improve the slice structure?
-
-An artifact that fills a known gap between two existing steps can have especially high coherence gain.
+The current deterministic call-path route reduces some placement ambiguity because executable order is already known, while the model still determines where business continuity begins/ends.
 
 ---
 
-## 7. Exploration policy and information gain
+## 9. Exploration policy and information gain
 
-Given several reachable artifacts, DataSong chooses the artifact expected to most improve the semantic world model.
+Given several reachable candidates, LeMap should prefer the evidence expected to most improve the semantic world model.
 
-The core question is:
+Useful gain includes:
 
-> **Which artifact should I inspect next to most advance or close an end-to-end vertical slice?**
-
-Information gain is not token volume. Useful gain includes:
-
-- extending the active slice toward its start or outcome
+- extending the active workflow toward its start or outcome
 - filling an unexplained transition
-- placing an existing step more precisely
 - resolving an open question
-- revealing or closing a material branch
-- exposing a meaningful sub-flow
-- connecting previously separate evidence
-- discovering a credible new vertical slice when the current one has dampened
+- revealing/closing a material branch
+- exposing a reusable subflow
+- connecting workflow semantics to persistent data
+- discovering a credible new workflow when current directions dampen
 
-Code adjacency is useful but not sufficient. A direct function call can be mechanically close while semantically irrelevant. A service call that continues the use case is much more valuable.
+Code adjacency is useful but not sufficient. A directly called generic helper may be structurally close but semantically weak.
 
 ---
 
-## 8. Path momentum, dampening, and completion pressure
+## 10. Momentum, dampening and completion pressure
 
-A high-signal slice should acquire momentum.
-
-Example:
+A high-signal business path should acquire momentum.
 
 ```text
-checkout screen
+checkout
 → place-order action
 → order service
 → durable order state
-→ approval decision
+→ payment / approval
 ```
 
-When successive artifacts strongly continue the same use case, the explorer should prefer that local path over unrelated global novelty.
+If successive evidence strongly continues the same business use case, the explorer should prefer that path.
 
-If the path begins producing generic helpers, logging, serialization, framework internals, or other low-semantic-gain artifacts, its marginal value dampens and other frontiers can compete again.
+If the path begins producing generic helpers, logging, serialization, framework internals or unrelated infrastructure, marginal semantic value dampens and the explorer should backtrack/bound that direction.
 
-Nearly coherent slices should receive **completion pressure** so the explorer does not abandon a 90%-formed path for a shiny unrelated artifact.
+Nearly coherent workflows should receive completion pressure so LeMap does not accumulate many half-built flows while closing none.
 
-This creates three intuitive modes:
+The original three intuitive modes remain useful:
 
 ```text
-EXPLORE  → what use-case paths exist here?
+EXPLORE  → what important use-case directions exist?
 BUILD    → how do these pieces connect?
-CLOSE    → what minimum evidence remains to make this slice coherent end to end?
+CLOSE    → what minimum evidence remains to close this workflow?
 ```
+
+In the current architecture Scout emphasizes breadth/novelty, Pass 1 schedules across known arcs, and Pass 2 performs detailed reconstruction/closure.
 
 ---
 
-## 9. Branches, sub-flows, and dependencies
+## 11. Branches, reusable workflows and external dependencies
 
 A vertical slice is not necessarily linear.
 
 ### Branches
 
-A material branch belongs to the current slice.
+Material branches remain part of the current workflow until explored or explicitly bounded.
+
+### Reusable workflows
+
+An independently meaningful reusable process should not be recursively duplicated into every parent.
 
 ```text
-validate order
-   ├─ valid → place order
-   ├─ invalid → reject
-   └─ approval required → approval path
+Place Order ──────┐
+                  ├──→ Payment Processing
+Pay Invoice ──────┘
 ```
 
-Completing the happy path does not make the parent slice complete while material branches remain unexplored.
-
-### Sub-flows
-
-A reusable independently meaningful process should not be recursively inlined into the parent slice.
-
-Example:
-
-```text
-Order placement
-   ↓
-Payment processing
-   ↓
-Order confirmed
-```
-
-The parent slice only needs a semantic contract for payment processing sufficient to understand its effect. Payment processing can exist as another separately explorable vertical slice.
+The parent needs enough of the reusable workflow contract to understand its effect; the reusable workflow can be explored independently.
 
 ### External dependencies
 
-If implementation is outside the supplied enterprise evidence boundary, treat it as a black box.
-
-Record only what is needed to continue the local slice:
-
-```text
-input → external dependency → observable output/effect
-```
-
-Do not recursively descend through SDKs, HTTP stacks, libraries, or infrastructure that are outside the evidence boundary.
+If implementation lies outside the supplied evidence boundary, treat it as a black box and preserve only the input/output/effect necessary for the local workflow.
 
 ---
 
-## 10. Closure and progress
+## 12. Persistent entities strengthen the semantic model
 
-Progress belongs to the semantic slice, not to source-code coverage.
+A workflow graph alone is insufficient for LeMap's intended use cases.
 
-A slice is complete when:
+Workflows are connected to persistent business entities and schema relationships:
+
+```text
+Place Order
+   └─ writes → OrderHeader
+
+View Order Detail
+   └─ reads → OrderHeader
+```
+
+Shared durable state provides strong evidence that workflows are related in the business/data model.
+
+Schema FKs provide deterministic relationship evidence and make later query traversal possible.
+
+The current `demo_v2` explicitly materializes/reconciles these relationships rather than treating them as incidental source-code observations.
+
+---
+
+## 13. Closure and progress
+
+Progress belongs to semantic workflow understanding, not source-code coverage.
+
+A workflow is sufficiently closed when:
 
 - its identity/use case is coherent
 - it has a meaningful beginning
 - its main progression is connected
 - it reaches a meaningful outcome
-- every material discovered branch is closed or bounded
-- local sub-flows have enough contract information for the parent
+- material discovered branches are closed or bounded
+- local subflows have enough contract information
 - external dependencies have adequate black-box contracts
-- no remaining frontier is likely to materially change the slice's meaning
+- remaining reachable evidence is unlikely to materially change the workflow meaning
 
-Progress may decrease if newly observed evidence reveals an important previously unknown branch or missing transition.
-
-A branch can be 100% while its parent slice is still incomplete.
-
-The explorer should finish the **semantic use case**, not exhaust every nearby source artifact.
+Progress may decrease if new evidence reveals a previously unknown important branch or gap.
 
 ---
 
-## 11. Source-agnostic architecture
+## 14. Persistence and reconciliation
 
-The same explorer should work over many evidence types because topology is source-specific while semantic reasoning is shared.
+The original exploration model has evolved into a persistent-map architecture.
+
+LeMap should accumulate new evidence into existing knowledge:
 
 ```text
-ENTERPRISE ARTIFACTS
+existing semantic map
+        +
+new workflow/entity evidence
         ↓
-1. TOPOLOGY
+reconciliation
+        ↓
+refined persistent map
+```
+
+New evidence may add a node/edge, strengthen an existing claim, refine it or conflict with it.
+
+Conflicting evidence should retain provenance rather than being silently overwritten.
+
+The current implementation includes map persistence, persisted-map loading, schema/entity reconciliation and resume-learning support.
+
+---
+
+## 15. Source-agnostic architecture
+
+The same high-level explorer can work over many evidence sources because topology is source-specific while semantic reasoning is shared.
+
+```text
+ENTERPRISE EVIDENCE
+        ↓
+1. SOURCE ADAPTER / TOPOLOGY
    what can be inspected next?
         ↓
 2. EXPLORATION POLICY
-   which candidate maximizes expected semantic information gain?
+   which candidate best advances semantic understanding?
         ↓
-3. SEMANTIC WORLD MODEL
-   which vertical slice does this evidence advance, and where does it fit?
+3. SEMANTIC MODEL
+   which workflow/entity/relationship does this evidence establish?
+        ↓
+4. RECONCILIATION / PERSISTENCE
+   how does this change the existing LeMap?
 ```
 
-For weakly structured sources, hierarchical clustering, search, embeddings, thread reconstruction, or temporal grouping can manufacture useful topology before the semantic explorer operates.
-
-When native topology is strong, follow it. When topology is weak, unresolved semantic questions can drive search and clustering.
+This is the boundary future evidence sources should preserve.
 
 ---
 
-## 12. RL-like interpretation
+## 16. Query is a consumer of the learned map
 
-The architecture resembles reinforcement learning/world exploration even if the initial implementation uses an LLM-scored policy rather than a trained RL model.
+The current implementation adds an important layer not present in the original single-slice experiment: Query-v4.
 
-- **Environment:** enterprise evidence world plus topology
-- **State:** current vertical slices, unresolved gaps, branches, orientation, visited artifacts, and frontier
-- **Action:** inspect one candidate artifact/search neighborhood
-- **Observation:** bounded artifact content
-- **Evaluator/simulator:** LLM semantic interpretation
-- **Reward intuition:** semantic continuity, coherence gain, uncertainty reduction, branch closure, use-case closure, and useful new-slice discovery
+Query-v4 starts from the persistent semantic graph rather than re-running discovery.
 
-The policy can eventually learn patterns such as:
-
-> Given this kind of semantic state and source topology, following this kind of edge tends to increase vertical-slice coherence.
-
-The learned parameters should be about exploration effectiveness, not fixed business categories.
-
----
-
-## 13. Logging and token efficiency
-
-The live console should remain terse:
+Its current flow is documented fully in `docs/LEMAP_ARCHITECTURE.md`, but conceptually:
 
 ```text
-[LLM #12] slices: Customer places an order 64% | tokens +840 | cumulative 11230
+question
+  ↓
+ordered analytical plan
+  ↓
+workflow-first semantic roots
+  ↓
+entity / FK evidence traversal
+  ↓
+semantic requirement coverage
+  ↓
+deterministic connectivity
+  ↓
+ordered-plan verification
+  ↓
+grounded answer
 ```
 
-Detailed debugging belongs in the persistent run trace:
+Query coverage is not graph coverage. It tracks whether the evidence earmarked for the user's analytical requirements has been resolved/exhausted.
 
-```text
-data/runs/<run-id>.jsonl
-```
-
-The trace should record:
-
-- observed artifact
-- candidate artifacts
-- prompt/system instruction
-- raw model response
-- parsed semantic delta
-- before/after state
-- branch/sub-flow decisions
-- per-call token usage
-- cumulative token usage
-
-The compact delta contract is specifically intended to avoid repeatedly sending and regenerating a large narrative/checklist structure.
+Query-v4 currently reads the persistent map; query-time discoveries are not yet reconciled back into persistence automatically.
 
 ---
 
-## 14. Current demo objective
+## 17. RL-like interpretation
 
-`demo_v2` currently tests one narrow but important hypothesis:
+The architecture still resembles reinforcement learning/world exploration even when implemented through model-scored policy rather than a trained RL agent.
 
-> Starting from an unknown code repository, can DataSong use code topology plus compact LLM semantic decisions to autonomously discover and close at least one coherent end-to-end vertical slice of a use case without wandering through the repository exhaustively?
+- **Environment:** enterprise evidence + topology
+- **State:** current workflows, entities, unresolved gaps, visited evidence and frontier
+- **Action:** inspect/expand one candidate
+- **Observation:** bounded evidence
+- **Evaluator:** semantic model calls
+- **Reward intuition:** continuity, coherence gain, uncertainty reduction, branch closure, workflow closure and useful novelty
 
-Once this works reliably for code, the same topology/exploration abstraction can be extended to documents, Slack/email, tables, logs, and mixed enterprise evidence.
+The learned policy should eventually optimize exploration effectiveness rather than memorize fixed business categories.
+
+---
+
+## 18. Current implementation references
+
+The original narrow demo objective has been superseded by the current implementation.
+
+Current references are:
+
+```text
+Canonical architecture:
+  docs/LEMAP_ARCHITECTURE.md
+
+Learning architecture:
+  demo_v2/ARCHITECTURE.md
+
+Learning / persistence implementation:
+  demo_v2/server/explorer/*
+
+Framework / repository topology:
+  demo_v2/server/*
+  demo_v2/server/adapters/*
+
+Current query implementation:
+  demo_v2/server/query_v4/*
+```
+
+The continuing architectural goal remains source-agnostic: extend evidence acquisition/topology while keeping the semantic model and reconciliation boundary stable.
