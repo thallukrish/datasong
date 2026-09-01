@@ -1,5 +1,11 @@
 # DataSong v2 semantic exploration architecture
 
+## Status
+
+This document describes the concrete `demo_v2` learning architecture.
+
+The canonical whole-system LeMap architecture, including persistence and the current Query-v4 path, is now documented in `docs/LEMAP_ARCHITECTURE.md`.
+
 ## Objective
 
 DataSong reconstructs end-to-end business use cases from heterogeneous enterprise evidence.
@@ -136,6 +142,8 @@ External service/library implementations are never assumed.
 inside supplied repo  → follow
 outside supplied repo → terminate as EXTERNAL
 ```
+
+The same architectural rule applies to entity schemas: generic relationships should be parsed generically, while framework-specific entity semantics belong behind adapters such as the current Moqui entity-schema adapter.
 
 ---
 
@@ -334,6 +342,8 @@ Pass 1 is the scheduler across qualified business arcs.
 
 It maintains stable arc identity, actor/intent, progress, evidence and outcome, and decides which qualified arc receives the next exploration turn.
 
+Pass 1 should favor semantic progress and completion pressure rather than simply selecting the least-explored arc. A nearly closed high-signal business flow may be completed before the system opens another weak direction.
+
 ---
 
 # Pass 2
@@ -348,6 +358,149 @@ dfsStateByArc = {
 ```
 
 Pass 2 follows the strongest semantic continuation, preserves alternatives, backtracks within the arc, and uses arc-anchored semantic search when local topology is exhausted.
+
+Pass 2 does not attempt to exhaust every structurally reachable helper. When business continuity / semantic gain dampens, that path should stop competing strongly and the explorer should backtrack, bound the dependency, or explore another relevant branch.
+
+Reusable independently meaningful business subflows should become separate semantic workflows rather than being duplicated recursively into each parent.
+
+---
+
+# Entity and schema reconciliation
+
+Workflow reconstruction is only one side of the semantic map.
+
+The current `demo_v2` learning path also materializes and reconciles persistent entities and schema relationships.
+
+This creates evidence-backed links such as:
+
+```text
+Place Order
+   ├─ writes → OrderHeader
+   └─ writes → OrderItem
+
+OrderItem.orderId
+   └─ schema FK → OrderHeader.orderId
+```
+
+Shared persistent entities are stronger evidence of business relationship than reuse of generic implementation helpers.
+
+Schema relationships that can be proven mechanically remain deterministic graph facts.
+
+The current implementation includes entity reconciliation, schema catalog materialization and schema-relationship materialization under `server/explorer/*`.
+
+---
+
+# Persistence and resume
+
+The output of learning is a persistent semantic map, not merely a transient exploration result.
+
+New evidence is reconciled into the existing map:
+
+```text
+existing LeMap
+   +
+new workflow/entity evidence
+   ↓
+reconciliation
+   ↓
+refined LeMap
+```
+
+Evidence/provenance should be retained so semantic claims can be traced back to their supporting source structure.
+
+Conflicting evidence should not be silently overwritten; it may remain attached to competing/refined claims until reconciliation can resolve it.
+
+The current learning implementation includes persisted-map loading, map persistence and resume-learning lifecycle support.
+
+---
+
+# Query-v4 — current query path
+
+The current working query implementation is:
+
+```text
+demo_v2/server/query_v4/*
+```
+
+Query-v4 operates over the persistent semantic map. It does not rediscover the repository from scratch for every question.
+
+Its high-level flow is:
+
+```text
+Natural-language question
+        ↓
+Derive ordered analytical intent / requirements
+        ↓
+Seed from learned workflows when available
+        ↓
+Best-first semantic traversal
+        ↓
+Workflow → entity expansion
+        ↓
+Entity schema inspection
+        ↓
+Real FK traversal
+        ↓
+Semantic coverage of unresolved requirements
+        ↓
+Deterministic connectivity
+        ↓
+Ordered-plan verification
+        ↓
+Grounded answer
+```
+
+## Workflow-first roots
+
+When persisted workflows contain entities, Query-v4 uses those workflows as its root candidates.
+
+Directory/semantic-hierarchy roots are a fallback when no usable workflow roots exist.
+
+This anchors query traversal in business meaning before expanding into persistent data.
+
+## Entity inspection
+
+For a selected entity, Query-v4 presents the model with the entity's complete known schema and only real FK edges that LeMap can traverse.
+
+The model may identify direct evidence on the entity and nominate promising real FK relationships for unresolved requirements.
+
+FK/ID fields are treated primarily as navigation handles rather than substitutes for attributes of the referenced entity.
+
+## Coverage
+
+Coverage means coverage of the query's semantic/analytical requirements, not percentage of the entire graph visited.
+
+The frontier is prioritized toward unresolved requirements. Dormant candidates can be reactivated when stronger candidates are exhausted.
+
+## Connectivity
+
+Once the required evidence has been found, Query-v4 deterministically checks whether the accepted entities can be connected through evidenced schema joins.
+
+Multi-hop connectivity is valid when LeMap can prove the path.
+
+Disconnected accepted evidence causes affected requirements to be reopened rather than accepted as one coherent analytical view.
+
+## Ordered-plan verification
+
+`verifier.js` checks whether the selected evidence can actually execute the ordered answer plan at the required grain.
+
+If a later requirement fails, only the semantically insufficient requirement is reopened; already-valid earlier evidence remains locked.
+
+## Final answer
+
+The final answer is generated from evidence-backed entities and evidenced joins supplied by LeMap.
+
+The model may qualify a strongest coherent interpretation as probable, but it must not invent fields, joins, constants or unsupported business logic.
+
+---
+
+# Current query write-back boundary
+
+Query-v4 currently reads the persistent map and maintains query-local accepted evidence, frontier, coverage and connectivity state.
+
+It does **not currently persist newly discovered query-time knowledge back through the learning-side reconciliation path**.
+
+A future write-back path should submit only evidence-backed new knowledge through the same reconciliation boundary used by learning; Query-v4 should not mutate the persistent map directly.
 
 ---
 
@@ -386,8 +539,28 @@ schedule qualified arcs
 
 PASS 2
 reconstruct selected arc end to end
+
+DATASONG — schema/entity layer
+materialize persistent entities and real relationships
+reconcile workflow and entity evidence
+persist/resume the semantic map
+
+MODEL — Query-v4
+turn a question into semantic requirements
+score semantic promise
+interpret entity fields against unresolved requirements
+verify ordered answer-plan semantics
+
+DATASONG — Query-v4
+seed workflow roots
+expand graph states
+follow only evidenced FK relationships
+track frontier and coverage
+prove connectivity
+reopen structurally disconnected evidence
+provide grounded graph to final answer
 ```
 
-The governing rule is:
+The governing rule remains:
 
 > **Use the model only for semantics. Use deterministic structure wherever the graph can prove the relationship.**
