@@ -1,42 +1,183 @@
-# DataSong demo_v2 — Semantic Explorer
+# DataSong demo_v2 — Current LeMap reference implementation
 
-This is the current experiment for the semantic-exploration architecture in `docs/SEMANTIC_EXPLORATION_ARCHITECTURE.md`.
+`demo_v2` is the current working reference implementation for LeMap learning, persistence, exploration and query.
 
-It intentionally does **not** start with predefined workflows, concepts, rules, or persistence checklists.
-
-The code-source experiment is now **symbol-first rather than file-first**.
-
-The demo:
-
-1. clones/caches a repository;
-2. parses supported code/XML sources locally into functions, methods, services, transitions and other named executable symbols;
-3. builds a deterministic local symbol/action graph with edges such as `calls`, `called_by`, `routes_to`, `reads` and `writes`;
-4. exposes symbols and their bounded bodies/signatures to the LLM; file paths and line ranges are provenance only;
-5. asks the LLM to interpret the business meaning of the observed symbol, attach it to an end-to-end vertical slice, and identify semantic gaps/branches;
-6. follows local graph edges when they provide the causal/operational continuation, using semantic search only when the needed continuation is not in the local neighborhood;
-7. repeats until one vertical slice reaches semantic closure (100%) or the exploration budget is exhausted.
-
-## Why symbol-first
-
-Files are storage/container boundaries and often mix unrelated behavior. Function/service/transition boundaries are much closer to the semantic units that make up an enterprise use case.
-
-The intended separation is:
+The canonical system-level architecture is documented in:
 
 ```text
-repository
-   ↓
-local parser / symbol graph
-   ↓
-functions + methods + services + transitions
-   ↓
-call/reference topology
-   ↓
-LLM semantic interpretation
-   ↓
-vertical slice
+docs/LEMAP_ARCHITECTURE.md
 ```
 
-The LLM should not spend tokens rediscovering the repository's mechanical structure.
+Supporting design history and deeper notes remain in:
+
+```text
+docs/SEMANTIC_EXPLORATION_ARCHITECTURE.md
+demo_v2/ARCHITECTURE.md
+demo_v2/PASS1_BUSINESS_ARC_DISCOVERY.md
+```
+
+---
+
+## Current architecture at a glance
+
+```text
+Repository / framework evidence
+        ↓
+Deterministic topology + adapters
+        ↓
+Call-path preprocessing + Scout
+        ↓
+Pass 1 scheduler
+        ↓
+Pass 2 workflow reconstruction
+        ↓
+Entity/schema reconciliation
+        ↓
+Persistent LeMap
+        ↓
+Query-v4
+```
+
+The current working query path is:
+
+```text
+demo_v2/server/query_v4/*
+```
+
+The current working learning/persistence path is centered under:
+
+```text
+demo_v2/server/explorer/*
+```
+
+---
+
+## Core principle
+
+LeMap separates deterministic structure from semantic interpretation.
+
+```text
+structure can prove it → code owns it
+meaning must be inferred → model interprets it
+```
+
+Examples:
+
+- call edges, FKs, path containment, evidenced joins → deterministic
+- business intent, workflow identity, semantic boundary, field meaning → model-assisted semantics
+
+The model should not spend tokens rediscovering relationships already proven by the graph.
+
+---
+
+## Learning path
+
+Learning currently combines two routes before Pass 1.
+
+### Scout / semantic discovery
+
+Scout looks for materially different business-use-case directions that may still be missing.
+
+### Deterministic call-path discovery
+
+The repository is converted into executable topology, branch/cycle-safe paths are constructed and grouped, and the model is used only to classify business meaning and identify semantic boundaries.
+
+After clipping at the semantic boundary, structural containment is calculated mechanically and maximal coherent flows seed Pass 1.
+
+### Pass 1
+
+Pass 1 schedules qualified business arcs and decides which workflow receives the next exploration turn.
+
+### Pass 2
+
+Pass 2 reconstructs one selected workflow in depth, following high business-continuity evidence and backing away when the semantic signal dampens.
+
+Reusable business subflows remain separate semantic workflows rather than being recursively duplicated into every parent flow.
+
+---
+
+## Entity and persistence path
+
+Workflows are connected to persistent entities and schema relationships.
+
+The current implementation includes:
+
+- entity reconciliation
+- schema catalog materialization
+- schema relationship materialization
+- map persistence/loading
+- resume learning over an existing map
+- compact-map persistence/logging
+
+LeMap is therefore an accumulating evidence-backed semantic graph, not a one-run report.
+
+New evidence should refine or extend the persistent map rather than require complete rediscovery.
+
+---
+
+## Query-v4
+
+`query_v4` is the current query implementation.
+
+Its main flow is:
+
+```text
+natural-language question
+        ↓
+derive ordered analytical plan / dimensions
+        ↓
+seed from learned workflows when available
+        ↓
+expand workflow → entity
+        ↓
+inspect complete entity schema
+        ↓
+follow real schema FK edges when useful
+        ↓
+track unresolved requirements
+        ↓
+connect accepted evidence deterministically
+        ↓
+verify the ordered answer plan
+        ↓
+grounded answer
+```
+
+Important query-v4 modules:
+
+```text
+queryEngine.js
+stateExpander.js
+scorer.js
+coverage.js
+connectivity.js
+verifier.js
+queryApi.js
+```
+
+Workflow roots are preferred when learned workflows are available. Directory/hierarchy roots are a fallback.
+
+Coverage is coverage of the query's required semantic dimensions, not percentage of the whole graph visited.
+
+Connectivity is determined from evidenced schema joins. Multi-hop connections are valid when LeMap can prove them structurally.
+
+Verification checks that the selected evidence actually implements the ordered answer plan and preserves the requested semantic grain. A failed later requirement can be reopened without discarding already-valid earlier evidence.
+
+Current query-v4 does not write newly discovered query-time facts back into the persistent semantic map; that is a future reconciliation extension documented in `docs/LEMAP_ARCHITECTURE.md`.
+
+---
+
+## Framework adapters
+
+Generic parsing should capture generic program/data relationships.
+
+Framework-specific execution/schema semantics belong behind adapters.
+
+Current examples include Moqui XML execution and Moqui entity-schema handling.
+
+This boundary is intended to allow future frameworks and evidence sources to plug into the same LeMap semantic model.
+
+---
 
 ## Run
 
@@ -48,45 +189,30 @@ $env:DEEPSEEK_MODEL="deepseek-v4-flash"   # optional
 npm start
 ```
 
-Open `http://localhost:3102`.
-
-## Console output
-
-Exploration deliberately keeps the console terse. Every LLM call prints token use, including reasoning tokens:
+Open:
 
 ```text
-[LLM #7] slices: Customer places an order 42% | tokens +742 (prompt 575, completion 167, reasoning 0) | cumulative 5114
+http://localhost:3102
 ```
 
-No symbol bodies, prompts, candidate graph nodes, or model responses are dumped to the console.
+---
 
-## Detailed run log
+## Logging and persistence
 
-Every exploration run writes a JSONL trace under:
+Detailed learning/query traces and persisted map state are intentionally separate from terse live console output.
 
-```text
-data/runs/<run-id>.jsonl
-```
+The persistent map is the reusable product of learning; query sessions operate over that map and maintain their own traversal/coverage state.
 
-Each LLM-call record includes:
-
-- observed symbol and provenance
-- bounded symbol body/signature
-- local call/reference candidates presented to the model
-- semantic board before the call
-- exact prompt
-- raw model response
-- parsed semantic update
-- per-call token usage
-- cumulative token usage
-
-This log is intended for replay/debugging and policy analysis.
+---
 
 ## Important demo rules
 
-- Code inside the supplied repo is parsed locally; files are provenance, not semantic exploration nodes.
-- Mechanical call/reference structure is deterministic topology, not something the LLM should infer repeatedly.
-- A branch is part of the current vertical slice and keeps the parent incomplete until explored or explicitly bounded.
-- A reusable local sub-flow becomes a semantic dependency/sub-flow rather than being recursively inlined.
-- An external library/API is treated as a black box; only the input/output/effect needed by the local slice is retained.
-- Progress is semantic closure, not percentage of files or symbols visited. It may go backward when important new evidence changes the known shape of the slice.
+- Source files are evidence/provenance; semantic workflows and entities are the primary map objects.
+- Mechanical topology is deterministic and should not be repeatedly inferred by the model.
+- Business continuity drives exploration depth; technical adjacency alone is not enough.
+- Shared persistent business entities are stronger semantic evidence than reuse of generic helper functions.
+- Material branches remain part of a workflow until closed or bounded.
+- Reusable business processes become separately referenced workflows.
+- External implementations outside the evidence boundary are black boxes.
+- Progress is semantic workflow closure, not source-code coverage.
+- Query stops based on resolution/exhaustion of its relevant evidence frontier, not traversal of the entire graph.
