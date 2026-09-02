@@ -25,6 +25,27 @@ test('buildPageStructure preserves labelled DOM hierarchy and interactive contro
   assert.equal(page.sections[1].regions[1].hidden, true);
 });
 
+test('buildPageStructure tunnels through unlabeled framework wrappers', () => {
+  const wrapped = {
+    tag: 'body', label: 'Questionnaire', children: [
+      { tag: 'app-root', label: '', children: [
+        { tag: 'app-itr-online', label: '', children: [
+          { tag: 'lib-itr3-ay2026', label: '', children: [
+            { tag: 'div', label: 'Are you filing the income tax return for any of the following reasons?', children: [
+              { tag: 'input', type: 'radio', name: 'reason', value: 'Y', label: 'Yes' },
+              { tag: 'input', type: 'radio', name: 'reason', value: 'N', label: 'No' }
+            ]}
+          ]}
+        ]}
+      ]}
+    ]
+  };
+  const page = buildPageStructure(wrapped);
+  assert.equal(page.sections.length, 1);
+  assert.equal(page.sections[0].label, 'Are you filing the income tax return for any of the following reasons?');
+  assert.deepEqual(page.sections[0].controls.map(c => c.value), ['Y', 'N']);
+});
+
 test('diffState reports only meaningful labelled state changes', () => {
   const before = { page: 'General Information', values: { taxRegime: null }, regions: { 'Form 10-IEA': { visible: false } } };
   const after = { page: 'General Information', values: { taxRegime: 'new' }, regions: { 'Form 10-IEA': { visible: true } } };
