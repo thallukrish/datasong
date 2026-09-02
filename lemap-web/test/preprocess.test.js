@@ -111,3 +111,23 @@ test('projectPageState maps captured label values onto stable normalized input i
   assert.equal(state.inputs[reasonA.id].value, 'A');
   assert.equal(state.inputs[reasonB.id].value, null);
 });
+
+test('preprocessPage exposes a nested input hierarchy from labelled ancestor paths', () => {
+  const result = preprocessPage(snapshot);
+  const filing = result.hierarchy.regions.find((r) => r.label === 'Filing reason');
+  const details = result.hierarchy.regions.find((r) => r.label === 'Details');
+  assert.ok(filing.inputIds.length >= 4);
+  assert.ok(details.inputIds.length >= 3);
+});
+
+test('projectPageState maps dynamic autocomplete options and validations to normalized state', () => {
+  const model = preprocessPage(snapshot);
+  const state = projectPageState({
+    ...snapshot,
+    validations: ['Choose a city from the list'],
+    options: { City: ['Bangalore', 'Bangkok'] }
+  }, model);
+  const city = model.inputs.find((x) => x.label === 'City');
+  assert.deepEqual(state.options[city.id], ['Bangalore', 'Bangkok']);
+  assert.deepEqual(state.validations, ['Choose a city from the list']);
+});
