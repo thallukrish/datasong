@@ -12,6 +12,7 @@ export function preprocessPage(snapshot = {}) {
     inputLabel: input.label,
     inputType: input.type,
     groupId: input.parentGroupId || '',
+    executableNow: input.visible && !input.disabled && input.type !== 'file',
     actions: scannerFor(input).actions(input)
   }));
   return { version: 1, page, inputs, groups, actionPlans };
