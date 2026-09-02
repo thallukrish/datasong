@@ -7,6 +7,7 @@ import { scannerFor } from '../src/preprocess/scanners/registry.js';
 import { computeStateDelta } from '../src/preprocess/stateDelta.js';
 import { normalizeObservation } from '../src/preprocess/observation.js';
 import { preprocessPage } from '../src/preprocess/pagePreprocessor.js';
+import { projectPageState } from '../src/preprocess/stateProjection.js';
 
 const snapshot = {
   page: 'Synthetic Filing Page',
@@ -20,6 +21,7 @@ const snapshot = {
       { tag: 'input', type: 'checkbox', name: 'condition2', value: 'on', label: 'Condition 2', disabled: true, hidden: false }
     ]},
     { tag: 'section', label: 'Details', children: [
+      { tag: 'input', type: 'hidden', name: 'technicalToken', value: 'x', label: 'technicalToken', hidden: true },
       { tag: 'input', type: 'date', name: 'filingDate', value: '', label: 'Filing date', placeholder: 'DD/MM/YYYY', disabled: false, hidden: false },
       { tag: 'input', type: 'text', role: 'combobox', name: 'city', value: '', label: 'City', autocomplete: 'off', disabled: false, hidden: false },
       { tag: 'select', name: 'state', value: '', label: 'State', options: ['KA', 'TN'], disabled: false, hidden: false }
@@ -37,13 +39,14 @@ test('buildPageIdentity is stable and route-aware', () => {
   assert.match(identity.id, /^page:/);
 });
 
-test('discoverInputs preserves parent region and classifies behavioral input type', () => {
+test('discoverInputs preserves parent region, ignores hidden technical fields and classifies behavioral input type', () => {
   const pageId = buildPageIdentity(snapshot).id;
   const inputs = discoverInputs(snapshot.dom, pageId);
   assert.equal(inputs.find((x) => x.label === 'Reason B').parentRegionLabel, 'Filing reason');
   assert.equal(inputs.find((x) => x.label === 'Filing date').type, 'date');
   assert.equal(inputs.find((x) => x.label === 'City').type, 'autocomplete');
   assert.equal(inputs.find((x) => x.label === 'Continue').type, 'button');
+  assert.equal(inputs.some((x) => x.name === 'technicalToken'), false);
 });
 
 test('discoverGroups keeps native radio group and labelled checkbox cluster', () => {
@@ -98,4 +101,13 @@ test('preprocessPage returns page identity, hierarchy, groups and scanner action
   assert.ok(result.inputs.length >= 8);
   assert.ok(result.groups.some((g) => g.groupType === 'radio'));
   assert.ok(result.actionPlans.some((p) => p.inputLabel === 'Filing date'));
+});
+
+test('projectPageState maps captured label values onto stable normalized input ids', () => {
+  const model = preprocessPage(snapshot);
+  const state = projectPageState({ ...snapshot, values: { ...snapshot.values, 'Reason A': 'A', 'Reason B': null } }, model);
+  const reasonA = model.inputs.find((x) => x.label === 'Reason A');
+  const reasonB = model.inputs.find((x) => x.label === 'Reason B');
+  assert.equal(state.inputs[reasonA.id].value, 'A');
+  assert.equal(state.inputs[reasonB.id].value, null);
 });
