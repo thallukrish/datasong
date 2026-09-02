@@ -8,6 +8,30 @@ function fieldLocator(page, field = {}) {
   throw new Error(`No locator evidence for ${field.id || field.label || 'field'}`);
 }
 
+export function fieldInteractionKind(field = {}) {
+  const tag = String(field.tag || '').toLowerCase();
+  const role = String(field.role || '').toLowerCase();
+  if (tag === 'mat-select' || role === 'combobox') return 'combobox';
+  if (tag === 'select' || field.type === 'select') return 'native_select';
+  return 'fillable';
+}
+
+async function chooseComboboxOption(page, locator, value) {
+  await locator.click();
+  const wanted = String(value).trim();
+  const exact = page.getByRole('option', { name: wanted, exact: true }).first();
+  if (await exact.count()) {
+    await exact.click();
+    return;
+  }
+  const contains = page.getByRole('option').filter({ hasText: wanted }).first();
+  if (await contains.count()) {
+    await contains.click();
+    return;
+  }
+  throw new Error(`Could not find combobox option matching "${wanted}"`);
+}
+
 export async function applyGroupAnswer(page, graph, question, interpretation) {
   const selected = new Set(interpretation.selectedFieldIds || []);
   const fields = (graph.fields || []).filter((field) => question.options?.some((option) => option.fieldId === field.id));
@@ -30,7 +54,12 @@ export async function applyQuestionAnswer(page, graph, question, interpretation)
   if (!field) throw new Error(`Missing field ${question.fieldId}`);
   if (!interpretation.value && interpretation.value !== '0') throw new Error(`No user-supplied value for ${field.label}`);
   const locator = fieldLocator(page, field);
-  if (field.type === 'select') {
+  const interaction = fieldInteractionKind(field);
+  if (interaction === 'combobox') {
+    await chooseComboboxOption(page, locator, interpretation.value);
+    return;
+  }
+  if (interaction === 'native_select') {
     await locator.selectOption({ value: interpretation.value }).catch(async () => locator.selectOption({ label: interpretation.value }));
     return;
   }
