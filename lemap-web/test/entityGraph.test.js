@@ -38,6 +38,7 @@ test('entity preprocessing exposes fields, actions, groups and candidate methods
   const graph = preprocessEntity(snapshot);
   assert.ok(graph.fields.some((field) => field.label === 'Reason B' && field.type === 'radio'));
   assert.ok(graph.actions.some((action) => action.label === 'Continue'));
+  assert.equal(graph.actions.some((action) => action.label === 'Menu'), false);
   assert.ok(graph.groups.some((group) => group.groupType === 'radio' && group.memberFieldIds.length === 2));
   const reasonB = graph.fields.find((field) => field.label === 'Reason B');
   assert.ok(graph.methods.some((method) => method.fieldId === reasonB.id && method.actions.some((action) => action.kind === 'select')));
@@ -52,4 +53,15 @@ test('entity state projection uses checked state for radios/checkboxes', () => {
   assert.equal(state.fields[reasonB.id].value, null);
   assert.equal(state.entityId, graph.entity.id);
   assert.equal(state.presentation.pageId, graph.entity.presentation.pageId);
+});
+
+test('entity identity stays stable when a completion action inside the visible entity becomes hidden', () => {
+  const before = preprocessEntity(snapshot);
+  const afterSnapshot = structuredClone(snapshot);
+  const entityRoot = afterSnapshot.dom.children[1];
+  entityRoot.children[1].hidden = true;
+  const after = preprocessEntity(afterSnapshot);
+  assert.equal(before.entity.id, after.entity.id);
+  assert.equal(after.entity.label, 'Generic Filing Form');
+  assert.ok(after.actions.some((action) => action.label === 'Continue' && action.visible === false));
 });
