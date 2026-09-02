@@ -37,6 +37,7 @@ function fieldLocator(page, field) {
   if (field.domId) return page.locator(`[id="${quoteAttr(field.domId)}"]`).first();
   if (field.name && field.type === 'radio') return page.locator(`input[name="${quoteAttr(field.name)}"][value="${quoteAttr(field.value)}"]`).first();
   if (field.name && field.type === 'checkbox') return page.locator(`input[name="${quoteAttr(field.name)}"]`).first();
+  if (field.name) return page.locator(`[name="${quoteAttr(field.name)}"]`).first();
   if (field.label) return page.getByLabel(field.label, { exact: true }).first();
   throw new Error(`No browser locator evidence for ${field.id}`);
 }
@@ -76,7 +77,8 @@ function addRelationship(result, relationship) {
     relationship.groupId || '',
     relationship.sourceFieldId || '',
     relationship.targetGroupId || '',
-    arr(relationship.memberFieldIds).slice().sort()
+    arr(relationship.memberFieldIds).slice().sort(),
+    arr(relationship.values)
   ]);
   if (result._relationshipKeys.has(key)) return;
   result._relationshipKeys.add(key);
@@ -134,6 +136,58 @@ async function settle(page, settleMs) {
   if (settleMs > 0) await page.waitForTimeout(settleMs);
 }
 
+async function discoverValueDomain(page, field, result, options) {
+  if (!['select', 'autocomplete'].includes(field.type)) return;
+  const locator = fieldLocator(page, field);
+  if (!(await locator.count())) return;
+  const shape = await locator.evaluate((el) => ({
+    tag: String(el.tagName || '').toLowerCase(),
+    role: String(el.getAttribute?.('role') || '').toLowerCase()
+  }));
+
+  let values = [];
+  if (shape.tag === 'select') {
+    values = await locator.evaluate((el) => Array.from(el.options || []).map((option) => String(option.value || option.textContent || '').trim()).filter(Boolean));
+  } else if (shape.tag === 'mat-select' || shape.role === 'combobox') {
+    try {
+      await locator.click();
+      await settle(page, options.settleMs);
+      values = await page.locator('[role="option"],mat-option').evaluateAll((nodes) => nodes
+        .filter((node) => {
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        })
+        .map((node) => String(node.getAttribute('data-value') || node.getAttribute('value') || node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean));
+    } finally {
+      await page.keyboard.press('Escape').catch(() => {});
+      await settle(page, Math.min(options.settleMs, 100));
+    }
+  }
+
+  values = unique(values);
+  if (!values.length) return;
+  result.valueDomains[field.id] = values;
+  addRelationship(result, {
+    kind: 'value_domain',
+    sourceFieldId: field.id,
+    values,
+    evidenceIds: []
+  });
+}
+
+async function discoverValueDomains(page, graph, result, options) {
+  for (const field of arr(graph.fields)) {
+    if (!field.visible || field.disabled) continue;
+    try {
+      await discoverValueDomain(page, field, result, options);
+    } catch (error) {
+      result.errors.push({ fieldId: field.id, message: `value-domain discovery failed: ${error.message}` });
+    }
+  }
+}
+
 async function setCheckbox(page, graph, fieldId, checked, settleMs) {
   const field = controlById(graph, fieldId);
   if (!field) throw new Error(`Missing checkbox ${fieldId}`);
@@ -161,7 +215,6 @@ async function exploreCheckboxGroup(page, groupId, result, options) {
   });
   if (!candidates.length) return;
 
-  // Phase 1: prove every member's individual behavior from the same clean group baseline.
   for (const fieldId of candidates) {
     try {
       const before = await capture(page);
@@ -173,7 +226,6 @@ async function exploreCheckboxGroup(page, groupId, result, options) {
     }
   }
 
-  // Phase 2: use one representative pair to infer whether selections can coexist.
   if (candidates.length > 1) {
     const firstId = candidates[0];
     const secondId = candidates[1];
@@ -271,6 +323,7 @@ export async function exploreLocalEntity(page, options = {}) {
     finalStateId: '',
     observations: [],
     learnedRelationships: [],
+    valueDomains: {},
     outgoingCandidates: arr(initial.graph.actions).map((actionField) => ({
       fieldId: actionField.id,
       label: actionField.label,
@@ -283,6 +336,8 @@ export async function exploreLocalEntity(page, options = {}) {
     errors: [],
     _relationshipKeys: new Set()
   };
+
+  await discoverValueDomains(page, initial.graph, result, settings);
 
   for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'radio')) {
     await exploreRadioGroup(page, initial, group, result, settings);
