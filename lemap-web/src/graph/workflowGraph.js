@@ -1,5 +1,18 @@
 function arr(value) { return Array.isArray(value) ? value : []; }
 
+export function isEmptyEntityDelta(delta = {}) {
+  const arrayKeys = [
+    'fieldValuesChanged', 'fieldsEnabled', 'fieldsDisabled', 'fieldsShown', 'fieldsHidden', 'fieldsAdded', 'fieldsRemoved',
+    'actionsEnabled', 'actionsDisabled', 'actionsShown', 'actionsHidden', 'regionsShown', 'regionsHidden',
+    'validationMessagesAdded', 'validationMessagesRemoved'
+  ];
+  if (arrayKeys.some((key) => arr(delta?.[key]).length > 0)) return false;
+  if (Object.values(delta?.optionsAdded || {}).some((values) => arr(values).length > 0)) return false;
+  if (Object.values(delta?.optionsRemoved || {}).some((values) => arr(values).length > 0)) return false;
+  if (delta?.routeChanged || delta?.entityChanged) return false;
+  return true;
+}
+
 export function classifyTransition(delta = {}, context = {}) {
   if (delta.entityChanged || delta.routeChanged) return 'navigation';
   if (context.overlayOpened) return 'overlay_open';
@@ -25,6 +38,8 @@ export function recordTransition(graph, transition = {}) {
   if (targetEntityId) graph.nodes.add(targetEntityId);
   if (transition.sourceStateId) ensureStateSet(graph, sourceEntityId)?.add(String(transition.sourceStateId));
   if (transition.targetStateId) ensureStateSet(graph, targetEntityId)?.add(String(transition.targetStateId));
+  if (isEmptyEntityDelta(transition.delta || {})) return null;
+
   const edge = {
     id: String(transition.id || `edge:${graph.edges.length + 1}`),
     sourceEntityId,
