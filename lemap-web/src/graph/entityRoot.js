@@ -42,8 +42,18 @@ export function selectEntityRoot(root = {}) {
   };
   visit(root);
   if (!candidates.length) return root;
+
   const withActions = candidates.filter((candidate) => candidate.hasAction);
   const pool = withActions.length ? withActions : candidates;
-  pool.sort((a, b) => b.depth - a.depth || b.dataControls - a.dataControls || a.controls - b.controls);
+
+  // Prefer the dominant interactive business region before DOM depth. Portal shells often
+  // contain deeply nested support/chat widgets with one input and one button; depth-first
+  // selection incorrectly promotes those widgets to the primary semantic entity.
+  pool.sort((a, b) =>
+    b.dataControls - a.dataControls ||
+    b.actionControls - a.actionControls ||
+    a.controls - b.controls ||
+    b.depth - a.depth
+  );
   return pool[0].node;
 }
