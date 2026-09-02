@@ -4,6 +4,9 @@ import readline from 'node:readline/promises';
 import process from 'node:process';
 import { chromium } from 'playwright-core';
 import { buildPageStructure, buildWebFlow } from './structuralFlow.js';
+import { preprocessPage } from './preprocess/pagePreprocessor.js';
+import { projectPageState } from './preprocess/stateProjection.js';
+import { computeStateDelta } from './preprocess/stateDelta.js';
 import {
   choosePage,
   installUserEventProbe,
@@ -57,14 +60,21 @@ try {
 
   const before = await snapshotPage(page);
   const pageStructure = buildPageStructure(before.dom);
+  const preprocessBefore = preprocessPage(before);
+  const projectedBefore = projectPageState(before, preprocessBefore);
   await installUserEventProbe(page);
 
   console.log(`[lemap-web] initial state captured: ${before.page}`);
+  console.log(`[lemap-web] discovered inputs: ${preprocessBefore.inputs.length}, groups: ${preprocessBefore.groups.length}`);
   await rl.question('\nPerform ONE meaningful action in the attached Chrome tab, wait for the page to settle, then press Enter here... ');
   await page.waitForTimeout(700);
 
   const events = await readUserEvents(page);
   const after = await snapshotPage(page);
+  const preprocessAfter = preprocessPage(after);
+  const projectedAfter = projectPageState(after, preprocessAfter);
+  const normalizedDelta = computeStateDelta(projectedBefore, projectedAfter);
+
   const meaningfulEvent = [...events].reverse().find((event) => ['change', 'click', 'submit', 'input'].includes(event.name)) || null;
   const sourceControl = meaningfulEvent?.label || meaningfulEvent?.controlName || '';
   const sourceRegion = nearestRegion(pageStructure, sourceControl);
@@ -90,6 +100,11 @@ try {
     capturedAt: new Date().toISOString(),
     endpoint,
     pageStructure,
+    preprocessing: {
+      before: preprocessBefore,
+      after: preprocessAfter,
+      normalizedDelta
+    },
     browserEvents: events,
     network,
     flow
@@ -102,8 +117,9 @@ try {
 
   console.log(`\n[lemap-web] browser events: ${events.length}`);
   console.log(`[lemap-web] network events: ${network.length}`);
-  console.log(`[lemap-web] meaningful state changes: ${flow.effects.length}`);
-  for (const effect of flow.effects) console.log(`  - ${effect.kind}:${effect.key}`);
+  console.log(`[lemap-web] normalized value changes: ${normalizedDelta.inputValuesChanged.length}`);
+  console.log(`[lemap-web] inputs enabled: ${normalizedDelta.inputsEnabled.length}, disabled: ${normalizedDelta.inputsDisabled.length}`);
+  console.log(`[lemap-web] actions shown: ${normalizedDelta.actionsShown.length}, hidden: ${normalizedDelta.actionsHidden.length}`);
   console.log(`[lemap-web] capture written: ${file}`);
 
   page.off('request', onRequest);
