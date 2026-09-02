@@ -95,8 +95,8 @@ function workflowContext(memory, session, userAnswers, semanticEntity, currentEn
     userAnswers
   };
 }
-async function learnCurrentContext({ page, client, model, memory, settleMs, priorDomains = {} }) {
-  const local = await exploreLocalEntity(page, { settleMs });
+async function learnCurrentContext({ page, client, model, memory, settleMs, priorDomains = {}, probeBehavior = false }) {
+  const local = await exploreLocalEntity(page, { settleMs, probeBehavior });
   const captured = await capture(page);
   if (!local.restored) throw new Error(`Local exploration did not restore ${captured.graph.entity.id}; stopping before user input/navigation.`);
   const valueDomains = { ...priorDomains, ...local.valueDomains };
@@ -162,10 +162,11 @@ try {
       captured = before;
       semanticEntity = known.semantic;
     } else {
-      const learned = await learnCurrentContext({ page, client, model, memory, settleMs });
+      const learned = await learnCurrentContext({ page, client, model, memory, settleMs, probeBehavior: false });
       captured = learned.captured;
       semanticEntity = learned.semanticEntity;
       valueDomains = learned.valueDomains;
+      console.log('[LeMap-Web] lazy local learn: structure + option domains only; behavioral probes deferred until needed');
     }
 
     semanticPath.push(semanticEntity.semanticName || captured.graph.entity.label);
@@ -218,10 +219,10 @@ try {
           break;
         }
         exploreMoreCount += 1;
-        const learned = await learnCurrentContext({ page, client, model, memory, settleMs, priorDomains: valueDomains });
+        const learned = await learnCurrentContext({ page, client, model, memory, settleMs, priorDomains: valueDomains, probeBehavior: true });
         semanticEntity = learned.semanticEntity;
         valueDomains = learned.valueDomains;
-        console.log(`[LeMap-Web] refreshed semantic context: ${semanticEntity.semanticName || '(unnamed)'}`);
+        console.log(`[LeMap-Web] behavioral exploration refreshed semantic context: ${semanticEntity.semanticName || '(unnamed)'}`);
         continue;
       }
 
@@ -262,8 +263,8 @@ try {
       await saveMemory(memory);
       console.log(`[LeMap-Web] interpreted (${interpretation.confidence.toFixed(2)}): ${interpretation.reason || interpretation.selectedFieldIds.join(', ') || 'value supplied'}`);
 
-      // The user's answer may expose a new local entity or branch. Learn from that new state before asking again.
-      const relearned = await learnCurrentContext({ page, client, model, memory, settleMs, priorDomains: valueDomains });
+      // The answer may expose a new local entity/branch. Refresh semantics cheaply first; probe only if the planner asks for more evidence.
+      const relearned = await learnCurrentContext({ page, client, model, memory, settleMs, priorDomains: valueDomains, probeBehavior: false });
       semanticEntity = relearned.semanticEntity;
       valueDomains = relearned.valueDomains;
       exploreMoreCount = 0;
