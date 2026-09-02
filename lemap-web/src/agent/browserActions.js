@@ -79,7 +79,7 @@ export async function executeNavigationCandidate(page, candidate) {
       }
     }
     if (candidate.href) {
-      const handle = page.locator('a[href]').filter({ has: page.locator('*') });
+      const handle = page.locator('a[href]');
       const count = await handle.count();
       for (let i = 0; i < count; i += 1) {
         const link = handle.nth(i);
