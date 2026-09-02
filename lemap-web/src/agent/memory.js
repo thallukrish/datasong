@@ -25,7 +25,13 @@ export function recordEntityKnowledge(memory, { structuralEntity = {}, structura
     ...arr(learnedRelationships).flatMap((relationship) => arr(relationship?.evidenceIds))
   ])];
   const structure = {
-    fields: arr(structuralGraph.fields).map((field) => ({ id: field.id, label: field.label, type: field.type, groupId: field.parentGroupId || '' })),
+    fields: arr(structuralGraph.fields).map((field) => ({
+      id: field.id,
+      label: field.label,
+      type: field.type,
+      groupId: field.parentGroupId || '',
+      valueDomain: [...arr(field.valueDomain)]
+    })),
     groups: arr(structuralGraph.groups).map((group) => ({ id: group.id, label: group.label, groupType: group.groupType, memberFieldIds: [...arr(group.memberFieldIds)] })),
     actions: arr(structuralGraph.actions).map((action) => ({ id: action.id, label: action.label, type: action.type }))
   };
