@@ -33,6 +33,7 @@ export function discoverInputs(root = {}, pageId = '') {
           tag,
           parentRegionLabel: parent?.label || '',
           parentRegionTag: parent?.tag || '',
+          regionPath: ancestry.map((x) => x.label),
           parentGroupId: null,
           required: !!node.required,
           disabled: !!node.disabled,
