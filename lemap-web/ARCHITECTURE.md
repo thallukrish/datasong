@@ -2,13 +2,33 @@
 
 ## 1. Objective
 
-LeMap-Web learns the structural and semantic model of an interactive web application separately from operating it, so later agents can act on known entities/workflows instead of rediscovering the UI during every task.
+LeMap-Web answers user queries and executes user goals by navigating an interactive web application semantically, learning missing parts of the application only when the current query requires them, and persisting what it learns for future queries.
 
 It follows the same governing rule as LeMap:
 
 > **If structure can prove it, deterministic code owns it. If meaning must be inferred, the model owns it.**
 
-LeMap-Web differs from core LeMap in one important way: the executable universe is not completely available up front. The browser must progressively discover it by interacting with the application. Semantic understanding therefore participates in guiding further structural exploration.
+The semantic map is therefore **not a prerequisite that must be exhaustively built before useful navigation can begin**. It is persistent operational knowledge accumulated and refined through query-driven exploration.
+
+The primary loop is:
+
+```text
+USER QUERY
+   ↓
+search existing semantic memory
+   ↓
+known path sufficient?
+   ├─ yes → use it
+   └─ no  → identify the knowledge gap
+               ↓
+          explore only the missing workflow/entity branch
+               ↓
+          persist newly learned structure + semantics
+               ↓
+          continue answering the same query
+```
+
+This avoids one-time exhaustive exploration of all possible browser paths and makes application learning demand-driven.
 
 ---
 
@@ -30,7 +50,8 @@ SHARED ENTITY GRAPH
       ↓ actions mutate
 
 WORKFLOW GRAPH
-  steps
+  workflow families
+  workflow arcs / steps
   branches
   merges
   entity/action paths
@@ -48,11 +69,177 @@ field DOM identity
 region path
 ```
 
-Those values help the browser find and operate the entity; they do not define business semantics.
+Those values help the browser locate and operate the entity; they do not define business semantics.
 
 ---
 
-## 3. Entity graph
+## 3. Persistent semantic memory
+
+LeMap-Web retains what has already been learned so that future queries do not rediscover the same application behavior.
+
+Persistent knowledge may include:
+
+```text
+application / domain
+workflow family
+workflow arc / step
+semantic entity
+field/action meanings
+relationships / constraints
+known branches
+known transitions
+successful paths
+negative knowledge
+coverage / confidence
+freshness / evidence
+```
+
+Example:
+
+```text
+Income Tax Portal
+  └─ File Income Tax Return
+       ├─ ITR-1
+       │    ├─ Filing Status
+       │    └─ Income Summary
+       │
+       └─ ITR-3
+            ├─ Filing Status
+            ├─ Personal Details
+            └─ Income Sources (partial)
+```
+
+The map may be incomplete by design. A partially learned workflow is still useful as long as LeMap-Web knows which parts are known, partial, unexplored or stale.
+
+The rule is:
+
+> **Explore when knowledge is absent or uncertain. Reuse when existing knowledge is sufficient.**
+
+---
+
+## 4. Query-driven semantic routing
+
+Every user query first attempts to route through persistent semantic memory before new browser exploration is started.
+
+```text
+USER QUERY
+   ↓
+semantic search over known entities / workflow scopes
+   ↓
+coverage + confidence analysis
+```
+
+Possible outcomes:
+
+```text
+A. exact or strong known path
+   → navigate using known graph
+
+B. relevant workflow is known but target branch/entity is missing
+   → selectively explore within that workflow
+
+C. several workflow scopes are plausible
+   → ask the user to disambiguate
+
+D. user identifies a workflow not represented in memory
+   → begin discovery from that workflow root
+
+E. high-confidence negative knowledge exists
+   → avoid pointless exploration
+```
+
+Example:
+
+```text
+Known top-level flows:
+  ITR-1
+  ITR-3
+
+User query:
+  "Where do I enter capital gains?"
+
+Semantic search:
+  no matching entity found
+```
+
+If current knowledge cannot determine which return the user means, LeMap-Web may ask:
+
+```text
+Which return are you working with — ITR-1, ITR-3, or another ITR?
+```
+
+If the user replies:
+
+```text
+ITR-2
+```
+
+and ITR-2 is not present in semantic memory, that becomes an explicit knowledge gap:
+
+```text
+known graph cannot answer
+→ new workflow root required
+→ begin ITR-2 exploration
+```
+
+This prevents expensive exploration of the wrong workflow family.
+
+---
+
+## 5. Absence, uncertainty and coverage
+
+A missing entity in the semantic map does **not** always mean that the application lacks that capability.
+
+LeMap-Web distinguishes:
+
+```text
+KNOWN ABSENCE
+  sufficiently explored workflow provides evidence that capability/branch is not present
+
+UNEXPLORED / PARTIAL
+  relevant workflow exists but coverage is incomplete
+
+UNKNOWN WORKFLOW
+  workflow family/root has not yet been learned
+```
+
+Example:
+
+```text
+ITR-1
+  capital gains = known absent
+  coverage confidence = high
+
+ITR-3
+  capital gains = unknown
+  income branch coverage = partial
+
+ITR-2
+  workflow = unknown
+```
+
+Negative knowledge should only be persisted when exploration coverage and evidence are strong enough to support it.
+
+Coverage metadata may be maintained at several levels:
+
+```text
+WorkflowFamily
+  coverage
+  confidence
+  lastObservedAt
+
+WorkflowArc / Entity
+  exploredStates
+  unexploredBranches
+  evidenceIds
+  freshness
+```
+
+This lets the query planner decide whether "not found" means "not applicable" or "not learned yet."
+
+---
+
+## 6. Entity graph
 
 An entity is a structurally coherent object whose state can be observed and changed.
 
@@ -63,7 +250,8 @@ Entity
   relationships[]
   methods/actions[]
   states[]
-  presentation
+  semantic annotation
+  presentation evidence
 ```
 
 A rendered screen may expose one entity, several related entities, a repeated entity collection, or an entity also exposed elsewhere.
@@ -74,7 +262,7 @@ The browser's page boundary never limits relationship/state-effect discovery.
 
 ---
 
-## 4. Central deterministic primitive
+## 7. Central deterministic primitive
 
 ```text
 ENTITY / FIELD
@@ -97,9 +285,9 @@ The resulting delta is compared across the observable entity context. An action 
 
 ---
 
-## 5. Local entity-behaviour exploration
+## 8. Local entity-behaviour exploration
 
-When LeMap-Web reaches a rendered entity context, it first resolves that context locally before choosing a broader workflow transition.
+When LeMap-Web reaches an unknown or insufficiently understood entity context, it resolves that context locally before choosing a broader transition.
 
 The local explorer is type-aware and deterministic.
 
@@ -116,7 +304,7 @@ observe whole local entity-state delta
       ↓
 infer structural constraints / relationships
       ↓
-repeat until local behavioural closure
+repeat until sufficient local behavioural closure
 ```
 
 Input type determines the **probe strategy**, not the semantic conclusion.
@@ -125,13 +313,14 @@ Examples:
 
 ```text
 radio group
-  select each option
+  select alternatives
   observe whether selection clears peers
-  learn exactly-one / mutually-exclusive behaviour empirically
+  learn mutually-exclusive / exactly-one behaviour empirically
 
 checkbox group
-  toggle members independently and in representative combinations
-  observe whether multiple selections coexist
+  probe every member individually
+  restore after each isolated probe
+  probe representative combinations rather than all combinations
   learn multi-select / mutually-exclusive / conditional behaviour empirically
 
 select
@@ -150,13 +339,17 @@ autocomplete
 
 The rule is:
 
+> **Probe every action individually where practical, but probe combinations strategically.**
+
+and:
+
 > **UI control type tells LeMap-Web how to experiment. Observed state change tells LeMap-Web what the control actually does.**
 
 Unsafe, destructive or externally consequential actions are not exploratory probes.
 
 ---
 
-## 6. Local entities, related entities and structural transition kinds
+## 9. Local entities, related entities and structural transition kinds
 
 Explorer actions may expose additional structure without advancing the broader workflow.
 
@@ -182,12 +375,10 @@ related entity inside the same local operation
 reusable sub-entity/subflow
 ```
 
-LeMap-Web continues local exploration until the current entity context is sufficiently understood.
-
 A useful notion is **local behavioural closure**:
 
 ```text
-input behaviour sufficiently explored
+relevant input behaviour sufficiently explored
 local constraints discovered
 local related entities explored
 local validations understood
@@ -195,15 +386,15 @@ local actions classified
 local semantic interpretation available
 ```
 
-Only after local behavioural closure does LeMap-Web choose among broader outgoing transitions.
+"Closure" is query-sensitive. LeMap-Web does not need to exhaust every possible local state if the current query can already be answered or safely routed onward.
 
 ---
 
-## 7. Local semantic resolution
+## 10. Local semantic resolution
 
-Unlike core LeMap, LeMap-Web needs a small amount of semantics while exploration is still in progress.
+LeMap-Web needs local semantics while exploration is in progress.
 
-After deterministic local behaviour has been collected, the model receives the local structural entity package:
+After deterministic local behavior has been collected, the model receives a compressed structural package:
 
 ```text
 entity label / presentation context
@@ -243,13 +434,13 @@ action/step meanings
 local completion meaning
 ```
 
-These annotations become part of the growing semantic entity graph and are also used to guide navigation.
+These annotations are persisted and immediately become usable by the query planner and navigator.
 
 ---
 
-## 8. Outgoing navigation discovery
+## 11. Goal-directed outgoing navigation
 
-After local behavioural closure, LeMap-Web returns to the broader rendered context and gathers outgoing interactions that were not consumed as local exploration.
+After sufficient local understanding, LeMap-Web gathers outgoing interactions that were not consumed as local exploration.
 
 Typical candidates include:
 
@@ -263,6 +454,7 @@ Home
 Help
 Profile
 AIS
+breadcrumbs
 section links
 modal-launch actions
 other navigational buttons/anchors
@@ -270,92 +462,115 @@ other navigational buttons/anchors
 
 Blind DOM-order DFS is not acceptable because many outgoing links may leave the active business context.
 
-The navigation decision therefore receives:
+The navigation decision receives:
 
 ```text
+original user query
 current semantically resolved entity
 local completion meaning
-current forming workflow arc
+known workflow context / path so far
 candidate outgoing actions / links
-presentation evidence
-known safety / reversibility information
+known semantic map around this point
+coverage / confidence
+safety / reversibility information
 ```
 
-The model's task is narrowly defined:
+The task is not merely:
 
-> **Score how strongly each outgoing transition continues the current workflow context.**
+```text
+"Which link continues this page?"
+```
+
+It is:
+
+> **Which safe outgoing transition most likely advances the original user goal, given the current workflow context and what is already known?**
 
 Useful classifications include:
 
 ```text
 LOCAL_EXPANSION
 RELATED_ENTITY
-WORKFLOW_CONTINUATION
+FORWARD_WORKFLOW
 WORKFLOW_BRANCH
-WORKFLOW_REVERSE
+REVERSE_WORKFLOW
+ANCESTOR_WORKFLOW
 WORKFLOW_EXIT
 SIDE_CONTEXT
+SITE_CHROME
 ```
 
 Useful scoring dimensions include:
 
 ```text
+goal relevance
 workflow continuity
 forward progress
 context preservation
-semantic fit
-novelty / unexplored coverage
+known vs unknown coverage
+confidence
 ```
 
-For example, after resolving a Filing Status entity:
+Example:
 
 ```text
-Continue   → very high continuity
-Back       → reverse/low forward progress
-Dashboard  → workflow exit
-Home       → workflow exit
-AIS        → side context / weak continuity
+User query:
+  "Where do I declare foreign capital gains?"
+
+Current entity:
+  Filing Status
+
+Continue
+  goal relevance: moderate
+  workflow continuity: very high
+
+Dashboard
+  goal relevance: very low
+  workflow continuity: very low
 ```
 
-Deterministic priors may cheaply identify obvious cases such as `Continue`, `Next`, `Back`, `Home`, `Dashboard`, `Logout`, but the model resolves ambiguous candidate sets.
+Later, on an Income Sources entity:
+
+```text
+Capital Gains
+  goal relevance: very high
+
+Business Income
+  goal relevance: low
+```
+
+The same query therefore drives branch selection differently at different points in the workflow.
 
 ---
 
-## 9. Frontier and DFS-style workflow exploration
+## 12. Frontier and query-driven branch exploration
 
-Outgoing candidates that are not chosen are retained rather than discarded.
+Outgoing candidates that are not chosen are retained rather than discarded when they may still be useful for the active query or future exploration.
 
-Each explored entity context may keep a traversal frame such as:
+A traversal frame may contain:
 
 ```text
 ExplorationFrame
+  queryId
   entityId
   entityStateId
   workflowArcId
   outgoingCandidates[]
     actionId
     transitionRole
+    goalScore
     continuityScore
     safety
     reversible
     explored
 ```
 
-LeMap-Web follows the best admissible candidate while retaining siblings in a frontier/stack.
+LeMap-Web follows the best admissible candidate while retaining useful siblings in a frontier/stack.
 
-```text
-Entity E1
-  Continue   score .98  → chosen
-  Back       score .30  → retained
-  Dashboard  score .04  → retained
-  AIS        score .12  → retained
+Unlike exhaustive site crawling, the frontier is **query-prioritized**. Low-relevance branches may remain persisted as unexplored rather than being visited immediately.
 
-E1 → Continue → E2 → ...
-```
+When a path reaches completion, a dead end, a low-relevance state, a cycle or a blocked transition, traversal can return to the nearest useful unresolved frontier candidate.
 
-When an arc reaches completion, a dead end, a low-continuity state, a cycle or a blocked transition, traversal can return to the nearest useful unresolved frontier candidate.
-
-This is conceptually similar to bounded graph traversal in LeMap query answering, but Web traversal is active: following an edge changes application state.
+This resembles bounded graph traversal in LeMap query answering, but Web traversal is active: following an edge changes application state.
 
 Therefore frontier exploration must also reason about restoration:
 
@@ -371,48 +586,102 @@ Irreversible, destructive or consequential actions are not explored merely to ga
 
 ---
 
-## 10. Global workflow graph grows during exploration
+## 13. Workflow graph grows as a by-product of query execution
 
-LeMap-Web learns local entity relationships and global workflow arcs at the same time.
+LeMap-Web learns local entity relationships and global workflow arcs while trying to satisfy user goals.
+
+```text
+User Query A
+   ↓
+learn Filing Status
+   ↓
+learn Personal Details
+
+User Query B
+   ↓
+reuse known path
+   ↓
+encounter unknown Income branch
+   ↓
+learn Capital Gains
+```
+
+Over time the persistent graph grows:
 
 ```text
 Workflow Arc
   Step 1
     local entity graph
-    local branches
        ↓
   Step 2
     local entity graph
-       ├─ workflow branch A → Step 3
-       └─ workflow branch B → Step 4
+       ├─ known branch A
+       ├─ newly learned branch B
+       └─ unexplored branch C
 ```
 
-An action may contribute at different structural levels.
+The semantic map is therefore the **memory accumulated by the agent**, not a separately required crawl product.
 
-Example local branch:
+A later query can refine existing knowledge:
 
 ```text
-select filing reason Y
-  → qualifying-condition entity becomes active
+known entity revisited
+  ↓
+new field / changed behavior detected
+  ↓
+existing semantic entity updated with new evidence/state
 ```
 
-This may remain inside the same semantic workflow step.
-
-Example workflow branch:
-
-```text
-select taxpayer category
-  → one downstream route for resident
-  → another downstream route for non-resident
-```
-
-This changes the broader workflow arc.
-
-The distinction is learned from observed downstream structure plus semantic context, not from presentation boundaries alone.
+The system should preserve provenance and freshness so changes in the application can refine rather than blindly overwrite prior knowledge.
 
 ---
 
-## 11. How LeMap-Web differs from core LeMap
+## 14. Top-level semantic scopes
+
+LeMap-Web navigates at more than the field/entity level.
+
+Useful semantic scopes include:
+
+```text
+Application
+  ↓
+Domain / capability
+  ↓
+Workflow family
+  ↓
+Workflow arc / stage
+  ↓
+Entity
+  ↓
+Field / action
+```
+
+Example:
+
+```text
+Income Tax Portal
+  ↓
+File Income Tax Return
+  ↓
+ITR-1 / ITR-2 / ITR-3
+  ↓
+Filing Status / Personal Details / Income / Tax / Verification
+  ↓
+Capital Gains / Business Income / etc.
+```
+
+This hierarchy lets LeMap-Web determine whether a query should:
+
+```text
+reuse a known entity path
+explore a missing branch inside a known workflow
+ask the user which workflow family applies
+or start an entirely new workflow discovery
+```
+
+---
+
+## 15. How LeMap-Web differs from core LeMap
 
 Core LeMap usually begins with a largely available executable universe:
 
@@ -421,54 +690,69 @@ repository
   ↓
 call graph / service graph / entity graph
   ↓
-Scout
-  ↓
-Pass 1
-  ↓
-Pass 2
+semantic search / Scout / Pass 1 / Pass 2
 ```
 
-The structural execution graph exists before semantic exploration begins.
+LeMap-Web is different because the browser exposes only the currently reachable portion of the application.
 
-LeMap-Web is different:
+Its normal lifecycle is:
 
 ```text
-observe local structure
+USER QUERY
   ↓
-probe local behaviour
+SEARCH KNOWN GRAPH
   ↓
-resolve local semantics
-  ↓
-use semantics to choose next structural transition
-  ↓
-discover next entity
-  ↓
-extend workflow graph
-  ↓
-repeat
+KNOWLEDGE GAP?
+  ├─ no  → use known graph
+  └─ yes
+       ↓
+     observe local structure
+       ↓
+     probe local behaviour
+       ↓
+     resolve local semantics
+       ↓
+     choose next transition using query + context
+       ↓
+     discover next entity
+       ↓
+     extend persistent graph
+       ↓
+     continue same query
 ```
 
 Therefore:
 
-> **LeMap discovers semantics over an already-existing execution graph. LeMap-Web uses semantics to help discover the execution graph itself.**
+> **LeMap searches a largely existing execution graph. LeMap-Web can actively create missing portions of the execution graph while answering the query.**
 
-The orchestration is interleaved and online:
-
-```text
-STRUCTURE
-  → LOCAL SEMANTICS
-  → GUIDED STRUCTURAL EXPLORATION
-  → MORE STRUCTURE
-  → MORE SEMANTICS
-```
-
-The deterministic/semantic ownership boundary is still preserved. The model does not invent browser behaviour; it interprets proven local evidence and helps prioritize what structure to discover next.
+The deterministic/semantic ownership boundary is still preserved. The model does not invent browser behaviour; it interprets proven evidence and helps prioritize what structure to discover next.
 
 ---
 
-## 12. Three semantic levels
+## 16. Semantic tasks
 
-LeMap-Web currently needs three distinct semantic tasks.
+LeMap-Web now has several semantic tasks with different scopes.
+
+### Level 0 — Query Planner / Semantic Router
+
+Input:
+
+```text
+original user query
+known workflow families / entities
+semantic search matches
+coverage / confidence / negative knowledge
+```
+
+Output:
+
+```text
+known path sufficient
+select workflow scope
+explore knowledge gap
+ask user to disambiguate
+start new workflow discovery
+```
 
 ### Level 1 — Local Entity Semantic Resolver
 
@@ -492,31 +776,32 @@ constraint meanings
 local action/step meanings
 ```
 
-### Level 2 — Navigation Continuity Scout
+### Level 2 — Goal-Directed Navigation Scout
 
 Input:
 
 ```text
+original user query
 resolved current entity
-forming workflow context
-unexplored outgoing actions
-safety/reversibility evidence
+known path so far
+candidate outgoing actions
+known semantic memory
+coverage/safety evidence
 ```
 
 Output:
 
 ```text
 transition classification
+goal relevance
 continuity score
 forward-progress assessment
 reason / evidence reference
 ```
 
-This drives frontier selection and DFS-style traversal.
+### Level 3 — Global Semantic Consolidation
 
-### Level 3 — Global Workflow Semantic Consolidation
-
-As enough structural workflow evidence accumulates, Pass-1/Pass-2-style reasoning consolidates the growing graph into business-level workflow semantics.
+Broader Pass-1/Pass-2-style reasoning may periodically consolidate accumulated evidence into cleaner business-level workflow semantics.
 
 This includes:
 
@@ -532,18 +817,19 @@ entity participation
 cross-step business rules
 ```
 
-Pass 1 / Pass 2 are therefore no longer the first appearance of semantics in LeMap-Web. They become broader consolidation/refinement over a workflow graph whose entities already carry local semantic annotations.
+Global consolidation is refinement over accumulated knowledge, not a prerequisite before query execution.
 
 ---
 
-## 13. Reuse from core LeMap
+## 17. Reuse from core LeMap
 
 LeMap-Web should reuse proven concepts without forcing the same lifecycle.
 
 Useful concepts to adapt:
 
 ```text
-bounded semantic interpretation
+semantic query planning
+bounded graph search
 arc continuity / coherence reasoning
 frontier retention
 branch exploration
@@ -568,7 +854,7 @@ Do not refactor `demo_v2` merely for code sharing yet. Copy/adapt into `lemap-we
 
 ---
 
-## 14. Safety and restoration
+## 18. Safety and restoration
 
 Web exploration is active and can mutate user/application state. Safety is therefore part of traversal semantics.
 
@@ -596,44 +882,67 @@ Delete                    → destructive
 Logout                    → workflow exit
 ```
 
-The explorer only executes actions compatible with the active safety policy. Coverage never justifies unsafe mutation.
+The explorer only executes actions compatible with the active safety policy. Query relevance never justifies unsafe mutation.
 
 ---
 
-## 15. Current implementation direction
+## 19. Current implementation direction
 
-The next engineering loop is:
+The engineering target is no longer an exhaustive crawler. It is a query-driven explorer backed by persistent semantic memory.
 
 ```text
-ENTITY DISCOVERY
+USER QUERY
       ↓
-TYPE-AWARE SAFE ACTION EXECUTOR
+SEARCH / ROUTE THROUGH PERSISTENT SEMANTIC MEMORY
       ↓
-LOCAL STATE DELTA / RELATIONSHIP LEARNING
-      ↓
-LOCAL BEHAVIOURAL CLOSURE
-      ↓
-LOCAL SEMANTIC RESOLUTION
-      ↓
-OUTGOING LINK/ACTION COLLECTION
-      ↓
-NAVIGATION CONTINUITY SCORING
-      ↓
-FRONTIER / DFS WORKFLOW EXPLORATION
-      ↓
-GROWING ENTITY + WORKFLOW GRAPHS
-      ↓
-GLOBAL SEMANTIC CONSOLIDATION
+KNOWN PATH SUFFICIENT?
+      ├─ YES → EXECUTE / ANSWER
+      └─ NO
+           ↓
+       IDENTIFY KNOWLEDGE GAP / AMBIGUITY
+           ↓
+       ASK USER IF WORKFLOW SCOPE IS AMBIGUOUS
+           ↓
+       DISCOVER CURRENT ENTITY
+           ↓
+       TYPE-AWARE SAFE LOCAL ACTION EXECUTOR
+           ↓
+       LOCAL STATE DELTA / RELATIONSHIP LEARNING
+           ↓
+       LOCAL SEMANTIC RESOLUTION
+           ↓
+       GOAL-DIRECTED OUTGOING SCORING
+           ↓
+       FOLLOW BEST SAFE TRANSITION
+           ↓
+       EXTEND PERSISTENT ENTITY + WORKFLOW GRAPH
+           ↓
+       CONTINUE SAME USER QUERY
 ```
 
 Stable deterministic IDs are required for entities, fields, actions, states and transitions. Empty/no-effect observations must not create workflow edges.
 
+Coverage, confidence and freshness must be persisted so absence can be distinguished from incomplete exploration.
+
 ---
 
-## 16. End-to-end architecture
+## 20. End-to-end architecture
 
 ```text
-WEB APPLICATION
+USER QUERY
+      ↓
+QUERY PLANNER / SEMANTIC ROUTER
+      ↓
+SEARCH PERSISTENT SEMANTIC MEMORY
+      ↓
+┌───────────────────────────────────────────────┐
+│ known route sufficient → execute / answer    │
+└───────────────────────────────────────────────┘
+      │ otherwise
+      ↓
+DETECT KNOWLEDGE GAP / AMBIGUITY
+      ↓
+(optional) USER DISAMBIGUATION
       ↓
 Browser instrumentation
       ↓
@@ -643,35 +952,31 @@ Type-aware safe local behaviour exploration
       ↓
 Entity-state deltas + local relationships
       ↓
-Explore inline/modal related entities
+Explore relevant inline/modal related entities
       ↓
-Local behavioural closure
+Sufficient local behavioural closure
       ↓
 LOCAL ENTITY SEMANTIC RESOLVER
       ↓
-Semantically annotated local entity graph
+Persist semantic entity annotations
       ↓
 Collect unresolved outgoing navigation actions
       ↓
-NAVIGATION CONTINUITY SCOUT
+GOAL-DIRECTED NAVIGATION SCOUT
       ↓
-Retain candidates in frontier
+Retain useful alternatives in query frontier
       ↓
-Follow best safe continuation
+Follow best safe transition
       ↓
 Discover next entity / extend workflow arc
       ↓
-DFS / branch / backtrack / merge
+Persist structure + semantics + coverage + evidence
       ↓
-repeat local discovery + semantics
+continue until original user query is answered
       ↓
-GLOBAL PASS-1 / PASS-2-STYLE CONSOLIDATION
-      ↓
-Evidence-backed semantic entity + workflow graph
-      ↓
-Query / navigation / autonomous execution
+(optional) GLOBAL SEMANTIC CONSOLIDATION
 ```
 
 The invariant is:
 
-> **LeMap-Web deterministically learns what the application does locally, semantically resolves that evidence, and uses the resolved context to guide discovery of the broader workflow graph.**
+> **LeMap-Web searches what it already knows, actively learns only what the current query needs, persists that knowledge, and uses the growing semantic memory to make future queries progressively cheaper and more reliable.**
