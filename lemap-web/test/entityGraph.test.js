@@ -18,7 +18,7 @@ const snapshot = {
       ]},
       { control: true, tag: 'button', type: 'button', label: 'Continue', hidden: false }
     ]}
-  },
+  ]},
   values: { 'Reason A': 'A', 'Reason B': null, 'Condition 1': false, 'Condition 2': false },
   regions: { 'Generic Filing Form': { visible: true }, 'Filing reason': { visible: true } },
   validations: [],
