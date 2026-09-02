@@ -44,6 +44,25 @@ test('entity preprocessing exposes fields, actions, groups and candidate methods
   assert.ok(graph.methods.some((method) => method.fieldId === reasonB.id && method.actions.some((action) => action.kind === 'select')));
 });
 
+test('dominant business form wins over a deeper embedded support widget', () => {
+  const withWidget = structuredClone(snapshot);
+  withWidget.dom.children[1].children.push({
+    tag: 'aside',
+    label: 'Welcome to Support',
+    hidden: false,
+    children: [
+      { tag: 'div', label: 'Support session', hidden: false, children: [
+        { control: true, tag: 'input', type: 'text', name: 'support-code', label: 'Session code', value: '', hidden: false },
+        { control: true, tag: 'button', type: 'button', label: 'Start support', hidden: false }
+      ]}
+    ]
+  });
+  const graph = preprocessEntity(withWidget);
+  assert.equal(graph.entity.label, 'Generic Filing Form');
+  assert.ok(graph.fields.some((field) => field.label === 'Reason A'));
+  assert.equal(graph.fields.some((field) => field.label === 'Session code'), false);
+});
+
 test('candidate action identity is deterministic across repeated preprocessing', () => {
   const first = preprocessEntity(snapshot);
   const second = preprocessEntity(structuredClone(snapshot));
