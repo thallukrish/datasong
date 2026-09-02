@@ -4,18 +4,23 @@ function collectStats(node) {
   let controls = 0;
   const walk = (n, ancestorHidden = false) => {
     if (!n || typeof n !== 'object') return;
-    const hidden = ancestorHidden || !!n.hidden;
     if (n.control === true) {
-      if (hidden) return;
-      controls += 1;
+      if (ancestorHidden) return;
       const tag = String(n.tag || '').toLowerCase();
       const type = String(n.type || '').toLowerCase();
       const role = String(n.role || '').toLowerCase();
       const isButton = tag === 'button' || role === 'button' || ['button', 'submit', 'reset', 'image'].includes(type);
-      if (isButton) actionControls += 1;
-      else if (type !== 'hidden') dataControls += 1;
+      if (isButton) {
+        controls += 1;
+        actionControls += 1;
+      } else if (!n.hidden && type !== 'hidden') {
+        controls += 1;
+        dataControls += 1;
+      }
       return;
     }
+    const hidden = ancestorHidden || !!n.hidden;
+    if (hidden) return;
     for (const child of Array.isArray(n.children) ? n.children : []) walk(child, hidden);
   };
   walk(node);
