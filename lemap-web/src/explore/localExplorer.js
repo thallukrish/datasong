@@ -315,7 +315,10 @@ async function exploreRadioGroup(page, initial, group, result, options) {
 }
 
 export async function exploreLocalEntity(page, options = {}) {
-  const settings = { settleMs: Number.isFinite(Number(options.settleMs)) ? Math.max(0, Number(options.settleMs)) : 250 };
+  const settings = {
+    settleMs: Number.isFinite(Number(options.settleMs)) ? Math.max(0, Number(options.settleMs)) : 250,
+    probeBehavior: options.probeBehavior !== false
+  };
   const initial = await capture(page);
   const result = {
     entity: structuredClone(initial.graph.entity),
@@ -324,6 +327,7 @@ export async function exploreLocalEntity(page, options = {}) {
     observations: [],
     learnedRelationships: [],
     valueDomains: {},
+    probeBehavior: settings.probeBehavior,
     outgoingCandidates: arr(initial.graph.actions).map((actionField) => ({
       fieldId: actionField.id,
       label: actionField.label,
@@ -339,13 +343,15 @@ export async function exploreLocalEntity(page, options = {}) {
 
   await discoverValueDomains(page, initial.graph, result, settings);
 
-  for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'radio')) {
-    await exploreRadioGroup(page, initial, group, result, settings);
-  }
+  if (settings.probeBehavior) {
+    for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'radio')) {
+      await exploreRadioGroup(page, initial, group, result, settings);
+    }
 
-  for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'checkbox')) {
-    const current = await capture(page);
-    if (arr(group.memberFieldIds).some((fieldId) => current.state.fields[fieldId]?.enabled)) await exploreCheckboxGroup(page, group.id, result, settings);
+    for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'checkbox')) {
+      const current = await capture(page);
+      if (arr(group.memberFieldIds).some((fieldId) => current.state.fields[fieldId]?.enabled)) await exploreCheckboxGroup(page, group.id, result, settings);
+    }
   }
 
   const final = await capture(page);
