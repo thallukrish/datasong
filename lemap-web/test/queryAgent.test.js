@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { buildUserQuestions, normalizeUserAnswerResponse, buildUserAnswerPrompt } from '../src/agent/userInput.js';
 import { buildNavigationPrompt, normalizeNavigationResponse } from '../src/semantic/navigationScout.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition } from '../src/agent/memory.js';
+import { fieldInteractionKind } from '../src/agent/browserActions.js';
 
 const graph = {
   entity: { id: 'entity:filing', label: 'Filing status' },
@@ -35,6 +36,12 @@ test('query agent asks actionable unresolved groups before empty standalone fiel
   assert.equal(questions[0].cardinality, 'exactly_one');
   assert.deepEqual(questions[0].options.map((option) => option.fieldId), ['field:n', 'field:y']);
   assert.ok(questions.some((question) => question.questionId === 'field:field:date' && question.answerKind === 'value'));
+});
+
+test('browser executor treats Angular Material select as a combobox instead of a fillable text field', () => {
+  assert.equal(fieldInteractionKind({ type: 'text', tag: 'mat-select', role: 'combobox' }), 'combobox');
+  assert.equal(fieldInteractionKind({ type: 'select', tag: 'select', role: '' }), 'native_select');
+  assert.equal(fieldInteractionKind({ type: 'text', tag: 'input', role: '' }), 'fillable');
 });
 
 test('user answer model contract maps natural language to known structural options only', () => {
