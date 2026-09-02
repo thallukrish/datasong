@@ -12,7 +12,7 @@ function clamp01(value) {
 
 const SYSTEM = `You are DataSong LeMap-Web's LOCAL ENTITY SEMANTIC RESOLVER.
 You receive deterministic structural evidence for one locally explored browser entity: fields, groups, actions, observed input→state effects and learned structural relationships.
-Do not rediscover browser mechanics. Do not invent behavior not present in evidence.
+Browser mechanics and observed behavior are already established by deterministic evidence. Interpret only their business/user meaning and do not invent unsupported behavior.
 Name and describe the business/user-level entity, fields, relationships and actions that the evidence supports.
 Return strict compact JSON only.`;
 
@@ -25,7 +25,7 @@ export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], le
     observations,
     learnedRelationships
   };
-  return `MODE web-local-entity-v1\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Do not infer browser mechanics; those are already established. Return JSON with semanticName, description, fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], localCompletion, confidence.`;
+  return `MODE web-local-entity-v1\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Browser mechanics are already established; produce only semantic business/user interpretation. Return JSON with semanticName, description, fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], localCompletion, confidence.`;
 }
 
 export function normalizeLocalEntityResponse(raw = {}) {
