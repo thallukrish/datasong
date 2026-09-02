@@ -13,16 +13,47 @@ export function createSemanticMemory(userGoal = '') {
 }
 
 function touch(memory) { memory.updatedAt = new Date().toISOString(); }
+function relationshipKey(relationship = {}) {
+  return JSON.stringify([
+    relationship.kind || '',
+    relationship.sourceFieldId || '',
+    relationship.actionId || '',
+    relationship.groupId || '',
+    relationship.groupType || '',
+    relationship.targetGroupId || '',
+    [...arr(relationship.memberFieldIds)].sort(),
+    [...arr(relationship.values)]
+  ]);
+}
+function mergeRelationships(previous = [], current = []) {
+  const merged = new Map();
+  for (const relationship of [...arr(previous), ...arr(current)]) {
+    const key = relationshipKey(relationship);
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, structuredClone(relationship));
+      continue;
+    }
+    existing.evidenceIds = [...new Set([...arr(existing.evidenceIds), ...arr(relationship.evidenceIds)])];
+    for (const [name, value] of Object.entries(relationship)) {
+      if (name === 'evidenceIds') continue;
+      if (Array.isArray(value)) existing[name] = [...new Set([...arr(existing[name]), ...value])];
+      else if (value !== undefined && value !== null && value !== '') existing[name] = value;
+    }
+  }
+  return [...merged.values()];
+}
 
 export function recordEntityKnowledge(memory, { structuralEntity = {}, structuralGraph = {}, semanticEntity = {}, learnedRelationships = [], observations = [] } = {}) {
   if (!memory?.entities) throw new Error('Invalid semantic memory');
   const id = String(structuralEntity.id || '');
   if (!id) return null;
   const previous = memory.entities[id] || {};
+  const mergedRelationships = mergeRelationships(previous.learnedRelationships, learnedRelationships);
   const evidenceIds = [...new Set([
     ...arr(previous.evidenceIds),
     ...arr(observations).map((observation) => observation?.id).filter(Boolean),
-    ...arr(learnedRelationships).flatMap((relationship) => arr(relationship?.evidenceIds))
+    ...arr(mergedRelationships).flatMap((relationship) => arr(relationship?.evidenceIds))
   ])];
   const structure = {
     fields: arr(structuralGraph.fields).map((field) => ({
@@ -42,7 +73,7 @@ export function recordEntityKnowledge(memory, { structuralEntity = {}, structura
     presentation: structuralEntity.presentation || previous.presentation || {},
     structure,
     semantic: semanticEntity,
-    learnedRelationships,
+    learnedRelationships: mergedRelationships,
     evidenceIds,
     lastObservedAt: new Date().toISOString()
   };
