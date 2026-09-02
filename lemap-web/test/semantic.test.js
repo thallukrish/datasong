@@ -147,7 +147,11 @@ test('semantic learner executes Pass 1 then whole-flow Pass 2 with an injected m
     { title: 'File ITR-3', businessActor: 'taxpayer', businessIntent: 'File return', majorStages: ['Establish filing status', 'Capture details'], completionCondition: 'Return is ready', outcome: 'Prepared return', confidence: 0.9, evidenceIds: ['obs:1', 'obs:2'] },
     { entities: [{ structuralEntityId: 'entity:filing', semanticName: 'Filing Status', description: 'Captures filing status', evidenceIds: ['obs:1'] }], relationships: [], rules: [], steps: [{ title: 'Establish filing status', entityIds: ['entity:filing'], evidenceIds: ['obs:1'] }], unresolvedBranches: [], confidence: 0.9 }
   ];
-  const client = { chat: { completions: { create: async (request) => { requests.push(request); const body = responses.shift(); return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(body) }], usage: { total_tokens: 10 } }; } } } } };
+  const client = { chat: { completions: { create: async (request) => {
+    requests.push(request);
+    const body = responses.shift();
+    return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(body) } }], usage: { total_tokens: 10 } };
+  } } } };
 
   const result = await learnSemanticPath({ client, model: 'test-model', workflowGraph: workflow, entities });
   assert.equal(requests.length, 2);
