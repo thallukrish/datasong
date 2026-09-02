@@ -32,7 +32,7 @@ export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], le
     observations,
     learnedRelationships
   };
-  return `MODE web-local-entity-v2\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Browser mechanics are already established. The rendered context may contain several business entities, so identify coherent semantic sub-entities when supported by fields/groups/behavior. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], localCompletion, confidence.`;
+  return `MODE web-local-entity-v1\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Browser mechanics are already established. The rendered context may contain several business entities, so identify coherent semantic sub-entities when supported by fields/groups/behavior. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], localCompletion, confidence.`;
 }
 
 export function normalizeLocalEntityResponse(raw = {}) {
