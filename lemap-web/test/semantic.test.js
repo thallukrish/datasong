@@ -4,6 +4,7 @@ import { selectSemanticPaths } from '../src/semantic/pathSelector.js';
 import { buildPass1Prompt, normalizePass1Response } from '../src/semantic/pass1.js';
 import { buildPass2Prompt, normalizePass2Response } from '../src/semantic/pass2.js';
 import { materializeSemanticGraph } from '../src/semantic/semanticGraph.js';
+import { learnSemanticPath } from '../src/semantic/semanticLearner.js';
 
 const workflow = {
   id: 'workflow:itr3',
@@ -61,4 +62,35 @@ test('Pass 2 receives Pass-1 context plus whole structural entity/workflow evide
   assert.ok(graph.nodes.some((node) => node.type === 'workflow'));
   assert.ok(graph.nodes.some((node) => node.type === 'entity' && node.sourceEntityId === 'entity:filing'));
   assert.ok(graph.evidenceIds.includes('obs:1'));
+});
+
+test('semantic learner executes Pass 1 then whole-flow Pass 2 with an injected model client', async () => {
+  const requests = [];
+  const responses = [
+    {
+      title: 'File ITR-3', businessActor: 'taxpayer', businessIntent: 'File return',
+      majorStages: ['Establish filing status', 'Capture details'], completionCondition: 'Return is ready', outcome: 'Prepared return',
+      confidence: 0.9, evidenceIds: ['obs:1', 'obs:2']
+    },
+    {
+      entities: [{ structuralEntityId: 'entity:filing', semanticName: 'Filing Status', description: 'Captures filing status', evidenceIds: ['obs:1'] }],
+      relationships: [], rules: [], steps: [{ title: 'Establish filing status', entityIds: ['entity:filing'], evidenceIds: ['obs:1'] }],
+      unresolvedBranches: [], confidence: 0.9
+    }
+  ];
+  const client = {
+    chat: { completions: { create: async (request) => {
+      requests.push(request);
+      const body = responses.shift();
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(body) } }], usage: { total_tokens: 10 } };
+    } } }
+  };
+
+  const result = await learnSemanticPath({ client, model: 'test-model', workflowGraph: workflow, entities });
+  assert.equal(requests.length, 2);
+  assert.match(requests[0].messages[1].content, /web-pass1-v1/);
+  assert.match(requests[1].messages[1].content, /web-pass2-whole-flow-v1/);
+  assert.equal(result.pass1.title, 'File ITR-3');
+  assert.ok(result.semanticGraph.nodes.some((node) => node.type === 'entity'));
+  assert.ok(result.path.edgeIds.includes('edge:2'));
 });
