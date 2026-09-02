@@ -14,6 +14,9 @@ import { buildUserQuestions, interpretUserAnswer } from './agent/userInput.js';
 import { applyQuestionAnswer, chooseExecutableNavigation, executeNavigationCandidate } from './agent/browserActions.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition, recordSessionAnswer, startQuerySession } from './agent/memory.js';
 import { createModelClient, modelConfigFromEnv } from './agent/modelClient.js';
+import { loadDotEnv } from './agent/env.js';
+
+const loadedEnvFiles = await loadDotEnv({ cwd: process.cwd(), env: process.env });
 
 const endpoint = process.env.LEMAP_CDP || 'http://127.0.0.1:9222';
 const settleMs = Number.isFinite(Number(process.env.LEMAP_SETTLE_MS)) ? Math.max(0, Number(process.env.LEMAP_SETTLE_MS)) : 500;
@@ -98,6 +101,7 @@ try {
 
   console.log(`[LeMap-Web] goal: ${userGoal}`);
   console.log(`[LeMap-Web] attached: ${await page.title()} :: ${page.url()}`);
+  if (loadedEnvFiles.length) console.log(`[LeMap-Web] env: ${loadedEnvFiles.join(', ')}`);
   console.log(`[LeMap-Web] persistent memory: ${memoryFile}`);
 
   const semanticPath = [];
