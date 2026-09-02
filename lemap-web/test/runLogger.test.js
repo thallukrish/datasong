@@ -22,10 +22,19 @@ test('model result logging keeps decisions and token usage compact', () => {
 test('user interaction logging does not persist free-text values', () => {
   const valueAnswer = summarizeUserInteraction({
     question: { questionId: 'field:pan', answerKind: 'value', label: 'PAN', inputType: 'text' },
-    interpretation: { value: 'ABCDE1234F', confidence: 0.99, reason: 'User supplied PAN.' }
+    interpretation: { value: 'ABCDE1234F', confidence: 0.99, reason: 'User supplied PAN ABCDE1234F.' }
   });
   assert.equal(valueAnswer.answer, 'value provided');
+  assert.equal(valueAnswer.interpretation, 'value interpreted');
   assert.equal(JSON.stringify(valueAnswer).includes('ABCDE1234F'), false);
+
+  const modelAnswer = compactModelResult({
+    purpose: 'user_answer',
+    model: 'deepseek-chat',
+    parsed: { value: 'ABCDE1234F', confidence: 0.99, reason: 'Mapped PAN ABCDE1234F.' }
+  });
+  assert.equal(JSON.stringify(modelAnswer).includes('ABCDE1234F'), false);
+  assert.equal(modelAnswer.result.value, 'value provided');
 
   const choiceAnswer = summarizeUserInteraction({
     question: { questionId: 'group:mode', answerKind: 'choice', label: 'ITR Mode', options: [{ fieldId: 'online', label: 'Online' }] },
