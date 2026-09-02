@@ -1,3 +1,5 @@
+import { planOverlayResolution } from '../semantic/overlayPlanner.js';
+
 function arr(value) { return Array.isArray(value) ? value : []; }
 function clean(value, max = 900) {
   const s = String(value || '').trim().replace(/\s+/g, ' ');
@@ -45,8 +47,7 @@ export async function findBlockingOverlay(page) {
     const found = [];
     for (const selector of selectors) {
       for (const el of document.querySelectorAll(selector)) {
-        if (!visible(el)) continue;
-        if (found.includes(el)) continue;
+        if (!visible(el) || found.includes(el)) continue;
         const buttons = Array.from(el.querySelectorAll('button,[role="button"]')).filter(visible);
         const text = clean(el.innerText || el.textContent || '');
         if (!buttons.length || text.length < 8) continue;
@@ -82,7 +83,8 @@ export async function executeOverlayAction(page, overlay, actionId) {
   const action = arr(overlay?.actions).find((item) => item.id === actionId);
   if (!action) throw new Error(`Unknown overlay action ${actionId}`);
   if (action.domId) {
-    const byId = page.locator(`[id="${String(action.domId).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`).first();
+    const escaped = String(action.domId).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const byId = page.locator(`[id="${escaped}"]`).first();
     if (await byId.count()) { await byId.click(); return; }
   }
   const selectors = ['[role="dialog"]','[aria-modal="true"]','mat-dialog-container','.mat-mdc-dialog-container','ngb-modal-window','.modal.show','.modal.in','app-notification-popup'];
@@ -99,4 +101,40 @@ export async function executeOverlayAction(page, overlay, actionId) {
     }
   }
   throw new Error(`Could not locate overlay action ${action.label}`);
+}
+
+export async function resolveBlockingOverlays({
+  page,
+  client,
+  model,
+  userGoal = '',
+  settleMs = 300,
+  askUser = async () => '',
+  onEvent = async () => {}
+} = {}) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const overlay = await findBlockingOverlay(page);
+    if (!overlay) return { resolved: true, count: attempt };
+    await onEvent('detected', {
+      title: overlay.title,
+      text: overlay.text,
+      actions: overlay.actions.map((action) => ({ id: action.id, label: action.label }))
+    });
+
+    let plan = await planOverlayResolution({ client, model, userGoal, overlay });
+    await onEvent('plan', plan);
+    if (plan.decision === 'ask_user') {
+      const response = await askUser(plan.question);
+      if (!String(response || '').trim()) return { resolved: false, reason: 'overlay_user_answer_missing' };
+      plan = await planOverlayResolution({ client, model, userGoal, overlay, userResponse: response });
+      await onEvent('plan_after_user', { ...plan, userAnswer: 'provided' });
+    }
+
+    if (plan.decision !== 'act') return { resolved: false, reason: plan.reason || 'overlay_not_resolved' };
+    const action = overlay.actions.find((candidate) => candidate.id === plan.actionId);
+    await onEvent('action', { actionId: plan.actionId, label: action?.label || '', reason: plan.reason, confidence: plan.confidence });
+    await executeOverlayAction(page, overlay, plan.actionId);
+    if (settleMs > 0) await page.waitForTimeout(settleMs);
+  }
+  return { resolved: false, reason: 'too_many_blocking_overlays' };
 }
