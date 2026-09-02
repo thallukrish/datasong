@@ -25,9 +25,14 @@ export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], le
       label: field.label,
       type: field.type,
       groupId: field.parentGroupId || '',
+      enabled: !!field.visible && !field.disabled,
+      visible: !!field.visible,
+      required: !!field.required,
+      checked: typeof field.checked === 'boolean' ? field.checked : null,
+      hasValue: field.value !== null && field.value !== undefined && String(field.value).trim() !== '',
       valueDomain: arr(field.valueDomain)
     })),
-    actions: arr(entityGraph.actions).map((action) => ({ id: action.id, label: action.label, type: action.type })),
+    actions: arr(entityGraph.actions).map((action) => ({ id: action.id, label: action.label, type: action.type, enabled: !!action.visible && !action.disabled })),
     groups: arr(entityGraph.groups).map((group) => ({ id: group.id, label: group.label, groupType: group.groupType, memberFieldIds: group.memberFieldIds })),
     observations,
     learnedRelationships
