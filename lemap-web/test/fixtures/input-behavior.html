@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>LeMap-Web Input Behavior Benchmark</title></head>
+<body>
+<main>
+  <h1>Generic Filing Form</h1>
+
+  <fieldset id="reason-group">
+    <legend>Filing reason</legend>
+    <label><input type="radio" name="reason" value="A" checked> Reason A</label>
+    <label><input type="radio" name="reason" value="B"> Reason B</label>
+    <div id="conditions">
+      <label><input id="condition1" type="checkbox" disabled> Condition 1</label>
+      <label><input id="condition2" type="checkbox" disabled> Condition 2</label>
+    </div>
+  </fieldset>
+
+  <section aria-label="Details">
+    <label>Filing date <input id="filingDate" placeholder="DD/MM/YYYY" pattern="\\d{2}/\\d{2}/\\d{4}"></label>
+    <div id="dateError" role="alert" hidden>Use DD/MM/YYYY</div>
+
+    <label>Count <input id="count" type="number" min="1" max="100"></label>
+
+    <label>City <input id="city" role="combobox" autocomplete="off" aria-controls="citySuggestions"></label>
+    <ul id="citySuggestions" role="listbox" hidden></ul>
+
+    <label>State
+      <select id="state"><option value="">Choose</option><option value="KA">Karnataka</option><option value="TN">Tamil Nadu</option></select>
+    </label>
+    <label>District
+      <select id="district"><option value="">Choose state first</option></select>
+    </label>
+
+    <label>Code <input id="code" maxlength="5" pattern="[A-Z]{3}[0-9]{2}"></label>
+  </section>
+
+  <button id="continue">Continue</button>
+</main>
+<script>
+  const reasonInputs = [...document.querySelectorAll('input[name="reason"]')];
+  const conditions = [...document.querySelectorAll('#conditions input')];
+  const continueButton = document.querySelector('#continue');
+  function updateReasonState() {
+    const b = document.querySelector('input[name="reason"][value="B"]').checked;
+    conditions.forEach((input) => input.disabled = !b);
+    continueButton.hidden = b && !conditions.some((input) => input.checked);
+  }
+  reasonInputs.forEach((input) => input.addEventListener('change', updateReasonState));
+  conditions.forEach((input) => input.addEventListener('change', updateReasonState));
+
+  const filingDate = document.querySelector('#filingDate');
+  const dateError = document.querySelector('#dateError');
+  filingDate.addEventListener('change', () => {
+    dateError.hidden = !filingDate.value || /^\d{2}\/\d{2}\/\d{4}$/.test(filingDate.value);
+  });
+
+  const city = document.querySelector('#city');
+  const suggestions = document.querySelector('#citySuggestions');
+  city.addEventListener('input', async () => {
+    const value = city.value.toLowerCase();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const all = ['Bangalore', 'Bangkok', 'Chennai'];
+    const matches = all.filter((name) => name.toLowerCase().startsWith(value));
+    suggestions.innerHTML = matches.map((name) => `<li role="option">${name}</li>`).join('');
+    suggestions.hidden = matches.length === 0;
+  });
+
+  const state = document.querySelector('#state');
+  const district = document.querySelector('#district');
+  state.addEventListener('change', () => {
+    const values = state.value === 'KA' ? ['Bengaluru', 'Mysuru'] : state.value === 'TN' ? ['Chennai', 'Coimbatore'] : [];
+    district.innerHTML = '<option value="">Choose</option>' + values.map((value) => `<option>${value}</option>`).join('');
+  });
+</script>
+</body>
+</html>
