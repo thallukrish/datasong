@@ -44,6 +44,15 @@ test('entity preprocessing exposes fields, actions, groups and candidate methods
   assert.ok(graph.methods.some((method) => method.fieldId === reasonB.id && method.actions.some((action) => action.kind === 'select')));
 });
 
+test('candidate action identity is deterministic across repeated preprocessing', () => {
+  const first = preprocessEntity(snapshot);
+  const second = preprocessEntity(structuredClone(snapshot));
+  const firstIds = first.methods.flatMap((method) => method.actions.map((action) => action.id));
+  const secondIds = second.methods.flatMap((method) => method.actions.map((action) => action.id));
+  assert.deepEqual(firstIds, secondIds);
+  assert.ok(firstIds.every((id) => /^action:[a-f0-9]{12}$/.test(id)));
+});
+
 test('entity state projection uses checked state for radios/checkboxes', () => {
   const graph = preprocessEntity(snapshot);
   const state = projectEntityState(snapshot, graph);
