@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/structuralFlow.test.js test/browserCapture.test.js test/preprocess.test.js test/activeWorkflow.test.js",
-    "test:browser": "node --test test/browserPreprocessor.e2e.test.js",
+    "test": "node --test test/browserCapture.test.js test/entityGraph.test.js test/workflowGraph.test.js test/semantic.test.js",
+    "test:browser": "node --test test/browserEntity.e2e.test.js",
     "test:all": "npm test && npm run test:browser",
     "attach": "node src/capture.js"
   },
