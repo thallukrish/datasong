@@ -20,6 +20,8 @@ export async function collectNavigationCandidates(page, graph = {}) {
     };
   });
 
+  if (graph.entity?.presentation?.overlay) return buttonCandidates;
+
   const links = await page.evaluate(() => {
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
     const visible = (el) => {
