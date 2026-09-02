@@ -144,43 +144,64 @@ async function setCheckbox(page, graph, fieldId, checked, settleMs) {
   return { field, action };
 }
 
+async function restoreCheckbox(page, fieldId, settleMs) {
+  const current = await capture(page);
+  if (current.state.fields[fieldId]?.checked !== true) return;
+  await setCheckbox(page, current.graph, fieldId, false, settleMs);
+}
+
 async function exploreCheckboxGroup(page, groupId, result, options) {
   const base = await capture(page);
   const group = groupById(base.graph, groupId);
   if (!group || group.groupType !== 'checkbox') return;
+
   const candidates = arr(group.memberFieldIds).filter((fieldId) => {
     const state = base.state.fields[fieldId];
     return state?.enabled && state?.visible && state?.checked === false;
   });
   if (!candidates.length) return;
 
-  const firstId = candidates[0];
-  const firstExec = await setCheckbox(page, base.graph, firstId, true, options.settleMs);
-  const afterFirst = await capture(page);
-  recordObservedEffect(result, base, afterFirst, firstExec.field, firstExec.action);
-
-  if (candidates.length > 1) {
-    const secondId = candidates[1];
-    const beforeSecond = afterFirst;
-    const secondExec = await setCheckbox(page, beforeSecond.graph, secondId, true, options.settleMs);
-    const afterSecond = await capture(page);
-    const secondObservation = recordObservedEffect(result, beforeSecond, afterSecond, secondExec.field, secondExec.action);
-    const firstStillChecked = afterSecond.state.fields[firstId]?.checked === true;
-    const secondChecked = afterSecond.state.fields[secondId]?.checked === true;
-    addRelationship(result, {
-      kind: firstStillChecked && secondChecked ? 'multi_select' : 'mutually_exclusive',
-      groupType: 'checkbox',
-      groupId: group.id,
-      memberFieldIds: [...group.memberFieldIds],
-      evidenceIds: secondObservation ? [secondObservation.id] : []
-    });
-
-    const current = await capture(page);
-    if (current.state.fields[secondId]?.checked === true) await setCheckbox(page, current.graph, secondId, false, options.settleMs);
+  // Phase 1: prove every member's individual behavior from the same clean group baseline.
+  for (const fieldId of candidates) {
+    try {
+      const before = await capture(page);
+      const exec = await setCheckbox(page, before.graph, fieldId, true, options.settleMs);
+      const after = await capture(page);
+      recordObservedEffect(result, before, after, exec.field, exec.action, 'individual-probe');
+    } finally {
+      await restoreCheckbox(page, fieldId, options.settleMs);
+    }
   }
 
-  const current = await capture(page);
-  if (current.state.fields[firstId]?.checked === true) await setCheckbox(page, current.graph, firstId, false, options.settleMs);
+  // Phase 2: use one representative pair to infer whether selections can coexist.
+  if (candidates.length > 1) {
+    const firstId = candidates[0];
+    const secondId = candidates[1];
+    let combinationObservation = null;
+    try {
+      const beforeFirst = await capture(page);
+      await setCheckbox(page, beforeFirst.graph, firstId, true, options.settleMs);
+
+      const beforeSecond = await capture(page);
+      const secondExec = await setCheckbox(page, beforeSecond.graph, secondId, true, options.settleMs);
+      const afterSecond = await capture(page);
+      combinationObservation = recordObservedEffect(result, beforeSecond, afterSecond, secondExec.field, secondExec.action, 'representative-combination');
+
+      const firstStillChecked = afterSecond.state.fields[firstId]?.checked === true;
+      const secondChecked = afterSecond.state.fields[secondId]?.checked === true;
+      addRelationship(result, {
+        kind: firstStillChecked && secondChecked ? 'multi_select' : 'mutually_exclusive',
+        groupType: 'checkbox',
+        groupId: group.id,
+        memberFieldIds: [...group.memberFieldIds],
+        representativeFieldIds: [firstId, secondId],
+        evidenceIds: combinationObservation ? [combinationObservation.id] : []
+      });
+    } finally {
+      await restoreCheckbox(page, secondId, options.settleMs);
+      await restoreCheckbox(page, firstId, options.settleMs);
+    }
+  }
 }
 
 async function exploreRadioGroup(page, initial, group, result, options) {
