@@ -122,12 +122,36 @@ export async function snapshotPage(page) {
       return output;
     };
 
-    const pageLabel = clean(document.querySelector('h1')?.innerText || document.title || location.pathname);
-    const root = document.querySelector('main,[role="main"]') || document.body;
+    const overlaySelectors = ['[role="dialog"]','[aria-modal="true"]','mat-dialog-container','.mat-mdc-dialog-container','ngb-modal-window','.modal.show','.modal.in','app-notification-popup'];
+    const overlayCandidates = [];
+    for (const selector of overlaySelectors) {
+      for (const el of document.querySelectorAll(selector)) {
+        if (!visible(el) || overlayCandidates.includes(el)) continue;
+        const buttons = Array.from(el.querySelectorAll('button,[role="button"]')).filter(visible);
+        const text = clean(el.innerText || el.textContent || '');
+        if (!buttons.length || text.length < 8) continue;
+        overlayCandidates.push(el);
+      }
+    }
+    overlayCandidates.sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return (br.width * br.height) - (ar.width * ar.height);
+    });
+    const blockingOverlay = overlayCandidates[0] || null;
+
+    const normalRoot = document.querySelector('main,[role="main"]') || document.body;
+    const root = blockingOverlay || normalRoot;
+    const overlayText = blockingOverlay ? clean(blockingOverlay.innerText || blockingOverlay.textContent || '') : '';
+    const overlayHeading = blockingOverlay?.querySelector?.('h1,h2,h3,h4,h5,h6,[role="heading"]');
+    const pageLabel = blockingOverlay
+      ? clean(overlayHeading?.innerText || overlayHeading?.textContent || overlayText.slice(0, 220) || 'Blocking dialog')
+      : clean(document.querySelector('h1')?.innerText || document.title || location.pathname);
     const dom = { tag: root.tagName.toLowerCase(), label: pageLabel, hidden: false, children: semanticChildren(root) };
+    const scope = blockingOverlay || document;
 
     const values = {};
-    for (const el of document.querySelectorAll('input,select,textarea,[role="combobox"],[role="spinbutton"]')) {
+    for (const el of scope.querySelectorAll('input,select,textarea,[role="combobox"],[role="spinbutton"]')) {
       if ((el.type || '').toLowerCase() === 'hidden') continue;
       const key = labelFor(el) || clean(el.name || el.id);
       if (!key) continue;
@@ -139,21 +163,21 @@ export async function snapshotPage(page) {
     }
 
     const regions = {};
-    for (const el of document.querySelectorAll('section,fieldset,[role="region"],div')) {
+    for (const el of scope.querySelectorAll('section,fieldset,[role="region"],div')) {
       const label = regionLabel(el);
       if (label) regions[label] = { visible: visible(el) };
     }
 
     const validations = [];
     const validationSelectors = '[role="alert"],[aria-live="assertive"],[aria-live="polite"],mat-error,.mat-mdc-form-field-error,.error,.validation-error';
-    for (const el of document.querySelectorAll(validationSelectors)) {
+    for (const el of scope.querySelectorAll(validationSelectors)) {
       if (!visible(el)) continue;
       const message = clean(el.innerText || el.textContent);
       if (message && !validations.includes(message)) validations.push(message);
     }
 
     const options = {};
-    for (const el of document.querySelectorAll('select,[role="combobox"]')) {
+    for (const el of scope.querySelectorAll('select,[role="combobox"]')) {
       const key = labelFor(el) || clean(el.name || el.id);
       if (!key) continue;
       let valuesForInput = optionsFor(el);
@@ -168,7 +192,17 @@ export async function snapshotPage(page) {
       if (valuesForInput.length) options[key] = valuesForInput;
     }
 
-    return { page: pageLabel, url: location.href, title: document.title, dom, values, regions, validations, options };
+    return {
+      page: pageLabel,
+      url: location.href,
+      title: document.title,
+      dom,
+      values,
+      regions,
+      validations,
+      options,
+      overlay: blockingOverlay ? { active: true, text: overlayText.slice(0, 1200) } : { active: false }
+    };
   });
 }
 
