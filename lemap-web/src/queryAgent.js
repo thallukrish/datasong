@@ -11,7 +11,7 @@ import { collectNavigationCandidates } from './explore/navigationCandidates.js';
 import { resolveLocalEntity } from './semantic/localEntityResolver.js';
 import { scoreNavigationCandidates } from './semantic/navigationScout.js';
 import { buildUserQuestions, interpretUserAnswer } from './agent/userInput.js';
-import { applyGroupAnswer, chooseExecutableNavigation, executeNavigationCandidate } from './agent/browserActions.js';
+import { applyQuestionAnswer, chooseExecutableNavigation, executeNavigationCandidate } from './agent/browserActions.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition, recordSessionAnswer, startQuerySession } from './agent/memory.js';
 import { createModelClient, modelConfigFromEnv } from './agent/modelClient.js';
 
@@ -28,8 +28,17 @@ async function capture(page) {
   return { snapshot, graph, state };
 }
 async function loadMemory(goal) {
-  try { return JSON.parse(await fs.readFile(memoryFile, 'utf8')); }
-  catch { return createSemanticMemory(goal); }
+  try {
+    const memory = JSON.parse(await fs.readFile(memoryFile, 'utf8'));
+    memory.entities ||= {};
+    memory.workflow ||= { nodes: [], edges: [] };
+    memory.workflow.nodes ||= [];
+    memory.workflow.edges ||= [];
+    memory.sessions ||= [];
+    return memory;
+  } catch {
+    return createSemanticMemory(goal);
+  }
 }
 async function saveMemory(memory) {
   await fs.mkdir(path.dirname(memoryFile), { recursive: true });
@@ -37,14 +46,33 @@ async function saveMemory(memory) {
 }
 function printQuestion(question) {
   console.log(`\n[LeMap-Web] ${question.label}`);
-  question.options.forEach((option, index) => console.log(`  ${index + 1}. ${option.label}`));
+  if (question.options?.length) question.options.forEach((option, index) => console.log(`  ${index + 1}. ${option.label}`));
 }
-function workflowContext(memory, session, userAnswers, semanticEntity) {
+function structuralSignatureFromGraph(graph = {}) {
+  return JSON.stringify({
+    fields: arr(graph.fields).map((field) => [field.id, field.type, field.parentGroupId || '']).sort(),
+    groups: arr(graph.groups).map((group) => [group.id, group.groupType, [...arr(group.memberFieldIds)].sort()]).sort((a, b) => a[0].localeCompare(b[0]))
+  });
+}
+function structuralSignatureFromMemory(entry = {}) {
+  return JSON.stringify({
+    fields: arr(entry.structure?.fields).map((field) => [field.id, field.type, field.groupId || '']).sort(),
+    groups: arr(entry.structure?.groups).map((group) => [group.id, group.groupType, [...arr(group.memberFieldIds)].sort()]).sort((a, b) => a[0].localeCompare(b[0]))
+  });
+}
+function knownEntityIsCompatible(entry, graph) {
+  return !!entry?.semantic?.semanticName && structuralSignatureFromMemory(entry) === structuralSignatureFromGraph(graph);
+}
+function workflowContext(memory, session, userAnswers, semanticEntity, currentEntityId) {
   const pathEdges = new Set(session.path || []);
   const traversed = arr(memory.workflow?.edges).filter((edge) => pathEdges.has(edge.id));
+  const knownOutgoing = arr(memory.workflow?.edges)
+    .filter((edge) => edge.sourceEntityId === currentEntityId)
+    .map((edge) => ({ label: edge.label, role: edge.role, targetEntityId: edge.targetEntityId, goalRelevance: edge.goalRelevance, continuity: edge.continuity }));
   return {
     currentEntity: semanticEntity?.semanticName || '',
     traversed: traversed.map((edge) => ({ label: edge.label, role: edge.role, sourceEntityId: edge.sourceEntityId, targetEntityId: edge.targetEntityId })),
+    knownOutgoing,
     userAnswers
   };
 }
@@ -60,7 +88,6 @@ try {
   const client = createModelClient(config);
   const model = config.model;
   const memory = await loadMemory(userGoal);
-  if (!Array.isArray(memory.sessions)) memory.sessions = [];
   const session = startQuerySession(memory, userGoal);
   await saveMemory(memory);
 
@@ -77,64 +104,80 @@ try {
   for (let step = 1; step <= maxSteps; step += 1) {
     console.log(`\n[LeMap-Web] --- step ${step} ---`);
     const before = await capture(page);
+    const entityId = before.graph.entity.id;
     console.log(`[LeMap-Web] structural entity: ${before.graph.entity.label}`);
 
-    const local = await exploreLocalEntity(page, { settleMs });
-    const restored = await capture(page);
-    if (!local.restored) throw new Error(`Local exploration did not restore ${before.graph.entity.id}; stopping before user input/navigation.`);
+    const known = memory.entities[entityId];
+    let local;
+    let restored;
+    let semanticEntity;
 
-    const semanticEntity = await resolveLocalEntity({
-      client,
-      model,
-      entityGraph: restored.graph,
-      observations: local.observations,
-      learnedRelationships: local.learnedRelationships
-    });
+    if (knownEntityIsCompatible(known, before.graph) && process.env.LEMAP_REFRESH_KNOWN !== '1') {
+      console.log(`[LeMap-Web] reusing learned semantics: ${known.semantic.semanticName}`);
+      local = { restored: true, observations: [], learnedRelationships: arr(known.learnedRelationships), errors: [] };
+      restored = before;
+      semanticEntity = known.semantic;
+    } else {
+      local = await exploreLocalEntity(page, { settleMs });
+      restored = await capture(page);
+      if (!local.restored) throw new Error(`Local exploration did not restore ${entityId}; stopping before user input/navigation.`);
+      semanticEntity = await resolveLocalEntity({
+        client,
+        model,
+        entityGraph: restored.graph,
+        observations: local.observations,
+        learnedRelationships: local.learnedRelationships
+      });
+      recordEntityKnowledge(memory, {
+        structuralEntity: restored.graph.entity,
+        structuralGraph: restored.graph,
+        semanticEntity,
+        learnedRelationships: local.learnedRelationships,
+        observations: local.observations
+      });
+      await saveMemory(memory);
+    }
+
     semanticPath.push(semanticEntity.semanticName || restored.graph.entity.label);
     console.log(`[LeMap-Web] semantic entity: ${semanticEntity.semanticName || '(unnamed)'}`);
     if (semanticEntity.description) console.log(`[LeMap-Web] ${semanticEntity.description}`);
 
-    recordEntityKnowledge(memory, {
-      structuralEntity: restored.graph.entity,
-      structuralGraph: restored.graph,
-      semanticEntity,
-      learnedRelationships: local.learnedRelationships,
-      observations: local.observations
-    });
-    await saveMemory(memory);
-
-    const answeredGroupIds = new Set();
+    const answeredQuestionIds = new Set();
     const userAnswers = [];
     while (true) {
       const current = await capture(page);
-      const questions = buildUserQuestions({ graph: current.graph, state: current.state, answeredGroupIds });
+      const questions = buildUserQuestions({ graph: current.graph, state: current.state, answeredQuestionIds });
       const question = questions[0];
       if (!question) break;
 
       printQuestion(question);
       const rawAnswer = (await rl.question('Your answer: ')).trim();
       const interpretation = await interpretUserAnswer({ client, model, userGoal, semanticEntity, question, userAnswer: rawAnswer });
-      if (!interpretation.selectedFieldIds.length || interpretation.confidence < 0.45) {
-        console.log(`[LeMap-Web] I could not map that confidently (${interpretation.reason || 'no matching option'}). Please answer again.`);
+      const hasAnswer = question.answerKind === 'choice' ? interpretation.selectedFieldIds.length > 0 : interpretation.value !== '';
+      if (!hasAnswer || interpretation.confidence < 0.45) {
+        console.log(`[LeMap-Web] I could not map that confidently (${interpretation.reason || 'no usable answer'}). Please answer again.`);
         continue;
       }
 
-      await applyGroupAnswer(page, current.graph, question, interpretation);
+      await applyQuestionAnswer(page, current.graph, question, interpretation);
       if (settleMs) await page.waitForTimeout(settleMs);
-      answeredGroupIds.add(question.groupId);
+      answeredQuestionIds.add(question.questionId);
       const answerRecord = {
         entityId: current.graph.entity.id,
-        groupId: question.groupId,
+        questionId: question.questionId,
+        groupId: question.groupId || '',
+        fieldId: question.fieldId || '',
         question: question.label,
         userAnswer: rawAnswer,
         selectedFieldIds: interpretation.selectedFieldIds,
+        value: question.answerKind === 'value' ? interpretation.value : '',
         confidence: interpretation.confidence,
         interpretation: interpretation.reason
       };
       userAnswers.push(answerRecord);
       recordSessionAnswer(memory, session, answerRecord);
       await saveMemory(memory);
-      console.log(`[LeMap-Web] interpreted: ${interpretation.selectedFieldIds.join(', ')} (${interpretation.confidence.toFixed(2)})`);
+      console.log(`[LeMap-Web] interpreted (${interpretation.confidence.toFixed(2)}): ${interpretation.reason || interpretation.selectedFieldIds.join(', ') || interpretation.value}`);
     }
 
     const completed = await capture(page);
@@ -142,7 +185,7 @@ try {
     const context = {
       originalGoal: userGoal,
       semanticPath,
-      ...workflowContext(memory, session, userAnswers, semanticEntity)
+      ...workflowContext(memory, session, userAnswers, semanticEntity, completed.graph.entity.id)
     };
     const scores = await scoreNavigationCandidates({ client, model, userGoal, semanticEntity, workflowContext: context, candidates });
 
