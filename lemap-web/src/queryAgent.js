@@ -10,6 +10,7 @@ import { exploreLocalEntity } from './explore/localExplorer.js';
 import { collectNavigationCandidates } from './explore/navigationCandidates.js';
 import { resolveLocalEntity } from './semantic/localEntityResolver.js';
 import { scoreNavigationCandidates } from './semantic/navigationScout.js';
+import { planInformationNeed } from './semantic/informationNeedPlanner.js';
 import { buildUserQuestions, interpretUserAnswer } from './agent/userInput.js';
 import { applyQuestionAnswer, chooseExecutableNavigation, executeNavigationCandidate } from './agent/browserActions.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition, recordSessionAnswer, startQuerySession } from './agent/memory.js';
@@ -51,6 +52,20 @@ function printQuestion(question) {
   console.log(`\n[LeMap-Web] ${question.label}`);
   if (question.options?.length) question.options.forEach((option, index) => console.log(`  ${index + 1}. ${option.label}`));
 }
+function applyValueDomains(graph = {}, valueDomains = {}) {
+  for (const field of arr(graph.fields)) {
+    const values = arr(valueDomains[field.id]);
+    if (values.length) field.valueDomain = [...values];
+  }
+  return graph;
+}
+function valueDomainsFromMemory(entry = {}) {
+  const output = {};
+  for (const field of arr(entry.structure?.fields)) {
+    if (arr(field.valueDomain).length) output[field.id] = [...field.valueDomain];
+  }
+  return output;
+}
 function structuralSignatureFromGraph(graph = {}) {
   return JSON.stringify({
     fields: arr(graph.fields).map((field) => [field.id, field.type, field.parentGroupId || '']).sort(),
@@ -66,7 +81,7 @@ function structuralSignatureFromMemory(entry = {}) {
 function knownEntityIsCompatible(entry, graph) {
   return !!entry?.semantic?.semanticName && structuralSignatureFromMemory(entry) === structuralSignatureFromGraph(graph);
 }
-function workflowContext(memory, session, userAnswers, semanticEntity, currentEntityId) {
+function workflowContext(memory, session, userAnswers, semanticEntity, currentEntityId, semanticPath) {
   const pathEdges = new Set(session.path || []);
   const traversed = arr(memory.workflow?.edges).filter((edge) => pathEdges.has(edge.id));
   const knownOutgoing = arr(memory.workflow?.edges)
@@ -74,10 +89,34 @@ function workflowContext(memory, session, userAnswers, semanticEntity, currentEn
     .map((edge) => ({ label: edge.label, role: edge.role, targetEntityId: edge.targetEntityId, goalRelevance: edge.goalRelevance, continuity: edge.continuity }));
   return {
     currentEntity: semanticEntity?.semanticName || '',
+    semanticPath,
     traversed: traversed.map((edge) => ({ label: edge.label, role: edge.role, sourceEntityId: edge.sourceEntityId, targetEntityId: edge.targetEntityId })),
     knownOutgoing,
     userAnswers
   };
+}
+async function learnCurrentContext({ page, client, model, memory, settleMs, priorDomains = {} }) {
+  const local = await exploreLocalEntity(page, { settleMs });
+  const captured = await capture(page);
+  if (!local.restored) throw new Error(`Local exploration did not restore ${captured.graph.entity.id}; stopping before user input/navigation.`);
+  const valueDomains = { ...priorDomains, ...local.valueDomains };
+  applyValueDomains(captured.graph, valueDomains);
+  const semanticEntity = await resolveLocalEntity({
+    client,
+    model,
+    entityGraph: captured.graph,
+    observations: local.observations,
+    learnedRelationships: local.learnedRelationships
+  });
+  recordEntityKnowledge(memory, {
+    structuralEntity: captured.graph.entity,
+    structuralGraph: captured.graph,
+    semanticEntity,
+    learnedRelationships: local.learnedRelationships,
+    observations: local.observations
+  });
+  await saveMemory(memory);
+  return { local, captured, semanticEntity, valueDomains };
 }
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -112,47 +151,87 @@ try {
     console.log(`[LeMap-Web] structural entity: ${before.graph.entity.label}`);
 
     const known = memory.entities[entityId];
-    let local;
-    let restored;
+    let captured;
     let semanticEntity;
+    let valueDomains = {};
 
     if (knownEntityIsCompatible(known, before.graph) && process.env.LEMAP_REFRESH_KNOWN !== '1') {
       console.log(`[LeMap-Web] reusing learned semantics: ${known.semantic.semanticName}`);
-      local = { restored: true, observations: [], learnedRelationships: arr(known.learnedRelationships), errors: [] };
-      restored = before;
+      valueDomains = valueDomainsFromMemory(known);
+      applyValueDomains(before.graph, valueDomains);
+      captured = before;
       semanticEntity = known.semantic;
     } else {
-      local = await exploreLocalEntity(page, { settleMs });
-      restored = await capture(page);
-      if (!local.restored) throw new Error(`Local exploration did not restore ${entityId}; stopping before user input/navigation.`);
-      semanticEntity = await resolveLocalEntity({
-        client,
-        model,
-        entityGraph: restored.graph,
-        observations: local.observations,
-        learnedRelationships: local.learnedRelationships
-      });
-      recordEntityKnowledge(memory, {
-        structuralEntity: restored.graph.entity,
-        structuralGraph: restored.graph,
-        semanticEntity,
-        learnedRelationships: local.learnedRelationships,
-        observations: local.observations
-      });
-      await saveMemory(memory);
+      const learned = await learnCurrentContext({ page, client, model, memory, settleMs });
+      captured = learned.captured;
+      semanticEntity = learned.semanticEntity;
+      valueDomains = learned.valueDomains;
     }
 
-    semanticPath.push(semanticEntity.semanticName || restored.graph.entity.label);
+    semanticPath.push(semanticEntity.semanticName || captured.graph.entity.label);
     console.log(`[LeMap-Web] semantic entity: ${semanticEntity.semanticName || '(unnamed)'}`);
     if (semanticEntity.description) console.log(`[LeMap-Web] ${semanticEntity.description}`);
+    if (semanticEntity.subEntities?.length) {
+      console.log(`[LeMap-Web] semantic sub-entities: ${semanticEntity.subEntities.map((entity) => entity.semanticName).filter(Boolean).join(', ')}`);
+    }
 
     const answeredQuestionIds = new Set();
     const userAnswers = [];
+    let forceStop = false;
+    let exploreMoreCount = 0;
+    let completed;
+    let candidates = [];
+
     while (true) {
       const current = await capture(page);
-      const questions = buildUserQuestions({ graph: current.graph, state: current.state, answeredQuestionIds });
-      const question = questions[0];
-      if (!question) break;
+      applyValueDomains(current.graph, valueDomains);
+      const candidateQuestions = buildUserQuestions({ graph: current.graph, state: current.state, answeredQuestionIds });
+      candidates = await collectNavigationCandidates(page, current.graph);
+      const context = workflowContext(memory, session, userAnswers, semanticEntity, current.graph.entity.id, semanticPath);
+      const informationPlan = await planInformationNeed({
+        client,
+        model,
+        userGoal,
+        semanticContext: semanticEntity,
+        workflowContext: context,
+        candidateQuestions,
+        navigationCandidates: candidates
+      });
+
+      console.log(`[LeMap-Web] information need: ${informationPlan.decision} (${informationPlan.confidence.toFixed(2)})${informationPlan.reason ? ` :: ${informationPlan.reason}` : ''}`);
+
+      if (informationPlan.decision === 'navigate') {
+        completed = current;
+        break;
+      }
+
+      if (informationPlan.decision === 'stop') {
+        console.log('[LeMap-Web] Planner cannot safely advance from current evidence. Stopping with learned memory persisted.');
+        forceStop = true;
+        break;
+      }
+
+      if (informationPlan.decision === 'explore_more') {
+        if (exploreMoreCount >= 1) {
+          console.log('[LeMap-Web] Planner requested additional exploration twice without resolving uncertainty. Stopping to avoid an exploration loop.');
+          forceStop = true;
+          break;
+        }
+        exploreMoreCount += 1;
+        const learned = await learnCurrentContext({ page, client, model, memory, settleMs, priorDomains: valueDomains });
+        semanticEntity = learned.semanticEntity;
+        valueDomains = learned.valueDomains;
+        console.log(`[LeMap-Web] refreshed semantic context: ${semanticEntity.semanticName || '(unnamed)'}`);
+        continue;
+      }
+
+      const questionId = informationPlan.questionIds[0];
+      const question = candidateQuestions.find((item) => item.questionId === questionId);
+      if (!question) {
+        console.log(`[LeMap-Web] Planner selected unavailable question ${questionId}. Stopping safely.`);
+        forceStop = true;
+        break;
+      }
 
       printQuestion(question);
       const rawAnswer = (await rl.question('Your answer: ')).trim();
@@ -182,14 +261,23 @@ try {
       recordSessionAnswer(memory, session, answerRecord);
       await saveMemory(memory);
       console.log(`[LeMap-Web] interpreted (${interpretation.confidence.toFixed(2)}): ${interpretation.reason || interpretation.selectedFieldIds.join(', ') || 'value supplied'}`);
+
+      // The user's answer may expose a new local entity or branch. Learn from that new state before asking again.
+      const relearned = await learnCurrentContext({ page, client, model, memory, settleMs, priorDomains: valueDomains });
+      semanticEntity = relearned.semanticEntity;
+      valueDomains = relearned.valueDomains;
+      exploreMoreCount = 0;
+      console.log(`[LeMap-Web] semantic context after answer: ${semanticEntity.semanticName || '(unnamed)'}`);
     }
 
-    const completed = await capture(page);
-    const candidates = await collectNavigationCandidates(page, completed.graph);
+    if (forceStop) break;
+    if (!completed) completed = await capture(page);
+    applyValueDomains(completed.graph, valueDomains);
+    if (!candidates.length) candidates = await collectNavigationCandidates(page, completed.graph);
+
     const context = {
       originalGoal: userGoal,
-      semanticPath,
-      ...workflowContext(memory, session, userAnswers, semanticEntity, completed.graph.entity.id)
+      ...workflowContext(memory, session, userAnswers, semanticEntity, completed.graph.entity.id, semanticPath)
     };
     const scores = await scoreNavigationCandidates({ client, model, userGoal, semanticEntity, workflowContext: context, candidates });
 
