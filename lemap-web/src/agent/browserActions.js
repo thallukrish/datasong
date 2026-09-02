@@ -71,11 +71,26 @@ export async function executeNavigationCandidate(page, candidate) {
       const current = new URL(page.url());
       if (target.origin !== current.origin) throw new Error(`Refusing cross-origin navigation to ${target.origin}`);
     }
-    const locator = candidate.href
-      ? page.locator(`a[href="${quoteAttr(candidate.href)}"]`).first()
-      : page.getByRole('link', { name: candidate.label, exact: true }).first();
-    await locator.click();
-    return;
+    if (candidate.label) {
+      const byLabel = page.getByRole('link', { name: candidate.label, exact: true }).first();
+      if (await byLabel.count()) {
+        await byLabel.click();
+        return;
+      }
+    }
+    if (candidate.href) {
+      const handle = page.locator('a[href]').filter({ has: page.locator('*') });
+      const count = await handle.count();
+      for (let i = 0; i < count; i += 1) {
+        const link = handle.nth(i);
+        const resolved = await link.evaluate((el) => el.href || el.getAttribute('href') || '');
+        if (resolved === candidate.href) {
+          await link.click();
+          return;
+        }
+      }
+    }
+    throw new Error(`Could not locate navigation link ${candidate.label || candidate.href}`);
   }
   throw new Error(`Unsupported navigation candidate kind ${candidate.kind}`);
 }
