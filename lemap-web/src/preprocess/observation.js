@@ -3,9 +3,9 @@ function arr(value) { return Array.isArray(value) ? value : []; }
 export function normalizeObservation(input = {}) {
   const trace = input.executionTrace || {};
   return {
-    id: String(input.id || `observation:${input.inputId || 'unknown'}:${input.action?.id || 'action'}`),
-    pageId: String(input.pageId || ''),
-    inputId: String(input.inputId || ''),
+    id: String(input.id || `observation:${input.fieldId || 'unknown'}:${input.action?.id || 'action'}`),
+    entityId: String(input.entityId || ''),
+    fieldId: String(input.fieldId || ''),
     groupId: String(input.groupId || ''),
     beforeStateId: String(input.beforeStateId || ''),
     action: { ...(input.action || {}) },
@@ -17,6 +17,7 @@ export function normalizeObservation(input = {}) {
       consoleSignals: arr(trace.consoleSignals).map((x) => ({ ...x }))
     },
     result: { ...(input.result || {}) },
+    affectedEntityIds: [...new Set(arr(input.affectedEntityIds).map(String).filter(Boolean))],
     afterStateId: String(input.afterStateId || '')
   };
 }
