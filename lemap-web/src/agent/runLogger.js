@@ -9,6 +9,7 @@ function clean(value, max = 260) {
 function numberOrNull(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
 
 export function compactModelResult({ purpose = '', model = '', durationMs = 0, usage = null, finishReason = '', parsed = {} } = {}) {
+  const normalizedPurpose = clean(purpose, 80);
   const tokens = {
     prompt: numberOrNull(usage?.prompt_tokens),
     completion: numberOrNull(usage?.completion_tokens),
@@ -16,8 +17,14 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
     cacheHit: numberOrNull(usage?.prompt_cache_hit_tokens ?? usage?.prompt_tokens_details?.cached_tokens)
   };
   const result = {};
+  const answerInterpreter = normalizedPurpose.includes('user_answer');
   for (const key of ['semanticName', 'decision', 'confidence', 'reason', 'localCompletion']) {
-    if (parsed?.[key] !== undefined && parsed?.[key] !== null && parsed?.[key] !== '') result[key] = typeof parsed[key] === 'string' ? clean(parsed[key]) : parsed[key];
+    if (parsed?.[key] === undefined || parsed?.[key] === null || parsed?.[key] === '') continue;
+    if (answerInterpreter && key === 'reason') {
+      result.reason = 'answer interpreted';
+      continue;
+    }
+    result[key] = typeof parsed[key] === 'string' ? clean(parsed[key]) : parsed[key];
   }
   if (arr(parsed?.questionIds).length) result.questionIds = arr(parsed.questionIds).slice(0, 6).map(String);
   if (arr(parsed?.selectedFieldIds).length) result.selectedFieldIds = arr(parsed.selectedFieldIds).slice(0, 6).map(String);
@@ -31,7 +38,7 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
   }));
   if (parsed?.value !== undefined && parsed?.value !== null && String(parsed.value) !== '') result.value = 'value provided';
   return {
-    purpose: clean(purpose, 80),
+    purpose: normalizedPurpose,
     model: clean(model, 120),
     durationMs: Math.max(0, Math.round(Number(durationMs) || 0)),
     tokens,
@@ -41,12 +48,13 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
 }
 
 export function summarizeUserInteraction({ question = {}, interpretation = {} } = {}) {
+  const isValue = question.answerKind === 'value';
   const base = {
     questionId: clean(question.questionId, 160),
     question: clean(question.label, 240),
     answerKind: clean(question.answerKind, 40),
     confidence: numberOrNull(interpretation.confidence),
-    interpretation: clean(interpretation.reason, 260)
+    interpretation: isValue ? 'value interpreted' : clean(interpretation.reason, 260)
   };
   if (question.answerKind === 'choice') {
     const labels = new Map(arr(question.options).map((option) => [String(option.fieldId || ''), String(option.label || '')]));
