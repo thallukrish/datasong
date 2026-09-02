@@ -1,2 +1,9 @@
 .env
-demo_v2\data
+demo_v2/data/
+demo_v3/data/
+demo_v3/node_modules/
+demo_v2/node_modules/
+demo/data/
+demo/node_modules/
+lemap_web/data/
+lemap_web/node_modules/
