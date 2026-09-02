@@ -57,10 +57,8 @@
   const city = document.querySelector('#city');
   const suggestions = document.querySelector('#citySuggestions');
   city.addEventListener('input', async () => {
-    const value = city.value.toLowerCase();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const all = ['Bangalore', 'Bangkok', 'Chennai'];
-    const matches = all.filter((name) => name.toLowerCase().startsWith(value));
+    const response = await fetch(`/cities?q=${encodeURIComponent(city.value)}`);
+    const matches = await response.json();
     suggestions.innerHTML = matches.map((name) => `<li role="option">${name}</li>`).join('');
     suggestions.hidden = matches.length === 0;
   });
