@@ -3,11 +3,14 @@ export function projectPageState(snapshot = {}, preprocessed = {}) {
   const options = {};
   for (const input of preprocessed.inputs || []) {
     let value = input.value;
-    if (snapshot.values && Object.prototype.hasOwnProperty.call(snapshot.values, input.label)) value = snapshot.values[input.label];
+    if (input.type === 'radio' && typeof input.checked === 'boolean') value = input.checked ? input.value : null;
+    else if (input.type === 'checkbox' && typeof input.checked === 'boolean') value = input.checked;
+    else if (snapshot.values && Object.prototype.hasOwnProperty.call(snapshot.values, input.label)) value = snapshot.values[input.label];
     else if (snapshot.values && Object.prototype.hasOwnProperty.call(snapshot.values, input.name)) value = snapshot.values[input.name];
     inputs[input.id] = {
       type: input.type,
       value: value ?? null,
+      checked: typeof input.checked === 'boolean' ? input.checked : null,
       enabled: !input.disabled,
       visible: !!input.visible,
       required: !!input.required,
