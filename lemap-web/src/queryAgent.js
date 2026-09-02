@@ -168,16 +168,16 @@ try {
         groupId: question.groupId || '',
         fieldId: question.fieldId || '',
         question: question.label,
-        userAnswer: rawAnswer,
         selectedFieldIds: interpretation.selectedFieldIds,
-        value: question.answerKind === 'value' ? interpretation.value : '',
+        valueProvided: question.answerKind === 'value',
+        inputType: question.inputType || '',
         confidence: interpretation.confidence,
         interpretation: interpretation.reason
       };
       userAnswers.push(answerRecord);
       recordSessionAnswer(memory, session, answerRecord);
       await saveMemory(memory);
-      console.log(`[LeMap-Web] interpreted (${interpretation.confidence.toFixed(2)}): ${interpretation.reason || interpretation.selectedFieldIds.join(', ') || interpretation.value}`);
+      console.log(`[LeMap-Web] interpreted (${interpretation.confidence.toFixed(2)}): ${interpretation.reason || interpretation.selectedFieldIds.join(', ') || 'value supplied'}`);
     }
 
     const completed = await capture(page);
