@@ -107,7 +107,7 @@ test('browser entity benchmark discovers and observes generic behavior', async (
     await page.close();
   });
 
-  await t.test('automatic local explorer probes radio branch, discovers enabled checkbox behavior, restores state, and retains outgoing navigation candidates', async () => {
+  await t.test('automatic local explorer probes every checkbox individually before representative combinations, restores state, and retains outgoing navigation candidates', async () => {
     const page = await freshPage(browser, fixture.url);
     const before = await capture(page);
     const result = await exploreLocalEntity(page, { settleMs: 25 });
@@ -120,7 +120,16 @@ test('browser entity benchmark discovers and observes generic behavior', async (
     const continueButton = controlByLabel(before.graph, 'Continue');
 
     assert.ok(result.observations.some((observation) => observation.fieldId === reasonB.id && observation.delta.fieldsEnabled.includes(condition1.id) && observation.delta.actionsHidden.includes(continueButton.id)));
-    assert.ok(result.observations.some((observation) => observation.fieldId === condition1.id && observation.delta.actionsShown.includes(continueButton.id)));
+
+    const condition1Individual = result.observations.find((observation) => observation.fieldId === condition1.id && observation.action.purpose === 'individual-probe');
+    const condition2Individual = result.observations.find((observation) => observation.fieldId === condition2.id && observation.action.purpose === 'individual-probe');
+    assert.ok(condition1Individual);
+    assert.ok(condition2Individual);
+    assert.ok(condition1Individual.delta.actionsShown.includes(continueButton.id));
+    assert.ok(condition2Individual.delta.actionsShown.includes(continueButton.id));
+
+    const combinationProbe = result.observations.find((observation) => observation.fieldId === condition2.id && observation.action.purpose === 'representative-combination');
+    assert.ok(combinationProbe);
     assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'mutually_exclusive' && relationship.groupType === 'radio'));
     assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'multi_select' && relationship.groupType === 'checkbox' && relationship.memberFieldIds.includes(condition1.id) && relationship.memberFieldIds.includes(condition2.id)));
     assert.deepEqual(after.state.fields, before.state.fields);
