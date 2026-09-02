@@ -19,10 +19,11 @@ export function createModelClient({ apiKey = '', baseUrl = '' } = {}) {
     chat: {
       completions: {
         create: async (request) => {
+          const { thinking: _thinking, ...portableRequest } = request || {};
           const response = await fetch(endpoint(baseUrl), {
             method: 'POST',
             headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify(request)
+            body: JSON.stringify(portableRequest)
           });
           if (!response.ok) throw new Error(`Model request failed: HTTP ${response.status} ${await response.text()}`);
           return response.json();
