@@ -43,7 +43,7 @@ export async function snapshotPage(page) {
     const regionLabel = (el) => {
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
-      const heading = el.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > legend');
+      const heading = el.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > legend');
       if (heading) return clean(heading.innerText || heading.textContent);
       return '';
     };
@@ -56,25 +56,34 @@ export async function snapshotPage(page) {
       disabled: !!el.disabled,
       hidden: !visible(el)
     });
-    const region = (el, depth = 0) => {
-      const children = [];
+
+    // Build a semantic DOM rather than copying wrapper-heavy framework markup.
+    // Unlabelled Angular/component wrappers are traversed transparently so deep
+    // labelled regions and controls bubble up into the structural hierarchy.
+    const semanticChildren = (el, depth = 0) => {
+      if (depth > 24) return [];
+      const output = [];
       for (const child of Array.from(el.children || [])) {
         const tag = child.tagName?.toLowerCase();
         if (['input', 'button', 'select', 'textarea'].includes(tag)) {
-          children.push(control(child));
+          output.push(control(child));
           continue;
         }
+
+        const nested = semanticChildren(child, depth + 1);
         const label = regionLabel(child);
-        const hasControls = !!child.querySelector?.('input,button,select,textarea');
-        if ((label || hasControls) && depth < 5) {
-          children.push({ tag: tag || 'div', label, hidden: !visible(child), children: region(child, depth + 1).children });
+        if (label) {
+          output.push({ tag: tag || 'div', label, hidden: !visible(child), children: nested });
+        } else {
+          output.push(...nested);
         }
       }
-      return { children };
+      return output;
     };
+
     const pageLabel = clean(document.querySelector('h1')?.innerText || document.title || location.pathname);
     const root = document.querySelector('main,[role="main"]') || document.body;
-    const dom = { tag: root.tagName.toLowerCase(), label: pageLabel, hidden: false, children: region(root).children };
+    const dom = { tag: root.tagName.toLowerCase(), label: pageLabel, hidden: false, children: semanticChildren(root) };
     const values = {};
     for (const el of document.querySelectorAll('input,select,textarea')) {
       const key = labelFor(el) || clean(el.name || el.id);
