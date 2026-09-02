@@ -39,6 +39,7 @@ export function discoverInputs(root = {}, pageId = '') {
           disabled: !!node.disabled,
           visible: !node.hidden,
           readonly: !!node.readonly,
+          checked: typeof node.checked === 'boolean' ? node.checked : null,
           placeholder: String(node.placeholder || ''),
           value: node.value ?? null,
           valueDomain: Array.isArray(node.options) ? [...node.options] : [],
