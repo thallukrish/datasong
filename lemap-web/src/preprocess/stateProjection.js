@@ -13,7 +13,9 @@ export function projectPageState(snapshot = {}, preprocessed = {}) {
       required: !!input.required,
       readonly: !!input.readonly
     };
-    if (input.valueDomain?.length) options[input.id] = [...input.valueDomain];
+    const dynamic = snapshot.options?.[input.label] || snapshot.options?.[input.name];
+    if (Array.isArray(dynamic)) options[input.id] = [...dynamic];
+    else if (input.valueDomain?.length) options[input.id] = [...input.valueDomain];
   }
   return {
     pageId: preprocessed.page?.id || '',
