@@ -45,15 +45,21 @@ export function selectEntityRoot(root = {}) {
 
   const withActions = candidates.filter((candidate) => candidate.hasAction);
   const pool = withActions.length ? withActions : candidates;
+  const maxDataControls = Math.max(...pool.map((candidate) => candidate.dataControls));
 
-  // Prefer the dominant interactive business region before DOM depth. Portal shells often
-  // contain deeply nested support/chat widgets with one input and one button; depth-first
-  // selection incorrectly promotes those widgets to the primary semantic entity.
-  pool.sort((a, b) =>
+  // Prefer the deepest cohesive region that still contains a dominant share of the
+  // interactive business controls. This avoids both extremes:
+  //   1. deepest-first selecting a tiny embedded support/chat widget; and
+  //   2. largest-first selecting the whole page shell that contains the business form
+  //      plus unrelated widgets/chrome.
+  // A 60% retention threshold keeps the main form when the shell adds a few unrelated
+  // controls, while falling back to the broader context when no single child dominates.
+  const dominant = pool.filter((candidate) => candidate.dataControls >= maxDataControls * 0.6);
+  dominant.sort((a, b) =>
+    b.depth - a.depth ||
     b.dataControls - a.dataControls ||
     b.actionControls - a.actionControls ||
-    a.controls - b.controls ||
-    b.depth - a.depth
+    a.controls - b.controls
   );
-  return pool[0].node;
+  return dominant[0].node;
 }
