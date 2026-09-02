@@ -6,7 +6,11 @@ function clean(value, max = 260) {
   const text = String(value ?? '').trim().replace(/\s+/g, ' ');
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
-function numberOrNull(value) { const n = Number(value); return Number.isFinite(n) ? n : null; }
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 export function compactModelResult({ purpose = '', model = '', durationMs = 0, usage = null, finishReason = '', parsed = {} } = {}) {
   const normalizedPurpose = clean(purpose, 80);
