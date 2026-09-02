@@ -14,18 +14,31 @@ function controlFrom(node) {
   };
 }
 
-function regionFrom(node) {
+function collectSemanticChildren(node) {
   const controls = [];
   const regions = [];
-  for (const child of arr(node.children)) {
-    if (['input', 'button', 'select', 'textarea'].includes(child.tag)) controls.push(controlFrom(child));
-    else if (child.label) regions.push(regionFrom(child));
-    else {
-      for (const nested of arr(child.children)) {
-        if (['input', 'button', 'select', 'textarea'].includes(nested.tag)) controls.push(controlFrom(nested));
-      }
+
+  for (const child of arr(node?.children)) {
+    if (['input', 'button', 'select', 'textarea'].includes(child?.tag)) {
+      controls.push(controlFrom(child));
+      continue;
     }
+
+    if (child?.label) {
+      regions.push(regionFrom(child));
+      continue;
+    }
+
+    const nested = collectSemanticChildren(child);
+    controls.push(...nested.controls);
+    regions.push(...nested.regions);
   }
+
+  return { controls, regions };
+}
+
+function regionFrom(node) {
+  const { controls, regions } = collectSemanticChildren(node);
   return {
     tag: text(node.tag),
     label: text(node.label),
@@ -36,12 +49,13 @@ function regionFrom(node) {
 }
 
 export function buildPageStructure(root) {
-  const sections = arr(root?.children).filter((node) => node?.label).map(regionFrom);
+  const { controls, regions } = collectSemanticChildren(root);
   return {
     tag: text(root?.tag),
     label: text(root?.label),
     hidden: !!root?.hidden,
-    sections
+    controls,
+    sections: regions
   };
 }
 
