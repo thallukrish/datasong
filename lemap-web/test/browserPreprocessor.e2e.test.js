@@ -138,8 +138,9 @@ test('browser preprocessor benchmark discovers and observes generic input behavi
     });
 
     const before = await capture(page);
+    const responsePromise = page.waitForResponse((response) => response.url().includes('/cities?q=ban') && response.status() === 200);
     await page.locator('#city').fill('ban');
-    await page.waitForResponse((response) => response.url().includes('/cities?q=ban') && response.status() === 200);
+    await responsePromise;
     const after = await capture(page);
     const delta = computeStateDelta(before.state, after.state);
     const city = inputByLabel(after.model, 'City');
