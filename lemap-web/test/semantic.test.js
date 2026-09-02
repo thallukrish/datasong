@@ -61,44 +61,42 @@ test('local entity semantic resolver receives deterministic fields, behavior and
   assert.doesNotMatch(prompt, /infer browser mechanics/i);
 
   const parsed = normalizeLocalEntityResponse({
-    semanticName: 'Filing Reason',
-    description: 'Determines why the taxpayer is filing the return.',
+    semanticName: 'Filing Reason', description: 'Determines why the taxpayer is filing the return.',
     fields: [{ structuralFieldId: 'field:y', semanticName: 'Seventh Proviso filing reason', description: 'Filing under qualifying conditions.' }],
     relationships: [{ kind: 'conditional_requirement', description: 'Qualifying conditions apply when this filing reason is selected.', evidenceIds: ['obs:local:1'] }],
     actions: [{ structuralFieldId: 'field:continue', semanticName: 'Complete filing reason', description: 'Advances after local requirements are satisfied.' }],
-    localCompletion: 'A filing reason is selected and any activated qualifying conditions are satisfied.',
-    confidence: 0.93
+    localCompletion: 'A filing reason is selected and any activated qualifying conditions are satisfied.', confidence: 0.93
   });
   assert.equal(parsed.semanticName, 'Filing Reason');
   assert.equal(parsed.localCompletion.length > 0, true);
 });
 
-test('navigation scout scores outgoing candidates against resolved current entity and workflow context', () => {
+test('navigation scout scores outgoing candidates against original user goal and workflow context', () => {
   const semanticEntity = normalizeLocalEntityResponse({ semanticName: 'Filing Reason', description: 'Determines why the taxpayer is filing.', localCompletion: 'Valid filing reason established.', confidence: 0.9 });
   const candidates = [
     { id: 'action:continue', label: 'Continue', kind: 'action', href: '' },
     { id: 'link:dashboard', label: 'Dashboard', kind: 'link', href: '/dashboard' }
   ];
-  const prompt = buildNavigationPrompt({ semanticEntity, workflowContext: { title: 'File ITR-3', path: ['Filing Reason'] }, candidates });
-  assert.match(prompt, /web-navigation-scout-v1/);
+  const prompt = buildNavigationPrompt({ userGoal: 'I want to file ITR-3', semanticEntity, workflowContext: { title: 'File ITR-3', path: ['Filing Reason'] }, candidates });
+  assert.match(prompt, /web-goal-navigation-v1/);
+  assert.match(prompt, /I want to file ITR-3/);
   assert.match(prompt, /Continue/);
   assert.match(prompt, /Dashboard/);
-  assert.match(prompt, /workflow continuity/i);
 
   const parsed = normalizeNavigationResponse({ scores: [
-    { candidateId: 'action:continue', continuity: 0.98, role: 'workflow_continuation', reason: 'Advances current filing setup.' },
-    { candidateId: 'link:dashboard', continuity: 0.05, role: 'workflow_exit', reason: 'Leaves current filing workflow.' }
+    { candidateId: 'action:continue', goalRelevance: 0.95, continuity: 0.98, forwardProgress: 0.98, role: 'workflow_continuation', reason: 'Advances current filing setup.' },
+    { candidateId: 'link:dashboard', goalRelevance: 0.01, continuity: 0.05, forwardProgress: 0.01, role: 'workflow_exit', reason: 'Leaves current filing workflow.' }
   ] }, candidates);
   assert.equal(parsed[0].candidateId, 'action:continue');
-  assert.ok(parsed[0].continuity > parsed[1].continuity);
+  assert.ok(parsed[0].goalRelevance > parsed[1].goalRelevance);
 });
 
-test('local resolver and navigation scout execute through injected model client', async () => {
+test('local resolver and goal-directed navigation scout execute through injected model client', async () => {
   const responses = [
     { semanticName: 'Filing Reason', description: 'Determines filing basis.', fields: [], relationships: [], actions: [], localCompletion: 'Valid filing basis established.', confidence: 0.9 },
     { scores: [
-      { candidateId: 'continue', continuity: 0.99, role: 'workflow_continuation', reason: 'Forward action.' },
-      { candidateId: 'dashboard', continuity: 0.04, role: 'workflow_exit', reason: 'Leaves context.' }
+      { candidateId: 'continue', goalRelevance: 0.95, continuity: 0.99, forwardProgress: 0.98, role: 'workflow_continuation', reason: 'Forward action.' },
+      { candidateId: 'dashboard', goalRelevance: 0.01, continuity: 0.04, forwardProgress: 0.01, role: 'workflow_exit', reason: 'Leaves context.' }
     ] }
   ];
   const requests = [];
@@ -108,7 +106,7 @@ test('local resolver and navigation scout execute through injected model client'
   } } } };
 
   const semanticEntity = await resolveLocalEntity({ client, model: 'test-model', entityGraph: localEntity, observations: localObservations, learnedRelationships: localRelationships });
-  const scored = await scoreNavigationCandidates({ client, model: 'test-model', semanticEntity, workflowContext: { title: 'File ITR-3' }, candidates: [
+  const scored = await scoreNavigationCandidates({ client, model: 'test-model', userGoal: 'I want to file ITR-3', semanticEntity, workflowContext: { title: 'File ITR-3' }, candidates: [
     { id: 'continue', label: 'Continue', kind: 'action' },
     { id: 'dashboard', label: 'Dashboard', kind: 'link', href: '/dashboard' }
   ] });
@@ -124,11 +122,7 @@ test('Pass 1 prompt and normalization operate on workflow/entity evidence', () =
   assert.match(prompt, /entity:filing/);
   assert.doesNotMatch(prompt, /repository search/i);
 
-  const parsed = normalizePass1Response({
-    title: 'File ITR-3', businessActor: 'taxpayer', businessIntent: 'File an income-tax return',
-    majorStages: ['Establish filing status', 'Capture personal information'], outcome: 'Return prepared', confidence: 0.9,
-    evidenceIds: ['obs:1', 'obs:2']
-  });
+  const parsed = normalizePass1Response({ title: 'File ITR-3', businessActor: 'taxpayer', businessIntent: 'File an income-tax return', majorStages: ['Establish filing status', 'Capture personal information'], outcome: 'Return prepared', confidence: 0.9, evidenceIds: ['obs:1', 'obs:2'] });
   assert.equal(parsed.title, 'File ITR-3');
   assert.equal(parsed.evidenceIds.length, 2);
 });
@@ -140,11 +134,7 @@ test('Pass 2 receives Pass-1 context plus whole structural entity/workflow evide
   assert.match(prompt, /WHOLE STRUCTURAL FLOW/);
   assert.match(prompt, /Filing reason/);
 
-  const pass2 = normalizePass2Response({
-    entities: [{ structuralEntityId: 'entity:filing', semanticName: 'Filing Status', description: 'Captures why the return is being filed', evidenceIds: ['obs:1'] }],
-    relationships: [], rules: [{ description: 'Qualifying conditions apply on one branch', evidenceIds: ['obs:1'] }],
-    steps: [{ title: 'Establish filing status', entityIds: ['entity:filing'], evidenceIds: ['obs:1'] }], unresolvedBranches: []
-  });
+  const pass2 = normalizePass2Response({ entities: [{ structuralEntityId: 'entity:filing', semanticName: 'Filing Status', description: 'Captures why the return is being filed', evidenceIds: ['obs:1'] }], relationships: [], rules: [{ description: 'Qualifying conditions apply on one branch', evidenceIds: ['obs:1'] }], steps: [{ title: 'Establish filing status', entityIds: ['entity:filing'], evidenceIds: ['obs:1'] }], unresolvedBranches: [] });
   const graph = materializeSemanticGraph({ pass1, pass2 });
   assert.ok(graph.nodes.some((node) => node.type === 'workflow'));
   assert.ok(graph.nodes.some((node) => node.type === 'entity' && node.sourceEntityId === 'entity:filing'));
@@ -154,24 +144,10 @@ test('Pass 2 receives Pass-1 context plus whole structural entity/workflow evide
 test('semantic learner executes Pass 1 then whole-flow Pass 2 with an injected model client', async () => {
   const requests = [];
   const responses = [
-    {
-      title: 'File ITR-3', businessActor: 'taxpayer', businessIntent: 'File return',
-      majorStages: ['Establish filing status', 'Capture details'], completionCondition: 'Return is ready', outcome: 'Prepared return',
-      confidence: 0.9, evidenceIds: ['obs:1', 'obs:2']
-    },
-    {
-      entities: [{ structuralEntityId: 'entity:filing', semanticName: 'Filing Status', description: 'Captures filing status', evidenceIds: ['obs:1'] }],
-      relationships: [], rules: [], steps: [{ title: 'Establish filing status', entityIds: ['entity:filing'], evidenceIds: ['obs:1'] }],
-      unresolvedBranches: [], confidence: 0.9
-    }
+    { title: 'File ITR-3', businessActor: 'taxpayer', businessIntent: 'File return', majorStages: ['Establish filing status', 'Capture details'], completionCondition: 'Return is ready', outcome: 'Prepared return', confidence: 0.9, evidenceIds: ['obs:1', 'obs:2'] },
+    { entities: [{ structuralEntityId: 'entity:filing', semanticName: 'Filing Status', description: 'Captures filing status', evidenceIds: ['obs:1'] }], relationships: [], rules: [], steps: [{ title: 'Establish filing status', entityIds: ['entity:filing'], evidenceIds: ['obs:1'] }], unresolvedBranches: [], confidence: 0.9 }
   ];
-  const client = {
-    chat: { completions: { create: async (request) => {
-      requests.push(request);
-      const body = responses.shift();
-      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(body) } }], usage: { total_tokens: 10 } };
-    } } }
-  };
+  const client = { chat: { completions: { create: async (request) => { requests.push(request); const body = responses.shift(); return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(body) }], usage: { total_tokens: 10 } }; } } } } };
 
   const result = await learnSemanticPath({ client, model: 'test-model', workflowGraph: workflow, entities });
   assert.equal(requests.length, 2);
