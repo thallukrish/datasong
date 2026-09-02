@@ -8,7 +8,7 @@ function isControlNode(node = {}) {
   return CONTROL_TAGS.has(String(node.tag || '').toLowerCase()) || CONTROL_ROLES.has(String(node.role || '').toLowerCase()) || node.control === true;
 }
 
-export function discoverInputs(root = {}, pageId = '') {
+export function discoverInputs(root = {}, entityId = '') {
   const inputs = [];
   function walk(node, ancestry = []) {
     if (!node || typeof node !== 'object') return;
@@ -20,10 +20,10 @@ export function discoverInputs(root = {}, pageId = '') {
       const normalizedType = classifyInput(node);
       if (normalizedType !== 'technical_hidden') {
         const parent = [...ancestry].reverse().find((x) => x.label) || null;
-        const identityBasis = [pageId, parent?.label || '', node.name || '', label, node.value ?? '', tag, node.type || '', node.role || ''].join('|');
+        const identityBasis = [entityId, parent?.label || '', node.name || '', label, node.value ?? '', tag, node.type || '', node.role || ''].join('|');
         inputs.push({
-          id: `input:${hash(identityBasis)}`,
-          pageId,
+          id: `field:${hash(identityBasis)}`,
+          entityId,
           domId: String(node.domId || node.id || ''),
           name: String(node.name || ''),
           label,
