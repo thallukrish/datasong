@@ -4,7 +4,7 @@
 
 This document defines the deterministic preprocessing layer that sits between browser instrumentation and semantic learning in LeMap-Web.
 
-The preprocessor does **not** decide what a page, input or workflow means to the business/user. Its job is to discover structural identity, hierarchy, input types, action space, execution evidence, state changes and page-to-page transitions in a normalized representation that can later be interpreted by the model.
+The preprocessor does **not** decide what an entity, relationship, action or workflow means to the business/user. Its job is to discover structural identity, fields, relationships, action space, execution evidence, state changes and transitions in a normalized representation that can later be interpreted by the model.
 
 The governing rule remains:
 
@@ -12,499 +12,308 @@ The governing rule remains:
 
 ---
 
-## 1. Core terminology
+## 1. Core model: shared entity graph + workflow graph
 
-LeMap-Web uses two different structural levels and they should not be conflated.
+LeMap-Web models the web application as a **shared entity graph**.
 
-### Workflow
+A rendered page is not a semantic primitive. It is only a human-friendly flattening/projection of part of that entity graph.
 
-A **Workflow** is the higher-level graph that connects pages in order to accomplish something.
+The structural model is therefore:
+
+```text
+Web Application
+  ↓
+Shared Entity Graph
+  Entity
+    fields[]
+    relationships[]
+    actions/methods[]
+    states[]
+    presentation evidence
+
+  Entity
+    ...
+
+  ↓ traversed/mutated by
+
+Workflow Graph
+  steps
+  branches
+  merges
+  action paths
+  completion conditions
+```
+
+A workflow is an ordered/branching sequence of actions over the shared entity graph that produces an end-to-end change in entity state.
 
 Example:
 
 ```text
-ITR-3 Filing
-  Filing Status
-    ├─ branch A → Personal Information
-    └─ branch B → Additional Filing Conditions
+Workflow: File ITR-3
 
-  Personal Information
-    → Income Details
-    → Tax Details
-    → Verification
+FilingStatus.selectReason(...)
+    ↓
+PersonalDetails.update(...)
+    ↓
+Income.capture(...)
+    ├─ branch A → CapitalGains.update(...)
+    └─ branch B → BusinessIncome.update(...)
+    ↓
+TaxComputation.calculate(...)
+    ↓
+Verification.submit(...)
 ```
 
-The pages traversed may differ depending on prior inputs. Therefore the workflow is not assumed to be a fixed sequence; it is a branch-and-merge graph, similar to executable call paths in LeMap.
-
-### PageIO
-
-A **PageIO** is the structured I/O object represented by one logical page or application screen.
-
-It contains:
-
-```text
-PageIO
-  identity
-  input objects[]
-  input groups[]
-  output/action objects[]
-  nested IO regions[]
-  relationships[]
-  state
-  execution evidence[]
-```
-
-A PageIO is not itself called a workflow.
-
-Its job is to expose what can be supplied to the page, what can be acted on, what state changes those actions cause, and what outputs/navigation can result.
-
-The resulting architecture mirrors LeMap conceptually:
-
-```text
-Within a page:
-  I/O objects ↔ relationships
-
-Across pages:
-  Workflow graph of PageIO nodes and transition edges
-```
+The browser pages crossed while this happens are presentation/navigation evidence, not the semantic workflow itself.
 
 ---
 
 ## 2. Architectural analogy with LeMap
 
-LeMap already separates entity relationships from executable/business workflow structure.
-
-LeMap-Web follows the same separation:
+This intentionally mirrors the existing LeMap architecture.
 
 ```text
-LeMap
-  Entity
-    ↕ relationships
-  Workflow
-    → functions/services/entities
+LeMap code side
 
+Entity graph
+  fields
+  relationships
+
+Functions/services/actions
+  operate on entities
+
+Workflow
+  branch-and-merge path of operations
+  producing business state changes
+
+Source files/classes
+  implementation containers
+```
+
+```text
 LeMap-Web
-  PageIO
-    ↕ input/output relationships
-  Workflow
-    → PageIO transitions
+
+Entity graph
+  fields derived from forms/content
+  relationships within/across rendered surfaces
+
+Clicks/events/methods
+  operate on entities
+
+Workflow
+  branch-and-merge path of actions
+  producing business state changes
+
+Pages/DOM
+  presentation containers
 ```
 
-The browser preprocessor therefore learns two deterministic substrates:
-
-1. **PageIO structure and behavior** within one page.
-2. **Page transition graph** across pages.
-
-The semantic model can later annotate both layers independently.
-
-At the workflow level it can interpret:
-
-```text
-business intent
-step purpose
-branch meaning
-completion condition
-```
-
-At the PageIO level it can interpret:
-
-```text
-what each input means
-what each group represents
-what dependencies mean
-what business/legal rule appears to be enforced
-```
+The acquisition mechanism differs, but after preprocessing the semantic-learning problem should look very similar to normal LeMap.
 
 ---
 
-## 3. Central structural primitive inside a PageIO
+## 3. Entity representation
 
-The central primitive of page preprocessing is:
+Every structurally coherent object discovered by the explorer can be represented as an entity.
 
 ```text
-INPUT
-+ ACTION
-→ EXECUTION TRACE
-→ RESULTING PAGE STATE DELTA
+Entity
+  id
+  fields[]
+  relationships[]
+  actions[]
+  state
+  presentationEvidence[]
 ```
 
-The input type determines which actions are meaningful to try. The observation/result format is shared across all input types.
-
-The resulting comparison is **page-wide**, not limited to the input's local DOM group.
+A page-level entity is simply an entity whose presentation evidence includes the current logical page/screen identity.
 
 Example:
 
 ```text
-Input: Filing reason / radio option B
-Action: select
+Entity: FilingStatus
 
-Execution trace:
-  change event
-  → component handler
-  → validation/update functions
+fields
+  filingReason
+  condition1
+  condition2
+  condition3
+  condition4
 
-Result anywhere in the active PageIO:
-  radio A unchecked
-  radio B checked
-  checkbox group becomes enabled
-  Continue becomes unavailable
-```
+actions
+  selectFilingReason()
+  toggleCondition()
+  continue()
 
-The fact that `Continue` is not in the same DOM group as the radio does not matter. It is still part of the same PageIO state delta.
-
-The preprocessor records these changes without deciding their tax/business meaning.
-
----
-
-## 4. PageIO identity
-
-Every discovered input and observation belongs to a stable PageIO identity.
-
-URL alone is insufficient because SPAs can reuse a route for materially different logical screens, and the same logical PageIO may experience many internal states.
-
-`PageIdentity` contains:
-
-```text
-id
-url
-route
-origin
-title
-mainLabel
-stableRoot
-structuralFingerprint
-```
-
-The identifier should be deterministic for the same logical page while avoiding volatile generated IDs, timestamps and cosmetic markup.
-
-Important distinction:
-
-```text
-PageIO identity
-  = stable logical screen
-
-PageIO state
-  = current values, visibility, enabled/disabled state,
-    validations, dynamic regions and available actions
-```
-
-One PageIO may therefore have many states.
-
----
-
-## 5. Input and output objects
-
-A PageIO contains controllable I/O objects.
-
-### InputObject
-
-```text
-InputObject
-  id
+presentationEvidence
   pageId
-  domId
-  name
+  route
+  title
+  root DOM identity
+```
+
+The semantic graph should not depend on the page boundary.
+
+A rendered page may expose:
+
+```text
+one entity
+multiple related entities
+a repeated entity collection
+an entity also exposed elsewhere in the application
+```
+
+The page merely flattens these entities into one visual surface for human use.
+
+---
+
+## 4. Fields
+
+Fields are observable state-bearing attributes of an entity.
+
+Examples include:
+
+```text
+labelled form inputs
+radio/checkbox selections
+select values
+text/number/date values
+visible content values
+validation/completion state
+availability flags where structurally meaningful
+```
+
+A field retains presentation evidence so the browser can locate and operate on it.
+
+```text
+Field
+  id
+  entityId
   label
-  type
-  role
-  tag
-  parentRegionId
-  parentGroupId
+  normalizedType
+  currentValue
+  valueDomain
   required
   disabled
   visible
   readonly
   checked
-  placeholder
-  value
-  valueDomain
-  attributes
+  presentationEvidence
+    pageId
+    domId
+    name
+    role
+    tag
+    regionPath
+    attributes
 ```
 
-`type` is the normalized behavioral type, not merely the raw HTML tag/type.
-
-Examples:
+For radios and checkboxes, option identity and state remain separate:
 
 ```text
-radio
-checkbox
-text
-number
-date
-select
-autocomplete
-file
-composite
-unknown
-```
-
-For radios and checkboxes, option identity and current state are distinct:
-
-```text
-value = "Y"      // identity of this option
+value = "Y"      // identity of the option
 checked = true    // current state
 ```
 
-This avoids confusing the static HTML value with whether the option is actually selected.
-
-### Output / ActionObject
-
-Buttons and similar controls are modeled as output/action objects rather than ordinary value-bearing inputs.
-
-Examples:
-
-```text
-Continue
-Back
-Save
-Submit
-Add
-Cancel
-Open
-```
-
-Their visible/enabled/disabled state is part of the PageIO state and may change as a consequence of actions elsewhere on the page.
-
 ---
 
-## 6. Input groups
+## 5. Entity relationships
 
-Grouping must be preserved instead of flattening controls.
+Relationships are not constrained by DOM containment or page boundaries.
 
-Sources of deterministic grouping evidence include:
-
-- same native radio `name`
-- `fieldset` / `legend`
-- ARIA radiogroup/listbox/group roles
-- common labelled container
-- repeated checkbox cluster under one label
-- framework component wrapper
-
-Normalized group:
+They may connect:
 
 ```text
-InputGroup
-  id
-  pageId
-  label
-  groupType
-  memberInputIds[]
-  parentRegionId
-  initialState
-  discoveredConstraints[]
+entities within the same rendered page
+entities introduced by inline expansion
+entities opened in a modal/drawer
+entities exposed on another page
+entities that share or influence state
 ```
 
-Examples of constraints that may later be inferred from experiments:
+Deterministically observed relationship types may include:
 
 ```text
-exactly_one
-zero_or_one
-one_or_more
-zero_or_more
-mutually_exclusive
-required_when
-active_when
-```
-
-These are behavioral discoveries, not assumptions from textual semantics.
-
----
-
-## 7. Relationships within a PageIO
-
-The PageIO preprocessor builds evidence for relationships among inputs, groups, regions and actions.
-
-Examples:
-
-```text
+contains
+references
 enables
 disables
 shows
 hides
 requires
 excludes
-changes
-derives
 gates
 activates
+changes
+derives
+influences
+navigates_to
 ```
-
-For example:
-
-```text
-Reason B
-  → enables Qualifying Conditions group
-
-Qualifying Conditions empty
-  → Continue unavailable
-
-One or more conditions selected
-  → Continue available
-```
-
-These relationships may connect objects in different DOM regions. The comparison scope is the entire active PageIO state.
-
-Locality is retained as structural evidence through the objects' region paths, but locality does not limit consequence detection.
-
----
-
-## 8. Nested I/O regions, inline additions and modals
-
-Not every newly introduced UI surface becomes a workflow.
-
-Dynamic structures inside a page are represented first as **nested I/O regions** under the current PageIO.
 
 Examples:
 
 ```text
-conditional inline section
-modal
-side drawer
-popover
-expanded editor
-embedded form panel
+FilingStatus
+  → contains QualifyingConditions
+
+Reason B
+  → enables QualifyingConditions
+
+QualifyingConditions empty
+  → gates Continue
+
+Income
+  → influences TaxComputation
 ```
+
+The browser structure supplies evidence; the model later gives the relationship semantic meaning.
+
+---
+
+## 6. Central structural primitive
+
+The central deterministic primitive is:
+
+```text
+ENTITY / FIELD
++ ACTION
+→ EXECUTION TRACE
+→ SHARED ENTITY STATE DELTA
+```
+
+The consequence comparison is not limited to the acted-on field, its group or its DOM region.
+
+After an action, LeMap-Web compares all relevant known entity state that is observable from the current application context.
 
 Example:
 
 ```text
-PageIO: Personal Information
-  Add Bank Account action
-    ↓
-  Nested IO Region: Bank Account Modal
-    account number
-    IFSC
-    validate
-    Save / Cancel
+FilingStatus.selectReason(Y)
+
+Execution trace:
+  change event
+  → component handler
+  → validation/update functions
+
+Observed entity-state delta:
+  FilingStatus.filingReason: N → Y
+  QualifyingConditions.enabled: false → true
+  Continue.available: true → false
 ```
 
-The modal is still structurally part of the current PageIO unless its interaction causes a logical page/navigation transition that participates in the higher-level workflow graph.
-
-Similarly:
-
-```text
-select Other
-  → "Please specify" input appears
-```
-
-is merely a state expansion inside the same PageIO.
-
-The preprocessor should therefore discover:
-
-```text
-regions
-inputs
-groups
-actions
-states
-relationships
-containment
-```
-
-without prematurely labeling every dynamic region as a workflow.
+The affected objects can live anywhere in the rendered DOM.
 
 ---
 
-## 9. Type-specific scanners
+## 7. Actions and methods
 
-Each normalized input type has a small scanner module responsible only for generating and executing safe, meaningful actions for that type.
-
-```text
-inputScanners/
-  radioScanner.js
-  checkboxScanner.js
-  textScanner.js
-  numberScanner.js
-  dateScanner.js
-  selectScanner.js
-  autocompleteScanner.js
-  buttonScanner.js
-  fileScanner.js
-  compositeScanner.js
-```
-
-The scanners must not own persistence, semantic interpretation or workflow construction.
-
-Their contract is:
-
-```text
-InputObject + current PageIO state
-→ candidate Action[]
-```
-
-and, when browser execution is enabled:
-
-```text
-Action
-→ raw browser evidence
-```
-
-All raw evidence is normalized by the common observation layer.
-
-### Radio
-
-- select each option
-- observe exclusivity
-- observe downstream page-wide state changes
-
-### Checkbox
-
-- toggle individually
-- for a group, test representative combinations
-- observe whether multiple members remain selected
-
-### Text
-
-- empty input where safe
-- representative text
-- invalid/boundary input where safe
-- inspect maxlength/pattern/placeholder evidence
-
-### Number
-
-- representative value
-- boundary values inferred from HTML attributes
-- invalid type/range where safe
-
-### Date
-
-- inspect input type, placeholder and format hint
-- valid representative date
-- invalid format where safe
-- invalid calendar date where safe
-
-### Select
-
-- enumerate available options
-- select representative alternatives
-- observe dependent controls/options
-
-### Autocomplete
-
-- type a safe prefix
-- observe suggestion region creation/update
-- capture network request/response evidence
-- select a suggestion
-- observe resulting value/state
-
-### Button / action
-
-Buttons are actions rather than value-bearing inputs. Their enabled/disabled/visible state is recorded and they are invoked only when the exploration policy marks the action safe.
-
-### File
-
-File controls are discovered structurally. Automatic upload probing is disabled by default and requires an explicit safe fixture.
-
----
-
-## 10. Action representation
-
-Every scanner emits normalized actions.
+Every interactable entity/field may expose user-equivalent actions.
 
 ```text
 Action
   id
-  inputId
+  sourceEntityId
+  sourceFieldId
   kind
   value
   safety
@@ -523,15 +332,98 @@ open_picker
 choose_date
 select_suggestion
 click
+submit
 ```
 
 Actions describe user-equivalent interaction rather than framework-specific implementation.
 
+The eventual semantic layer may interpret repeated structural actions as entity methods such as:
+
+```text
+selectFilingReason()
+addBankAccount()
+validateAddress()
+submitReturn()
+```
+
+but the preprocessor first records the observed action and evidence without inventing business semantics.
+
 ---
 
-## 11. Execution trace
+## 8. Type-specific scanners
 
-For each attempted action, instrumentation should collect structural execution evidence.
+Each normalized field/input type has a small scanner responsible for generating and executing safe, meaningful actions for that type.
+
+```text
+inputScanners/
+  radioScanner.js
+  checkboxScanner.js
+  textScanner.js
+  numberScanner.js
+  dateScanner.js
+  selectScanner.js
+  autocompleteScanner.js
+  buttonScanner.js
+  fileScanner.js
+  compositeScanner.js
+```
+
+The scanner contract is:
+
+```text
+Field + current entity/application state
+→ candidate Action[]
+```
+
+and, when execution is enabled:
+
+```text
+Action
+→ raw browser evidence
+```
+
+The scanners must not own persistence, semantic interpretation or workflow construction.
+
+### Radio
+
+- select each option
+- observe exclusivity
+- observe graph-wide downstream state changes
+
+### Checkbox
+
+- toggle individually
+- test representative group combinations
+- observe whether multiple values remain selected
+
+### Text / Number / Date
+
+- inspect structural constraints
+- use safe representative values
+- use boundary/invalid probes where safe
+- observe validations and downstream changes
+
+### Select / Autocomplete
+
+- enumerate/select representative options
+- observe dependent fields/entities/options
+- capture network evidence for dynamic suggestions
+
+### Button / action
+
+- record visible/enabled/disabled state
+- invoke only when exploration policy marks the action safe
+
+### File
+
+- discover structurally
+- do not automatically upload unless an explicit safe fixture/policy allows it
+
+---
+
+## 9. Execution trace
+
+For every attempted action, instrumentation should collect structural execution evidence.
 
 ```text
 ExecutionTrace
@@ -542,8 +434,6 @@ ExecutionTrace
   consoleSignals[]
 ```
 
-Function-call reconstruction may later copy/adapt concepts from the current LeMap executable/call-path machinery. The preprocessing contract is defined now so richer tracing can be plugged in without changing the normalized observation model.
-
 The trace can include:
 
 ```text
@@ -553,30 +443,36 @@ DOM event
 → request
 → response
 → callback
-→ framework/application state update
+→ application-state update
+→ render/state change
 ```
 
-The preprocessor stores raw/proven structural evidence. The model later decides which calls constitute meaningful semantic steps.
+This is the HOW evidence.
+
+The entity state delta is the WHAT evidence.
+
+Function-call reconstruction may later adapt the current LeMap executable/call-path machinery so the model can interpret web actions and code execution using a common structure.
 
 ---
 
-## 12. PageIO state delta
+## 10. Entity-state delta
 
-A result is not limited to the acted-on object's local region.
+After every action, LeMap-Web compares relevant known state before and after.
 
-After every action, LeMap-Web compares the complete active PageIO state before and after and records changes including:
+The normalized delta can include:
 
 ```text
-inputValuesChanged[]
-inputsEnabled[]
-inputsDisabled[]
-inputsShown[]
-inputsHidden[]
-inputsAdded[]
-inputsRemoved[]
-groupsChanged[]
-regionsShown[]
-regionsHidden[]
+fieldValuesChanged[]
+fieldsEnabled[]
+fieldsDisabled[]
+fieldsShown[]
+fieldsHidden[]
+fieldsAdded[]
+fieldsRemoved[]
+entitiesAdded[]
+entitiesRemoved[]
+entitiesShown[]
+entitiesHidden[]
 actionsEnabled[]
 actionsDisabled[]
 actionsShown[]
@@ -585,131 +481,329 @@ validationMessagesAdded[]
 validationMessagesRemoved[]
 optionsAdded[]
 optionsRemoved[]
-routeChanged
-pageChanged
+relationshipsAdded[]
+relationshipsRemoved[]
+presentationChanged
+navigationChanged
 ```
 
-This is how an action on one region can deterministically establish a relationship with an object elsewhere on the page.
+A single source action may affect many entities.
 
 Example:
 
 ```text
-radio Y selected
+Income.update(...)
   ↓
-radio N checked true → false
-radio Y checked false → true
-checkbox group disabled true → false
-Continue visible true → false
+Income.total changes
+TaxComputation.taxableIncome changes
+Summary.totalIncome changes
 ```
 
-The whole result belongs to one observation.
+The preprocessor should preserve all observable effects as one causally connected observation where possible.
 
 ---
 
-## 13. Normalized observation
+## 11. Normalized observation
 
-All scanners return the same normalized evidence object:
+All scanners/executors produce the same normalized evidence object:
 
 ```text
-InputObservation
+ActionObservation
   id
-  pageId
-  inputId
-  groupId
+  sourceEntityId
+  sourceFieldId
   beforeStateId
   action
   executionTrace
+  affectedEntities[]
   result
   afterStateId
 ```
 
-This is the durable output of deterministic PageIO preprocessing.
-
-The model is deliberately downstream of this representation.
+This is the durable deterministic substrate consumed by later relationship and workflow construction.
 
 ---
 
-## 14. PageIO state graph
+## 12. Explorer-driven graph expansion
 
-The preprocessor accumulates normalized observations into a page-local state graph.
+The explorer expands the shared entity graph by acting on reachable controls/links/actions.
 
-```text
-PageIO State S0
-  -- Input A / Action X -->
-PageIO State S1
-  -- Input B / Action Y -->
-PageIO State S2
-```
-
-State identity is structural and should ignore irrelevant cosmetic changes while preserving meaningful input/group/validation/visibility/action differences.
-
-This state graph describes **how one PageIO behaves**.
-
-It is not the business workflow graph.
-
----
-
-## 15. Cross-page workflow graph
-
-The higher-level workflow is constructed from observed transitions among PageIO nodes.
+An action can produce several structural outcomes:
 
 ```text
-Workflow
-  nodes = PageIO objects
-  edges = page transitions
-  branch conditions = observed source PageIO state/input conditions
+state_change
+inline_expand
+overlay_open
+navigation
 ```
+
+All of them may introduce new entities, fields or relationships.
+
+### Inline expansion
 
 Example:
 
 ```text
-PageIO A: Filing Status
-  -- condition X --> PageIO B
-  -- condition Y --> PageIO C
-
-PageIO B
-  --> PageIO D
-
-PageIO C
-  --> PageIO D
+select "Other"
+  ↓
+"Please specify" field appears
 ```
 
-This is analogous to the branch-and-merge executable path graph already used in LeMap.
+This normally enriches the current entity/action branch.
 
-A transition edge should retain evidence such as:
+### Modal / drawer / overlay
+
+Example:
 
 ```text
-source PageIO
-source state
-trigger action
-execution trace
-navigation/route evidence
-result PageIO
+Add Bank Account
+  ↓
+Bank Account editor opens in modal
 ```
 
-The same destination page may therefore be reached through multiple branches, and some pages may be skipped entirely depending on prior inputs.
+The modal can expose a related entity:
+
+```text
+PersonalDetails
+  → contains/references BankAccount
+```
+
+It is not automatically promoted to a separate workflow merely because it renders as an overlay.
+
+### Navigation
+
+Example:
+
+```text
+FilingStatus.continue()
+  ↓
+PersonalDetails entity becomes the primary rendered context
+```
+
+Navigation is strong structural evidence of a broader workflow-step transition.
 
 ---
 
-## 16. Semantic annotation strategy
+## 13. Entity transitions
 
-Once deterministic preprocessing has produced enough evidence, semantic interpretation can occur at two levels.
-
-### Workflow-level annotation
-
-Provide the model with bounded page-flow branches such as:
+Every explorer action can be normalized as an entity transition:
 
 ```text
-Filing Status
-→ Personal Information
-→ Income Details
-→ Taxes Paid
-→ Verification
+EntityTransition
+  sourceEntity
+  action
+  affectedEntities[]
+  targetEntity / newlyReachableEntities[]
+  transitionKind
+    state_change
+    inline_expand
+    overlay_open
+    navigation
+  executionTrace
+  resultingStateDelta
 ```
 
-along with branch conditions and execution evidence.
+This representation separates **what changed in the entity graph** from **how the workflow graph should be expanded**.
+
+---
+
+## 14. Workflow construction
+
+The workflow graph is built from entity/action transitions.
+
+A workflow does not own the data. It operates over the shared entity graph.
+
+```text
+Workflow
+  entry condition
+  steps[]
+  branches[]
+  merges[]
+  action/entity path
+  completion condition
+  resulting entity-state changes
+```
+
+A useful provisional construction rule is:
+
+```text
+state_change / inline_expand / overlay_open
+  → usually enrich the current workflow step/branch
+
+navigation
+  → usually introduces or advances to a new workflow step
+```
+
+These are structural defaults, not final semantic judgments.
+
+The model can later merge/split steps based on business meaning.
+
+Example:
+
+```text
+Workflow: File ITR-3
+
+Step 1
+  FilingStatus
+    ├─ branch A: reason N
+    └─ branch B: reason Y
+         └─ QualifyingConditions interaction
+
+Step 2
+  PersonalDetails
+
+Step 3
+  Income
+    ├─ branch: Capital Gains
+    └─ branch: Business Income
+
+Step 4
+  Tax Computation
+
+Step 5
+  Verification
+```
+
+This is analogous to broad executable arcs in LeMap, with lower-level action/entity branches nested within them.
+
+---
+
+## 15. Re-visiting previously rendered entities
+
+A previously seen entity must never be assumed to have the same state when it is encountered again.
+
+An action later in the workflow can mutate shared application/business state that changes an earlier entity when it is rendered again.
+
+Example:
+
+```text
+Entity A rendered with state S0
+  ↓
+workflow continues
+  ↓
+Action on Entity C mutates shared state
+  ↓
+Entity A is rendered again
+  ↓
+Entity A now has state S1
+```
+
+This should be represented as:
+
+```text
+Action on Entity C
+  → influences Entity A
+```
+
+rather than as a special concept such as "Page 3 changed Page 1".
+
+Navigation and state influence are separate relationships:
+
+```text
+navigation edge
+  C → A
+
+state influence edge
+  C.someAction → A.someField
+```
+
+Execution/network evidence can help prove shared underlying state, for example:
+
+```text
+Entity C
+  POST /return/update-status
+
+Entity A on revisit
+  GET /return/status
+```
+
+---
+
+## 16. Presentation evidence
+
+Although page is removed from the semantic model, browser presentation metadata remains necessary for acquisition and provenance.
+
+Each entity/field may retain:
+
+```text
+pageId
+url/route
+title
+root DOM fingerprint
+DOM id/name/role/tag
+region path
+visibility
+framework-specific locators where stable
+```
+
+This metadata answers:
+
+```text
+Where/how did the browser observe this entity or field?
+```
+
+It does not answer:
+
+```text
+What does this entity mean to the business?
+```
+
+That distinction is important.
+
+---
+
+## 17. Semantic annotation strategy
+
+Once deterministic preprocessing has produced the entity graph and workflow graph, the model builds the semantic graph.
+
+The model is not asked to rediscover structure from raw DOM.
+
+It receives grounded evidence such as:
+
+```text
+entities
+fields
+relationships
+actions
+state transitions
+execution traces
+workflow branches
+merges
+entry/completion evidence
+```
+
+### Entity-level semantic annotation
 
 The model annotates:
+
+```text
+business entity meaning
+field meaning
+relationship meaning
+business/legal constraints
+semantic method/action meaning
+```
+
+Example deterministic evidence:
+
+```text
+Reason B selected
+  → QualifyingConditions enabled
+  → Continue unavailable
+
+Condition 1 selected
+  → Continue available
+```
+
+Possible semantic annotation:
+
+```text
+Selecting the Seventh Proviso filing reason requires at least one qualifying condition.
+```
+
+### Workflow-level semantic annotation
+
+The model walks bounded workflow branches and annotates:
 
 ```text
 workflow/business intent
@@ -719,43 +813,21 @@ completion condition
 business outcome
 ```
 
-This is similar to LeMap interpreting bounded executable call paths.
-
-### PageIO-level annotation
-
-For one PageIO, provide:
-
-```text
-inputs
-groups
-relationships
-behavior observations
-validation evidence
-execution traces
-```
-
-The model annotates:
-
-```text
-semantic meaning of each I/O object
-semantic meaning of groups
-meaning of dependencies
-business/legal rules represented by observed behavior
-```
-
-The deterministic graph remains provenance for those interpretations.
+This should resemble LeMap Scout / Pass 1 / Pass 2 operating over executable paths.
 
 ---
 
-## 17. Generic module boundary
+## 18. Generic module boundary
 
-Current/target implementation layout:
+Current code is still partly page-named because implementation preceded this conceptual cleanup. The semantic architecture should move toward entity terminology without forcing a large refactor before behavior is proven.
+
+Current/target preprocessing areas:
 
 ```text
 lemap-web/src/preprocess/
-  pageIdentity.js
-  activeWorkflow.js
-  inputDiscovery.js
+  pageIdentity.js            # presentation identity evidence
+  activeWorkflow.js          # active rendered acquisition scope
+  inputDiscovery.js          # field discovery
   inputClassifier.js
   groupDiscovery.js
   hierarchy.js
@@ -763,43 +835,45 @@ lemap-web/src/preprocess/
   observation.js
   stateProjection.js
   stateDelta.js
-  pagePreprocessor.js
-  scanners/
-    radioScanner.js
-    checkboxScanner.js
-    textScanner.js
-    numberScanner.js
-    dateScanner.js
-    selectScanner.js
-    autocompleteScanner.js
-    buttonScanner.js
-    fileScanner.js
-    compositeScanner.js
-    registry.js
+  pagePreprocessor.js        # candidate for later entity-oriented rename
+  scanners/*
 ```
 
-Browser instrumentation remains separate:
+Future logical layers:
 
 ```text
-browserCapture.js
-trace/*
+entity/
+  entityDiscovery
+  fieldDiscovery
+  relationshipDiscovery
+  entityState
+  entityTransition
+
+workflow/
+  workflowGraph
+  branchDiscovery
+  stepCompression
+
+trace/
+  eventTracer
+  functionTracer
+  networkTracer
+  domMutationTracer
 ```
 
-Higher-level page transition indexing/workflow construction should also remain separate from PageIO preprocessing.
-
-Semantic interpretation remains separate again.
+Browser instrumentation remains separate from semantic interpretation.
 
 ---
 
-## 18. Generic testing strategy
+## 19. Generic testing strategy
 
-The PageIO preprocessor must be testable independently of any specific production website.
+The deterministic preprocessor must be testable independently of any specific production website.
 
-LeMap-Web therefore maintains a synthetic benchmark page containing known behavior:
+The synthetic benchmark should contain known behaviors such as:
 
 ```text
 radio group
-  B enables checkbox group
+  B enables checkbox entity/group
 
 checkbox group
   one-or-more gates Continue
@@ -811,93 +885,96 @@ number field
   min/max validation
 
 autocomplete
-  fake async city suggestions
+  fake async suggestions/network evidence
 
 select
-  changes dependent select options
+  changes dependent options/entities
 
-text
-  maxlength/pattern validation
+inline expansion
+  reveals additional field/entity
 
-completion action
-  changes with page validity
+modal
+  exposes related entity
+
+navigation
+  exposes another entity/workflow step
+
+revisit
+  previously seen entity renders different state after downstream action
 ```
 
-Because the ground truth is known, tests can assert whether preprocessing discovered:
+Tests can assert discovery of:
 
-- PageIO identity
-- input type
-- group membership
-- candidate action space
-- page-wide state delta
+- entity/field identity
+- field type
+- grouping
+- action space
+- graph-wide state delta
 - checked-state transitions
-- validation output
-- async suggestion/output changes
-- network evidence shape
+- validation changes
+- inline/modal expansion
+- navigation transitions
+- cross-entity state influence
+- workflow branching/merging evidence
+- network/trace evidence shape
 - normalized observation schema
-- application-shell exclusion from the active PageIO
 
-A multi-page synthetic benchmark should later test:
-
-- page transitions
-- branch conditions
-- skipped pages
-- branch merges
-- nested modal/inline IO regions
-
-The Income Tax ITR-3 site is a real-world stress test, not the primitive unit-test environment.
+The Income Tax ITR-3 site remains the real-world stress test, not the primitive unit-test environment.
 
 ---
 
-## 19. Non-goals of this stage
+## 20. Non-goals of preprocessing
 
-This preprocessing stage does not yet:
+The deterministic preprocessing stage does not itself:
 
 - infer business meaning
+- decide final business-entity boundaries
+- decide final workflow-step semantics
 - decide which function calls are meaningful business steps
-- label every page transition semantically
-- autonomously complete a production workflow
-- persist final semantic WebMap workflows
-- refactor or share implementation with `demo_v2`
+- generate final natural-language workflow descriptions
+- autonomously submit/complete sensitive production workflows without explicit policy
+- persist the final semantic WebMap
 
-Those layers come after the deterministic PageIO and page-transition representations are proven.
+Those belong to later semantic/workflow layers.
 
 ---
 
-## 20. Architecture summary
+## 21. Architecture summary
 
 ```text
-WEB APPLICATION
+BROWSER / APPLICATION
    ↓
-DISCOVER PageIO
+PRESENTATION EVIDENCE
    ↓
-PAGE IDENTITY + ACTIVE IO REGION
+FIELD / ENTITY DISCOVERY
    ↓
-INPUT / OUTPUT / GROUP HIERARCHY
+TYPE-SPECIFIC EXPLORATION
    ↓
-INPUT TYPE CLASSIFICATION
-   ↓
-TYPE-SPECIFIC SCANNER
-   ↓
-ACTION
+ENTITY + ACTION
    ↓
 EVENT / FUNCTION / NETWORK TRACE
    ↓
-GLOBAL PageIO BEFORE/AFTER STATE DELTA
+SHARED ENTITY STATE DELTA
    ↓
-INPUT OBSERVATION
+ENTITY RELATIONSHIPS / TRANSITIONS
    ↓
-RELATIONSHIP / BEHAVIORAL CONSTRAINT DISCOVERY
+SHARED ENTITY GRAPH
    ↓
-PageIO STATE GRAPH
+WORKFLOW GRAPH
+   branches / merges / steps / completion
    ↓
-OBSERVED PAGE TRANSITION
-   ↓
-CROSS-PAGE WORKFLOW GRAPH
-   ↓
-SEMANTIC ANNOTATION (later)
+SEMANTIC LEARNING
+   entity semantics
+   relationship semantics
+   workflow semantics
 ```
 
-The invariant to preserve is:
+The key invariants are:
 
-> **Within a page, learn I/O objects and their relationships. Across pages, learn the branching workflow graph that stitches PageIO nodes together to accomplish a goal.**
+> **The page is presentation evidence, not a semantic primitive.**
+
+> **Explorer actions expand the entity graph; transition scope determines how they provisionally expand the workflow graph.**
+
+> **Workflows operate over shared entity state to accomplish end-to-end business change.**
+
+> **Deterministic code proves structure and behavior; the model builds the semantic graph from that grounded evidence.**
