@@ -5,6 +5,8 @@ import { buildPass1Prompt, normalizePass1Response } from '../src/semantic/pass1.
 import { buildPass2Prompt, normalizePass2Response } from '../src/semantic/pass2.js';
 import { materializeSemanticGraph } from '../src/semantic/semanticGraph.js';
 import { learnSemanticPath } from '../src/semantic/semanticLearner.js';
+import { buildLocalEntityPrompt, normalizeLocalEntityResponse, resolveLocalEntity } from '../src/semantic/localEntityResolver.js';
+import { buildNavigationPrompt, normalizeNavigationResponse, scoreNavigationCandidates } from '../src/semantic/navigationScout.js';
 
 const workflow = {
   id: 'workflow:itr3',
@@ -22,12 +24,97 @@ const entities = {
   'entity:income': { id: 'entity:income', label: 'Income Details', fields: [] }
 };
 
+const localEntity = {
+  entity: { id: 'entity:filing', label: 'Please answer the following questions', presentation: { route: '/filing-status' } },
+  fields: [
+    { id: 'field:n', label: 'Taxable income is more than basic exemption limit', type: 'radio' },
+    { id: 'field:y', label: 'Filing return due to Seventh Proviso conditions', type: 'radio' },
+    { id: 'field:c1', label: 'Deposits exceed threshold', type: 'checkbox' }
+  ],
+  actions: [{ id: 'field:continue', label: 'Continue', type: 'button' }],
+  groups: [{ id: 'group:reason', groupType: 'radio', memberFieldIds: ['field:n', 'field:y'] }]
+};
+
+const localObservations = [
+  { id: 'obs:local:1', fieldId: 'field:y', action: { kind: 'select', value: 'Y' }, delta: { fieldsEnabled: ['field:c1'], actionsHidden: ['field:continue'] } },
+  { id: 'obs:local:2', fieldId: 'field:c1', action: { kind: 'toggle', value: true }, delta: { actionsShown: ['field:continue'] } }
+];
+
+const localRelationships = [
+  { kind: 'mutually_exclusive', groupType: 'radio', memberFieldIds: ['field:n', 'field:y'], evidenceIds: ['obs:local:1'] },
+  { kind: 'enables_group', sourceFieldId: 'field:y', targetGroupId: 'group:conditions', memberFieldIds: ['field:c1'], evidenceIds: ['obs:local:1'] }
+];
+
 test('lightweight selector ranks bounded structural paths without code/repository concepts', () => {
   const paths = selectSemanticPaths(workflow, { limit: 4 });
   assert.ok(paths.length >= 1);
   assert.ok(paths[0].edgeIds.includes('edge:2'));
   assert.equal(JSON.stringify(paths).includes('function'), false);
   assert.equal(JSON.stringify(paths).includes('sourcePath'), false);
+});
+
+test('local entity semantic resolver receives deterministic fields, behavior and relationships', () => {
+  const prompt = buildLocalEntityPrompt({ entityGraph: localEntity, observations: localObservations, learnedRelationships: localRelationships });
+  assert.match(prompt, /web-local-entity-v1/);
+  assert.match(prompt, /Seventh Proviso/);
+  assert.match(prompt, /enables_group/);
+  assert.doesNotMatch(prompt, /infer browser mechanics/i);
+
+  const parsed = normalizeLocalEntityResponse({
+    semanticName: 'Filing Reason',
+    description: 'Determines why the taxpayer is filing the return.',
+    fields: [{ structuralFieldId: 'field:y', semanticName: 'Seventh Proviso filing reason', description: 'Filing under qualifying conditions.' }],
+    relationships: [{ kind: 'conditional_requirement', description: 'Qualifying conditions apply when this filing reason is selected.', evidenceIds: ['obs:local:1'] }],
+    actions: [{ structuralFieldId: 'field:continue', semanticName: 'Complete filing reason', description: 'Advances after local requirements are satisfied.' }],
+    localCompletion: 'A filing reason is selected and any activated qualifying conditions are satisfied.',
+    confidence: 0.93
+  });
+  assert.equal(parsed.semanticName, 'Filing Reason');
+  assert.equal(parsed.localCompletion.length > 0, true);
+});
+
+test('navigation scout scores outgoing candidates against resolved current entity and workflow context', () => {
+  const semanticEntity = normalizeLocalEntityResponse({ semanticName: 'Filing Reason', description: 'Determines why the taxpayer is filing.', localCompletion: 'Valid filing reason established.', confidence: 0.9 });
+  const candidates = [
+    { id: 'action:continue', label: 'Continue', kind: 'action', href: '' },
+    { id: 'link:dashboard', label: 'Dashboard', kind: 'link', href: '/dashboard' }
+  ];
+  const prompt = buildNavigationPrompt({ semanticEntity, workflowContext: { title: 'File ITR-3', path: ['Filing Reason'] }, candidates });
+  assert.match(prompt, /web-navigation-scout-v1/);
+  assert.match(prompt, /Continue/);
+  assert.match(prompt, /Dashboard/);
+  assert.match(prompt, /workflow continuity/i);
+
+  const parsed = normalizeNavigationResponse({ scores: [
+    { candidateId: 'action:continue', continuity: 0.98, role: 'workflow_continuation', reason: 'Advances current filing setup.' },
+    { candidateId: 'link:dashboard', continuity: 0.05, role: 'workflow_exit', reason: 'Leaves current filing workflow.' }
+  ] }, candidates);
+  assert.equal(parsed[0].candidateId, 'action:continue');
+  assert.ok(parsed[0].continuity > parsed[1].continuity);
+});
+
+test('local resolver and navigation scout execute through injected model client', async () => {
+  const responses = [
+    { semanticName: 'Filing Reason', description: 'Determines filing basis.', fields: [], relationships: [], actions: [], localCompletion: 'Valid filing basis established.', confidence: 0.9 },
+    { scores: [
+      { candidateId: 'continue', continuity: 0.99, role: 'workflow_continuation', reason: 'Forward action.' },
+      { candidateId: 'dashboard', continuity: 0.04, role: 'workflow_exit', reason: 'Leaves context.' }
+    ] }
+  ];
+  const requests = [];
+  const client = { chat: { completions: { create: async (request) => {
+    requests.push(request);
+    return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(responses.shift()) } }] };
+  } } } };
+
+  const semanticEntity = await resolveLocalEntity({ client, model: 'test-model', entityGraph: localEntity, observations: localObservations, learnedRelationships: localRelationships });
+  const scored = await scoreNavigationCandidates({ client, model: 'test-model', semanticEntity, workflowContext: { title: 'File ITR-3' }, candidates: [
+    { id: 'continue', label: 'Continue', kind: 'action' },
+    { id: 'dashboard', label: 'Dashboard', kind: 'link', href: '/dashboard' }
+  ] });
+  assert.equal(requests.length, 2);
+  assert.equal(semanticEntity.semanticName, 'Filing Reason');
+  assert.equal(scored[0].candidateId, 'continue');
 });
 
 test('Pass 1 prompt and normalization operate on workflow/entity evidence', () => {
