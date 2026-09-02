@@ -80,8 +80,6 @@ export async function snapshotPage(page) {
       return ['input', 'button', 'select', 'textarea'].includes(tag) || interactiveRoles.has(role);
     };
 
-    // Framework wrappers are traversed transparently; labelled regions and
-    // controls are retained as the structural UI hierarchy.
     const semanticChildren = (el, depth = 0) => {
       if (depth > 24) return [];
       const output = [];
@@ -101,6 +99,7 @@ export async function snapshotPage(page) {
     const pageLabel = clean(document.querySelector('h1')?.innerText || document.title || location.pathname);
     const root = document.querySelector('main,[role="main"]') || document.body;
     const dom = { tag: root.tagName.toLowerCase(), label: pageLabel, hidden: false, children: semanticChildren(root) };
+
     const values = {};
     for (const el of document.querySelectorAll('input,select,textarea,[role="combobox"],[role="spinbutton"]')) {
       if ((el.type || '').toLowerCase() === 'hidden') continue;
@@ -112,12 +111,38 @@ export async function snapshotPage(page) {
       } else if (el.type === 'checkbox') values[key] = !!el.checked;
       else values[key] = 'value' in el ? el.value : el.getAttribute?.('aria-valuenow') ?? null;
     }
+
     const regions = {};
     for (const el of document.querySelectorAll('section,fieldset,[role="region"],div')) {
       const label = regionLabel(el);
       if (label) regions[label] = { visible: visible(el) };
     }
-    return { page: pageLabel, url: location.href, title: document.title, dom, values, regions };
+
+    const validations = [];
+    const validationSelectors = '[role="alert"],[aria-live="assertive"],[aria-live="polite"],mat-error,.mat-mdc-form-field-error,.error,.validation-error';
+    for (const el of document.querySelectorAll(validationSelectors)) {
+      if (!visible(el)) continue;
+      const message = clean(el.innerText || el.textContent);
+      if (message && !validations.includes(message)) validations.push(message);
+    }
+
+    const options = {};
+    for (const el of document.querySelectorAll('select,[role="combobox"]')) {
+      const key = labelFor(el) || clean(el.name || el.id);
+      if (!key) continue;
+      let valuesForInput = optionsFor(el);
+      const controlledId = el.getAttribute?.('aria-controls');
+      if (controlledId) {
+        const controlled = document.getElementById(controlledId);
+        if (controlled) {
+          const dynamic = Array.from(controlled.querySelectorAll('[role="option"],option,li')).filter(visible).map((option) => clean(option.getAttribute?.('data-value') || option.getAttribute?.('value') || option.innerText || option.textContent)).filter(Boolean);
+          if (dynamic.length) valuesForInput = dynamic;
+        }
+      }
+      if (valuesForInput.length) options[key] = valuesForInput;
+    }
+
+    return { page: pageLabel, url: location.href, title: document.title, dom, values, regions, validations, options };
   });
 }
 
