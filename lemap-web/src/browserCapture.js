@@ -33,13 +33,35 @@ export async function snapshotPage(page) {
       const rect = el.getBoundingClientRect();
       return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
     };
+    const textWithoutControls = (el) => {
+      if (!el) return '';
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll?.('input,select,textarea,button,[role="button"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
+      return clean(clone.textContent || '');
+    };
     const labelFor = (el) => {
-      if (el.labels?.length) return clean(Array.from(el.labels).map((x) => x.innerText || x.textContent).join(' '));
+      const associated = el.labels?.length ? Array.from(el.labels) : [];
+      const closest = el.closest?.('label');
+      if (closest && !associated.includes(closest)) associated.push(closest);
+      const associatedText = clean(associated.map(textWithoutControls).filter(Boolean).join(' '));
+      if (associatedText) return associatedText;
+
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
       const labelledBy = el.getAttribute?.('aria-labelledby');
-      if (labelledBy) return clean(labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.innerText || '').join(' '));
-      return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('name') || el.id || '');
+      if (labelledBy) {
+        const text = clean(labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || '').join(' '));
+        if (text) return text;
+      }
+
+      const tag = el.tagName?.toLowerCase();
+      const role = clean(el.getAttribute?.('role') || '').toLowerCase();
+      if (tag === 'button' || role === 'button') {
+        const buttonText = clean(el.innerText || el.textContent);
+        if (buttonText) return buttonText;
+      }
+
+      return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.getAttribute?.('name') || el.id || '');
     };
     const regionLabel = (el) => {
       const aria = el.getAttribute?.('aria-label');
@@ -150,9 +172,28 @@ export async function installUserEventProbe(page) {
   await page.evaluate(() => {
     window.__lemapWebEvents = [];
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const textWithoutControls = (el) => {
+      if (!el) return '';
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll?.('input,select,textarea,button,[role="button"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
+      return clean(clone.textContent || '');
+    };
     const labelFor = (el) => {
-      if (el?.labels?.length) return clean(Array.from(el.labels).map((x) => x.innerText || x.textContent).join(' '));
-      return clean(el?.getAttribute?.('aria-label') || el?.getAttribute?.('placeholder') || el?.name || el?.id || '');
+      if (!el) return '';
+      const associated = el.labels?.length ? Array.from(el.labels) : [];
+      const closest = el.closest?.('label');
+      if (closest && !associated.includes(closest)) associated.push(closest);
+      const associatedText = clean(associated.map(textWithoutControls).filter(Boolean).join(' '));
+      if (associatedText) return associatedText;
+      const aria = el.getAttribute?.('aria-label');
+      if (aria) return clean(aria);
+      const tag = el.tagName?.toLowerCase();
+      const role = clean(el.getAttribute?.('role') || '').toLowerCase();
+      if (tag === 'button' || role === 'button') {
+        const buttonText = clean(el.innerText || el.textContent);
+        if (buttonText) return buttonText;
+      }
+      return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.name || el.id || '');
     };
     const handler = (event) => {
       const el = event.target;
