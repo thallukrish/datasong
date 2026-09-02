@@ -14,7 +14,7 @@ export function createSemanticMemory(userGoal = '') {
 
 function touch(memory) { memory.updatedAt = new Date().toISOString(); }
 
-export function recordEntityKnowledge(memory, { structuralEntity = {}, semanticEntity = {}, learnedRelationships = [], observations = [] } = {}) {
+export function recordEntityKnowledge(memory, { structuralEntity = {}, structuralGraph = {}, semanticEntity = {}, learnedRelationships = [], observations = [] } = {}) {
   if (!memory?.entities) throw new Error('Invalid semantic memory');
   const id = String(structuralEntity.id || '');
   if (!id) return null;
@@ -24,11 +24,17 @@ export function recordEntityKnowledge(memory, { structuralEntity = {}, semanticE
     ...arr(observations).map((observation) => observation?.id).filter(Boolean),
     ...arr(learnedRelationships).flatMap((relationship) => arr(relationship?.evidenceIds))
   ])];
+  const structure = {
+    fields: arr(structuralGraph.fields).map((field) => ({ id: field.id, label: field.label, type: field.type, groupId: field.parentGroupId || '' })),
+    groups: arr(structuralGraph.groups).map((group) => ({ id: group.id, label: group.label, groupType: group.groupType, memberFieldIds: [...arr(group.memberFieldIds)] })),
+    actions: arr(structuralGraph.actions).map((action) => ({ id: action.id, label: action.label, type: action.type }))
+  };
   const entry = {
     ...previous,
     id,
     label: structuralEntity.label || previous.label || '',
     presentation: structuralEntity.presentation || previous.presentation || {},
+    structure,
     semantic: semanticEntity,
     learnedRelationships,
     evidenceIds,
@@ -40,7 +46,26 @@ export function recordEntityKnowledge(memory, { structuralEntity = {}, semanticE
   return entry;
 }
 
-export function recordSelectedTransition(memory, { sourceEntityId = '', targetEntityId = '', candidate = {}, score = {}, alternatives = [] } = {}) {
+export function startQuerySession(memory, userGoal = '') {
+  const session = {
+    id: `session:${memory.sessions.length + 1}`,
+    userGoal: String(userGoal || ''),
+    startedAt: new Date().toISOString(),
+    path: [],
+    answers: []
+  };
+  memory.sessions.push(session);
+  memory.userGoal = session.userGoal;
+  touch(memory);
+  return session;
+}
+
+export function recordSessionAnswer(memory, session, answer = {}) {
+  session.answers.push({ ...answer, recordedAt: new Date().toISOString() });
+  touch(memory);
+}
+
+export function recordSelectedTransition(memory, { sourceEntityId = '', targetEntityId = '', candidate = {}, score = {}, alternatives = [], session = null } = {}) {
   if (!memory?.workflow?.edges) throw new Error('Invalid semantic memory');
   const edge = {
     id: `transition:${memory.workflow.edges.length + 1}`,
@@ -59,6 +84,7 @@ export function recordSelectedTransition(memory, { sourceEntityId = '', targetEn
   };
   memory.workflow.edges.push(edge);
   for (const entityId of [edge.sourceEntityId, edge.targetEntityId]) if (entityId && !memory.workflow.nodes.includes(entityId)) memory.workflow.nodes.push(entityId);
+  if (session) session.path.push(edge.id);
   touch(memory);
   return edge;
 }
