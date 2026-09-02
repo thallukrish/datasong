@@ -8,8 +8,8 @@ export function classifyInput(node = {}) {
   const type = String(node.type || '').toLowerCase();
   const role = String(node.role || '').toLowerCase();
   if (type === 'hidden') return 'technical_hidden';
+  if (tag === 'select' || tag === 'mat-select' || role === 'listbox') return 'select';
   if (role === 'combobox' || node.autocomplete === 'list') return 'autocomplete';
-  if (tag === 'select' || role === 'listbox') return 'select';
   if (tag === 'button' || role === 'button' || ['button', 'submit', 'reset', 'image'].includes(type)) return 'button';
   if (type === 'radio' || role === 'radio') return 'radio';
   if (type === 'checkbox' || role === 'checkbox') return 'checkbox';
