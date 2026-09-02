@@ -46,7 +46,7 @@ test('entity preprocessing exposes fields, actions, groups and candidate methods
 
 test('dominant business form wins over a deeper embedded support widget', () => {
   const withWidget = structuredClone(snapshot);
-  withWidget.dom.children[1].children.push({
+  withWidget.dom.children.push({
     tag: 'aside',
     label: 'Welcome to Support',
     hidden: false,
