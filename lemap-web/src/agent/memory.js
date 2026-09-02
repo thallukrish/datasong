@@ -1,0 +1,64 @@
+function arr(value) { return Array.isArray(value) ? value : []; }
+
+export function createSemanticMemory(userGoal = '') {
+  return {
+    version: 1,
+    userGoal: String(userGoal || ''),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    entities: {},
+    workflow: { nodes: [], edges: [] },
+    sessions: []
+  };
+}
+
+function touch(memory) { memory.updatedAt = new Date().toISOString(); }
+
+export function recordEntityKnowledge(memory, { structuralEntity = {}, semanticEntity = {}, learnedRelationships = [], observations = [] } = {}) {
+  if (!memory?.entities) throw new Error('Invalid semantic memory');
+  const id = String(structuralEntity.id || '');
+  if (!id) return null;
+  const previous = memory.entities[id] || {};
+  const evidenceIds = [...new Set([
+    ...arr(previous.evidenceIds),
+    ...arr(observations).map((observation) => observation?.id).filter(Boolean),
+    ...arr(learnedRelationships).flatMap((relationship) => arr(relationship?.evidenceIds))
+  ])];
+  const entry = {
+    ...previous,
+    id,
+    label: structuralEntity.label || previous.label || '',
+    presentation: structuralEntity.presentation || previous.presentation || {},
+    semantic: semanticEntity,
+    learnedRelationships,
+    evidenceIds,
+    lastObservedAt: new Date().toISOString()
+  };
+  memory.entities[id] = entry;
+  if (!memory.workflow.nodes.includes(id)) memory.workflow.nodes.push(id);
+  touch(memory);
+  return entry;
+}
+
+export function recordSelectedTransition(memory, { sourceEntityId = '', targetEntityId = '', candidate = {}, score = {}, alternatives = [] } = {}) {
+  if (!memory?.workflow?.edges) throw new Error('Invalid semantic memory');
+  const edge = {
+    id: `transition:${memory.workflow.edges.length + 1}`,
+    sourceEntityId: String(sourceEntityId || ''),
+    targetEntityId: String(targetEntityId || ''),
+    candidateId: String(candidate.id || ''),
+    label: String(candidate.label || ''),
+    kind: String(candidate.kind || ''),
+    href: String(candidate.href || ''),
+    role: String(score.role || 'unknown'),
+    goalRelevance: Number(score.goalRelevance || 0),
+    continuity: Number(score.continuity || 0),
+    forwardProgress: Number(score.forwardProgress || 0),
+    retainedCandidateIds: arr(alternatives).map((item) => String(item.id || '')).filter(Boolean),
+    traversedAt: new Date().toISOString()
+  };
+  memory.workflow.edges.push(edge);
+  for (const entityId of [edge.sourceEntityId, edge.targetEntityId]) if (entityId && !memory.workflow.nodes.includes(entityId)) memory.workflow.nodes.push(entityId);
+  touch(memory);
+  return edge;
+}
