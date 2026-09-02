@@ -18,7 +18,8 @@ export function buildEntityIdentity(snapshot = {}, root = snapshot.dom || {}) {
   const route = normalizeRoute(snapshot.url || '');
   const label = String(root?.label || snapshot.page || snapshot.title || '').trim();
   const rootTag = String(root?.tag || '').toLowerCase();
-  const fingerprint = hash(JSON.stringify({ route, label, rootTag }));
+  const overlay = !!snapshot.overlay?.active;
+  const fingerprint = hash(JSON.stringify({ route, label, rootTag, overlay }));
   return {
     id: `entity:${fingerprint}`,
     type: 'structural_entity',
@@ -30,6 +31,8 @@ export function buildEntityIdentity(snapshot = {}, root = snapshot.dom || {}) {
       origin,
       title: String(snapshot.title || ''),
       rootTag,
+      overlay,
+      overlayText: overlay ? String(snapshot.overlay?.text || '').slice(0, 1200) : '',
       structuralFingerprint: fingerprint
     }
   };
