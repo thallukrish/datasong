@@ -24,6 +24,20 @@ export async function applyGroupAnswer(page, graph, question, interpretation) {
   }
 }
 
+export async function applyQuestionAnswer(page, graph, question, interpretation) {
+  if (question.answerKind === 'choice') return applyGroupAnswer(page, graph, question, interpretation);
+  const field = (graph.fields || []).find((candidate) => candidate.id === question.fieldId);
+  if (!field) throw new Error(`Missing field ${question.fieldId}`);
+  if (!interpretation.value && interpretation.value !== '0') throw new Error(`No user-supplied value for ${field.label}`);
+  const locator = fieldLocator(page, field);
+  if (field.type === 'select') {
+    await locator.selectOption({ value: interpretation.value }).catch(async () => locator.selectOption({ label: interpretation.value }));
+    return;
+  }
+  await locator.fill(String(interpretation.value));
+  if (field.type === 'autocomplete') await locator.press('Tab');
+}
+
 const BLOCKED_NAVIGATION = /\b(submit|verify|verification|pay|payment|delete|remove|logout|log out|file return|final submit)\b/i;
 const ALLOWED_ROLES = new Set(['workflow_continuation', 'workflow_branch', 'related_entity']);
 
