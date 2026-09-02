@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildInformationNeedPrompt, normalizeInformationNeedResponse } from '../src/semantic/informationNeedPlanner.js';
 import { normalizeLocalEntityResponse } from '../src/semantic/localEntityResolver.js';
+import { classifyInput } from '../src/preprocess/inputClassifier.js';
+import { createSemanticMemory, recordEntityKnowledge } from '../src/agent/memory.js';
 
 const candidateQuestions = [
   {
@@ -83,4 +85,21 @@ test('local semantic resolver can describe multiple semantic entities in one ren
   assert.equal(semantic.subEntities.length, 2);
   assert.equal(semantic.subEntities[0].semanticName, 'Assessment Year');
   assert.deepEqual(semantic.subEntities[0].structuralFieldIds, ['assessment-year']);
+});
+
+test('Angular Material mat-select is structurally classified as a select, not autocomplete', () => {
+  assert.equal(classifyInput({ tag: 'mat-select', role: 'combobox' }), 'select');
+});
+
+test('semantic memory retains discovered value domains for reuse', () => {
+  const memory = createSemanticMemory('I want to file ITR-3');
+  recordEntityKnowledge(memory, {
+    structuralEntity: { id: 'entity:setup', label: 'Return Filing Setup' },
+    structuralGraph: {
+      fields: [{ id: 'assessment-year', label: 'Select Assessment year', type: 'select', valueDomain: ['2026-27', '2025-26'] }],
+      groups: [], actions: []
+    },
+    semanticEntity: { semanticName: 'Return Filing Setup' }
+  });
+  assert.deepEqual(memory.entities['entity:setup'].structure.fields[0].valueDomain, ['2026-27', '2025-26']);
 });
