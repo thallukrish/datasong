@@ -4,47 +4,133 @@
 
 This document defines the deterministic preprocessing layer that sits between browser instrumentation and semantic learning in LeMap-Web.
 
-The preprocessor does **not** decide what a page or input means to the business/user. Its job is to discover the structural identity, hierarchy, input types, action space, execution evidence and resulting state changes of a page in a normalized representation that can later be interpreted by the model.
+The preprocessor does **not** decide what a page, input or workflow means to the business/user. Its job is to discover structural identity, hierarchy, input types, action space, execution evidence, state changes and page-to-page transitions in a normalized representation that can later be interpreted by the model.
 
 The governing rule remains:
 
-> **If the browser can observe or prove it, deterministic preprocessing owns it. The model interprets meaning only after the behavioral evidence is assembled.**
+> **If the browser can observe or prove it, deterministic preprocessing owns it. The model interprets meaning only after the structural and behavioral evidence is assembled.**
 
 ---
 
-## 1. Page is the workflow boundary
+## 1. Core terminology
 
-LeMap-Web does not treat each radio button, checkbox or text field as a separate workflow.
+LeMap-Web uses two different structural levels and they should not be conflated.
 
-The **page is the workflow container**. Inputs and input groups are the controllable elements whose behavior determines the page's state graph.
+### Workflow
+
+A **Workflow** is the higher-level graph that connects pages in order to accomplish something.
+
+Example:
 
 ```text
-Page Workflow
-  ├─ labelled region / section
-  │   ├─ input group
-  │   │   ├─ input
-  │   │   └─ input
-  │   └─ input
-  ├─ labelled region / section
-  └─ completion actions
+ITR-3 Filing
+  Filing Status
+    ├─ branch A → Personal Information
+    └─ branch B → Additional Filing Conditions
+
+  Personal Information
+    → Income Details
+    → Tax Details
+    → Verification
 ```
 
-A page workflow is learned by observing how actions on its inputs transform the page state.
+The pages traversed may differ depending on prior inputs. Therefore the workflow is not assumed to be a fixed sequence; it is a branch-and-merge graph, similar to executable call paths in LeMap.
+
+### PageIO
+
+A **PageIO** is the structured I/O object represented by one logical page or application screen.
+
+It contains:
+
+```text
+PageIO
+  identity
+  input objects[]
+  input groups[]
+  output/action objects[]
+  nested IO regions[]
+  relationships[]
+  state
+  execution evidence[]
+```
+
+A PageIO is not itself called a workflow.
+
+Its job is to expose what can be supplied to the page, what can be acted on, what state changes those actions cause, and what outputs/navigation can result.
+
+The resulting architecture mirrors LeMap conceptually:
+
+```text
+Within a page:
+  I/O objects ↔ relationships
+
+Across pages:
+  Workflow graph of PageIO nodes and transition edges
+```
 
 ---
 
-## 2. Central structural primitive
+## 2. Architectural analogy with LeMap
 
-The central primitive of preprocessing is:
+LeMap already separates entity relationships from executable/business workflow structure.
+
+LeMap-Web follows the same separation:
+
+```text
+LeMap
+  Entity
+    ↕ relationships
+  Workflow
+    → functions/services/entities
+
+LeMap-Web
+  PageIO
+    ↕ input/output relationships
+  Workflow
+    → PageIO transitions
+```
+
+The browser preprocessor therefore learns two deterministic substrates:
+
+1. **PageIO structure and behavior** within one page.
+2. **Page transition graph** across pages.
+
+The semantic model can later annotate both layers independently.
+
+At the workflow level it can interpret:
+
+```text
+business intent
+step purpose
+branch meaning
+completion condition
+```
+
+At the PageIO level it can interpret:
+
+```text
+what each input means
+what each group represents
+what dependencies mean
+what business/legal rule appears to be enforced
+```
+
+---
+
+## 3. Central structural primitive inside a PageIO
+
+The central primitive of page preprocessing is:
 
 ```text
 INPUT
 + ACTION
 → EXECUTION TRACE
-→ RESULTING STATE DELTA
+→ RESULTING PAGE STATE DELTA
 ```
 
 The input type determines which actions are meaningful to try. The observation/result format is shared across all input types.
+
+The resulting comparison is **page-wide**, not limited to the input's local DOM group.
 
 Example:
 
@@ -57,20 +143,24 @@ Execution trace:
   → component handler
   → validation/update functions
 
-Result:
+Result anywhere in the active PageIO:
+  radio A unchecked
+  radio B checked
   checkbox group becomes enabled
   Continue becomes unavailable
 ```
 
-The preprocessor records this without deciding the tax/business meaning of the rule.
+The fact that `Continue` is not in the same DOM group as the radio does not matter. It is still part of the same PageIO state delta.
+
+The preprocessor records these changes without deciding their tax/business meaning.
 
 ---
 
-## 3. Page identity
+## 4. PageIO identity
 
-Every discovered input and observation belongs to a stable page identity.
+Every discovered input and observation belongs to a stable PageIO identity.
 
-URL alone is insufficient because SPAs can reuse a route for materially different states.
+URL alone is insufficient because SPAs can reuse a route for materially different logical screens, and the same logical PageIO may experience many internal states.
 
 `PageIdentity` contains:
 
@@ -85,18 +175,31 @@ stableRoot
 structuralFingerprint
 ```
 
-The identifier should be deterministic for the same structural page while avoiding volatile generated IDs, timestamps and cosmetic markup.
+The identifier should be deterministic for the same logical page while avoiding volatile generated IDs, timestamps and cosmetic markup.
 
-Inputs are namespaced under the page identity.
+Important distinction:
+
+```text
+PageIO identity
+  = stable logical screen
+
+PageIO state
+  = current values, visibility, enabled/disabled state,
+    validations, dynamic regions and available actions
+```
+
+One PageIO may therefore have many states.
 
 ---
 
-## 4. Input identity
+## 5. Input and output objects
 
-An input is represented by structural identity plus observable attributes.
+A PageIO contains controllable I/O objects.
+
+### InputObject
 
 ```text
-Input
+InputObject
   id
   pageId
   domId
@@ -111,13 +214,16 @@ Input
   disabled
   visible
   readonly
+  checked
   placeholder
   value
   valueDomain
   attributes
 ```
 
-`type` is the normalized behavioral type, not merely the raw HTML tag/type. Examples:
+`type` is the normalized behavioral type, not merely the raw HTML tag/type.
+
+Examples:
 
 ```text
 radio
@@ -128,16 +234,40 @@ date
 select
 autocomplete
 file
-button
 composite
 unknown
 ```
 
-The classifier may use tag/type/role/ARIA metadata, associated labels and DOM structure, but should not require semantic interpretation.
+For radios and checkboxes, option identity and current state are distinct:
+
+```text
+value = "Y"      // identity of this option
+checked = true    // current state
+```
+
+This avoids confusing the static HTML value with whether the option is actually selected.
+
+### Output / ActionObject
+
+Buttons and similar controls are modeled as output/action objects rather than ordinary value-bearing inputs.
+
+Examples:
+
+```text
+Continue
+Back
+Save
+Submit
+Add
+Cancel
+Open
+```
+
+Their visible/enabled/disabled state is part of the PageIO state and may change as a consequence of actions elsewhere on the page.
 
 ---
 
-## 5. Input groups
+## 6. Input groups
 
 Grouping must be preserved instead of flattening controls.
 
@@ -176,11 +306,106 @@ required_when
 active_when
 ```
 
-These are behavioral discoveries, not assumptions from the text label.
+These are behavioral discoveries, not assumptions from textual semantics.
 
 ---
 
-## 6. Type-specific scanners
+## 7. Relationships within a PageIO
+
+The PageIO preprocessor builds evidence for relationships among inputs, groups, regions and actions.
+
+Examples:
+
+```text
+enables
+disables
+shows
+hides
+requires
+excludes
+changes
+derives
+gates
+activates
+```
+
+For example:
+
+```text
+Reason B
+  → enables Qualifying Conditions group
+
+Qualifying Conditions empty
+  → Continue unavailable
+
+One or more conditions selected
+  → Continue available
+```
+
+These relationships may connect objects in different DOM regions. The comparison scope is the entire active PageIO state.
+
+Locality is retained as structural evidence through the objects' region paths, but locality does not limit consequence detection.
+
+---
+
+## 8. Nested I/O regions, inline additions and modals
+
+Not every newly introduced UI surface becomes a workflow.
+
+Dynamic structures inside a page are represented first as **nested I/O regions** under the current PageIO.
+
+Examples:
+
+```text
+conditional inline section
+modal
+side drawer
+popover
+expanded editor
+embedded form panel
+```
+
+Example:
+
+```text
+PageIO: Personal Information
+  Add Bank Account action
+    ↓
+  Nested IO Region: Bank Account Modal
+    account number
+    IFSC
+    validate
+    Save / Cancel
+```
+
+The modal is still structurally part of the current PageIO unless its interaction causes a logical page/navigation transition that participates in the higher-level workflow graph.
+
+Similarly:
+
+```text
+select Other
+  → "Please specify" input appears
+```
+
+is merely a state expansion inside the same PageIO.
+
+The preprocessor should therefore discover:
+
+```text
+regions
+inputs
+groups
+actions
+states
+relationships
+containment
+```
+
+without prematurely labeling every dynamic region as a workflow.
+
+---
+
+## 9. Type-specific scanners
 
 Each normalized input type has a small scanner module responsible only for generating and executing safe, meaningful actions for that type.
 
@@ -198,12 +423,12 @@ inputScanners/
   compositeScanner.js
 ```
 
-The scanners must not own persistence, semantic interpretation or page-level graph construction.
+The scanners must not own persistence, semantic interpretation or workflow construction.
 
 Their contract is:
 
 ```text
-Input + current state
+InputObject + current PageIO state
 → candidate Action[]
 ```
 
@@ -220,7 +445,7 @@ All raw evidence is normalized by the common observation layer.
 
 - select each option
 - observe exclusivity
-- observe downstream state changes
+- observe downstream page-wide state changes
 
 ### Checkbox
 
@@ -262,9 +487,9 @@ All raw evidence is normalized by the common observation layer.
 - select a suggestion
 - observe resulting value/state
 
-### Button
+### Button / action
 
-Buttons are actions rather than value-bearing inputs. The scanner records enabled/disabled/visible state and only invokes buttons when the exploration policy marks the action safe.
+Buttons are actions rather than value-bearing inputs. Their enabled/disabled/visible state is recorded and they are invoked only when the exploration policy marks the action safe.
 
 ### File
 
@@ -272,7 +497,7 @@ File controls are discovered structurally. Automatic upload probing is disabled 
 
 ---
 
-## 7. Action representation
+## 10. Action representation
 
 Every scanner emits normalized actions.
 
@@ -300,11 +525,11 @@ select_suggestion
 click
 ```
 
-Actions should describe user-equivalent interaction rather than framework-specific implementation.
+Actions describe user-equivalent interaction rather than framework-specific implementation.
 
 ---
 
-## 8. Execution trace
+## 11. Execution trace
 
 For each attempted action, instrumentation should collect structural execution evidence.
 
@@ -317,7 +542,7 @@ ExecutionTrace
   consoleSignals[]
 ```
 
-Function-call reconstruction may later reuse/copied concepts from the current LeMap executable/call-path machinery. The preprocessing contract is defined now so that richer tracing can be plugged in without changing the normalized observation model.
+Function-call reconstruction may later copy/adapt concepts from the current LeMap executable/call-path machinery. The preprocessing contract is defined now so richer tracing can be plugged in without changing the normalized observation model.
 
 The trace can include:
 
@@ -331,15 +556,15 @@ DOM event
 → framework/application state update
 ```
 
-The preprocessor stores raw/proven structural evidence. The model later decides which calls constitute meaningful steps.
+The preprocessor stores raw/proven structural evidence. The model later decides which calls constitute meaningful semantic steps.
 
 ---
 
-## 9. Result/state delta
+## 12. PageIO state delta
 
-A result is not limited to the acted-on input's value.
+A result is not limited to the acted-on object's local region.
 
-After every action, LeMap-Web compares page state before and after and records changes including:
+After every action, LeMap-Web compares the complete active PageIO state before and after and records changes including:
 
 ```text
 inputValuesChanged[]
@@ -364,25 +589,24 @@ routeChanged
 pageChanged
 ```
 
-This covers in-place page transitions as well as navigation.
+This is how an action on one region can deterministically establish a relationship with an object elsewhere on the page.
 
-Example autocomplete:
+Example:
 
 ```text
-City input
-+ type "ban"
-→ input event
-→ debounce/search function
-→ GET /cities?q=ban
-→ response
-→ suggestion list appears
+radio Y selected
+  ↓
+radio N checked true → false
+radio Y checked false → true
+checkbox group disabled true → false
+Continue visible true → false
 ```
 
-The suggestion list is a state change and becomes part of the observation.
+The whole result belongs to one observation.
 
 ---
 
-## 10. Normalized observation
+## 13. Normalized observation
 
 All scanners return the same normalized evidence object:
 
@@ -399,77 +623,145 @@ InputObservation
   afterStateId
 ```
 
-This is the durable output of preprocessing.
+This is the durable output of deterministic PageIO preprocessing.
 
 The model is deliberately downstream of this representation.
 
 ---
 
-## 11. Behavioral rule discovery
-
-Rules are inferred from repeated structural observations.
-
-Example observations:
-
-```text
-A selected
-→ Continue enabled
-
-B selected
-→ checkbox group enabled
-→ Continue disabled
-
-B + b1 selected
-→ Continue enabled
-```
-
-The deterministic behavioral layer can propose:
-
-```text
-B activates group G
-G gates Continue while empty
-```
-
-A later semantic model can interpret that as a user-facing rule such as:
-
-```text
-Selecting filing reason B requires at least one qualifying condition.
-```
-
-The semantic phrasing is not part of preprocessing.
-
----
-
-## 12. Page state graph
+## 14. PageIO state graph
 
 The preprocessor accumulates normalized observations into a page-local state graph.
 
 ```text
-PageState S0
+PageIO State S0
   -- Input A / Action X -->
-PageState S1
+PageIO State S1
   -- Input B / Action Y -->
-PageState S2
+PageIO State S2
 ```
 
-State identity is structural and should ignore irrelevant cosmetic changes while preserving meaningful input/group/validation/visibility/completion differences.
+State identity is structural and should ignore irrelevant cosmetic changes while preserving meaningful input/group/validation/visibility/action differences.
 
-The page state graph is the deterministic substrate later given to Scout/Pass 1/Pass 2 or an equivalent LeMap-Web semantic learner.
+This state graph describes **how one PageIO behaves**.
+
+It is not the business workflow graph.
 
 ---
 
-## 13. Generic module boundary
+## 15. Cross-page workflow graph
 
-Initial implementation layout:
+The higher-level workflow is constructed from observed transitions among PageIO nodes.
+
+```text
+Workflow
+  nodes = PageIO objects
+  edges = page transitions
+  branch conditions = observed source PageIO state/input conditions
+```
+
+Example:
+
+```text
+PageIO A: Filing Status
+  -- condition X --> PageIO B
+  -- condition Y --> PageIO C
+
+PageIO B
+  --> PageIO D
+
+PageIO C
+  --> PageIO D
+```
+
+This is analogous to the branch-and-merge executable path graph already used in LeMap.
+
+A transition edge should retain evidence such as:
+
+```text
+source PageIO
+source state
+trigger action
+execution trace
+navigation/route evidence
+result PageIO
+```
+
+The same destination page may therefore be reached through multiple branches, and some pages may be skipped entirely depending on prior inputs.
+
+---
+
+## 16. Semantic annotation strategy
+
+Once deterministic preprocessing has produced enough evidence, semantic interpretation can occur at two levels.
+
+### Workflow-level annotation
+
+Provide the model with bounded page-flow branches such as:
+
+```text
+Filing Status
+→ Personal Information
+→ Income Details
+→ Taxes Paid
+→ Verification
+```
+
+along with branch conditions and execution evidence.
+
+The model annotates:
+
+```text
+workflow/business intent
+step purpose
+branch meaning
+completion condition
+business outcome
+```
+
+This is similar to LeMap interpreting bounded executable call paths.
+
+### PageIO-level annotation
+
+For one PageIO, provide:
+
+```text
+inputs
+groups
+relationships
+behavior observations
+validation evidence
+execution traces
+```
+
+The model annotates:
+
+```text
+semantic meaning of each I/O object
+semantic meaning of groups
+meaning of dependencies
+business/legal rules represented by observed behavior
+```
+
+The deterministic graph remains provenance for those interpretations.
+
+---
+
+## 17. Generic module boundary
+
+Current/target implementation layout:
 
 ```text
 lemap-web/src/preprocess/
   pageIdentity.js
+  activeWorkflow.js
   inputDiscovery.js
   inputClassifier.js
   groupDiscovery.js
+  hierarchy.js
   action.js
   observation.js
+  stateProjection.js
   stateDelta.js
   pagePreprocessor.js
   scanners/
@@ -493,25 +785,27 @@ browserCapture.js
 trace/*
 ```
 
+Higher-level page transition indexing/workflow construction should also remain separate from PageIO preprocessing.
+
 Semantic interpretation remains separate again.
 
 ---
 
-## 14. Generic testing strategy
+## 18. Generic testing strategy
 
-The preprocessor must be testable independently of any specific production website.
+The PageIO preprocessor must be testable independently of any specific production website.
 
 LeMap-Web therefore maintains a synthetic benchmark page containing known behavior:
 
 ```text
 radio group
-  B reveals/requires checkbox group
+  B enables checkbox group
 
 checkbox group
   one-or-more gates Continue
 
 date field
-  DD/MM/YYYY validation
+  format validation
 
 number field
   min/max validation
@@ -525,49 +819,61 @@ select
 text
   maxlength/pattern validation
 
-completion button
-  enabled only in valid state
+completion action
+  changes with page validity
 ```
 
 Because the ground truth is known, tests can assert whether preprocessing discovered:
 
-- page identity
+- PageIO identity
 - input type
 - group membership
 - candidate action space
-- state delta
+- page-wide state delta
+- checked-state transitions
 - validation output
 - async suggestion/output changes
 - network evidence shape
 - normalized observation schema
+- application-shell exclusion from the active PageIO
+
+A multi-page synthetic benchmark should later test:
+
+- page transitions
+- branch conditions
+- skipped pages
+- branch merges
+- nested modal/inline IO regions
 
 The Income Tax ITR-3 site is a real-world stress test, not the primitive unit-test environment.
 
 ---
 
-## 15. Non-goals of this stage
+## 19. Non-goals of this stage
 
 This preprocessing stage does not yet:
 
 - infer business meaning
 - decide which function calls are meaningful business steps
-- generate natural-language questions to the user
+- label every page transition semantically
 - autonomously complete a production workflow
 - persist final semantic WebMap workflows
 - refactor or share implementation with `demo_v2`
 
-Those layers come after the preprocessor representation is proven.
+Those layers come after the deterministic PageIO and page-transition representations are proven.
 
 ---
 
-## 16. Architecture summary
+## 20. Architecture summary
 
 ```text
-WEB PAGE
+WEB APPLICATION
    ↓
-PAGE IDENTITY
+DISCOVER PageIO
    ↓
-INPUT + GROUP HIERARCHY
+PAGE IDENTITY + ACTIVE IO REGION
+   ↓
+INPUT / OUTPUT / GROUP HIERARCHY
    ↓
 INPUT TYPE CLASSIFICATION
    ↓
@@ -577,17 +883,21 @@ ACTION
    ↓
 EVENT / FUNCTION / NETWORK TRACE
    ↓
-NORMALIZED BEFORE/AFTER STATE DELTA
+GLOBAL PageIO BEFORE/AFTER STATE DELTA
    ↓
 INPUT OBSERVATION
    ↓
-BEHAVIORAL CONSTRAINT DISCOVERY
+RELATIONSHIP / BEHAVIORAL CONSTRAINT DISCOVERY
    ↓
-PAGE STATE GRAPH
+PageIO STATE GRAPH
    ↓
-SEMANTIC LEARNING (later)
+OBSERVED PAGE TRANSITION
+   ↓
+CROSS-PAGE WORKFLOW GRAPH
+   ↓
+SEMANTIC ANNOTATION (later)
 ```
 
 The invariant to preserve is:
 
-> **Type-specific exploration, normalized behavioral evidence, page-level composition.**
+> **Within a page, learn I/O objects and their relationships. Across pages, learn the branching workflow graph that stitches PageIO nodes together to accomplish a goal.**
