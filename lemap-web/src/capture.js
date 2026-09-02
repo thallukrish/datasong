@@ -1,12 +1,13 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import process from 'node:process';
 import { chromium } from 'playwright-core';
-import { buildPageStructure, buildWebFlow } from './structuralFlow.js';
-import { preprocessPage } from './preprocess/pagePreprocessor.js';
-import { projectPageState } from './preprocess/stateProjection.js';
-import { computeStateDelta } from './preprocess/stateDelta.js';
+import { preprocessEntity } from './graph/entityPreprocessor.js';
+import { projectEntityState } from './graph/entityState.js';
+import { computeEntityDelta } from './graph/entityDelta.js';
+import { classifyTransition, createWorkflowGraph, recordTransition, serializeWorkflowGraph } from './graph/workflowGraph.js';
 import {
   choosePage,
   installUserEventProbe,
@@ -18,19 +19,12 @@ import {
 const endpoint = process.env.LEMAP_CDP || 'http://127.0.0.1:9222';
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-function timestamp() {
-  return new Date().toISOString().replace(/[:.]/g, '-');
-}
-
-function nearestRegion(pageStructure, label) {
-  if (!label) return '';
-  const stack = [...(pageStructure.sections || [])];
-  while (stack.length) {
-    const region = stack.shift();
-    if ((region.controls || []).some((control) => control.label === label || control.name === label)) return region.label || '';
-    stack.push(...(region.regions || []));
-  }
-  return '';
+function timestamp() { return new Date().toISOString().replace(/[:.]/g, '-'); }
+function stateId(state) { return `state:${crypto.createHash('sha1').update(JSON.stringify(state)).digest('hex').slice(0, 12)}`; }
+function observedField(graph, event) {
+  if (!event) return null;
+  const controls = [...(graph.fields || []), ...(graph.actions || [])];
+  return controls.find((field) => field.label === event.label || field.name === event.controlName) || null;
 }
 
 let browser;
@@ -45,69 +39,84 @@ try {
 
   const network = [];
   const onRequest = (request) => {
-    const type = request.resourceType();
-    if (!['xhr', 'fetch', 'document'].includes(type)) return;
+    if (!['xhr', 'fetch', 'document'].includes(request.resourceType())) return;
     network.push(summarizeNetworkEvent({ phase: 'request', method: request.method(), url: request.url() }));
   };
   const onResponse = (response) => {
     const request = response.request();
-    const type = request.resourceType();
-    if (!['xhr', 'fetch', 'document'].includes(type)) return;
+    if (!['xhr', 'fetch', 'document'].includes(request.resourceType())) return;
     network.push(summarizeNetworkEvent({ phase: 'response', method: request.method(), url: response.url(), status: response.status() }));
   };
   page.on('request', onRequest);
   page.on('response', onResponse);
 
-  const before = await snapshotPage(page);
-  const pageStructure = buildPageStructure(before.dom);
-  const preprocessBefore = preprocessPage(before);
-  const projectedBefore = projectPageState(before, preprocessBefore);
+  const beforeSnapshot = await snapshotPage(page);
+  const beforeEntity = preprocessEntity(beforeSnapshot);
+  const beforeState = projectEntityState(beforeSnapshot, beforeEntity);
+  const beforeStateId = stateId(beforeState);
   await installUserEventProbe(page);
 
-  console.log(`[lemap-web] initial state captured: ${before.page}`);
-  console.log(`[lemap-web] discovered inputs: ${preprocessBefore.inputs.length}, groups: ${preprocessBefore.groups.length}`);
-  await rl.question('\nPerform ONE meaningful action in the attached Chrome tab, wait for the page to settle, then press Enter here... ');
+  console.log(`[lemap-web] entity: ${beforeEntity.entity.label} (${beforeEntity.entity.id})`);
+  console.log(`[lemap-web] fields: ${beforeEntity.fields.length}, actions: ${beforeEntity.actions.length}, groups: ${beforeEntity.groups.length}`);
+  await rl.question('\nPerform ONE meaningful action in the attached Chrome tab, wait for the UI to settle, then press Enter here... ');
   await page.waitForTimeout(700);
 
   const events = await readUserEvents(page);
-  const after = await snapshotPage(page);
-  const preprocessAfter = preprocessPage(after);
-  const projectedAfter = projectPageState(after, preprocessAfter);
-  const normalizedDelta = computeStateDelta(projectedBefore, projectedAfter);
+  const afterSnapshot = await snapshotPage(page);
+  const afterEntity = preprocessEntity(afterSnapshot);
+  const afterState = projectEntityState(afterSnapshot, afterEntity);
+  const afterStateId = stateId(afterState);
+  const entityDelta = computeEntityDelta(beforeState, afterState);
 
   const meaningfulEvent = [...events].reverse().find((event) => ['change', 'click', 'submit', 'input'].includes(event.name)) || null;
-  const sourceControl = meaningfulEvent?.label || meaningfulEvent?.controlName || '';
-  const sourceRegion = nearestRegion(pageStructure, sourceControl);
-  const trigger = meaningfulEvent ? {
-    kind: meaningfulEvent.name.toUpperCase(),
-    value: meaningfulEvent.value,
-    label: meaningfulEvent.label,
-    controlName: meaningfulEvent.controlName,
-    tag: meaningfulEvent.tag
-  } : { kind: 'OBSERVED', value: null };
-
-  const flow = buildWebFlow({
-    id: `webflow:${timestamp()}`,
-    sourceState: before,
-    sourceRegion,
-    sourceControl,
-    trigger,
-    execution: [...events, ...network],
-    resultState: after
+  const sourceField = observedField(beforeEntity, meaningfulEvent);
+  const evidenceId = `observation:${timestamp()}`;
+  const transitionKind = classifyTransition(entityDelta);
+  const workflow = createWorkflowGraph('workflow:observed');
+  recordTransition(workflow, {
+    sourceEntityId: beforeEntity.entity.id,
+    targetEntityId: afterEntity.entity.id,
+    sourceStateId: beforeStateId,
+    targetStateId: afterStateId,
+    actionId: sourceField?.id || '',
+    kind: transitionKind,
+    evidenceIds: [evidenceId],
+    delta: entityDelta,
+    presentation: {
+      source: beforeEntity.entity.presentation,
+      target: afterEntity.entity.presentation
+    }
   });
+
+  const observation = {
+    id: evidenceId,
+    entityId: beforeEntity.entity.id,
+    fieldId: sourceField?.id || '',
+    action: meaningfulEvent ? {
+      kind: meaningfulEvent.name,
+      label: meaningfulEvent.label,
+      controlName: meaningfulEvent.controlName,
+      value: meaningfulEvent.value
+    } : { kind: 'observed', value: null },
+    executionTrace: { browserEvents: events, functions: [], network, callbacks: [], consoleSignals: [] },
+    beforeStateId,
+    afterStateId,
+    result: entityDelta,
+    affectedEntityIds: [...new Set([beforeEntity.entity.id, afterEntity.entity.id])]
+  };
 
   const output = {
     capturedAt: new Date().toISOString(),
     endpoint,
-    pageStructure,
-    preprocessing: {
-      before: preprocessBefore,
-      after: preprocessAfter,
-      normalizedDelta
+    structural: {
+      entityBefore: beforeEntity,
+      entityAfter: afterEntity,
+      stateBefore: beforeState,
+      stateAfter: afterState,
+      entityDelta,
+      workflow: serializeWorkflowGraph(workflow)
     },
-    browserEvents: events,
-    network,
-    flow
+    observation
   };
 
   const dir = path.resolve('data', 'captures');
@@ -117,9 +126,10 @@ try {
 
   console.log(`\n[lemap-web] browser events: ${events.length}`);
   console.log(`[lemap-web] network events: ${network.length}`);
-  console.log(`[lemap-web] normalized value changes: ${normalizedDelta.inputValuesChanged.length}`);
-  console.log(`[lemap-web] inputs enabled: ${normalizedDelta.inputsEnabled.length}, disabled: ${normalizedDelta.inputsDisabled.length}`);
-  console.log(`[lemap-web] actions shown: ${normalizedDelta.actionsShown.length}, hidden: ${normalizedDelta.actionsHidden.length}`);
+  console.log(`[lemap-web] field value changes: ${entityDelta.fieldValuesChanged.length}`);
+  console.log(`[lemap-web] fields enabled: ${entityDelta.fieldsEnabled.length}, disabled: ${entityDelta.fieldsDisabled.length}`);
+  console.log(`[lemap-web] actions shown: ${entityDelta.actionsShown.length}, hidden: ${entityDelta.actionsHidden.length}`);
+  console.log(`[lemap-web] transition: ${transitionKind}`);
   console.log(`[lemap-web] capture written: ${file}`);
 
   page.off('request', onRequest);
