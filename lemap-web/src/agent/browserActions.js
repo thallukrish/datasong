@@ -86,6 +86,20 @@ export async function executeNavigationCandidate(page, candidate) {
   if (!candidate) throw new Error('Missing navigation candidate');
   if (BLOCKED_NAVIGATION.test(candidate.label || '')) throw new Error(`Blocked consequential navigation: ${candidate.label}`);
   if (candidate.kind === 'action') {
+    if (candidate.presentation?.domId) {
+      const byId = page.locator(`[id="${quoteAttr(candidate.presentation.domId)}"]`).first();
+      if (await byId.count() && await byId.isVisible().catch(() => false)) {
+        await byId.click();
+        return;
+      }
+    }
+    if (candidate.presentation?.name) {
+      const byName = page.locator(`[name="${quoteAttr(candidate.presentation.name)}"]`).first();
+      if (await byName.count() && await byName.isVisible().catch(() => false)) {
+        await byName.click();
+        return;
+      }
+    }
     const role = candidate.presentation?.role || 'button';
     if (role === 'button' || candidate.presentation?.tag === 'button') {
       await page.getByRole('button', { name: candidate.label, exact: true }).first().click();
