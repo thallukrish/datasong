@@ -74,28 +74,32 @@ export async function snapshotPage(page) {
       if (el.tagName?.toLowerCase() === 'select') return Array.from(el.options || []).map((option) => clean(option.value || option.textContent)).filter(Boolean);
       return [];
     };
-    const control = (el) => ({
-      control: true,
-      tag: el.tagName.toLowerCase(),
-      type: clean(el.type || ''),
-      role: clean(el.getAttribute?.('role') || ''),
-      domId: clean(el.id || ''),
-      name: clean(el.name || el.id || ''),
-      value: 'value' in el ? el.value : el.getAttribute?.('aria-valuenow') ?? null,
-      label: labelFor(el),
-      disabled: !!el.disabled || el.getAttribute?.('aria-disabled') === 'true',
-      hidden: !visible(el),
-      required: !!el.required || el.getAttribute?.('aria-required') === 'true',
-      readonly: !!el.readOnly || el.getAttribute?.('aria-readonly') === 'true',
-      placeholder: clean(el.getAttribute?.('placeholder') || ''),
-      autocomplete: clean(el.getAttribute?.('autocomplete') || ''),
-      min: el.getAttribute?.('min'),
-      max: el.getAttribute?.('max'),
-      step: el.getAttribute?.('step'),
-      maxlength: el.getAttribute?.('maxlength'),
-      pattern: el.getAttribute?.('pattern'),
-      options: optionsFor(el)
-    });
+    const control = (el) => {
+      const type = clean(el.type || '').toLowerCase();
+      return {
+        control: true,
+        tag: el.tagName.toLowerCase(),
+        type,
+        role: clean(el.getAttribute?.('role') || ''),
+        domId: clean(el.id || ''),
+        name: clean(el.name || el.id || ''),
+        value: 'value' in el ? el.value : el.getAttribute?.('aria-valuenow') ?? null,
+        checked: ['radio', 'checkbox'].includes(type) ? !!el.checked : null,
+        label: labelFor(el),
+        disabled: !!el.disabled || el.getAttribute?.('aria-disabled') === 'true',
+        hidden: !visible(el),
+        required: !!el.required || el.getAttribute?.('aria-required') === 'true',
+        readonly: !!el.readOnly || el.getAttribute?.('aria-readonly') === 'true',
+        placeholder: clean(el.getAttribute?.('placeholder') || ''),
+        autocomplete: clean(el.getAttribute?.('autocomplete') || ''),
+        min: el.getAttribute?.('min'),
+        max: el.getAttribute?.('max'),
+        step: el.getAttribute?.('step'),
+        maxlength: el.getAttribute?.('maxlength'),
+        pattern: el.getAttribute?.('pattern'),
+        options: optionsFor(el)
+      };
+    };
     const isControl = (el) => {
       const tag = el.tagName?.toLowerCase();
       const role = clean(el.getAttribute?.('role') || '').toLowerCase();
