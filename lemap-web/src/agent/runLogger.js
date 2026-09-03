@@ -33,6 +33,7 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
   if (arr(parsed?.questionIds).length) result.questionIds = arr(parsed.questionIds).slice(0, 6).map(String);
   if (arr(parsed?.selectedFieldIds).length) result.selectedFieldIds = arr(parsed.selectedFieldIds).slice(0, 6).map(String);
   if (arr(parsed?.subEntities).length) result.subEntities = arr(parsed.subEntities).slice(0, 8).map((item) => clean(item?.semanticName || item?.name || '')).filter(Boolean);
+  if (arr(parsed?.interactions).length) result.interactions = arr(parsed.interactions).slice(0, 8).map((item) => clean(item?.semanticKey || item?.semanticName || '')).filter(Boolean);
   if (arr(parsed?.scores).length) result.topScores = arr(parsed.scores).slice(0, 5).map((score) => ({
     candidateId: clean(score?.candidateId, 120),
     role: clean(score?.role, 80),
@@ -48,6 +49,30 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
     tokens,
     finishReason: clean(finishReason, 80),
     result
+  };
+}
+
+export function createTokenLedger() {
+  const byPurpose = {};
+  const total = { calls: 0, prompt: 0, completion: 0, tokens: 0, cacheHit: 0 };
+  return {
+    add(summary = {}) {
+      const purpose = clean(summary.purpose || 'unknown', 80) || 'unknown';
+      const bucket = byPurpose[purpose] ||= { calls: 0, prompt: 0, completion: 0, tokens: 0, cacheHit: 0 };
+      const tokens = summary.tokens || {};
+      const prompt = Number(tokens.prompt) || 0;
+      const completion = Number(tokens.completion) || 0;
+      const tokenTotal = Number(tokens.total) || prompt + completion;
+      const cacheHit = Number(tokens.cacheHit) || 0;
+      for (const target of [bucket, total]) {
+        target.calls += 1;
+        target.prompt += prompt;
+        target.completion += completion;
+        target.tokens += tokenTotal;
+        target.cacheHit += cacheHit;
+      }
+    },
+    summary() { return { byPurpose: structuredClone(byPurpose), total: { ...total } }; }
   };
 }
 
@@ -75,11 +100,17 @@ export async function createRunLogger({ baseDir = path.join('data', 'query-runs'
   const file = path.resolve(baseDir, `${stamp}.jsonl`);
   await fs.mkdir(path.dirname(file), { recursive: true });
   let sequence = 0;
+  const tokenLedger = createTokenLedger();
   const write = async (type, data = {}) => {
     const event = { seq: ++sequence, at: new Date().toISOString(), type, ...data };
     await fs.appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
     return event;
   };
+  const recordModel = async (summary = {}) => {
+    tokenLedger.add(summary);
+    return write('model_call', summary);
+  };
+  const tokenSummary = () => tokenLedger.summary();
   await write('run_start', { goal: clean(goal, 500) });
-  return { file, write };
+  return { file, write, recordModel, tokenSummary };
 }
