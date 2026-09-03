@@ -312,6 +312,15 @@ async function restoreSelect(page, originalField, original, result, options) {
   }
 }
 
+function comparableStructure(captured = {}) {
+  return JSON.stringify({
+    entityId: captured.graph?.entity?.id || '',
+    fields: arr(captured.graph?.fields).map((field) => [field.id, field.type]).sort((a, b) => a[0].localeCompare(b[0])),
+    groups: arr(captured.graph?.groups).map((group) => [group.id, group.groupType, [...arr(group.memberFieldIds)].sort()]).sort((a, b) => a[0].localeCompare(b[0])),
+    actions: arr(captured.graph?.actions).map((action) => [action.id, action.type]).sort((a, b) => a[0].localeCompare(b[0]))
+  });
+}
+
 async function setCheckbox(page, graph, fieldId, checked, settleMs) {
   const field = controlById(graph, fieldId);
   if (!field) throw new Error(`Missing checkbox ${fieldId}`);
@@ -496,22 +505,8 @@ async function exploreRadioGroup(page, initial, group, result, options) {
   });
 }
 
-async function exploreSelectField(page, initial, field, result, options) {
-  const selectable = arr(result.optionDomains[field.id]).filter((option) => !option.disabled);
-  if (!selectable.length) return;
+async function probeSelectSamples(page, initial, field, selectable, result, options, { restore = null } = {}) {
   const original = await currentSelectIdentity(page, field);
-  const restoreTarget = reversibleSelectTarget(field, original, result);
-  if (!restoreTarget) {
-    addRelationship(result, {
-      kind: 'probe_skipped',
-      sourceFieldId: field.id,
-      reason: 'irreversible_initial_state',
-      evidenceIds: []
-    });
-    await page.keyboard.press('Escape').catch(() => {});
-    return;
-  }
-
   const alternatives = selectable.filter((option) => !(option.value === original.value || option.label === original.label));
   const sampled = chooseBehaviorSamples(alternatives, {
     maxSamples: options.maxBehaviorSamples,
@@ -546,7 +541,7 @@ async function exploreSelectField(page, initial, field, result, options) {
     } catch (error) {
       result.errors.push({ fieldId: field.id, message: `select option probe failed: ${error.message}` });
     } finally {
-      await restoreSelect(page, field, original, result, options);
+      if (restore) await restore();
     }
   }
 
@@ -554,6 +549,69 @@ async function exploreSelectField(page, initial, field, result, options) {
     sourceFieldId: field.id,
     probes,
     coverage: sampled.coverage
+  });
+  return sampled.coverage;
+}
+
+async function exploreSelectInDisposablePage(livePage, initial, field, result, options) {
+  let probePage;
+  try {
+    probePage = await livePage.context().newPage();
+    await probePage.goto(livePage.url(), { waitUntil: 'domcontentloaded' });
+    await settle(probePage, Math.max(options.settleMs, 100));
+    let baseline = await capture(probePage);
+    if (comparableStructure(baseline) !== comparableStructure(initial)) throw new Error('Disposable page does not reproduce the current structural entity');
+    let probeField = controlById(baseline.graph, field.id);
+    if (!probeField) throw new Error(`Disposable page is missing select ${field.id}`);
+    const selectable = arr(await readSelectableOptions(probePage, probeField)).filter((option) => !option.disabled);
+    await settle(probePage, Math.min(options.settleMs, 100));
+    if (!selectable.length) throw new Error('Disposable select has no probeable options');
+
+    const reset = async () => {
+      await probePage.reload({ waitUntil: 'domcontentloaded' });
+      await settle(probePage, Math.max(options.settleMs, 100));
+      baseline = await capture(probePage);
+      if (comparableStructure(baseline) !== comparableStructure(initial)) throw new Error('Disposable page failed to restore structural baseline');
+      probeField = controlById(baseline.graph, field.id);
+      if (!probeField) throw new Error(`Disposable page lost select ${field.id}`);
+    };
+
+    const coverage = await probeSelectSamples(probePage, baseline, probeField, selectable, result, options, { restore: reset });
+    addRelationship(result, {
+      kind: 'disposable_probe',
+      sourceFieldId: field.id,
+      reason: 'irreversible_initial_state',
+      coverage,
+      evidenceIds: []
+    });
+    return true;
+  } catch (error) {
+    result.errors.push({ fieldId: field.id, message: `disposable select probe failed: ${error.message}` });
+    addRelationship(result, {
+      kind: 'probe_skipped',
+      sourceFieldId: field.id,
+      reason: 'irreversible_initial_state',
+      evidenceIds: []
+    });
+    return false;
+  } finally {
+    await probePage?.close().catch(() => {});
+  }
+}
+
+async function exploreSelectField(page, initial, field, result, options) {
+  const selectable = arr(result.optionDomains[field.id]).filter((option) => !option.disabled);
+  if (!selectable.length) return;
+  const original = await currentSelectIdentity(page, field);
+  const restoreTarget = reversibleSelectTarget(field, original, result);
+  if (!restoreTarget) {
+    await page.keyboard.press('Escape').catch(() => {});
+    await exploreSelectInDisposablePage(page, initial, field, result, options);
+    return;
+  }
+
+  await probeSelectSamples(page, initial, field, selectable, result, options, {
+    restore: async () => restoreSelect(page, field, original, result, options)
   });
 }
 
