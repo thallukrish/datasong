@@ -21,10 +21,10 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
     cacheHit: numberOrNull(usage?.prompt_cache_hit_tokens ?? usage?.prompt_tokens_details?.cached_tokens)
   };
   const result = {};
-  const answerInterpreter = normalizedPurpose.includes('user_answer');
+  const legacyAnswerInterpreter = normalizedPurpose.includes('user_answer');
   for (const key of ['semanticName', 'decision', 'confidence', 'reason', 'localCompletion']) {
     if (parsed?.[key] === undefined || parsed?.[key] === null || parsed?.[key] === '') continue;
-    if (answerInterpreter && key === 'reason') {
+    if (legacyAnswerInterpreter && key === 'reason') {
       result.reason = 'answer interpreted';
       continue;
     }
@@ -82,6 +82,7 @@ export function summarizeUserInteraction({ question = {}, interpretation = {} } 
     questionId: clean(question.questionId, 160),
     question: clean(question.label, 240),
     answerKind: clean(question.answerKind, 40),
+    mode: interpretation.local ? 'local' : 'model',
     confidence: numberOrNull(interpretation.confidence),
     interpretation: isValue ? 'value interpreted' : clean(interpretation.reason, 260)
   };
