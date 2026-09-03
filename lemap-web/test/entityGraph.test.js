@@ -93,3 +93,27 @@ test('entity identity stays stable when a completion action inside the visible e
   assert.equal(after.entity.label, 'Generic Filing Form');
   assert.ok(after.actions.some((action) => action.label === 'Continue' && action.visible === false));
 });
+
+test('mutable field value and enabled state do not change structural field identity', () => {
+  const empty = structuredClone(snapshot);
+  empty.dom.children[1].children.unshift({
+    control: true,
+    tag: 'select',
+    domId: 'assessment-year',
+    name: 'assessmentYear',
+    label: 'Assessment Year',
+    value: '',
+    disabled: true,
+    hidden: false,
+    options: ['Select', '2026-27', '2025-26']
+  });
+  const selected = structuredClone(empty);
+  selected.dom.children[1].children[0].value = '2026-27';
+  selected.dom.children[1].children[0].disabled = false;
+
+  const before = preprocessEntity(empty).fields.find((field) => field.label === 'Assessment Year');
+  const after = preprocessEntity(selected).fields.find((field) => field.label === 'Assessment Year');
+  assert.ok(before);
+  assert.ok(after);
+  assert.equal(after.id, before.id);
+});
