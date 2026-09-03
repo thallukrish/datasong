@@ -95,10 +95,24 @@ test('irreversible material-like select is behaviorally explored in disposable s
   assert.equal(year.type, 'select');
 
   const result = await exploreLocalEntity(page, { settleMs: 10, probeBehavior: true });
+  const selectObservations = result.observations.filter((observation) => observation.action?.kind === 'select_option');
+  const behaviorRelationships = result.learnedRelationships.filter((relationship) => ['behavior_classes', 'disposable_probe', 'probe_skipped'].includes(relationship.kind));
+  const diagnostics = JSON.stringify({
+    yearId: year.id,
+    onlineId: online.id,
+    errors: result.errors,
+    selectObservations,
+    behaviorRelationships
+  }, null, 2);
+
   assert.ok(result.valueDomains[year.id].includes('2026-27 (Current A.Y.)'));
-  assert.ok(result.observations.some((observation) => observation.fieldId === year.id && observation.action.kind === 'select_option' && observation.delta.fieldsEnabled.includes(online.id)));
-  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'behavior_classes' && relationship.sourceFieldId === year.id));
-  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'disposable_probe' && relationship.sourceFieldId === year.id));
+  assert.equal(result.errors.length, 0, diagnostics);
+  assert.ok(
+    selectObservations.some((observation) => observation.fieldId === year.id && observation.delta.fieldsEnabled.includes(online.id)),
+    diagnostics
+  );
+  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'behavior_classes' && relationship.sourceFieldId === year.id), diagnostics);
+  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'disposable_probe' && relationship.sourceFieldId === year.id), diagnostics);
   assert.equal((await page.locator('#year').innerText()).trim(), 'Select');
   assert.equal(await page.locator('#online').isDisabled(), true);
   assert.equal(await page.locator('#offline').isDisabled(), true);
