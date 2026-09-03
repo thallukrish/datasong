@@ -32,6 +32,11 @@ async function startMaterialLikeServer() {
     <div role="option">2026-27 (Current A.Y.)</div>
     <div role="option">2025-26</div>
   </div>
+  <fieldset><legend>Filing Mode</legend>
+    <label><input id="online" name="mode" type="radio" value="online" disabled>Online</label>
+    <label><input id="offline" name="mode" type="radio" value="offline" disabled>Offline</label>
+  </fieldset>
+  <button id="continue" disabled>Continue</button>
   <script>
     const select = document.getElementById('year');
     const panel = document.getElementById('panel');
@@ -41,6 +46,8 @@ async function startMaterialLikeServer() {
       if (option.getAttribute('aria-disabled') === 'true') return;
       select.textContent = option.textContent;
       option.setAttribute('aria-selected', 'true');
+      document.getElementById('online').disabled = false;
+      document.getElementById('offline').disabled = false;
       panel.hidden = true;
     }));
   </script></main></body></html>`;
@@ -73,7 +80,7 @@ test('local explorer discovers dropdown domain and behavior, then restores origi
   assert.equal(result.restored, true);
 });
 
-test('material-like select with non-selectable placeholder is enumerated but not mutated', async (t) => {
+test('irreversible material-like select is behaviorally explored in disposable state while live page remains untouched', async (t) => {
   const fixture = await startMaterialLikeServer();
   const browser = await launchChrome();
   t.after(async () => { await browser.close(); await fixture.close(); });
@@ -82,14 +89,19 @@ test('material-like select with non-selectable placeholder is enumerated but not
   const snapshot = await snapshotPage(page);
   const graph = preprocessEntity(snapshot);
   const year = graph.fields.find((field) => field.label === 'Assessment Year');
+  const online = graph.fields.find((field) => field.label === 'Online');
   assert.ok(year);
+  assert.ok(online);
   assert.equal(year.type, 'select');
 
   const result = await exploreLocalEntity(page, { settleMs: 10, probeBehavior: true });
   assert.ok(result.valueDomains[year.id].includes('2026-27 (Current A.Y.)'));
+  assert.ok(result.observations.some((observation) => observation.fieldId === year.id && observation.action.kind === 'select_option' && observation.delta.fieldsEnabled.includes(online.id)));
+  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'behavior_classes' && relationship.sourceFieldId === year.id));
+  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'disposable_probe' && relationship.sourceFieldId === year.id));
   assert.equal((await page.locator('#year').innerText()).trim(), 'Select');
+  assert.equal(await page.locator('#online').isDisabled(), true);
+  assert.equal(await page.locator('#offline').isDisabled(), true);
   assert.equal(await page.locator('#panel').isHidden(), true);
-  assert.equal(result.observations.some((observation) => observation.fieldId === year.id && observation.action.kind === 'select_option'), false);
-  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'probe_skipped' && relationship.sourceFieldId === year.id && relationship.reason === 'irreversible_initial_state'));
   assert.equal(result.restored, true);
 });
