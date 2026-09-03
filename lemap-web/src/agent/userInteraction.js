@@ -117,6 +117,21 @@ export function interpretationFromRemembered({ graph = {}, interaction = {}, fac
   return { selectedFieldIds: [], value: fact.value ?? fact.optionLabel ?? '', confidence: 1, reason: 'reused stored workflow fact' };
 }
 
+export function interpretationFromPrefilled({ graph = {}, state = {}, interaction = {} } = {}) {
+  const fields = interactionFields(graph, interaction);
+  if (!fields.length) return null;
+  const choiceFields = fields.filter((field) => ['radio', 'checkbox'].includes(field.type));
+  if (choiceFields.length) {
+    const selected = choiceFields.filter((field) => state.fields?.[field.id]?.checked === true);
+    if (!selected.length) return null;
+    return { selectedFieldIds: selected.map((field) => field.id), value: '', confidence: 1, reason: 'confirmed current workflow value' };
+  }
+  const field = fields[0];
+  const value = state.fields?.[field.id]?.value;
+  if (!nonEmpty(value)) return null;
+  return { selectedFieldIds: [], value: String(value), confidence: 1, reason: 'confirmed current workflow value' };
+}
+
 export function displayValueFromInterpretation(question = {}, interpretation = {}) {
   if (question.answerKind === 'choice') {
     const selected = new Set(arr(interpretation.selectedFieldIds).map(String));
