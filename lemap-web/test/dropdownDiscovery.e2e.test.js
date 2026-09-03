@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { exploreLocalEntity } from '../src/explore/localExplorer.js';
+import { exploreReadOnlyEntity } from '../src/explore/readOnlyExplorer.js';
 import { snapshotPage } from '../src/browserCapture.js';
 import { preprocessEntity } from '../src/graph/entityPreprocessor.js';
 
@@ -65,14 +66,14 @@ async function startMaterialLikeServer() {
   return { url: `http://127.0.0.1:${address.port}/`, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
-test('probeBehavior false is genuinely read-only and opens no disposable tab', async (t) => {
+test('read-only explorer opens no disposable tab and emits no live change event', async (t) => {
   const fixture = await startServer();
   const browser = await launchChrome();
   const { context, page } = await openTestPage(browser);
   t.after(async () => { await context.close(); await browser.close(); await fixture.close(); });
   await page.goto(fixture.url);
 
-  const result = await exploreLocalEntity(page, { settleMs: 10, probeBehavior: false });
+  const result = await exploreReadOnlyEntity(page);
 
   assert.equal(await page.evaluate(() => window.__openCount), 0);
   assert.equal(await page.evaluate(() => window.__liveChangeCount), 0);
