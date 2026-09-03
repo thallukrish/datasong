@@ -8,6 +8,11 @@ function isControlNode(node = {}) {
   return CONTROL_TAGS.has(String(node.tag || '').toLowerCase()) || CONTROL_ROLES.has(String(node.role || '').toLowerCase()) || node.control === true;
 }
 
+function stableChoiceIdentity(node = {}, normalizedType = '') {
+  if (normalizedType !== 'radio') return '';
+  return String(node.value ?? '');
+}
+
 export function discoverInputs(root = {}, entityId = '') {
   const inputs = [];
   function walk(node, ancestry = []) {
@@ -20,11 +25,22 @@ export function discoverInputs(root = {}, entityId = '') {
       const normalizedType = classifyInput(node);
       if (normalizedType !== 'technical_hidden') {
         const parent = [...ancestry].reverse().find((x) => x.label) || null;
-        const identityBasis = [entityId, parent?.label || '', node.name || '', label, node.value ?? '', tag, node.type || '', node.role || ''].join('|');
+        const domId = String(node.domId || node.id || '');
+        const identityBasis = [
+          entityId,
+          parent?.label || '',
+          domId,
+          node.name || '',
+          label,
+          stableChoiceIdentity(node, normalizedType),
+          tag,
+          node.type || '',
+          node.role || ''
+        ].join('|');
         inputs.push({
           id: `field:${hash(identityBasis)}`,
           entityId,
-          domId: String(node.domId || node.id || ''),
+          domId,
           name: String(node.name || ''),
           label,
           type: normalizedType,
