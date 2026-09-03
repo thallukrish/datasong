@@ -18,14 +18,39 @@ function compactWorkflowContext(context = {}) {
   };
 }
 
+function compactExplorationEvidence(observations = [], learnedRelationships = []) {
+  const relationships = arr(learnedRelationships);
+  const behaviorClasses = relationships.filter((relationship) => relationship?.kind === 'behavior_classes');
+  const coveredFieldIds = new Set(behaviorClasses.flatMap((relationship) => [
+    relationship?.sourceFieldId,
+    ...arr(relationship?.memberFieldIds)
+  ]).map(String).filter(Boolean));
+
+  const compactObservations = arr(observations).filter((observation) => {
+    if (!coveredFieldIds.has(String(observation?.fieldId || ''))) return true;
+    return observation?.action?.purpose === 'representative-combination';
+  });
+  const compactRelationships = relationships.filter((relationship) => !(
+    relationship?.kind === 'action_effect'
+    && coveredFieldIds.has(String(relationship?.sourceFieldId || ''))
+  ));
+
+  return {
+    observations: compactObservations.slice(0, 80),
+    learnedRelationships: compactRelationships.slice(0, 120)
+  };
+}
+
 const SYSTEM = `You are DataSong LeMap-Web's LOCAL ENTITY SEMANTIC RESOLVER.
 You receive deterministic structural evidence for one locally explored browser context: fields, groups, actions, observed input→state effects and learned structural relationships, plus a compact semantic workflow arc.
 A rendered browser context may contain one business entity or several related business entities. Browser/page boundaries are presentation evidence only.
 Browser mechanics and observed behavior are already established by deterministic evidence. Interpret only their business/user meaning and do not invent unsupported behavior.
+Finite-choice behavior may be supplied as behavior_classes. coverage.exhaustive=true means the represented domain was exhaustively probed; coverage.exhaustive=false means the classes come from bounded samples and are explicitly non-exhaustive. Never generalize sampled classes into proven universal behavior.
 Name and describe the semantic entities, fields, relationships and actions. For user-input entities, also learn reusable interaction semantics: a concise explanation, a friendly question, useful examples, value reuse scope/policy, and confirmation wording. These interaction semantics describe HOW to ask about the application concept; they must never contain or infer a particular user's value.
 Return strict compact JSON only.`;
 
 export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], learnedRelationships = [], workflowContext = {} } = {}) {
+  const evidence = compactExplorationEvidence(observations, learnedRelationships);
   const payload = {
     workflowArc: compactWorkflowContext(workflowContext),
     entity: entityGraph.entity || {},
@@ -43,10 +68,10 @@ export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], le
     })),
     actions: arr(entityGraph.actions).map((action) => ({ id: action.id, label: action.label, type: action.type, enabled: !!action.visible && !action.disabled })),
     groups: arr(entityGraph.groups).map((group) => ({ id: group.id, label: group.label, groupType: group.groupType, memberFieldIds: group.memberFieldIds })),
-    observations,
-    learnedRelationships
+    observations: evidence.observations,
+    learnedRelationships: evidence.learnedRelationships
   };
-  return `MODE web-local-entity-v1\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Browser mechanics are already established. Identify coherent semantic entities/sub-entities and their relationships. For every coherent user-input concept, return one reusable interaction entry covering the structural field(s). Keep explanations/questions concise and understandable to a normal user, explaining domain jargon when the evidence supports it. Do not invent legal/business meaning beyond the supplied evidence/workflow arc. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], interactions:[{semanticKey,semanticName,structuralFieldIds,explanation,question,examples,valueScope,reusePolicy,confirmationQuestion}], completionInteraction:{confirmationIntro,confirmationQuestion,changeQuestion}, localCompletion, confidence. valueScope must be global|taxpayer|workflow|assessment_year|filing_instance. reusePolicy must be always|same_scope|confirm|never.`;
+  return `MODE web-local-entity-v1\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Browser mechanics are already established. Identify coherent semantic entities/sub-entities and their relationships. For every coherent user-input concept, return one reusable interaction entry covering the structural field(s). Keep explanations/questions concise and understandable to a normal user, explaining domain jargon when the evidence supports it. Treat sampled behavior classes as illustrative/non-exhaustive when coverage.exhaustive=false. Do not invent legal/business meaning beyond the supplied evidence/workflow arc. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], interactions:[{semanticKey,semanticName,structuralFieldIds,explanation,question,examples,valueScope,reusePolicy,confirmationQuestion}], completionInteraction:{confirmationIntro,confirmationQuestion,changeQuestion}, localCompletion, confidence. valueScope must be global|taxpayer|workflow|assessment_year|filing_instance. reusePolicy must be always|same_scope|confirm|never.`;
 }
 
 export function normalizeLocalEntityResponse(raw = {}) {
