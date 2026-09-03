@@ -13,6 +13,12 @@ async function launchChrome() {
   return chromium.launch(options);
 }
 
+async function openTestPage(browser) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  return { context, page };
+}
+
 async function startServer() {
   const html = `<!doctype html><html><body><main><h1>Return Setup</h1>
   <label>Assessment Year<select id="year" onchange="document.getElementById('mode').disabled=!this.value; document.getElementById('continue').disabled=!(this.value && document.querySelector('input[name=mode]:checked'))"><option value="">Choose</option><option value="2026-27">2026-27</option><option value="2025-26">2025-26</option></select></label>
@@ -60,8 +66,8 @@ async function startMaterialLikeServer() {
 test('local explorer discovers dropdown domain and behavior, then restores original state', async (t) => {
   const fixture = await startServer();
   const browser = await launchChrome();
-  t.after(async () => { await browser.close(); await fixture.close(); });
-  const page = await browser.newPage();
+  const { context, page } = await openTestPage(browser);
+  t.after(async () => { await context.close(); await browser.close(); await fixture.close(); });
   await page.goto(fixture.url);
   const snapshot = await snapshotPage(page);
   const graph = preprocessEntity(snapshot);
@@ -83,8 +89,8 @@ test('local explorer discovers dropdown domain and behavior, then restores origi
 test('irreversible material-like select is behaviorally explored in disposable state while live page remains untouched', async (t) => {
   const fixture = await startMaterialLikeServer();
   const browser = await launchChrome();
-  t.after(async () => { await browser.close(); await fixture.close(); });
-  const page = await browser.newPage();
+  const { context, page } = await openTestPage(browser);
+  t.after(async () => { await context.close(); await browser.close(); await fixture.close(); });
   await page.goto(fixture.url);
   const snapshot = await snapshotPage(page);
   const graph = preprocessEntity(snapshot);
