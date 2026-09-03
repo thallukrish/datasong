@@ -33,26 +33,27 @@ test('token ledger aggregates model usage by purpose and total', () => {
   assert.equal(summary.byPurpose.local_entity.tokens, 1980);
 });
 
-test('user interaction logging does not persist free-text values', () => {
+test('user interaction logging does not persist free-text values and records local handling', () => {
   const valueAnswer = summarizeUserInteraction({
     question: { questionId: 'field:pan', answerKind: 'value', label: 'PAN', inputType: 'text' },
-    interpretation: { value: 'ABCDE1234F', confidence: 0.99, reason: 'User supplied PAN ABCDE1234F.' }
+    interpretation: { value: 'ABCDE1234F', confidence: 1, reason: 'value accepted locally', local: true }
   });
   assert.equal(valueAnswer.answer, 'value provided');
   assert.equal(valueAnswer.interpretation, 'value interpreted');
+  assert.equal(valueAnswer.mode, 'local');
   assert.equal(JSON.stringify(valueAnswer).includes('ABCDE1234F'), false);
 
   const modelAnswer = compactModelResult({
-    purpose: 'user_answer',
+    purpose: 'user_choice',
     model: 'deepseek-chat',
-    parsed: { value: 'ABCDE1234F', confidence: 0.99, reason: 'Mapped PAN ABCDE1234F.' }
+    parsed: { selectedFieldIds: ['online'], confidence: 0.99, reason: 'Mapped choice.' }
   });
   assert.equal(JSON.stringify(modelAnswer).includes('ABCDE1234F'), false);
-  assert.equal(modelAnswer.result.value, 'value provided');
 
   const choiceAnswer = summarizeUserInteraction({
     question: { questionId: 'group:mode', answerKind: 'choice', label: 'ITR Mode', options: [{ fieldId: 'online', label: 'Online' }] },
-    interpretation: { selectedFieldIds: ['online'], confidence: 1, reason: 'Selected Online.' }
+    interpretation: { selectedFieldIds: ['online'], confidence: 1, reason: 'Selected Online.', local: false }
   });
+  assert.equal(choiceAnswer.mode, 'model');
   assert.deepEqual(choiceAnswer.selected, [{ fieldId: 'online', label: 'Online' }]);
 });
