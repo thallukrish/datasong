@@ -78,7 +78,8 @@ function addRelationship(result, relationship) {
     relationship.sourceFieldId || '',
     relationship.targetGroupId || '',
     arr(relationship.memberFieldIds).slice().sort(),
-    arr(relationship.values)
+    arr(relationship.values),
+    relationship.reason || ''
   ]);
   if (result._relationshipKeys.has(key)) return;
   result._relationshipKeys.add(key);
@@ -157,7 +158,7 @@ async function readSelectableOptions(page, field) {
       selected: !!option.selected
     })).filter((option) => option.label));
   }
-  if (shape.tag === 'mat-select' || shape.role === 'combobox') {
+  if (shape.tag === 'mat-select' || shape.role === 'combobox' || shape.role === 'listbox') {
     try {
       await locator.click();
       await settle(page, 50);
@@ -176,6 +177,7 @@ async function readSelectableOptions(page, field) {
         .filter((option) => option.label));
     } finally {
       await page.keyboard.press('Escape').catch(() => {});
+      await settle(page, 25);
     }
   }
   return [];
@@ -212,14 +214,23 @@ async function chooseSelectOption(page, field, option, settleMs) {
     await settle(page, settleMs);
     return;
   }
-  if (shape.tag === 'mat-select' || shape.role === 'combobox') {
-    await locator.click();
-    await settle(page, Math.min(settleMs, 100));
-    const exact = page.getByRole('option', { name: option.label, exact: true }).first();
-    if (await exact.count()) await exact.click();
-    else await page.locator('[role="option"],mat-option').filter({ hasText: option.label }).first().click();
-    await settle(page, settleMs);
-    return;
+  if (shape.tag === 'mat-select' || shape.role === 'combobox' || shape.role === 'listbox') {
+    let chosen = false;
+    try {
+      await locator.click();
+      await settle(page, Math.min(settleMs, 100));
+      const exact = page.getByRole('option', { name: option.label, exact: true }).first();
+      if (await exact.count()) await exact.click();
+      else await page.locator('[role="option"],mat-option').filter({ hasText: option.label }).first().click();
+      chosen = true;
+      await settle(page, settleMs);
+      return;
+    } finally {
+      if (!chosen) {
+        await page.keyboard.press('Escape').catch(() => {});
+        await settle(page, 25);
+      }
+    }
   }
   throw new Error(`Unsupported selectable field ${field.id}`);
 }
@@ -230,10 +241,22 @@ async function currentSelectIdentity(page, field) {
   if (shape.tag === 'select') {
     return locator.evaluate((el) => {
       const option = el.options?.[el.selectedIndex];
-      return { value: String(el.value ?? ''), label: String(option?.textContent || option?.label || '').replace(/\s+/g, ' ').trim() };
+      return { value: String(el.value ?? ''), label: String(option?.textContent || option?.label || '').replace(/\s+/g, ' ').trim(), kind: 'native' };
     });
   }
-  return { value: shape.value, label: shape.text };
+  return { value: shape.value, label: shape.text, kind: 'composite' };
+}
+
+function reversibleSelectTarget(field, original, result) {
+  const choices = arr(result.optionDomains[field.id]);
+  if (original.kind === 'native') {
+    return choices.find((option) => option.value === original.value) || null;
+  }
+  return choices.find((option) => !option.disabled && (
+    option.selected
+    || (original.value && option.value === original.value)
+    || (original.label && option.label === original.label)
+  )) || null;
 }
 
 async function restoreSelect(page, originalField, original, result, options) {
@@ -249,14 +272,13 @@ async function restoreSelect(page, originalField, original, result, options) {
       return;
     }
 
-    const choices = result.optionDomains[originalField.id] || [];
-    const target = choices.find((option) => option.value === original.value)
-      || choices.find((option) => option.label === original.label)
-      || choices.find((option) => option.selected);
-    if (!target) throw new Error('No original combobox option discovered');
+    const target = reversibleSelectTarget(originalField, original, result);
+    if (!target) throw new Error('No reversible original combobox option discovered');
     await chooseSelectOption(page, originalField, target, options.settleMs);
   } catch (error) {
     result.errors.push({ fieldId: originalField.id, message: `select restore failed: ${error.message}` });
+  } finally {
+    await page.keyboard.press('Escape').catch(() => {});
   }
 }
 
@@ -397,6 +419,17 @@ async function exploreSelectField(page, initial, field, result, options) {
   const selectable = arr(result.optionDomains[field.id]).filter((option) => !option.disabled);
   if (!selectable.length) return;
   const original = await currentSelectIdentity(page, field);
+  const restoreTarget = reversibleSelectTarget(field, original, result);
+  if (!restoreTarget) {
+    addRelationship(result, {
+      kind: 'probe_skipped',
+      sourceFieldId: field.id,
+      reason: 'irreversible_initial_state',
+      evidenceIds: []
+    });
+    await page.keyboard.press('Escape').catch(() => {});
+    return;
+  }
   const alternatives = selectable.filter((option) => !(option.value === original.value || option.label === original.label));
   for (let index = 0; index < alternatives.length; index += 1) {
     const option = alternatives[index];
