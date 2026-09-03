@@ -24,6 +24,32 @@ async function startServer() {
   return { url: `http://127.0.0.1:${address.port}/`, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
+async function startMaterialLikeServer() {
+  const html = `<!doctype html><html><body><main><h1>Return Setup</h1>
+  <mat-select id="year" role="listbox" aria-label="Assessment Year" tabindex="0">Select</mat-select>
+  <div id="panel" hidden>
+    <div role="option" aria-disabled="true">Select</div>
+    <div role="option">2026-27 (Current A.Y.)</div>
+    <div role="option">2025-26</div>
+  </div>
+  <script>
+    const select = document.getElementById('year');
+    const panel = document.getElementById('panel');
+    select.addEventListener('click', () => { panel.hidden = false; });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') panel.hidden = true; });
+    panel.querySelectorAll('[role=option]').forEach((option) => option.addEventListener('click', () => {
+      if (option.getAttribute('aria-disabled') === 'true') return;
+      select.textContent = option.textContent;
+      option.setAttribute('aria-selected', 'true');
+      panel.hidden = true;
+    }));
+  </script></main></body></html>`;
+  const server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  return { url: `http://127.0.0.1:${address.port}/`, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
 test('local explorer discovers dropdown domain and behavior, then restores original state', async (t) => {
   const fixture = await startServer();
   const browser = await launchChrome();
@@ -44,5 +70,26 @@ test('local explorer discovers dropdown domain and behavior, then restores origi
   assert.equal(await page.locator('#year').inputValue(), '');
   assert.equal(await page.locator('#online').isDisabled(), true);
   assert.equal(await page.locator('#continue').isDisabled(), true);
+  assert.equal(result.restored, true);
+});
+
+test('material-like select with non-selectable placeholder is enumerated but not mutated', async (t) => {
+  const fixture = await startMaterialLikeServer();
+  const browser = await launchChrome();
+  t.after(async () => { await browser.close(); await fixture.close(); });
+  const page = await browser.newPage();
+  await page.goto(fixture.url);
+  const snapshot = await snapshotPage(page);
+  const graph = preprocessEntity(snapshot);
+  const year = graph.fields.find((field) => field.label === 'Assessment Year');
+  assert.ok(year);
+  assert.equal(year.type, 'select');
+
+  const result = await exploreLocalEntity(page, { settleMs: 10, probeBehavior: true });
+  assert.ok(result.valueDomains[year.id].includes('2026-27 (Current A.Y.)'));
+  assert.equal((await page.locator('#year').innerText()).trim(), 'Select');
+  assert.equal(await page.locator('#panel').isHidden(), true);
+  assert.equal(result.observations.some((observation) => observation.fieldId === year.id && observation.action.kind === 'select_option'), false);
+  assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'probe_skipped' && relationship.sourceFieldId === year.id && relationship.reason === 'irreversible_initial_state'));
   assert.equal(result.restored, true);
 });
