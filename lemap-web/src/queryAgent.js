@@ -25,8 +25,9 @@ import {
   buildInstanceFact,
   buildQuestionFromInteraction,
   classifyInteractionItems,
+  confirmationDecision,
+  interpretationFromPrefilled,
   interpretationFromRemembered,
-  isAffirmativeConfirmation,
   scopeKeyForInteraction
 } from './agent/userInteraction.js';
 import { createModelClient, modelConfigFromEnv } from './agent/modelClient.js';
@@ -386,10 +387,17 @@ try {
     const confirmationItems = new Map();
     let forceStop = false;
     let interactionGapRefreshCount = 0;
+    let pendingExecutionReconcile = false;
     let completed;
     let candidates = [];
 
     while (true) {
+      if (pendingExecutionReconcile) {
+        if (settleMs) await page.waitForTimeout(settleMs);
+        pendingExecutionReconcile = false;
+        await runLogger.write('execution_reconcile', { mode: 'fresh_capture_before_planner' });
+      }
+
       const current = await capture(page);
       applyValueDomains(current.graph, valueDomains);
       const interactionItems = classifyInteractionItems({ graph: current.graph, state: current.state, semanticEntity, instanceMemory, workflowKey, scopeKeys });
@@ -453,6 +461,7 @@ try {
           console.log(`[LeMap-Web] reused remembered value for ${remembered.semanticName || remembered.semanticKey}`);
           await runLogger.write('instance_reuse', { semanticKey: remembered.semanticKey, scope: remembered.valueScope || '', source: 'remembered' });
           interactionGapRefreshCount = 0;
+          pendingExecutionReconcile = true;
           continue;
         }
         reusedSemanticKeys.add(remembered.semanticKey);
@@ -487,17 +496,25 @@ try {
           console.log(`[LeMap-Web] ${summary.question}`);
           await runLogger.write('confirmation_request', { items: summary.items.map((item) => ({ semanticKey: item.semanticKey, source: item.source })) });
           const confirmation = (await rl.question('Your answer: ')).trim();
-          if (!isAffirmativeConfirmation(confirmation)) {
-            const changeQuestion = buildChangeSelectionQuestion(summary);
-            printQuestion(changeQuestion);
-            const changeAnswer = (await rl.question('Your answer: ')).trim();
-            const changeInterpretation = await interpretUserAnswer({ client, model, userGoal, semanticEntity, question: changeQuestion, userAnswer: changeAnswer });
-            const semanticKey = changeInterpretation.selectedFieldIds[0];
+          const decision = confirmationDecision(summary, confirmation);
+
+          if (decision !== 'accept') {
+            let semanticKey = '';
+            if (decision === 'reject' && summary.items.length === 1) {
+              semanticKey = summary.items[0].semanticKey;
+            } else {
+              const changeQuestion = buildChangeSelectionQuestion(summary);
+              printQuestion(changeQuestion);
+              const changeAnswer = (await rl.question('Your answer: ')).trim();
+              const changeInterpretation = await interpretUserAnswer({ client, model, userGoal, semanticEntity, question: changeQuestion, userAnswer: changeAnswer });
+              semanticKey = changeInterpretation.selectedFieldIds[0] || '';
+            }
+
             const interaction = arr(semanticEntity.interactions).find((item) => item.semanticKey === semanticKey);
             const editQuestion = interaction ? buildQuestionFromInteraction({ graph: current.graph, interaction }) : null;
             if (!interaction || !editQuestion) {
               console.log('[LeMap-Web] I could not identify which prefilled detail to change. Please try again.');
-              await runLogger.write('confirmation_change_unresolved', { confidence: changeInterpretation.confidence });
+              await runLogger.write('confirmation_change_unresolved', { semanticKey });
               continue;
             }
             printQuestion(editQuestion);
@@ -542,11 +559,45 @@ try {
             }
             await runLogger.write('instance_write', { semanticKey, source: 'user', scope: fact.scope, value: 'stored' });
             interactionGapRefreshCount = 0;
+            pendingExecutionReconcile = true;
             continue;
           }
 
+          let executedConfirmedPrefill = false;
           for (const item of confirmationItems.values()) {
             const interaction = arr(semanticEntity.interactions).find((candidate) => candidate.semanticKey === item.semanticKey) || item;
+
+            if (item.status === 'prefilled') {
+              const executionCapture = await capture(page);
+              const question = buildQuestionFromInteraction({ graph: executionCapture.graph, interaction });
+              const interpretation = interpretationFromPrefilled({ graph: executionCapture.graph, state: executionCapture.state, interaction });
+              if (question && interpretation) {
+                await applyQuestionAnswer(page, executionCapture.graph, question, interpretation);
+                if (settleMs) await page.waitForTimeout(settleMs);
+                const afterExecution = await capture(page);
+                const behaviorResult = await learnFromExecution({
+                  before: executionCapture,
+                  after: afterExecution,
+                  interaction,
+                  interpretation,
+                  labels: [item.displayValue].filter(Boolean),
+                  source: 'confirmed_prefill',
+                  client, model, memory,
+                  workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
+                });
+                if (behaviorResult.semanticRefresh && behaviorResult.semanticEntity) semanticEntity = behaviorResult.semanticEntity;
+                await runLogger.write('execution_behavior', {
+                  semanticKey: interaction.semanticKey,
+                  classId: behaviorResult.behavior?.classId || '',
+                  novel: !!behaviorResult.novel,
+                  semanticRefresh: !!behaviorResult.semanticRefresh,
+                  source: 'confirmed_prefill'
+                });
+                providedSemanticKeys.add(interaction.semanticKey);
+                executedConfirmedPrefill = true;
+              }
+            }
+
             const scopeKey = scopeKeyForFact(interaction, scopeKeys, workflowKey, interaction.valueScope === 'assessment_year' ? item.displayValue : '');
             if (!scopeKey) continue;
             recordInstanceFact(instanceMemory, {
@@ -562,8 +613,14 @@ try {
             if (interaction.valueScope === 'assessment_year') scopeKeys.assessment_year = scopeKey;
           }
           await saveInstanceMemory(instanceFile, instanceMemory);
-          await runLogger.write('confirmation', { accepted: true, count: summary.items.length, semanticKeys: summary.items.map((item) => item.semanticKey) });
+          await runLogger.write('confirmation', { accepted: true, count: summary.items.length, semanticKeys: summary.items.map((item) => item.semanticKey), executedPrefill: executedConfirmedPrefill });
           confirmationItems.clear();
+
+          if (executedConfirmedPrefill) {
+            pendingExecutionReconcile = true;
+            interactionGapRefreshCount = 0;
+            continue;
+          }
         }
         completed = await capture(page);
         break;
@@ -672,6 +729,7 @@ try {
       await runLogger.write('user_answer', { ...interactionLog, mode: interpretation.local ? 'local' : 'model' });
 
       interactionGapRefreshCount = 0;
+      pendingExecutionReconcile = true;
       await runLogger.write('instance_state_change', {
         semanticKey: interaction?.semanticKey || '',
         source: 'user',
