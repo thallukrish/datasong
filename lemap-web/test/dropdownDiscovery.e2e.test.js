@@ -86,11 +86,11 @@ test('local explorer discovers dropdown domain and behavior, then restores origi
   assert.equal(result.restored, true);
 });
 
-test('irreversible material-like select is behaviorally explored in disposable state while live page remains untouched', async (t) => {
+test('irreversible material-like select is behaviorally explored even when context.newPage is unavailable', async (t) => {
   const fixture = await startMaterialLikeServer();
   const browser = await launchChrome();
-  const { context, page } = await openTestPage(browser);
-  t.after(async () => { await context.close(); await browser.close(); await fixture.close(); });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await fixture.close(); });
   await page.goto(fixture.url);
   const snapshot = await snapshotPage(page);
   const graph = preprocessEntity(snapshot);
@@ -103,20 +103,11 @@ test('irreversible material-like select is behaviorally explored in disposable s
   const result = await exploreLocalEntity(page, { settleMs: 10, probeBehavior: true });
   const selectObservations = result.observations.filter((observation) => observation.action?.kind === 'select_option');
   const behaviorRelationships = result.learnedRelationships.filter((relationship) => ['behavior_classes', 'disposable_probe', 'probe_skipped'].includes(relationship.kind));
-  const diagnostics = JSON.stringify({
-    yearId: year.id,
-    onlineId: online.id,
-    errors: result.errors,
-    selectObservations,
-    behaviorRelationships
-  }, null, 2);
+  const diagnostics = JSON.stringify({ yearId: year.id, onlineId: online.id, errors: result.errors, selectObservations, behaviorRelationships }, null, 2);
 
   assert.ok(result.valueDomains[year.id].includes('2026-27 (Current A.Y.)'));
   assert.equal(result.errors.length, 0, diagnostics);
-  assert.ok(
-    selectObservations.some((observation) => observation.fieldId === year.id && observation.delta.fieldsEnabled.includes(online.id)),
-    diagnostics
-  );
+  assert.ok(selectObservations.some((observation) => observation.fieldId === year.id && observation.delta.fieldsEnabled.includes(online.id)), diagnostics);
   assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'behavior_classes' && relationship.sourceFieldId === year.id), diagnostics);
   assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'disposable_probe' && relationship.sourceFieldId === year.id), diagnostics);
   assert.equal((await page.locator('#year').innerText()).trim(), 'Select');
