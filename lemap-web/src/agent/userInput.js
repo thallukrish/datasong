@@ -4,9 +4,9 @@ function arr(value) { return Array.isArray(value) ? value : []; }
 function clamp01(value) { const n = Number(value); return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0; }
 function text(value, max = 700) { const s = String(value || '').trim().replace(/\s+/g, ' '); return s.length > max ? `${s.slice(0, max)}…` : s; }
 
-const SYSTEM = `You are DataSong LeMap-Web's USER ANSWER INTERPRETER.
-The browser structure and available choices are already known. Interpret the user's natural-language answer only against the supplied structural question and compact semantic context.
-Never invent an option, field id, or factual value. Return strict compact JSON only.`;
+const SYSTEM = `You are DataSong LeMap-Web's CHOICE ANSWER INTERPRETER.
+The browser structure and available choices are already known. Interpret the user's natural-language choice only against the supplied structural options and compact semantic context.
+Never invent an option, field id, or factual value. You never receive free-form personal field values. Return strict compact JSON only.`;
 
 export function buildUserQuestions({ graph = {}, state = {}, answeredQuestionIds = new Set(), answeredGroupIds = null } = {}) {
   const answered = answeredQuestionIds instanceof Set ? answeredQuestionIds : (answeredGroupIds instanceof Set ? answeredGroupIds : new Set());
@@ -79,22 +79,21 @@ function compactSemanticForQuestion(semanticEntity = {}, question = {}) {
 }
 
 export function buildUserAnswerPrompt({ userGoal = '', semanticEntity = {}, question = {}, userAnswer = '' } = {}) {
+  if (question.answerKind !== 'choice') throw new Error('Free-form value answers must not be sent to the model');
   const payload = {
     userGoal: text(userGoal, 220),
     currentEntity: compactSemanticForQuestion(semanticEntity, question),
     question: {
       questionId: question.questionId,
-      answerKind: question.answerKind,
+      answerKind: 'choice',
       groupId: question.groupId || '',
-      fieldId: question.fieldId || '',
-      inputType: question.inputType || '',
       label: text(question.label, 280),
       cardinality: question.cardinality,
       options: arr(question.options).slice(0, 30).map((option) => ({ fieldId: option.fieldId || '', value: option.value ?? '', label: text(option.label, 160) }))
     },
-    userAnswer
+    userAnswer: text(userAnswer, 500)
   };
-  return `MODE web-user-answer-v1\n${JSON.stringify(payload)}\n\nTASK:\nIf answerKind=choice, map the user's answer only to supplied option field IDs. If answerKind=value, preserve only the concrete value the user supplied, normalized minimally for the input type; do not infer missing facts. Return JSON {selectedFieldIds,value,confidence,reason}.`;
+  return `MODE web-user-choice-v1\n${JSON.stringify(payload)}\n\nTASK:\nMap the user's choice only to supplied option field IDs. Return JSON {selectedFieldIds,confidence,reason}.`;
 }
 
 export function normalizeUserAnswerResponse(raw = {}, question = {}) {
@@ -106,11 +105,63 @@ export function normalizeUserAnswerResponse(raw = {}, question = {}) {
     selectedFieldIds,
     value,
     confidence: clamp01(raw.confidence),
-    reason: text(raw.reason, 420)
+    reason: text(raw.reason, 420),
+    local: !!raw.local
   };
 }
 
+function localValueInterpretation(userAnswer = '') {
+  const value = String(userAnswer ?? '').trim();
+  return {
+    selectedFieldIds: [],
+    value,
+    confidence: value ? 1 : 0,
+    reason: value ? 'value accepted locally' : 'no value supplied',
+    local: true
+  };
+}
+
+function localChoiceInterpretation(question = {}, userAnswer = '') {
+  const options = arr(question.options);
+  const raw = String(userAnswer ?? '').trim();
+  if (!raw || !options.length) return null;
+
+  const numericParts = raw.split(/[\s,]+/).filter(Boolean);
+  if (numericParts.every((part) => /^\d+$/.test(part))) {
+    const indexes = [...new Set(numericParts.map(Number))];
+    const selected = indexes.map((index) => options[index - 1]).filter(Boolean);
+    if (selected.length === indexes.length && (question.cardinality !== 'exactly_one' || selected.length === 1)) {
+      return {
+        selectedFieldIds: selected.map((option) => String(option.fieldId || '')).filter(Boolean),
+        value: '',
+        confidence: 1,
+        reason: 'choice matched locally by option number',
+        local: true
+      };
+    }
+  }
+
+  const normalized = raw.toLocaleLowerCase();
+  const exact = options.filter((option) => [option.label, option.value, option.fieldId]
+    .some((candidate) => String(candidate ?? '').trim().toLocaleLowerCase() === normalized));
+  if (exact.length === 1) {
+    return {
+      selectedFieldIds: [String(exact[0].fieldId || '')].filter(Boolean),
+      value: '',
+      confidence: 1,
+      reason: 'choice matched locally by exact option',
+      local: true
+    };
+  }
+  return null;
+}
+
 export async function interpretUserAnswer({ client, model, userGoal, semanticEntity, question, userAnswer } = {}) {
+  if (question.answerKind === 'value') return localValueInterpretation(userAnswer);
+
+  const localChoice = localChoiceInterpretation(question, userAnswer);
+  if (localChoice) return localChoice;
+
   const prompt = buildUserAnswerPrompt({ userGoal, semanticEntity, question, userAnswer });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt: prompt });
   return normalizeUserAnswerResponse(response.parsed, question);
