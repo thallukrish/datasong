@@ -136,45 +136,60 @@ async function settle(page, settleMs) {
   if (settleMs > 0) await page.waitForTimeout(settleMs);
 }
 
-async function discoverValueDomain(page, field, result, options) {
-  if (!['select', 'autocomplete'].includes(field.type)) return;
-  const locator = fieldLocator(page, field);
-  if (!(await locator.count())) return;
-  const shape = await locator.evaluate((el) => ({
+async function selectShape(locator) {
+  return locator.evaluate((el) => ({
     tag: String(el.tagName || '').toLowerCase(),
-    role: String(el.getAttribute?.('role') || '').toLowerCase()
+    role: String(el.getAttribute?.('role') || '').toLowerCase(),
+    value: el.value == null ? '' : String(el.value),
+    text: String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim()
   }));
+}
 
-  let values = [];
+async function readSelectableOptions(page, field) {
+  const locator = fieldLocator(page, field);
+  if (!(await locator.count())) return [];
+  const shape = await selectShape(locator);
   if (shape.tag === 'select') {
-    values = await locator.evaluate((el) => Array.from(el.options || []).map((option) => String(option.value || option.textContent || '').trim()).filter(Boolean));
-  } else if (shape.tag === 'mat-select' || shape.role === 'combobox') {
+    return locator.evaluate((el) => Array.from(el.options || []).map((option) => ({
+      value: String(option.value ?? ''),
+      label: String(option.textContent || option.label || option.value || '').replace(/\s+/g, ' ').trim(),
+      disabled: !!option.disabled,
+      selected: !!option.selected
+    })).filter((option) => option.label));
+  }
+  if (shape.tag === 'mat-select' || shape.role === 'combobox') {
     try {
       await locator.click();
-      await settle(page, options.settleMs);
-      values = await page.locator('[role="option"],mat-option').evaluateAll((nodes) => nodes
+      await settle(page, 50);
+      return await page.locator('[role="option"],mat-option').evaluateAll((nodes) => nodes
         .filter((node) => {
           const style = getComputedStyle(node);
           const rect = node.getBoundingClientRect();
           return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
         })
-        .map((node) => String(node.getAttribute('data-value') || node.getAttribute('value') || node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim())
-        .filter(Boolean));
+        .map((node) => ({
+          value: String(node.getAttribute('data-value') || node.getAttribute('value') || node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
+          label: String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
+          disabled: node.getAttribute('aria-disabled') === 'true' || node.hasAttribute('disabled'),
+          selected: node.getAttribute('aria-selected') === 'true'
+        }))
+        .filter((option) => option.label));
     } finally {
       await page.keyboard.press('Escape').catch(() => {});
-      await settle(page, Math.min(options.settleMs, 100));
     }
   }
+  return [];
+}
 
-  values = unique(values);
+async function discoverValueDomain(page, field, result, options) {
+  if (!['select', 'autocomplete'].includes(field.type)) return;
+  const selectable = await readSelectableOptions(page, field);
+  await settle(page, Math.min(options.settleMs, 100));
+  const values = unique(selectable.map((option) => option.label || option.value));
   if (!values.length) return;
   result.valueDomains[field.id] = values;
-  addRelationship(result, {
-    kind: 'value_domain',
-    sourceFieldId: field.id,
-    values,
-    evidenceIds: []
-  });
+  result.optionDomains[field.id] = selectable;
+  addRelationship(result, { kind: 'value_domain', sourceFieldId: field.id, values, evidenceIds: [] });
 }
 
 async function discoverValueDomains(page, graph, result, options) {
@@ -185,6 +200,56 @@ async function discoverValueDomains(page, graph, result, options) {
     } catch (error) {
       result.errors.push({ fieldId: field.id, message: `value-domain discovery failed: ${error.message}` });
     }
+  }
+}
+
+async function chooseSelectOption(page, field, option, settleMs) {
+  const locator = fieldLocator(page, field);
+  const shape = await selectShape(locator);
+  if (shape.tag === 'select') {
+    const target = option.value !== '' ? { value: option.value } : { label: option.label };
+    await locator.selectOption(target).catch(async () => locator.selectOption({ label: option.label }));
+    await settle(page, settleMs);
+    return;
+  }
+  if (shape.tag === 'mat-select' || shape.role === 'combobox') {
+    await locator.click();
+    await settle(page, Math.min(settleMs, 100));
+    const exact = page.getByRole('option', { name: option.label, exact: true }).first();
+    if (await exact.count()) await exact.click();
+    else await page.locator('[role="option"],mat-option').filter({ hasText: option.label }).first().click();
+    await settle(page, settleMs);
+    return;
+  }
+  throw new Error(`Unsupported selectable field ${field.id}`);
+}
+
+async function currentSelectIdentity(page, field) {
+  const locator = fieldLocator(page, field);
+  const shape = await selectShape(locator);
+  if (shape.tag === 'select') {
+    return locator.evaluate((el) => {
+      const option = el.options?.[el.selectedIndex];
+      return { value: String(el.value ?? ''), label: String(option?.textContent || option?.label || '').replace(/\s+/g, ' ').trim() };
+    });
+  }
+  return { value: shape.value, label: shape.text };
+}
+
+async function restoreSelect(page, fieldId, original, result, options) {
+  try {
+    const current = await capture(page);
+    const field = controlById(current.graph, fieldId);
+    if (!field) throw new Error(`Missing select ${fieldId}`);
+    const choices = result.optionDomains[fieldId] || [];
+    const target = choices.find((option) => option.value === original.value)
+      || choices.find((option) => option.label === original.label)
+      || choices.find((option) => option.selected)
+      || choices[0];
+    if (!target) throw new Error('No restore option discovered');
+    await chooseSelectOption(page, field, target, options.settleMs);
+  } catch (error) {
+    result.errors.push({ fieldId, message: `select restore failed: ${error.message}` });
   }
 }
 
@@ -208,7 +273,6 @@ async function exploreCheckboxGroup(page, groupId, result, options) {
   const base = await capture(page);
   const group = groupById(base.graph, groupId);
   if (!group || group.groupType !== 'checkbox') return;
-
   const candidates = arr(group.memberFieldIds).filter((fieldId) => {
     const state = base.state.fields[fieldId];
     return state?.enabled && state?.visible && state?.checked === false;
@@ -233,26 +297,56 @@ async function exploreCheckboxGroup(page, groupId, result, options) {
     try {
       const beforeFirst = await capture(page);
       await setCheckbox(page, beforeFirst.graph, firstId, true, options.settleMs);
-
       const beforeSecond = await capture(page);
       const secondExec = await setCheckbox(page, beforeSecond.graph, secondId, true, options.settleMs);
       const afterSecond = await capture(page);
       combinationObservation = recordObservedEffect(result, beforeSecond, afterSecond, secondExec.field, secondExec.action, 'representative-combination');
-
       const firstStillChecked = afterSecond.state.fields[firstId]?.checked === true;
       const secondChecked = afterSecond.state.fields[secondId]?.checked === true;
       addRelationship(result, {
         kind: firstStillChecked && secondChecked ? 'multi_select' : 'mutually_exclusive',
-        groupType: 'checkbox',
-        groupId: group.id,
-        memberFieldIds: [...group.memberFieldIds],
-        representativeFieldIds: [firstId, secondId],
+        groupType: 'checkbox', groupId: group.id, memberFieldIds: [...group.memberFieldIds], representativeFieldIds: [firstId, secondId],
         evidenceIds: combinationObservation ? [combinationObservation.id] : []
       });
     } finally {
       await restoreCheckbox(page, secondId, options.settleMs);
       await restoreCheckbox(page, firstId, options.settleMs);
     }
+  }
+}
+
+async function clearRadioGroup(page, graph, group, settleMs) {
+  for (const fieldId of arr(group.memberFieldIds)) {
+    const field = controlById(graph, fieldId);
+    if (!field) continue;
+    const locator = fieldLocator(page, field);
+    if (!(await locator.count())) continue;
+    await locator.evaluate((el) => {
+      if (!el.checked) return;
+      el.checked = false;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+  await settle(page, settleMs);
+}
+
+async function restoreRadioGroup(page, group, originalId, result, options) {
+  try {
+    const current = await capture(page);
+    if (originalId) {
+      if (current.state.fields[originalId]?.checked === true) return;
+      const originalField = controlById(current.graph, originalId);
+      const restoreAction = methodFor(current.graph, originalId, (candidate) => candidate.kind === 'select');
+      if (originalField && restoreAction?.safety === 'safe') {
+        await executeSafeAction(page, originalField, restoreAction);
+        await settle(page, options.settleMs);
+      }
+      return;
+    }
+    await clearRadioGroup(page, current.graph, group, options.settleMs);
+  } catch (error) {
+    result.errors.push({ fieldId: originalId || group.id, message: `radio restore failed: ${error.message}` });
   }
 }
 
@@ -266,7 +360,6 @@ async function exploreRadioGroup(page, initial, group, result, options) {
     const field = controlById(before.graph, fieldId);
     const action = methodFor(before.graph, fieldId, (candidate) => candidate.kind === 'select');
     if (!field || !action || action.safety !== 'safe') continue;
-
     try {
       await executeSafeAction(page, field, action);
       await settle(page, options.settleMs);
@@ -275,18 +368,11 @@ async function exploreRadioGroup(page, initial, group, result, options) {
       if (observation) {
         const selected = after.state.fields[fieldId]?.checked === true;
         const otherSelected = arr(group.memberFieldIds).filter((memberId) => memberId !== fieldId && after.state.fields[memberId]?.checked === true);
-        if (selected && otherSelected.length === 0) {
-          addRelationship(result, {
-            kind: 'mutually_exclusive',
-            groupType: 'radio',
-            groupId: group.id,
-            memberFieldIds: [...group.memberFieldIds],
-            evidenceIds: [observation.id]
-          });
-        }
+        if (selected && otherSelected.length === 0) addRelationship(result, {
+          kind: 'mutually_exclusive', groupType: 'radio', groupId: group.id, memberFieldIds: [...group.memberFieldIds], evidenceIds: [observation.id]
+        });
         learnEnabledGroups(result, before, after, fieldId, observation.id);
       }
-
       const enabledCheckboxGroupIds = arr(after.graph.groups)
         .filter((candidate) => candidate.groupType === 'checkbox')
         .filter((candidate) => arr(candidate.memberFieldIds).some((memberId) => after.state.fields[memberId]?.enabled && !before.state.fields[memberId]?.enabled))
@@ -295,21 +381,38 @@ async function exploreRadioGroup(page, initial, group, result, options) {
     } catch (error) {
       result.errors.push({ fieldId, message: error.message });
     } finally {
-      if (originalId) {
-        try {
-          const current = await capture(page);
-          if (current.state.fields[originalId]?.checked !== true) {
-            const originalField = controlById(current.graph, originalId);
-            const restoreAction = methodFor(current.graph, originalId, (candidate) => candidate.kind === 'select');
-            if (originalField && restoreAction?.safety === 'safe') {
-              await executeSafeAction(page, originalField, restoreAction);
-              await settle(page, options.settleMs);
-            }
-          }
-        } catch (error) {
-          result.errors.push({ fieldId: originalId, message: `restore failed: ${error.message}` });
-        }
+      await restoreRadioGroup(page, group, originalId, result, options);
+    }
+  }
+}
+
+async function exploreSelectField(page, initial, field, result, options) {
+  const selectable = arr(result.optionDomains[field.id]).filter((option) => !option.disabled);
+  if (!selectable.length) return;
+  const original = await currentSelectIdentity(page, field);
+  const alternatives = selectable.filter((option) => !(option.value === original.value || option.label === original.label));
+  for (let index = 0; index < alternatives.length; index += 1) {
+    const option = alternatives[index];
+    try {
+      const before = await capture(page);
+      const currentField = controlById(before.graph, field.id);
+      if (!currentField || before.state.fields[field.id]?.enabled === false || before.state.fields[field.id]?.visible === false) continue;
+      await chooseSelectOption(page, currentField, option, options.settleMs);
+      const after = await capture(page);
+      const action = { id: `probe:${field.id}:option:${index + 1}`, kind: 'select_option', value: option.label || option.value, purpose: 'option-probe', safety: 'safe' };
+      const observation = recordObservedEffect(result, before, after, currentField, action, 'option-probe');
+      if (observation) learnEnabledGroups(result, before, after, field.id, observation.id);
+
+      const newlyEnabledGroups = arr(after.graph.groups).filter((group) => arr(group.memberFieldIds)
+        .some((memberId) => after.state.fields[memberId]?.enabled && !before.state.fields[memberId]?.enabled));
+      for (const group of newlyEnabledGroups) {
+        if (group.groupType === 'radio') await exploreRadioGroup(page, after, group, result, options);
+        if (group.groupType === 'checkbox') await exploreCheckboxGroup(page, group.id, result, options);
       }
+    } catch (error) {
+      result.errors.push({ fieldId: field.id, message: `select option probe failed: ${error.message}` });
+    } finally {
+      await restoreSelect(page, field.id, original, result, options);
     }
   }
 }
@@ -323,31 +426,27 @@ export async function exploreLocalEntity(page, options = {}) {
   const result = {
     entity: structuredClone(initial.graph.entity),
     initialStateId: initial.stateId,
-    finalStateId: '',
-    observations: [],
-    learnedRelationships: [],
-    valueDomains: {},
+    finalStateId: '', observations: [], learnedRelationships: [], valueDomains: {}, optionDomains: {},
     probeBehavior: settings.probeBehavior,
     outgoingCandidates: arr(initial.graph.actions).map((actionField) => ({
-      fieldId: actionField.id,
-      label: actionField.label,
-      type: actionField.type,
-      href: actionField.href || '',
+      fieldId: actionField.id, label: actionField.label, type: actionField.type, href: actionField.href || '',
       executableNow: !!(actionField.visible && !actionField.disabled),
       safety: methodFor(initial.graph, actionField.id)?.safety || methodFor(initial.graph, actionField.id)?.actions?.[0]?.safety || 'policy-required'
     })),
-    restored: false,
-    errors: [],
-    _relationshipKeys: new Set()
+    restored: false, errors: [], _relationshipKeys: new Set()
   };
 
   await discoverValueDomains(page, initial.graph, result, settings);
 
   if (settings.probeBehavior) {
-    for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'radio')) {
-      await exploreRadioGroup(page, initial, group, result, settings);
+    for (const field of arr(initial.graph.fields).filter((candidate) => candidate.type === 'select' && candidate.visible && !candidate.disabled)) {
+      await exploreSelectField(page, initial, field, result, settings);
     }
-
+    for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'radio')) {
+      const current = await capture(page);
+      const currentGroup = groupById(current.graph, group.id);
+      if (currentGroup && arr(currentGroup.memberFieldIds).some((fieldId) => current.state.fields[fieldId]?.enabled)) await exploreRadioGroup(page, current, currentGroup, result, settings);
+    }
     for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'checkbox')) {
       const current = await capture(page);
       if (arr(group.memberFieldIds).some((fieldId) => current.state.fields[fieldId]?.enabled)) await exploreCheckboxGroup(page, group.id, result, settings);
@@ -358,5 +457,6 @@ export async function exploreLocalEntity(page, options = {}) {
   result.finalStateId = final.stateId;
   result.restored = JSON.stringify(final.state.fields) === JSON.stringify(initial.state.fields);
   delete result._relationshipKeys;
+  delete result.optionDomains;
   return result;
 }
