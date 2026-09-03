@@ -110,13 +110,45 @@ export function normalizeUserAnswerResponse(raw = {}, question = {}) {
   };
 }
 
-function localValueInterpretation(userAnswer = '') {
-  const value = String(userAnswer ?? '').trim();
+function localValueInterpretation(question = {}, userAnswer = '') {
+  const raw = String(userAnswer ?? '').trim();
+  if (!raw) return { selectedFieldIds: [], value: '', confidence: 0, reason: 'no value supplied', local: true };
+
+  const options = arr(question.options);
+  const isKnownOptionInput = ['select'].includes(String(question.inputType || '').toLowerCase()) && options.length > 0;
+  if (isKnownOptionInput) {
+    if (/^\d+$/.test(raw)) {
+      const option = options[Number(raw) - 1];
+      if (option) {
+        return {
+          selectedFieldIds: [],
+          value: String(option.value ?? option.label ?? ''),
+          confidence: 1,
+          reason: 'select value matched locally by option number',
+          local: true
+        };
+      }
+    }
+    const normalized = raw.toLocaleLowerCase();
+    const exact = options.filter((option) => [option.label, option.value]
+      .some((candidate) => String(candidate ?? '').trim().toLocaleLowerCase() === normalized));
+    if (exact.length === 1) {
+      return {
+        selectedFieldIds: [],
+        value: String(exact[0].value ?? exact[0].label ?? ''),
+        confidence: 1,
+        reason: 'select value matched locally by exact option',
+        local: true
+      };
+    }
+    return { selectedFieldIds: [], value: '', confidence: 0, reason: 'select value did not match a supplied option', local: true };
+  }
+
   return {
     selectedFieldIds: [],
-    value,
-    confidence: value ? 1 : 0,
-    reason: value ? 'value accepted locally' : 'no value supplied',
+    value: raw,
+    confidence: 1,
+    reason: 'value accepted locally',
     local: true
   };
 }
@@ -157,7 +189,7 @@ function localChoiceInterpretation(question = {}, userAnswer = '') {
 }
 
 export async function interpretUserAnswer({ client, model, userGoal, semanticEntity, question, userAnswer } = {}) {
-  if (question.answerKind === 'value') return localValueInterpretation(userAnswer);
+  if (question.answerKind === 'value') return localValueInterpretation(question, userAnswer);
 
   const localChoice = localChoiceInterpretation(question, userAnswer);
   if (localChoice) return localChoice;
