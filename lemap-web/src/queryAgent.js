@@ -12,7 +12,7 @@ import { resolveLocalEntity } from './semantic/localEntityResolver.js';
 import { scoreNavigationCandidates } from './semantic/navigationScout.js';
 import { planInformationNeed } from './semantic/informationNeedPlanner.js';
 import { setModelCallLogger } from './semantic/modelCall.js';
-import { buildUserQuestions, interpretUserAnswer } from './agent/userInput.js';
+import { interpretUserAnswer } from './agent/userInput.js';
 import { applyQuestionAnswer, chooseExecutableNavigation, executeNavigationCandidate } from './agent/browserActions.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition, recordSessionAnswer, startQuerySession } from './agent/memory.js';
 import { loadInstanceMemory, recordInstanceFact, saveInstanceMemory } from './agent/instanceMemory.js';
@@ -107,6 +107,11 @@ function knownEntityIsCompatible(entry, graph) {
     && Array.isArray(entry.semantic.interactions)
     && structuralSignatureFromMemory(entry) === structuralSignatureFromGraph(graph);
 }
+function uncoveredUserInputFields(graph = {}, state = {}, semanticEntity = {}) {
+  const covered = new Set(arr(semanticEntity.interactions).flatMap((item) => arr(item.structuralFieldIds)).map(String));
+  const inputTypes = new Set(['text', 'number', 'date', 'select', 'autocomplete', 'radio', 'checkbox']);
+  return arr(graph.fields).filter((field) => inputTypes.has(field.type) && state.fields?.[field.id]?.visible && state.fields?.[field.id]?.enabled && !covered.has(String(field.id)));
+}
 function workflowContext(memory, session, userAnswers, semanticEntity, currentEntityId, semanticPath) {
   const pathEdges = new Set(session.path || []);
   const traversed = arr(memory.workflow?.edges).filter((edge) => pathEdges.has(edge.id));
@@ -155,7 +160,17 @@ async function learnCurrentContext({ page, client, model, memory, settleMs, prio
     observations: local.observations
   });
   await saveMemory(memory);
-  return { local, captured, semanticEntity, valueDomains };
+  return { local, captured, semanticEntity, valueDomains, mode: 'learn' };
+}
+async function refreshCurrentContext({ page, client, model, memory, settleMs, priorDomains = {}, workflowArc = {} }) {
+  const current = await capture(page);
+  const known = memory.entities?.[current.graph.entity.id];
+  if (knownEntityIsCompatible(known, current.graph)) {
+    const valueDomains = { ...priorDomains, ...valueDomainsFromMemory(known) };
+    applyValueDomains(current.graph, valueDomains);
+    return { captured: current, semanticEntity: known.semantic, valueDomains, mode: 'reuse' };
+  }
+  return learnCurrentContext({ page, client, model, memory, settleMs, priorDomains, probeBehavior: false, workflowArc });
 }
 function modelConsoleLine(summary = {}) {
   const t = summary.tokens || {};
@@ -290,6 +305,7 @@ try {
     const confirmationItems = new Map();
     let forceStop = false;
     let exploreMoreCount = 0;
+    let interactionGapRefreshCount = 0;
     let completed;
     let candidates = [];
 
@@ -300,6 +316,26 @@ try {
 
       for (const item of interactionItems) {
         if (item.status === 'prefilled' && !providedSemanticKeys.has(item.semanticKey) && !confirmationItems.has(item.semanticKey)) confirmationItems.set(item.semanticKey, item);
+      }
+
+      const uncovered = uncoveredUserInputFields(current.graph, current.state, semanticEntity);
+      if (uncovered.length) {
+        if (interactionGapRefreshCount >= 1) {
+          console.log(`[LeMap-Web] semantic interaction coverage incomplete for ${uncovered.length} input field(s); stopping instead of asking raw UI labels.`);
+          await runLogger.write('stop', { reason: 'semantic_interaction_coverage_gap', uncoveredFieldCount: uncovered.length });
+          forceStop = true;
+          break;
+        }
+        interactionGapRefreshCount += 1;
+        console.log(`[LeMap-Web] refreshing semantics for ${uncovered.length} uncovered user input field(s)`);
+        await runLogger.write('semantic_interaction_gap', { uncoveredFieldCount: uncovered.length });
+        const learned = await learnCurrentContext({
+          page, client, model, memory, settleMs, priorDomains: valueDomains, probeBehavior: true,
+          workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
+        });
+        semanticEntity = learned.semanticEntity;
+        valueDomains = learned.valueDomains;
+        continue;
       }
 
       const remembered = interactionItems.find((item) => item.status === 'remembered' && !reusedSemanticKeys.has(item.semanticKey));
@@ -313,12 +349,13 @@ try {
           confirmationItems.set(remembered.semanticKey, { ...remembered, status: 'remembered' });
           console.log(`[LeMap-Web] reused remembered value for ${remembered.semanticName || remembered.semanticKey}`);
           await runLogger.write('instance_reuse', { semanticKey: remembered.semanticKey, scope: remembered.valueScope || '', source: 'remembered' });
-          const relearned = await learnCurrentContext({
-            page, client, model, memory, settleMs, priorDomains: valueDomains, probeBehavior: false,
+          const refreshed = await refreshCurrentContext({
+            page, client, model, memory, settleMs, priorDomains: valueDomains,
             workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
           });
-          semanticEntity = relearned.semanticEntity;
-          valueDomains = relearned.valueDomains;
+          semanticEntity = refreshed.semanticEntity;
+          valueDomains = refreshed.valueDomains;
+          await runLogger.write('semantic_refresh', { mode: refreshed.mode, reason: 'remembered_value_applied', semanticName: semanticEntity.semanticName || '' });
           continue;
         }
         reusedSemanticKeys.add(remembered.semanticKey);
@@ -326,12 +363,10 @@ try {
       }
 
       const refreshedItems = classifyInteractionItems({ graph: current.graph, state: current.state, semanticEntity, instanceMemory, workflowKey, scopeKeys });
-      const semanticQuestions = refreshedItems
+      const candidateQuestions = refreshedItems
         .filter((item) => item.status === 'missing' && !answeredQuestionIds.has(`interaction:${item.semanticKey}`))
         .map((item) => buildQuestionFromInteraction({ graph: current.graph, interaction: item }))
         .filter(Boolean);
-      const fallbackQuestions = arr(semanticEntity.interactions).length ? [] : buildUserQuestions({ graph: current.graph, state: current.state, answeredQuestionIds });
-      const candidateQuestions = semanticQuestions.length ? semanticQuestions : fallbackQuestions;
 
       candidates = await collectNavigationCandidates(page, current.graph);
       const context = workflowContext(memory, session, userAnswers, semanticEntity, current.graph.entity.id, semanticPath);
@@ -388,12 +423,13 @@ try {
               await saveInstanceMemory(instanceFile, instanceMemory);
             }
             await runLogger.write('instance_write', { semanticKey, source: 'user', scope: fact.scope, value: 'stored' });
-            const relearned = await learnCurrentContext({
-              page, client, model, memory, settleMs, priorDomains: valueDomains, probeBehavior: false,
+            const refreshed = await refreshCurrentContext({
+              page, client, model, memory, settleMs, priorDomains: valueDomains,
               workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
             });
-            semanticEntity = relearned.semanticEntity;
-            valueDomains = relearned.valueDomains;
+            semanticEntity = refreshed.semanticEntity;
+            valueDomains = refreshed.valueDomains;
+            await runLogger.write('semantic_refresh', { mode: refreshed.mode, reason: 'confirmed_value_changed', semanticName: semanticEntity.semanticName || '' });
             continue;
           }
 
@@ -460,6 +496,7 @@ try {
       await runLogger.write('user_question', {
         questionId: question.questionId,
         semanticKey: String(question.questionId || '').startsWith('interaction:') ? String(question.questionId).slice('interaction:'.length) : '',
+        question: String(question.label || '').slice(0, 300),
         answerKind: question.answerKind,
         options: arr(question.options).slice(0, 30).map((option) => ({ fieldId: option.fieldId || '', label: option.label }))
       });
@@ -506,15 +543,16 @@ try {
       console.log(`[LeMap-Web] interpreted (${interpretation.confidence.toFixed(2)}): ${question.answerKind === 'value' ? 'value supplied' : interpretation.reason || labels.join(', ')}`);
       await runLogger.write('user_answer', summarizeUserInteraction({ question, interpretation }));
 
-      const relearned = await learnCurrentContext({
-        page, client, model, memory, settleMs, priorDomains: valueDomains, probeBehavior: false,
+      const refreshed = await refreshCurrentContext({
+        page, client, model, memory, settleMs, priorDomains: valueDomains,
         workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
       });
-      semanticEntity = relearned.semanticEntity;
-      valueDomains = relearned.valueDomains;
+      semanticEntity = refreshed.semanticEntity;
+      valueDomains = refreshed.valueDomains;
       exploreMoreCount = 0;
-      console.log(`[LeMap-Web] semantic context after answer: ${semanticEntity.semanticName || '(unnamed)'}`);
-      await runLogger.write('semantic_refresh', { semanticName: semanticEntity.semanticName || '', interactionKeys: arr(semanticEntity.interactions).map((item) => item.semanticKey).slice(0, 12) });
+      interactionGapRefreshCount = 0;
+      console.log(`[LeMap-Web] semantic context after answer: ${semanticEntity.semanticName || '(unnamed)'} (${refreshed.mode})`);
+      await runLogger.write('semantic_refresh', { mode: refreshed.mode, reason: 'user_answer_applied', semanticName: semanticEntity.semanticName || '', interactionKeys: arr(semanticEntity.interactions).map((item) => item.semanticKey).slice(0, 12) });
     }
 
     if (forceStop) break;
