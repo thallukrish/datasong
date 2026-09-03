@@ -38,7 +38,9 @@ export async function applyGroupAnswer(page, graph, question, interpretation) {
   if (question.cardinality === 'exactly_one') {
     const chosen = fields.find((field) => selected.has(field.id));
     if (!chosen) throw new Error('No valid option selected for exactly-one question');
-    await fieldLocator(page, chosen).check();
+    const locator = fieldLocator(page, chosen);
+    if (chosen.type === 'radio' && await locator.isChecked().catch(() => false)) await locator.click();
+    else await locator.check();
     return;
   }
   for (const field of fields) {
