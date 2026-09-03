@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/browserCapture.test.js test/entityGraph.test.js test/workflowGraph.test.js test/semantic.test.js test/queryAgent.test.js test/lazyNavigation.test.js test/runLogger.test.js test/interactionSemantics.test.js test/instanceMemory.test.js test/userInteraction.test.js",
+    "test": "node --test test/browserCapture.test.js test/entityGraph.test.js test/workflowGraph.test.js test/semantic.test.js test/queryAgent.test.js test/lazyNavigation.test.js test/runLogger.test.js test/interactionSemantics.test.js test/instanceMemory.test.js test/userInteraction.test.js test/behaviorSampling.test.js",
     "test:browser": "node --test test/browserEntity.e2e.test.js test/dropdownDiscovery.e2e.test.js test/blockingOverlay.e2e.test.js",
     "test:all": "npm test && npm run test:browser",
     "attach": "node src/capture.js",
