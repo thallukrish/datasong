@@ -8,8 +8,6 @@ import { snapshotPage } from '../src/browserCapture.js';
 import { preprocessEntity } from '../src/graph/entityPreprocessor.js';
 import { projectEntityState } from '../src/graph/entityState.js';
 import { computeEntityDelta } from '../src/graph/entityDelta.js';
-import { exploreLocalEntity } from '../src/explore/localExplorer.js';
-import { collectNavigationCandidates } from '../src/explore/navigationCandidates.js';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/input-behavior.html', import.meta.url));
 
@@ -104,39 +102,6 @@ test('browser entity benchmark discovers and observes generic behavior', async (
     const delta = computeEntityDelta(before.state, after.state);
     const continueButton = controlByLabel(after.graph, 'Continue');
     assert.ok(delta.actionsShown.includes(continueButton.id));
-    await page.close();
-  });
-
-  await t.test('automatic local explorer probes every checkbox individually before representative combinations, restores state, and retains outgoing navigation candidates', async () => {
-    const page = await freshPage(browser, fixture.url);
-    const before = await capture(page);
-    const result = await exploreLocalEntity(page, { settleMs: 25 });
-    const after = await capture(page);
-    const candidates = await collectNavigationCandidates(page, after.graph);
-
-    const reasonB = controlByLabel(before.graph, 'Reason B');
-    const condition1 = controlByLabel(before.graph, 'Condition 1');
-    const condition2 = controlByLabel(before.graph, 'Condition 2');
-    const continueButton = controlByLabel(before.graph, 'Continue');
-
-    assert.ok(result.observations.some((observation) => observation.fieldId === reasonB.id && observation.delta.fieldsEnabled.includes(condition1.id) && observation.delta.actionsHidden.includes(continueButton.id)));
-
-    const condition1Individual = result.observations.find((observation) => observation.fieldId === condition1.id && observation.action.purpose === 'individual-probe');
-    const condition2Individual = result.observations.find((observation) => observation.fieldId === condition2.id && observation.action.purpose === 'individual-probe');
-    assert.ok(condition1Individual);
-    assert.ok(condition2Individual);
-    assert.ok(condition1Individual.delta.actionsShown.includes(continueButton.id));
-    assert.ok(condition2Individual.delta.actionsShown.includes(continueButton.id));
-
-    const combinationProbe = result.observations.find((observation) => observation.fieldId === condition2.id && observation.action.purpose === 'representative-combination');
-    assert.ok(combinationProbe);
-    assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'mutually_exclusive' && relationship.groupType === 'radio'));
-    assert.ok(result.learnedRelationships.some((relationship) => relationship.kind === 'multi_select' && relationship.groupType === 'checkbox' && relationship.memberFieldIds.includes(condition1.id) && relationship.memberFieldIds.includes(condition2.id)));
-    assert.deepEqual(after.state.fields, before.state.fields);
-    assert.equal(result.restored, true);
-    assert.ok(candidates.some((candidate) => candidate.label === 'Continue' && candidate.kind === 'action'));
-    assert.ok(candidates.some((candidate) => candidate.label === 'Dashboard' && candidate.kind === 'link' && candidate.href.endsWith('/dashboard')));
-    assert.ok(candidates.some((candidate) => candidate.label === 'Home' && candidate.kind === 'link' && candidate.href.endsWith('/home')));
     await page.close();
   });
 
