@@ -17,9 +17,12 @@ function normalizeScope(scope) {
   return VALID_SCOPES.has(scope) ? scope : 'filing_instance';
 }
 
-function factKey(fact = {}) {
-  return [text(fact.semanticKey), normalizeScope(fact.scope), text(fact.workflowKey), text(fact.scopeKey)].join('|');
+function keyParts(fact = {}) {
+  const scope = normalizeScope(fact.scope);
+  const workflowKey = ['workflow', 'assessment_year', 'filing_instance'].includes(scope) ? text(fact.workflowKey) : '';
+  return [text(fact.semanticKey), scope, workflowKey, text(fact.scopeKey)];
 }
+function factKey(fact = {}) { return keyParts(fact).join('|'); }
 
 export function recordInstanceFact(memory, fact = {}) {
   if (!memory || !Array.isArray(memory.facts)) throw new Error('Invalid instance memory');
@@ -45,8 +48,8 @@ export function recordInstanceFact(memory, fact = {}) {
 }
 
 export function findApplicableFact(memory, { semanticKey = '', workflowKey = '', scope = 'filing_instance', scopeKey = '' } = {}) {
-  const wantedScope = normalizeScope(scope);
-  const key = [text(semanticKey), wantedScope, text(workflowKey), text(scopeKey)].join('|');
+  const probe = { semanticKey, workflowKey, scope, scopeKey };
+  const key = factKey(probe);
   const fact = arr(memory?.facts).find((item) => factKey(item) === key && item.confirmed !== false);
   return fact || null;
 }
