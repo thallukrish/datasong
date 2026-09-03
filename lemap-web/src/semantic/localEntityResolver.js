@@ -122,8 +122,23 @@ export function normalizeLocalEntityResponse(raw = {}) {
   };
 }
 
+export function expandInteractionBindings(semanticEntity = {}, entityGraph = {}) {
+  const groups = arr(entityGraph.groups).filter((group) => ['radio', 'checkbox'].includes(String(group?.groupType || '')));
+  return {
+    ...semanticEntity,
+    interactions: arr(semanticEntity.interactions).map((interaction) => {
+      const ids = new Set(arr(interaction.structuralFieldIds).map(String));
+      for (const group of groups) {
+        const members = arr(group.memberFieldIds).map(String);
+        if (members.some((fieldId) => ids.has(fieldId))) members.forEach((fieldId) => ids.add(fieldId));
+      }
+      return { ...interaction, structuralFieldIds: [...ids] };
+    })
+  };
+}
+
 export async function resolveLocalEntity({ client, model, entityGraph, observations = [], learnedRelationships = [], workflowContext = {} } = {}) {
   const userPrompt = buildLocalEntityPrompt({ entityGraph, observations, learnedRelationships, workflowContext });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
-  return normalizeLocalEntityResponse(response.parsed);
+  return expandInteractionBindings(normalizeLocalEntityResponse(response.parsed), entityGraph);
 }
