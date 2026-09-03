@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyInteractionItems, buildConfirmationSummary, interactionFields } from '../src/agent/userInteraction.js';
+import { classifyInteractionItems, buildConfirmationSummary, interactionFields, confirmationDecision } from '../src/agent/userInteraction.js';
 import { createInstanceMemory, recordInstanceFact } from '../src/agent/instanceMemory.js';
 
 const graph = {
@@ -71,4 +71,18 @@ test('confirmation summary includes only prefilled or reused values', () => {
   });
   assert.equal(summary.items.length, 2);
   assert.match(summary.question, /correct/i);
+});
+
+test('single-item confirmation accepts yes, option number, or displayed value locally', () => {
+  const summary = { items: [{ semanticKey: 'assessee-status', label: 'Assessee Status', value: 'Individual', source: 'prefilled' }] };
+  assert.equal(confirmationDecision(summary, 'yes'), 'accept');
+  assert.equal(confirmationDecision(summary, '1'), 'accept');
+  assert.equal(confirmationDecision(summary, 'Individual'), 'accept');
+  assert.equal(confirmationDecision(summary, 'individual'), 'accept');
+});
+
+test('single-item confirmation rejects explicit no instead of entering field-selection mode', () => {
+  const summary = { items: [{ semanticKey: 'assessee-status', label: 'Assessee Status', value: 'Individual', source: 'prefilled' }] };
+  assert.equal(confirmationDecision(summary, 'no'), 'reject');
+  assert.equal(confirmationDecision(summary, 'change'), 'reject');
 });
