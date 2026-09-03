@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compactModelResult, summarizeUserInteraction } from '../src/agent/runLogger.js';
+import { compactModelResult, createTokenLedger, summarizeUserInteraction } from '../src/agent/runLogger.js';
 
 test('model result logging keeps decisions and token usage compact', () => {
   const summary = compactModelResult({
@@ -17,6 +17,20 @@ test('model result logging keeps decisions and token usage compact', () => {
   assert.equal(summary.result.decision, 'ask_user');
   assert.deepEqual(summary.result.questionIds, ['field:year']);
   assert.equal(summary.result.huge, undefined);
+});
+
+test('token ledger aggregates model usage by purpose and total', () => {
+  const ledger = createTokenLedger();
+  ledger.add({ purpose: 'local_entity', tokens: { prompt: 1000, completion: 100, total: 1100, cacheHit: 500 } });
+  ledger.add({ purpose: 'local_entity', tokens: { prompt: 800, completion: 80, total: 880, cacheHit: 400 } });
+  ledger.add({ purpose: 'navigation_scout', tokens: { prompt: 600, completion: 60, total: 660, cacheHit: 0 } });
+
+  const summary = ledger.summary();
+  assert.equal(summary.total.calls, 3);
+  assert.equal(summary.total.tokens, 2640);
+  assert.equal(summary.total.cacheHit, 900);
+  assert.equal(summary.byPurpose.local_entity.calls, 2);
+  assert.equal(summary.byPurpose.local_entity.tokens, 1980);
 });
 
 test('user interaction logging does not persist free-text values', () => {
