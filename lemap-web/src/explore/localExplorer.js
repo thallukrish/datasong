@@ -553,11 +553,20 @@ async function probeSelectSamples(page, initial, field, selectable, result, opti
   return sampled.coverage;
 }
 
+async function openDisposablePage(livePage) {
+  const context = livePage.context();
+  const pagePromise = context.waitForEvent('page', { timeout: 5000 });
+  const opened = await livePage.evaluate((url) => !!window.open(url, '_blank'), livePage.url());
+  if (!opened) throw new Error('Browser blocked disposable exploration tab');
+  const probePage = await pagePromise;
+  await probePage.waitForLoadState('domcontentloaded');
+  return probePage;
+}
+
 async function exploreSelectInDisposablePage(livePage, initial, field, result, options) {
   let probePage;
   try {
-    probePage = await livePage.context().newPage();
-    await probePage.goto(livePage.url(), { waitUntil: 'domcontentloaded' });
+    probePage = await openDisposablePage(livePage);
     await settle(probePage, Math.max(options.settleMs, 100));
     let baseline = await capture(probePage);
     if (comparableStructure(baseline) !== comparableStructure(initial)) throw new Error('Disposable page does not reproduce the current structural entity');
