@@ -347,25 +347,154 @@ The goal is:
 
 The explorer is type-aware and evidence-driven.
 
+### Shared finite-choice exploration policy
+
+Controls such as selects, radio groups, checkbox groups, segmented buttons, tabs, exclusive toggle groups and bounded autocomplete domains all expose some form of finite choice. Their DOM mechanics differ, but the exploration policy should be shared.
+
+Each control adapter is responsible only for mechanics:
+
+```text
+enumerateChoices()
+getCurrentState()
+canRestore()
+applyChoice()
+restore()
+```
+
+The common exploration layer owns sampling, observation and abstraction:
+
+```text
+discover choice domain
+        ↓
+prove a reversible baseline before mutation
+        ↓
+choose representative values/combinations
+        ↓
+apply one probe
+        ↓
+observe structural effects outside the control itself
+        ↓
+restore the exact original state
+        ↓
+normalize the external effect signature
+        ↓
+group probes with equivalent effects
+        ↓
+record coverage + behavior classes
+```
+
+The explorer is interested primarily in **external structural effects**, not in the trivial fact that the probed control's own value changed. A normalized effect signature may include:
+
+```text
+fields enabled / disabled
+fields shown / hidden
+fields added / removed
+groups enabled / disabled
+actions enabled / disabled / shown / hidden
+regions or overlays opened / closed
+validation changes
+route/entity changes
+```
+
+while omitting the probed control's own value change when that change carries no additional relationship evidence.
+
+If every exhaustively tested value produces the same external signature, LeMap-Web may safely abstract that behavior as:
+
+```text
+value = *
+→ common external effect
+```
+
+For non-exhaustive probing, LeMap-Web must retain the uncertainty explicitly rather than claiming a universal wildcard.
+
+### Sampling large domains
+
+Small domains should be explored exhaustively when safe and reversible.
+
+```text
+domain size <= 10
+→ probe all usable choices
+```
+
+Large domains should use a bounded representative sample instead of cycling through every value.
+
+```text
+domain size > 10
+→ sample up to 10 usable choices
+→ observe their external effects
+→ cluster identical effects
+```
+
+Sampling may be randomized to expose diverse behavior classes. Where reproducibility matters, the random selection should be seeded from stable structural identity such as entityId + fieldId.
+
+Sampling metadata is part of the evidence:
+
+```text
+coverage
+  domainSize
+  probedCount
+  exhaustive
+  samplingMethod
+  sampledValues / representatives
+```
+
+The semantic model must be told when sampled behavior classes are **illustrative and non-exhaustive**.
+
+For example:
+
+```text
+Assessment Year
+Domain size: 21
+Sampled: 10
+Exhaustive: false
+
+Observed behavior classes:
+  Class A: 8 sampled values → same external effect
+  Class B: 2 sampled values → additional warning/field behavior
+
+These classes are based on sampled values and are not proven exhaustive.
+```
+
+This gives the semantic model the shape of the behavior without bloating the graph or prompt with repetitive observations.
+
+### Reversibility is a precondition for in-place probing
+
+A probe is a transaction:
+
+```text
+baseline
+→ temporary mutation
+→ observe
+→ restore exact baseline
+```
+
+If the explorer cannot prove that the original state is reachable again through safe mechanics, it must not mutate that live control merely for coverage. It may still enumerate the option domain and record that behavioral probing was skipped because the initial state was not safely reversible.
+
+This is especially important for controls whose initial state is a placeholder such as `Select`, while the placeholder is not itself a selectable option.
+
 ### Radio groups
 
 ```text
-select alternatives
+select representative alternatives
 observe whether peers are cleared
 observe dependent entities/actions
 learn mutually-exclusive / exactly-one behavior
 restore original state
 ```
 
+Radio groups use the shared finite-choice policy for sampling when the number of alternatives is large.
+
 ### Checkbox groups
 
 ```text
-probe each member independently
+probe members independently
 restore after each isolated probe
-probe representative combinations
+probe bounded representative combinations
 learn multi-select / exclusivity / conditional behavior
 avoid 2^n combinatorial exploration
 ```
+
+Checkboxes use the same effect-signature and behavior-class abstraction, but their adapter supplies both individual choices and a bounded set of meaningful combinations.
 
 ### Dropdowns / comboboxes
 
@@ -373,16 +502,23 @@ avoid 2^n combinatorial exploration
 open control
 inspect available options
 record option labels/values where safe
-probe representative alternatives when useful
+sample or exhaustively probe according to domain size
 observe dependent state/entity changes
-restore where possible
+cluster equivalent external effects
+restore exact original state after each reversible probe
 ```
 
 A dropdown is part of local discovery, not merely something the executor knows how to click.
 
+### Tabs / segmented buttons / toggle groups
+
+These should reuse the same finite-choice engine when their actions are local, safe and reversible. Their adapters only define how to enumerate, activate and restore a choice.
+
 ### Text / number / date / autocomplete
 
 These are handled conservatively because arbitrary values may be sensitive or destructive.
+
+Bounded autocomplete option domains may use the finite-choice exploration policy. Truly free-form values do not.
 
 Safe synthetic probes may be used where appropriate to discover validation or format behavior, but user-specific values must not be invented merely for coverage.
 
@@ -400,6 +536,10 @@ irreversible/destructive effect
 ```
 
 Unsafe or consequential actions are never executed merely to increase knowledge.
+
+The governing exploration rule is:
+
+> **Explore behavior classes, not individual values. Probe exhaustively for small domains, sample large domains, collapse equivalent external effects, preserve coverage/uncertainty, and never mutate a live control without a proven safe restoration path.**
 
 ---
 
@@ -434,6 +574,7 @@ candidate entities
 fields/groups/options
 actions
 observed state transitions
+normalized behavior classes + sampling coverage
 structural relationships
 local related entities
 validation/action availability evidence
@@ -831,6 +972,8 @@ Query relevance never justifies unsafe exploration.
 
 Where local probes temporarily change state, the explorer should restore the original state before handing control back to the navigator or asking the user.
 
+For choice controls, restoration must be proven **before** the first in-place probe. If the initial state is not safely reachable again, the explorer may inspect the domain but must skip live mutation. A failed probe must also close any temporary overlay/menu before control returns to the navigator.
+
 ---
 
 ## 23. Privacy and storage separation
@@ -906,6 +1049,7 @@ current application location
 
 ```text
 proven local structural evidence
++ normalized behavior classes / coverage
 + compact prior workflow-arc semantics
 → business/user meaning of entities, fields, relationships and actions
 → reusable interaction semantics for user-input entities
@@ -959,11 +1103,14 @@ The preferred pattern is:
 
 ```text
 local exploration
+→ normalize/summarize behavior classes
 → one semantic-resolution call
 → entity/relationship/workflow meaning
   + reusable interaction semantics
 → persist
 ```
+
+Repeated option probes with the same normalized external effect should be collapsed before they reach the model. For large finite-choice domains, only sampled behavior classes plus explicit coverage metadata should be sent instead of one observation per option.
 
 Later runs reuse the persisted explanation/question/examples.
 
@@ -975,7 +1122,8 @@ small relevant workflow arc
 few recent semantic selections/facts
 current entity
 current local relationships
-valid options
+valid options / summarized domains
+behavior classes + coverage
 ```
 
 Do not send an unbounded transcript or whole-page dump when a compact semantic slice is sufficient.
@@ -1041,7 +1189,13 @@ Can we choose a safe goal-directed next action now?
         ↓
      DISCOVER LOCAL ENTITY GRAPH AS NEEDED
         ↓
-     SAFE TYPE-AWARE BEHAVIOR PROBES AS NEEDED
+     SAFE TYPE-AWARE CONTROL ADAPTERS
+        ↓
+     SHARED BEHAVIOR SAMPLING / EFFECT CLUSTERING
+       exhaustive for small domains
+       sampled for large domains
+       explicit coverage / uncertainty
+       restoration required before mutation
         ↓
      LOCAL SEMANTIC RESOLUTION
        entity meaning
@@ -1085,4 +1239,4 @@ NAVIGATE UNTIL NEW INFORMATION IS ACTUALLY REQUIRED
 
 The final invariant is:
 
-> **LeMap-Web navigates semantically, learns reusable interaction semantics with the entity, and maintains separate scoped user/workflow instances so future runs can reuse known information, confirm current application state, and ask the user only for genuinely new facts.**
+> **LeMap-Web navigates semantically, learns reusable interaction semantics with the entity, explores finite-choice controls through shared bounded behavior sampling, preserves coverage and reversibility evidence, and maintains separate scoped user/workflow instances so future runs can reuse known information, confirm current application state, and ask the user only for genuinely new facts.**
