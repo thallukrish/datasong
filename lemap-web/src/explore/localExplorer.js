@@ -4,6 +4,7 @@ import { preprocessEntity } from '../graph/entityPreprocessor.js';
 import { projectEntityState } from '../graph/entityState.js';
 import { computeEntityDelta } from '../graph/entityDelta.js';
 import { isEmptyEntityDelta } from '../graph/workflowGraph.js';
+import { chooseBehaviorSamples, normalizeExternalEffect, clusterBehaviorEffects } from './behaviorSampling.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 function stateId(state) { return `state:${crypto.createHash('sha1').update(JSON.stringify(state)).digest('hex').slice(0, 12)}`; }
@@ -112,6 +113,35 @@ function recordObservedEffect(result, before, after, field, action, purpose = ''
     evidenceIds: [id]
   });
   return observation;
+}
+
+function compactBehaviorClasses(clustered = {}) {
+  return arr(clustered.classes).map((item) => ({
+    id: item.id,
+    sampleCount: item.sampleCount,
+    wildcard: !!item.wildcard,
+    sampleValues: arr(item.samples).map((sample) => String(sample?.label || sample?.value || sample?.fieldId || '')).filter(Boolean).slice(0, 10),
+    effect: item.effect
+  }));
+}
+
+function recordBehaviorClasses(result, {
+  sourceFieldId = '', groupId = '', groupType = '', memberFieldIds = [], probes = [], coverage = {}
+} = {}) {
+  if (!probes.length) return null;
+  const clustered = clusterBehaviorEffects(probes, { coverage });
+  addRelationship(result, {
+    kind: 'behavior_classes',
+    sourceFieldId,
+    groupId,
+    groupType,
+    memberFieldIds,
+    coverage: clustered.coverage,
+    exhaustiveWildcard: clustered.exhaustiveWildcard,
+    classes: compactBehaviorClasses(clustered),
+    evidenceIds: probes.map((probe) => probe.evidenceId).filter(Boolean)
+  });
+  return clustered;
 }
 
 function learnEnabledGroups(result, before, after, sourceFieldId, evidenceId) {
@@ -308,20 +338,46 @@ async function exploreCheckboxGroup(page, groupId, result, options) {
   });
   if (!candidates.length) return;
 
-  for (const fieldId of candidates) {
+  const choices = candidates.map((fieldId) => {
+    const field = controlById(base.graph, fieldId);
+    return { fieldId, value: fieldId, label: field?.label || fieldId };
+  });
+  const sampled = chooseBehaviorSamples(choices, {
+    maxSamples: options.maxBehaviorSamples,
+    seedKey: `${base.graph.entity.id}:${group.id}:checkbox`
+  });
+  const probes = [];
+
+  for (const choice of sampled.samples) {
+    const fieldId = choice.fieldId;
     try {
       const before = await capture(page);
       const exec = await setCheckbox(page, before.graph, fieldId, true, options.settleMs);
       const after = await capture(page);
-      recordObservedEffect(result, before, after, exec.field, exec.action, 'individual-probe');
+      const observation = recordObservedEffect(result, before, after, exec.field, exec.action, 'individual-probe');
+      const delta = observation?.delta || computeEntityDelta(before.state, after.state);
+      probes.push({
+        sample: choice,
+        effect: normalizeExternalEffect(delta, { sourceFieldIds: group.memberFieldIds }),
+        evidenceId: observation?.id || ''
+      });
     } finally {
       await restoreCheckbox(page, fieldId, options.settleMs);
     }
   }
 
-  if (candidates.length > 1) {
-    const firstId = candidates[0];
-    const secondId = candidates[1];
+  recordBehaviorClasses(result, {
+    groupId: group.id,
+    groupType: 'checkbox',
+    memberFieldIds: group.memberFieldIds,
+    probes,
+    coverage: sampled.coverage
+  });
+
+  const combinationCandidates = sampled.samples.map((choice) => choice.fieldId);
+  if (combinationCandidates.length > 1) {
+    const firstId = combinationCandidates[0];
+    const secondId = combinationCandidates[1];
     let combinationObservation = null;
     try {
       const beforeFirst = await capture(page);
@@ -384,7 +440,18 @@ async function exploreRadioGroup(page, initial, group, result, options) {
   const alternatives = arr(group.memberFieldIds).filter((fieldId) => fieldId !== originalId && initial.state.fields[fieldId]?.enabled && initial.state.fields[fieldId]?.visible);
   if (!alternatives.length) return;
 
-  for (const fieldId of alternatives) {
+  const choices = alternatives.map((fieldId) => {
+    const field = controlById(initial.graph, fieldId);
+    return { fieldId, value: field?.value ?? fieldId, label: field?.label || String(field?.value ?? fieldId) };
+  });
+  const sampled = chooseBehaviorSamples(choices, {
+    maxSamples: options.maxBehaviorSamples,
+    seedKey: `${initial.graph.entity.id}:${group.id}:radio`
+  });
+  const probes = [];
+
+  for (const choice of sampled.samples) {
+    const fieldId = choice.fieldId;
     const before = await capture(page);
     const field = controlById(before.graph, fieldId);
     const action = methodFor(before.graph, fieldId, (candidate) => candidate.kind === 'select');
@@ -394,6 +461,12 @@ async function exploreRadioGroup(page, initial, group, result, options) {
       await settle(page, options.settleMs);
       const after = await capture(page);
       const observation = recordObservedEffect(result, before, after, field, action);
+      const delta = observation?.delta || computeEntityDelta(before.state, after.state);
+      probes.push({
+        sample: choice,
+        effect: normalizeExternalEffect(delta, { sourceFieldIds: group.memberFieldIds }),
+        evidenceId: observation?.id || ''
+      });
       if (observation) {
         const selected = after.state.fields[fieldId]?.checked === true;
         const otherSelected = arr(group.memberFieldIds).filter((memberId) => memberId !== fieldId && after.state.fields[memberId]?.checked === true);
@@ -413,6 +486,14 @@ async function exploreRadioGroup(page, initial, group, result, options) {
       await restoreRadioGroup(page, group, originalId, result, options);
     }
   }
+
+  recordBehaviorClasses(result, {
+    groupId: group.id,
+    groupType: 'radio',
+    memberFieldIds: group.memberFieldIds,
+    probes,
+    coverage: sampled.coverage
+  });
 }
 
 async function exploreSelectField(page, initial, field, result, options) {
@@ -430,9 +511,16 @@ async function exploreSelectField(page, initial, field, result, options) {
     await page.keyboard.press('Escape').catch(() => {});
     return;
   }
+
   const alternatives = selectable.filter((option) => !(option.value === original.value || option.label === original.label));
-  for (let index = 0; index < alternatives.length; index += 1) {
-    const option = alternatives[index];
+  const sampled = chooseBehaviorSamples(alternatives, {
+    maxSamples: options.maxBehaviorSamples,
+    seedKey: `${initial.graph.entity.id}:${field.id}:select`
+  });
+  const probes = [];
+
+  for (let index = 0; index < sampled.samples.length; index += 1) {
+    const option = sampled.samples[index];
     try {
       const before = await capture(page);
       const currentField = controlById(before.graph, field.id) || field;
@@ -441,6 +529,12 @@ async function exploreSelectField(page, initial, field, result, options) {
       const after = await capture(page);
       const action = { id: `probe:${field.id}:option:${index + 1}`, kind: 'select_option', value: option.label || option.value, purpose: 'option-probe', safety: 'safe' };
       const observation = recordObservedEffect(result, before, after, currentField, action, 'option-probe');
+      const delta = observation?.delta || computeEntityDelta(before.state, after.state);
+      probes.push({
+        sample: option,
+        effect: normalizeExternalEffect(delta, { sourceFieldId: field.id }),
+        evidenceId: observation?.id || ''
+      });
       if (observation) learnEnabledGroups(result, before, after, field.id, observation.id);
 
       const newlyEnabledGroups = arr(after.graph.groups).filter((group) => arr(group.memberFieldIds)
@@ -455,12 +549,19 @@ async function exploreSelectField(page, initial, field, result, options) {
       await restoreSelect(page, field, original, result, options);
     }
   }
+
+  recordBehaviorClasses(result, {
+    sourceFieldId: field.id,
+    probes,
+    coverage: sampled.coverage
+  });
 }
 
 export async function exploreLocalEntity(page, options = {}) {
   const settings = {
     settleMs: Number.isFinite(Number(options.settleMs)) ? Math.max(0, Number(options.settleMs)) : 250,
-    probeBehavior: options.probeBehavior !== false
+    probeBehavior: options.probeBehavior !== false,
+    maxBehaviorSamples: Number.isFinite(Number(options.maxBehaviorSamples)) ? Math.max(1, Number(options.maxBehaviorSamples)) : 10
   };
   const initial = await capture(page);
   const result = {
