@@ -13,6 +13,15 @@ export function interactionFields(graph = {}, interaction = {}) {
   return arr(graph.fields).filter((field) => ids.has(String(field.id)));
 }
 
+export function interactionExecutable(graph = {}, state = {}, interaction = {}) {
+  const fields = interactionFields(graph, interaction);
+  if (!fields.length) return false;
+  return fields.some((field) => {
+    const current = state.fields?.[field.id];
+    return !!current?.visible && !!current?.enabled && !current?.readonly;
+  });
+}
+
 export function currentInteractionValue(graph = {}, state = {}, interaction = {}) {
   const fields = interactionFields(graph, interaction);
   if (!fields.length) return { value: '', optionLabel: '' };
@@ -47,9 +56,10 @@ export function classifyInteractionItems({ graph = {}, state = {}, semanticEntit
       ? findApplicableFact(instanceMemory, { semanticKey: interaction.semanticKey, workflowKey, scope, scopeKey })
       : null;
     if (rememberedFact) {
+      const executable = interactionExecutable(graph, state, interaction);
       return {
         ...interaction,
-        status: 'remembered',
+        status: executable ? 'remembered' : 'blocked',
         displayValue: rememberedFact.optionLabel || (nonEmpty(rememberedFact.value) ? String(rememberedFact.value) : ''),
         currentValue: '',
         source: 'remembered',
