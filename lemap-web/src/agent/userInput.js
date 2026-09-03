@@ -5,7 +5,7 @@ function clamp01(value) { const n = Number(value); return Number.isFinite(n) ? M
 function text(value, max = 700) { const s = String(value || '').trim().replace(/\s+/g, ' '); return s.length > max ? `${s.slice(0, max)}…` : s; }
 
 const SYSTEM = `You are DataSong LeMap-Web's USER ANSWER INTERPRETER.
-The browser structure and available choices are already known. Interpret the user's natural-language answer only against the supplied structural question and current semantic context.
+The browser structure and available choices are already known. Interpret the user's natural-language answer only against the supplied structural question and compact semantic context.
 Never invent an option, field id, or factual value. Return strict compact JSON only.`;
 
 export function buildUserQuestions({ graph = {}, state = {}, answeredQuestionIds = new Set(), answeredGroupIds = null } = {}) {
@@ -63,19 +63,34 @@ export function buildUserQuestions({ graph = {}, state = {}, answeredQuestionIds
   return questions;
 }
 
+function compactSemanticForQuestion(semanticEntity = {}, question = {}) {
+  const semanticKey = String(question.questionId || '').startsWith('interaction:') ? String(question.questionId).slice('interaction:'.length) : '';
+  const interaction = arr(semanticEntity.interactions).find((item) => item.semanticKey === semanticKey);
+  return {
+    semanticName: text(semanticEntity.semanticName, 180),
+    description: text(semanticEntity.description, 360),
+    interaction: interaction ? {
+      semanticKey: text(interaction.semanticKey, 140),
+      semanticName: text(interaction.semanticName, 160),
+      explanation: text(interaction.explanation, 300),
+      question: text(interaction.question, 260)
+    } : null
+  };
+}
+
 export function buildUserAnswerPrompt({ userGoal = '', semanticEntity = {}, question = {}, userAnswer = '' } = {}) {
   const payload = {
-    userGoal,
-    currentEntity: semanticEntity,
+    userGoal: text(userGoal, 220),
+    currentEntity: compactSemanticForQuestion(semanticEntity, question),
     question: {
       questionId: question.questionId,
       answerKind: question.answerKind,
       groupId: question.groupId || '',
       fieldId: question.fieldId || '',
       inputType: question.inputType || '',
-      label: question.label,
+      label: text(question.label, 280),
       cardinality: question.cardinality,
-      options: arr(question.options).map((option) => ({ fieldId: option.fieldId || '', value: option.value ?? '', label: option.label }))
+      options: arr(question.options).slice(0, 30).map((option) => ({ fieldId: option.fieldId || '', value: option.value ?? '', label: text(option.label, 160) }))
     },
     userAnswer
   };
