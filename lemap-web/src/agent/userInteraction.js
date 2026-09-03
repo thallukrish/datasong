@@ -2,6 +2,7 @@ import { findApplicableFact } from './instanceMemory.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 function nonEmpty(value) { return value !== null && value !== undefined && String(value).trim() !== ''; }
+function norm(value = '') { return String(value).trim().toLowerCase().replace(/\s+/g, ' '); }
 
 export function interactionFields(graph = {}, interaction = {}) {
   const ids = new Set(arr(interaction.structuralFieldIds).map(String));
@@ -162,4 +163,17 @@ export function buildChangeSelectionQuestion(summary = {}) {
 
 export function isAffirmativeConfirmation(answer = '') {
   return /^(y|yes|yeah|yep|ok|okay|correct|continue|looks good|all good)$/i.test(String(answer).trim());
+}
+
+export function confirmationDecision(summary = {}, answer = '') {
+  const text = norm(answer);
+  if (isAffirmativeConfirmation(text)) return 'accept';
+  if (/^(n|no|nope|change|wrong|edit|not correct)$/i.test(text)) return 'reject';
+  const items = arr(summary.items);
+  if (items.length === 1) {
+    if (text === '1') return 'accept';
+    const value = norm(items[0]?.value || '');
+    if (value && text === value) return 'accept';
+  }
+  return 'change';
 }
