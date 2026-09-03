@@ -51,28 +51,33 @@ export function chooseBehaviorSamples(options = [], { maxSamples = 10, seedKey =
   };
 }
 
-function filterFieldIds(values, sourceFieldId) {
-  return sortedUnique(arr(values).filter((value) => String(value) !== String(sourceFieldId)));
+function sourceSet({ sourceFieldId = '', sourceFieldIds = [] } = {}) {
+  return new Set([...arr(sourceFieldIds), sourceFieldId].map(String).filter(Boolean));
 }
 
-function filterOptionMap(map = {}, sourceFieldId) {
+function filterFieldIds(values, sources) {
+  return sortedUnique(arr(values).filter((value) => !sources.has(String(value))));
+}
+
+function filterOptionMap(map = {}, sources) {
   return Object.fromEntries(Object.entries(map || {})
-    .filter(([fieldId]) => String(fieldId) !== String(sourceFieldId))
+    .filter(([fieldId]) => !sources.has(String(fieldId)))
     .sort(([a], [b]) => a.localeCompare(b)));
 }
 
-export function normalizeExternalEffect(delta = {}, { sourceFieldId = '' } = {}) {
+export function normalizeExternalEffect(delta = {}, options = {}) {
+  const sources = sourceSet(options);
   return {
     fieldValuesChanged: arr(delta.fieldValuesChanged)
-      .filter((change) => String(change?.fieldId) !== String(sourceFieldId))
+      .filter((change) => !sources.has(String(change?.fieldId)))
       .map((change) => ({ fieldId: change.fieldId, before: change.before, after: change.after }))
       .sort((a, b) => String(a.fieldId).localeCompare(String(b.fieldId))),
-    fieldsEnabled: filterFieldIds(delta.fieldsEnabled, sourceFieldId),
-    fieldsDisabled: filterFieldIds(delta.fieldsDisabled, sourceFieldId),
-    fieldsShown: filterFieldIds(delta.fieldsShown, sourceFieldId),
-    fieldsHidden: filterFieldIds(delta.fieldsHidden, sourceFieldId),
-    fieldsAdded: filterFieldIds(delta.fieldsAdded, sourceFieldId),
-    fieldsRemoved: filterFieldIds(delta.fieldsRemoved, sourceFieldId),
+    fieldsEnabled: filterFieldIds(delta.fieldsEnabled, sources),
+    fieldsDisabled: filterFieldIds(delta.fieldsDisabled, sources),
+    fieldsShown: filterFieldIds(delta.fieldsShown, sources),
+    fieldsHidden: filterFieldIds(delta.fieldsHidden, sources),
+    fieldsAdded: filterFieldIds(delta.fieldsAdded, sources),
+    fieldsRemoved: filterFieldIds(delta.fieldsRemoved, sources),
     actionsEnabled: sortedUnique(delta.actionsEnabled),
     actionsDisabled: sortedUnique(delta.actionsDisabled),
     actionsShown: sortedUnique(delta.actionsShown),
@@ -81,8 +86,8 @@ export function normalizeExternalEffect(delta = {}, { sourceFieldId = '' } = {})
     regionsHidden: sortedUnique(delta.regionsHidden),
     validationMessagesAdded: sortedUnique(delta.validationMessagesAdded),
     validationMessagesRemoved: sortedUnique(delta.validationMessagesRemoved),
-    optionsAdded: filterOptionMap(delta.optionsAdded, sourceFieldId),
-    optionsRemoved: filterOptionMap(delta.optionsRemoved, sourceFieldId),
+    optionsAdded: filterOptionMap(delta.optionsAdded, sources),
+    optionsRemoved: filterOptionMap(delta.optionsRemoved, sources),
     routeChanged: !!delta.routeChanged,
     entityChanged: !!delta.entityChanged
   };
