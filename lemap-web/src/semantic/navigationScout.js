@@ -14,16 +14,32 @@ const ALLOWED_ROLES = new Set(['workflow_continuation', 'workflow_branch', 'rela
 
 const SYSTEM = `You are DataSong LeMap-Web's GOAL-DIRECTED NAVIGATION SCOUT.
 The current local entity has already been structurally explored and semantically resolved.
-You receive the original user goal, the resolved entity, current workflow context, and outgoing button/link candidates.
+You receive the original user goal, a compact resolved entity summary, current workflow context, and outgoing button/link candidates.
 Score each candidate for advancing the original user goal while preserving the active workflow context. A generally important portal destination can still be irrelevant to the user's goal.
 Do not execute anything. Return strict compact JSON only.`;
 
+function compactEntity(semanticEntity = {}) {
+  return {
+    semanticName: text(semanticEntity.semanticName, 180),
+    description: text(semanticEntity.description, 420),
+    localCompletion: text(semanticEntity.localCompletion, 260),
+    subEntities: arr(semanticEntity.subEntities).slice(0, 8).map((item) => text(item?.semanticName, 160)).filter(Boolean),
+    relationships: arr(semanticEntity.relationships).slice(0, 8).map((item) => ({ kind: text(item?.kind, 100), description: text(item?.description, 220) })),
+    actions: arr(semanticEntity.actions).slice(0, 10).map((item) => ({ semanticName: text(item?.semanticName, 160), description: text(item?.description, 220) }))
+  };
+}
+
 export function buildNavigationPrompt({ userGoal = '', semanticEntity = {}, workflowContext = {}, candidates = [] } = {}) {
   const payload = {
-    userGoal,
-    currentEntity: semanticEntity,
-    workflowContext,
-    candidates: arr(candidates).map((candidate) => ({
+    userGoal: text(userGoal, 240),
+    currentEntity: compactEntity(semanticEntity),
+    workflowContext: {
+      currentEntity: text(workflowContext.currentEntity, 180),
+      semanticPath: arr(workflowContext.semanticPath).slice(-6).map((item) => text(item, 160)),
+      knownOutgoing: arr(workflowContext.knownOutgoing).slice(0, 8),
+      traversed: arr(workflowContext.traversed).slice(-6)
+    },
+    candidates: arr(candidates).slice(0, 30).map((candidate) => ({
       candidateId: candidate.id,
       label: candidate.label || '',
       kind: candidate.kind || '',
