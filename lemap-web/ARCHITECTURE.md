@@ -213,6 +213,7 @@ workflow arc / stage
 semantic entities
 field/action meanings
 relationships / constraints
+interaction semantics
 observed states
 known transitions
 successful traversed paths
@@ -273,21 +274,6 @@ UNKNOWN WORKFLOW
   workflow family/root has not yet been learned
 ```
 
-Example:
-
-```text
-ITR-1
-  capital gains = known absent
-  confidence = high
-
-ITR-3
-  capital gains = unknown
-  income coverage = partial
-
-ITR-2
-  workflow = unknown
-```
-
 Negative knowledge should only be persisted when the evidence and coverage are strong enough to justify it.
 
 ---
@@ -308,20 +294,6 @@ Workflow arc / stage
 Entity
   ↓
 Field / action
-```
-
-Example:
-
-```text
-Income Tax Portal
-  ↓
-File Income Tax Return
-  ↓
-ITR-1 / ITR-2 / ITR-3
-  ↓
-Filing Setup / Filing Status / Personal Details / Income / Tax / Verification
-  ↓
-Capital Gains / Business Income / etc.
 ```
 
 This lets the query planner reason before touching the browser.
@@ -375,8 +347,6 @@ The goal is:
 
 The explorer is type-aware and evidence-driven.
 
-Input type determines how to probe; observed effects determine what the control means structurally.
-
 ### Radio groups
 
 ```text
@@ -410,15 +380,6 @@ restore where possible
 
 A dropdown is part of local discovery, not merely something the executor knows how to click.
 
-Framework-specific rendering such as Angular Material `mat-select` may be handled by a browser adapter, but the semantic graph should expose the generic concept:
-
-```text
-selectable field
-options[]
-selected value/state
-dependencies
-```
-
 ### Text / number / date / autocomplete
 
 These are handled conservatively because arbitrary values may be sensitive or destructive.
@@ -448,25 +409,12 @@ A local action can reveal more structure without creating a new workflow step.
 
 ```text
 state_change
-  current entity state changed
-
 inline_expand
-  additional fields/entity became reachable inline
-
 overlay_open
-  modal/drawer/popover entity became reachable
-
 navigation
-  broader rendered application context changed
 ```
 
-Inline and overlay changes may represent:
-
-```text
-same entity expansion
-related entity
-reusable sub-entity/subflow
-```
+A visible blocking overlay becomes the dominant current entity projection until it is resolved. Underlying entities are not explored or navigated while the overlay blocks interaction.
 
 Presentation boundaries do not decide whether something is a workflow step.
 
@@ -480,6 +428,7 @@ Input may include:
 
 ```text
 current user goal
+compact prior workflow-arc semantics
 presentation context
 candidate entities
 fields/groups/options
@@ -493,22 +442,6 @@ known semantic memory for matching entities
 
 The model annotates rather than replaces deterministic evidence.
 
-Example:
-
-```text
-Structural evidence
-  radio group N/Y/NA is mutually exclusive
-  choosing Y enables four checkboxes
-  multiple checkboxes may coexist
-  Continue becomes available under valid combinations
-
-Semantic interpretation
-  Entity: Filing Reason
-  Entity: Seventh Proviso Conditions
-  Relationship: qualifying conditions apply only on the Y branch
-  Action: Continue completes filing-status determination
-```
-
 Semantic resolution may produce:
 
 ```text
@@ -518,10 +451,57 @@ relationship meanings
 constraints
 action meanings
 local completion meaning
+interaction semantics
 confidence
 ```
 
-Once sufficiently stable, those annotations are persisted and reused on later runs.
+### Interaction semantics are learned with the entity
+
+When an entity or field represents information that may need to come from a human, the semantic resolver should also generate a reusable interaction description while it already has the richest local context.
+
+```text
+InteractionSemantics
+  requiresUserInformation
+  information
+  friendlyQuestion
+  examples[]
+  optionExplanations[]
+  clarification
+  dependencies / relevant relationships
+  confidence
+```
+
+For example, deterministic evidence may expose:
+
+```text
+label: section 139
+control: selectable field
+options: 139(1), 139(4), 139(5), ...
+relationship: selection changes downstream filing basis/path
+```
+
+The semantic model may learn:
+
+```text
+Entity: Return Filing Basis
+
+information:
+  identifies the legal/timing basis under which the return is being filed
+
+friendlyQuestion:
+  Which situation describes how you are filing this return?
+
+examples:
+  within the normal filing period
+  filing after the due date
+  revising an earlier return
+```
+
+The interaction semantics are persisted with the semantic template and reused. LeMap-Web should not spend another model call merely to rephrase the same field every time it is encountered.
+
+The semantic resolver should use only a compact workflow arc: the current goal, the immediately relevant prior stage descriptions, the current entity, local relationships and structurally valid options. It should not receive an unbounded transcript.
+
+Once sufficiently stable, these annotations are persisted and reused on later runs.
 
 ---
 
@@ -530,23 +510,6 @@ Once sufficiently stable, those annotations are persisted and reused on later ru
 A crucial rule is:
 
 > **The user is not required for navigation whenever the application state plus semantic memory are sufficient to choose the next action.**
-
-For example, if the current entity is understood and `Continue` clearly advances the active ITR-3 workflow, LeMap-Web should continue immediately.
-
-It should not stop simply because the page contains form controls.
-
-The system first tries to navigate using:
-
-```text
-original user goal
-known workflow context
-current semantic entity graph
-current application state
-known successful transitions
-candidate outgoing actions
-coverage/confidence
-safety
-```
 
 Only unresolved information that genuinely blocks progress should cause further exploration or a user question.
 
@@ -591,82 +554,169 @@ business/user fact genuinely required
 → ask user
 ```
 
-Example:
-
-```text
-Entity: Filing Setup
-  Assessment Year
-  Filing Mode
-  Continue
-```
-
-The model should determine whether Assessment Year or Filing Mode must actually be supplied by the user, whether either is already known/prefilled, and whether the active goal/context implies a choice.
-
-It should not ask merely because a parser detected two empty controls.
+The planner chooses **which learned interaction semantic is required now**. It should not regenerate the wording if the entity already has a stable friendly question/explanation.
 
 ---
 
-## 15. User question planning
+## 15. Three value classes on a rendered step
 
-When user input is genuinely necessary, the question should be generated from semantic entity context rather than directly from DOM labels.
-
-For example, deterministic discovery may provide:
+Before leaving a rendered workflow step, LeMap-Web classifies relevant inputs into three categories:
 
 ```text
-label: Select Assessment year
-control: combobox
-options: 2026-27, 2025-26, ...
+1. PREFILLED
+   browser/application already contains a value
+
+2. REMEMBERED
+   a prior user/workflow instance contains a potentially reusable value
+
+3. MISSING
+   no usable value exists and the workflow requires user input
 ```
 
-Semantic question planning may turn that into:
+The interaction order is:
 
 ```text
-Which assessment year do you want to file the return for?
+resolve semantic entities + relationships + interaction semantics
+        ↓
+identify prefilled / remembered / missing values
+        ↓
+collect only missing information
+        ↓
+apply new user answers
+        ↓
+reconcile remembered values when their scope permits reuse
+        ↓
+before leaving the step, summarize prefilled/reused information
+        ↓
+allow user to confirm or modify
+        ↓
+navigate
 ```
 
-The model receives only the structurally valid choices and must map the user's natural-language response back to those known structural field/action IDs.
+### Missing values
 
-It must never invent an option.
+Missing values are collected using the persisted friendly explanation/question for the relevant semantic entity.
+
+### Prefilled values
+
+Prefilled values are treated as current browser/application state. The agent should not interrupt the user once per field merely because a value exists.
+
+Before leaving an important step, it should present a concise grouped summary and allow correction, for example:
+
+```text
+I found your personal details already filled in.
+Name, PAN, date of birth and address are populated.
+I will continue with them as shown unless you want to change something.
+```
+
+If the user asks to modify one item, LeMap maps the request to the corresponding semantic entity/field, changes it through the proven UI mechanics, observes the resulting state, and only then leaves the step.
+
+### Remembered values
+
+Remembered values are candidates, not automatically authoritative. Reuse depends on semantic scope and validity.
+
+```text
+scope:
+  taxpayer
+  workflow
+  assessment_year
+  filing_instance
+  global
+
+validity:
+  persistent
+  until_changed
+  instance_only
+```
+
+A preferred filing mode might be reusable. Assessment year or audit status may not be reusable across filings without appropriate scope/confirmation.
 
 ---
 
-## 16. Dynamic follow-up questions
+## 16. Semantic templates and user/workflow instances
+
+LeMap-Web separates reusable application knowledge from user-specific facts.
+
+### Semantic template
+
+Describes how the application/business concept works:
+
+```text
+EntityTemplate
+  semantic name
+  description
+  structural bindings
+  options
+  relationships
+  constraints
+  actions
+  workflow role
+  interaction semantics
+```
+
+### Entity/workflow instance
+
+Describes what is true for one user or one execution:
+
+```text
+EntityInstance
+  instanceOf
+  value / selected option
+  source
+  scope
+  validity
+  confirmation state
+  workflowInstanceId
+  observed/confirmed timestamps
+```
+
+Sources may include:
+
+```text
+user
+browser_prefill
+remembered_instance
+derived
+```
+
+Conceptually:
+
+```text
+SEMANTIC TEMPLATE
+      +
+USER / WORKFLOW INSTANCE
+      ↓
+PERSONALIZED EXECUTABLE WORKFLOW
+```
+
+This is how a later request such as:
+
+```text
+File ITR-3
+```
+
+can reuse already-known applicable information, execute known portions of the workflow immediately, and stop only when a genuinely new or non-reusable fact is required.
+
+---
+
+## 17. Dynamic follow-up questions
 
 User answers change application state and may expose additional entities.
 
-Example:
-
 ```text
-Filing Reason
-  N
-  Y
-  NA
+answer
+→ apply through proven UI mechanics
+→ re-observe state
+→ discover newly active entities/relationships
+→ reuse or generate interaction semantics for those entities
+→ resolve next information need
 ```
 
-If the user answer maps to `N`:
-
-```text
-apply N
-→ no qualifying-condition entity becomes active
-→ do not ask those questions
-→ continue workflow if possible
-```
-
-If the answer maps to `Y`:
-
-```text
-apply Y
-→ Seventh Proviso Conditions becomes active
-→ re-observe local entity graph
-→ resolve new information need
-→ ask only required follow-up question(s)
-```
-
-Therefore questioning is itself lazy and state-dependent.
+Questioning is lazy and state-dependent.
 
 ---
 
-## 17. Goal-directed navigation scout
+## 18. Goal-directed navigation scout
 
 When broader navigation is needed, LeMap-Web gathers outgoing actions/links and ranks them against the **original user goal**.
 
@@ -677,79 +727,30 @@ original user goal
 current semantic entity graph
 workflow family / arc context
 semantic path so far
-user-supplied branch facts where safe to retain
+known user/workflow instance facts where appropriate
 known outgoing transitions
 candidate actions/links
 safety/reversibility
 coverage/confidence
 ```
 
-The model answers:
-
-> **Which safe outgoing transition most likely advances the original goal from the current semantic state?**
-
-Useful roles include:
-
-```text
-LOCAL_EXPANSION
-RELATED_ENTITY
-FORWARD_WORKFLOW
-WORKFLOW_BRANCH
-REVERSE_WORKFLOW
-ANCESTOR_WORKFLOW
-WORKFLOW_EXIT
-SIDE_CONTEXT
-SITE_CHROME
-UNKNOWN
-```
-
-Useful scoring dimensions include:
-
-```text
-goal relevance
-workflow continuity
-forward progress
-context preservation
-confidence
-```
-
 The highest-ranked safe candidate may be executed immediately.
 
 ---
 
-## 18. Lazy frontier
+## 19. Lazy frontier
 
 Unselected outgoing candidates are not automatically explored.
-
-They may be retained as a query/session frontier:
-
-```text
-ExplorationFrame
-  queryId
-  entityId
-  entityStateId
-  workflowArcId
-  outgoingCandidates[]
-    actionId
-    role
-    goalScore
-    continuityScore
-    safety
-    reversible
-    explored
-```
 
 The frontier is query-prioritized, not coverage-prioritized.
 
 A low-relevance branch may remain unexplored indefinitely unless a later query makes it useful.
 
-This avoids combinatorial explosion on large enterprise applications.
-
 ---
 
-## 19. The entity/workflow graph grows underneath navigation
+## 20. The entity/workflow graph grows underneath navigation
 
-As the agent moves toward the user's goal, two things are learned continuously.
+As the agent moves toward the user's goal, two reusable template graphs are learned continuously.
 
 ### Entity graph
 
@@ -761,6 +762,7 @@ actions
 states
 constraints
 semantic annotations
+interaction semantics
 ```
 
 ### Workflow graph
@@ -773,31 +775,11 @@ entry/completion evidence
 business outcomes as semantics mature
 ```
 
-Example:
-
-```text
-Assessment Year
-   ↓
-Filing Mode
-   ↓
-Continue
-   ↓
-Filing Status
-   ↓
-N
-   ↓
-Continue
-   ↓
-Return Type
-```
-
-That traversed path becomes reusable evidence.
-
-Other links may remain recorded as candidates, but they are not falsely promoted to workflow edges merely because they existed in the DOM.
+User/workflow instances are stored separately from these reusable templates.
 
 ---
 
-## 20. Memoization and instant navigation
+## 21. Memoization and instant personalized navigation
 
 The payoff of lazy learning appears on later runs.
 
@@ -807,35 +789,29 @@ First run:
 unknown state
 → discover entities
 → probe behavior
-→ resolve semantics
-→ rank transition
+→ resolve semantics + interaction semantics
+→ collect required user facts
+→ persist applicable workflow instances
 → navigate
 ```
 
-Later run over a structurally compatible known state:
+Later run:
 
 ```text
-recognize entity/state
-→ reuse semantic annotation
-→ reuse known transition priors
-→ rank/validate against current goal
-→ navigate almost immediately
+recognize known workflow/entity
+→ reuse semantic template
+→ load applicable user/workflow instances
+→ apply reusable known values
+→ confirm prefilled/reused values when needed
+→ navigate known path
+→ stop only at first genuinely unknown/non-reusable fact
 ```
 
-If a known entity has changed:
-
-```text
-structural signature mismatch
-→ treat prior knowledge as stale/partial
-→ rediscover changed area
-→ refine existing semantic memory
-```
-
-Thus the application becomes progressively cheaper to navigate without ever requiring a complete up-front crawl.
+Thus the application becomes progressively cheaper and more personalized to navigate without ever requiring a complete up-front crawl.
 
 ---
 
-## 21. Safety and restoration
+## 22. Safety and restoration
 
 Web exploration actively changes application state, so safety is part of traversal semantics.
 
@@ -851,57 +827,67 @@ destructive
 unknown
 ```
 
-Typical examples:
-
-```text
-select radio option      → often safe local probe
-open informational modal → usually safe
-Continue                 → often safe navigation, context-dependent
-Save Draft               → persistent mutation
-Submit Return             → irreversible/high impact
-Delete                    → destructive
-Logout                    → workflow exit
-```
-
 Query relevance never justifies unsafe exploration.
 
 Where local probes temporarily change state, the explorer should restore the original state before handing control back to the navigator or asking the user.
 
 ---
 
-## 22. Privacy
+## 23. Privacy and storage separation
 
-LeMap-Web's semantic memory should describe the application, not become a store of sensitive user data.
+LeMap-Web must keep reusable semantic knowledge separate from sensitive user/workflow instance data.
 
-Persist:
+### Semantic map
+
+The semantic map should persist application knowledge:
 
 ```text
 structural field IDs
 semantic meanings
+interaction semantics
 branch structure
 option semantics where non-sensitive
 relationships
-selected workflow edge
-"value supplied" markers when useful
+workflow transitions
+coverage / confidence
 ```
 
-Avoid persisting:
+### User/workflow instance store
+
+Actual user values belong in a separate instance store with appropriate protection and lifecycle rules.
 
 ```text
-passwords
-auth/session tokens
-PAN/account identifiers
-email/phone where not required for structural learning
-raw taxpayer free-text values
-raw financial values
-sensitive response bodies
+data/
+  semantic-memory/
+    web-map.json
+
+  instances/
+    <workflow-instance>.json
 ```
 
-User-supplied values may exist transiently in the active browser/session context without becoming long-lived semantic memory.
+Long-term instance storage containing PAN, addresses, income, bank or other sensitive information should ultimately use an encrypted/secure store rather than plain semantic memory.
+
+### Run logs
+
+Run logs should continue to record structural interaction such as:
+
+```text
+field selected
+value provided
+prefilled value confirmed
+remembered value reused
+value changed
+```
+
+without writing raw sensitive free-text/financial values.
+
+The rule is:
+
+> **Semantic memory remembers how the application works. Instance memory remembers what is true for this user/workflow. Logs remember what the agent did, not sensitive values.**
 
 ---
 
-## 23. Semantic tasks
+## 24. Semantic tasks
 
 LeMap-Web has several distinct semantic responsibilities.
 
@@ -910,6 +896,7 @@ LeMap-Web has several distinct semantic responsibilities.
 ```text
 original user goal
 known workflow/entity memory
+known applicable workflow instances
 coverage/confidence
 current application location
 → choose known scope/path or identify knowledge gap
@@ -919,7 +906,9 @@ current application location
 
 ```text
 proven local structural evidence
++ compact prior workflow-arc semantics
 → business/user meaning of entities, fields, relationships and actions
+→ reusable interaction semantics for user-input entities
 ```
 
 ### Level 2 — Information-Need Planner
@@ -928,11 +917,23 @@ proven local structural evidence
 original goal
 current semantic entity graph
 current state
+prefilled / remembered / missing classification
 known context
-→ no question / explore first / ask specific user fact
+→ no question / explore first / use remembered value / ask specific user fact
 ```
 
-### Level 3 — Goal-Directed Navigation Scout
+### Level 3 — Step Completion / Reconciliation
+
+```text
+new user answers
+prefilled browser values
+remembered applicable values
+→ summarize
+→ confirm or modify when required
+→ produce completed step state
+```
+
+### Level 4 — Goal-Directed Navigation Scout
 
 ```text
 original goal
@@ -942,25 +943,57 @@ candidate outgoing actions
 → rank safe next transitions
 ```
 
-### Level 4 — Global Semantic Consolidation
+### Level 5 — Global Semantic Consolidation
 
-Optional broader Pass-1/Pass-2-style reasoning may periodically clean up accumulated workflow semantics:
-
-```text
-business actor
-business intent
-major stages
-branches / joins
-completion conditions
-outcomes
-cross-step rules
-```
+Optional broader Pass-1/Pass-2-style reasoning may periodically clean up accumulated workflow semantics.
 
 Global consolidation is refinement, not a prerequisite for navigation.
 
 ---
 
-## 24. Difference from core LeMap
+## 25. Token and model-call discipline
+
+Friendly interaction should not cause a second model call every time a question is shown.
+
+The preferred pattern is:
+
+```text
+local exploration
+→ one semantic-resolution call
+→ entity/relationship/workflow meaning
+  + reusable interaction semantics
+→ persist
+```
+
+Later runs reuse the persisted explanation/question/examples.
+
+Model context should remain compact:
+
+```text
+original goal
+small relevant workflow arc
+few recent semantic selections/facts
+current entity
+current local relationships
+valid options
+```
+
+Do not send an unbounded transcript or whole-page dump when a compact semantic slice is sufficient.
+
+Run logs should track model usage by purpose:
+
+```text
+local_entity
+information_need
+user_answer
+navigation
+```
+
+including latency and prompt/completion/total/cache-hit tokens, plus aggregate totals per run.
+
+---
+
+## 26. Difference from core LeMap
 
 Core LeMap usually begins with a largely available executable universe:
 
@@ -987,14 +1020,14 @@ meaning/prioritization = model
 
 ---
 
-## 25. End-to-end architecture
+## 27. End-to-end architecture
 
 ```text
 USER GOAL
    ↓
 QUERY PLANNER / SEMANTIC ROUTER
    ↓
-SEARCH PERSISTENT SEMANTIC MEMORY
+SEARCH SEMANTIC MEMORY + APPLICABLE WORKFLOW INSTANCES
    ↓
 RECOGNIZE CURRENT APPLICATION STATE
    ↓
@@ -1002,55 +1035,54 @@ Can we choose a safe goal-directed next action now?
    │
    ├─ YES
    │    ↓
-   │  GOAL-DIRECTED NAVIGATION SCOUT
-   │    ↓
-   │  EXECUTE BEST SAFE TRANSITION
+   │  GOAL-DIRECTED NAVIGATION
    │
    └─ NO
         ↓
-     Is local structure/behavior insufficiently understood?
-        │
-        ├─ YES
-        │    ↓
-        │  DISCOVER LOCAL ENTITY GRAPH
-        │    ↓
-        │  SAFE TYPE-AWARE BEHAVIOR PROBES
-        │    ↓
-        │  ENTITY STATE DELTAS + RELATIONSHIPS
-        │    ↓
-        │  LOCAL SEMANTIC RESOLUTION
-        │    ↓
-        │  PERSIST / REFINE SEMANTIC ENTITY MEMORY
-        │    ↓
-        │  RETRY NEXT-ACTION DECISION
-        │
-        └─ NO
-             ↓
-          INFORMATION-NEED PLANNER
-             ↓
-          Is a user-specific business fact required?
-             │
-             ├─ NO → retry navigation / stop on unresolved ambiguity
-             │
-             └─ YES
-                  ↓
-               ASK ONLY THE REQUIRED QUESTION
-                  ↓
-               MAP ANSWER TO PROVEN STRUCTURAL OPTION/FIELD
-                  ↓
-               APPLY ANSWER
-                  ↓
-               RE-OBSERVE ENTITY STATE
-                  ↓
-               RETRY NEXT-ACTION DECISION
+     DISCOVER LOCAL ENTITY GRAPH AS NEEDED
+        ↓
+     SAFE TYPE-AWARE BEHAVIOR PROBES AS NEEDED
+        ↓
+     LOCAL SEMANTIC RESOLUTION
+       entity meaning
+       relationships
+       workflow role
+       reusable interaction semantics
+        ↓
+     CLASSIFY REQUIRED VALUES
+       prefilled
+       remembered/applicable
+       missing
+        ↓
+     COLLECT ONLY MISSING USER INFORMATION
+        ↓
+     APPLY ANSWERS + RE-OBSERVE
+        ↓
+     BEFORE LEAVING STEP
+       summarize prefilled/reused values
+       confirm or allow modification when needed
+        ↓
+     PERSIST/UPDATE USER-WORKFLOW INSTANCE
+        ↓
+     GOAL-DIRECTED NAVIGATION SCOUT
+        ↓
+     EXECUTE BEST SAFE TRANSITION
 
-Every executed transition / discovered entity
+Every learned semantic template / executed transition
         ↓
-PERSIST EVIDENCE + COVERAGE + SELECTED WORKFLOW EDGE
+PERSIST SEMANTIC EVIDENCE + WORKFLOW EDGE
+
+Every applicable user fact
         ↓
-Future runs reuse compatible knowledge
+PERSIST SEPARATE SCOPED WORKFLOW INSTANCE
+
+Future runs
+        ↓
+REUSE TEMPLATE + INSTANCE
+        ↓
+NAVIGATE UNTIL NEW INFORMATION IS ACTUALLY REQUIRED
 ```
 
 The final invariant is:
 
-> **LeMap-Web does not build a semantic map in order to navigate. It navigates semantically toward the user's goal and memoizes what it learns, asking the user only when genuinely missing business information prevents further safe progress.**
+> **LeMap-Web navigates semantically, learns reusable interaction semantics with the entity, and maintains separate scoped user/workflow instances so future runs can reuse known information, confirm current application state, and ask the user only for genuinely new facts.**
