@@ -1,4 +1,4 @@
-import { controlScope } from './controlScope.js';
+import { controlScope, currentControlScope } from './controlScope.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 
@@ -20,10 +20,13 @@ export function uncoveredUserInputFields(graph = {}, state = {}, semanticEntity 
   const inputTypes = new Set(['text', 'number', 'date', 'select', 'autocomplete', 'radio', 'checkbox']);
   const memory = options.memory || null;
   const entityId = options.entityId || graph.entity?.id || '';
+  const scopeFor = memory
+    ? (field) => controlScope(memory, field, entityId)
+    : (field) => currentControlScope(field, entityId);
 
   return arr(graph.fields).filter((field) => inputTypes.has(field.type)
     && state.fields?.[field.id]?.visible
     && state.fields?.[field.id]?.enabled
     && !covered.has(String(field.id))
-    && (!memory || controlScope(memory, field, entityId) !== 'application'));
+    && scopeFor(field) !== 'application');
 }
