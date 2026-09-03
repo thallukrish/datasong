@@ -207,8 +207,8 @@ async function chooseSelectOption(page, field, option, settleMs) {
   const locator = fieldLocator(page, field);
   const shape = await selectShape(locator);
   if (shape.tag === 'select') {
-    const target = option.value !== '' ? { value: option.value } : { label: option.label };
-    await locator.selectOption(target).catch(async () => locator.selectOption({ label: option.label }));
+    await locator.selectOption({ value: String(option.value ?? '') })
+      .catch(async () => locator.selectOption({ label: option.label }));
     await settle(page, settleMs);
     return;
   }
@@ -236,20 +236,27 @@ async function currentSelectIdentity(page, field) {
   return { value: shape.value, label: shape.text };
 }
 
-async function restoreSelect(page, fieldId, original, result, options) {
+async function restoreSelect(page, originalField, original, result, options) {
   try {
-    const current = await capture(page);
-    const field = controlById(current.graph, fieldId);
-    if (!field) throw new Error(`Missing select ${fieldId}`);
-    const choices = result.optionDomains[fieldId] || [];
+    const locator = fieldLocator(page, originalField);
+    if (!(await locator.count())) throw new Error(`Missing original select locator for ${originalField.id}`);
+    const shape = await selectShape(locator);
+
+    if (shape.tag === 'select') {
+      await locator.selectOption({ value: String(original.value ?? '') })
+        .catch(async () => locator.selectOption({ label: original.label }));
+      await settle(page, options.settleMs);
+      return;
+    }
+
+    const choices = result.optionDomains[originalField.id] || [];
     const target = choices.find((option) => option.value === original.value)
       || choices.find((option) => option.label === original.label)
-      || choices.find((option) => option.selected)
-      || choices[0];
-    if (!target) throw new Error('No restore option discovered');
-    await chooseSelectOption(page, field, target, options.settleMs);
+      || choices.find((option) => option.selected);
+    if (!target) throw new Error('No original combobox option discovered');
+    await chooseSelectOption(page, originalField, target, options.settleMs);
   } catch (error) {
-    result.errors.push({ fieldId, message: `select restore failed: ${error.message}` });
+    result.errors.push({ fieldId: originalField.id, message: `select restore failed: ${error.message}` });
   }
 }
 
@@ -395,8 +402,8 @@ async function exploreSelectField(page, initial, field, result, options) {
     const option = alternatives[index];
     try {
       const before = await capture(page);
-      const currentField = controlById(before.graph, field.id);
-      if (!currentField || before.state.fields[field.id]?.enabled === false || before.state.fields[field.id]?.visible === false) continue;
+      const currentField = controlById(before.graph, field.id) || field;
+      if (before.state.fields[field.id]?.enabled === false || before.state.fields[field.id]?.visible === false) continue;
       await chooseSelectOption(page, currentField, option, options.settleMs);
       const after = await capture(page);
       const action = { id: `probe:${field.id}:option:${index + 1}`, kind: 'select_option', value: option.label || option.value, purpose: 'option-probe', safety: 'safe' };
@@ -412,7 +419,7 @@ async function exploreSelectField(page, initial, field, result, options) {
     } catch (error) {
       result.errors.push({ fieldId: field.id, message: `select option probe failed: ${error.message}` });
     } finally {
-      await restoreSelect(page, field.id, original, result, options);
+      await restoreSelect(page, field, original, result, options);
     }
   }
 }
