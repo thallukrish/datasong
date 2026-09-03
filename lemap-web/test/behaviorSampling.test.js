@@ -48,6 +48,25 @@ test('external effect normalization removes the probed control own value noise',
   assert.deepEqual(normalized.actionsEnabled, ['action:continue']);
 });
 
+test('external effect normalization removes every member of a finite-choice source group', () => {
+  const normalized = normalizeExternalEffect({
+    fieldValuesChanged: [
+      { fieldId: 'field:online', before: false, after: true },
+      { fieldId: 'field:offline', before: true, after: false },
+      { fieldId: 'field:other', before: '', after: 'ready' }
+    ],
+    fieldsEnabled: ['field:online', 'field:offline', 'field:other'],
+    fieldsDisabled: [], fieldsShown: [], fieldsHidden: [], fieldsAdded: [], fieldsRemoved: [],
+    actionsEnabled: ['action:continue'], actionsDisabled: [], actionsShown: [], actionsHidden: [],
+    regionsShown: [], regionsHidden: [], validationMessagesAdded: [], validationMessagesRemoved: [],
+    optionsAdded: {}, optionsRemoved: {}, routeChanged: false, entityChanged: false
+  }, { sourceFieldIds: ['field:online', 'field:offline'] });
+
+  assert.deepEqual(normalized.fieldValuesChanged, [{ fieldId: 'field:other', before: '', after: 'ready' }]);
+  assert.deepEqual(normalized.fieldsEnabled, ['field:other']);
+  assert.deepEqual(normalized.actionsEnabled, ['action:continue']);
+});
+
 test('identical external effects collapse into a single behavior class with coverage', () => {
   const coverage = { domainSize: 25, probedCount: 10, exhaustive: false, samplingMethod: 'seeded_random' };
   const effect = { fieldsEnabled: ['field:mode'], actionsDisabled: ['action:continue'] };
