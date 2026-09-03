@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildUserQuestions, normalizeUserAnswerResponse, buildUserAnswerPrompt } from '../src/agent/userInput.js';
+import { buildUserQuestions, normalizeUserAnswerResponse, buildUserAnswerPrompt, interpretUserAnswer } from '../src/agent/userInput.js';
 import { buildNavigationPrompt, normalizeNavigationResponse } from '../src/semantic/navigationScout.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition } from '../src/agent/memory.js';
 import { fieldInteractionKind } from '../src/agent/browserActions.js';
@@ -59,6 +59,46 @@ test('standalone value answer is preserved for the discovered field', () => {
   const result = normalizeUserAnswerResponse({ value: '13/09/2025', confidence: 0.98, reason: 'User supplied the filing date.' }, question);
   assert.equal(result.value, '13/09/2025');
   assert.equal(result.confidence, 0.98);
+});
+
+test('private value answers never call the model', async () => {
+  const question = {
+    questionId: 'interaction:pan',
+    answerKind: 'value',
+    fieldId: 'field:pan',
+    label: 'What is your PAN?',
+    inputType: 'text',
+    cardinality: 'single_value',
+    options: []
+  };
+  let calls = 0;
+  const client = { chat: { completions: { create: async () => { calls += 1; throw new Error('model must not be called'); } } } };
+  const result = await interpretUserAnswer({ client, model: 'test-model', userGoal: 'File ITR-3', semanticEntity: { semanticName: 'Personal details' }, question, userAnswer: 'ABCDE1234F' });
+  assert.equal(calls, 0);
+  assert.equal(result.value, 'ABCDE1234F');
+  assert.equal(result.confidence, 1);
+  assert.equal(result.local, true);
+});
+
+test('unambiguous choice answers are interpreted locally before model fallback', async () => {
+  const question = {
+    questionId: 'interaction:mode',
+    answerKind: 'choice',
+    label: 'How would you like to file?',
+    cardinality: 'exactly_one',
+    options: [
+      { fieldId: 'field:online', label: 'Online (Recommended)' },
+      { fieldId: 'field:offline', label: 'Offline' }
+    ]
+  };
+  let calls = 0;
+  const client = { chat: { completions: { create: async () => { calls += 1; throw new Error('model must not be called'); } } } };
+  const byNumber = await interpretUserAnswer({ client, model: 'test-model', question, userAnswer: '2' });
+  assert.deepEqual(byNumber.selectedFieldIds, ['field:offline']);
+  assert.equal(byNumber.local, true);
+  const byLabel = await interpretUserAnswer({ client, model: 'test-model', question, userAnswer: 'Online (Recommended)' });
+  assert.deepEqual(byLabel.selectedFieldIds, ['field:online']);
+  assert.equal(calls, 0);
 });
 
 test('navigation scout ranks candidates against original user goal, not continuity alone', () => {
