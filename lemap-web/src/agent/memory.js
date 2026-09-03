@@ -1,3 +1,5 @@
+import { setControlScopeMemory } from './controlScope.js';
+
 function arr(value) { return Array.isArray(value) ? value : []; }
 
 export function createSemanticMemory(userGoal = '') {
@@ -79,11 +81,13 @@ export function recordEntityKnowledge(memory, { structuralEntity = {}, structura
   };
   memory.entities[id] = entry;
   if (!memory.workflow.nodes.includes(id)) memory.workflow.nodes.push(id);
+  setControlScopeMemory(memory);
   touch(memory);
   return entry;
 }
 
 export function startQuerySession(memory, userGoal = '') {
+  setControlScopeMemory(memory);
   const session = {
     id: `session:${memory.sessions.length + 1}`,
     userGoal: String(userGoal || ''),
