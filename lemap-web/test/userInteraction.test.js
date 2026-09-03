@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyInteractionItems, buildConfirmationSummary } from '../src/agent/userInteraction.js';
+import { classifyInteractionItems, buildConfirmationSummary, interactionFields } from '../src/agent/userInteraction.js';
 import { createInstanceMemory, recordInstanceFact } from '../src/agent/instanceMemory.js';
 
 const graph = {
@@ -36,6 +36,11 @@ test('interaction layer distinguishes prefilled remembered and missing without c
   assert.equal(items.find((item) => item.semanticKey === 'assessment-year').status, 'prefilled');
   assert.equal(items.find((item) => item.semanticKey === 'filing-mode').status, 'remembered');
   assert.equal(items.find((item) => item.semanticKey === 'filing-section').status, 'missing');
+});
+
+test('interaction binding to one finite-choice member expands to the whole structural group', () => {
+  const fields = interactionFields(graph, { structuralFieldIds: ['field:mode-online'] });
+  assert.deepEqual(fields.map((field) => field.id).sort(), ['field:mode-offline', 'field:mode-online']);
 });
 
 test('confirmation summary includes only prefilled or reused values', () => {
