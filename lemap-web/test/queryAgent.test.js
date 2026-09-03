@@ -80,6 +80,29 @@ test('private value answers never call the model', async () => {
   assert.equal(result.local, true);
 });
 
+test('select value answers resolve option numbers locally instead of storing the literal number', async () => {
+  const question = {
+    questionId: 'interaction:assessment-year',
+    answerKind: 'value',
+    fieldId: 'field:assessment-year',
+    label: 'For which assessment year are you filing?',
+    inputType: 'select',
+    cardinality: 'single_value',
+    options: [
+      { value: 'Select', label: 'Select' },
+      { value: '2026-27 (Current A.Y.)', label: '2026-27 (Current A.Y.)' },
+      { value: '2025-26', label: '2025-26' }
+    ]
+  };
+  let calls = 0;
+  const client = { chat: { completions: { create: async () => { calls += 1; throw new Error('model must not be called'); } } } };
+  const result = await interpretUserAnswer({ client, model: 'test-model', question, userAnswer: '2' });
+  assert.equal(calls, 0);
+  assert.equal(result.value, '2026-27 (Current A.Y.)');
+  assert.equal(result.local, true);
+  assert.match(result.reason, /option number/i);
+});
+
 test('unambiguous choice answers are interpreted locally before model fallback', async () => {
   const question = {
     questionId: 'interaction:mode',
