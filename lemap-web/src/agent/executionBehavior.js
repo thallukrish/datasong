@@ -5,7 +5,7 @@ function signature(effect = {}) { return JSON.stringify(effect); }
 function touch(memory) { if (memory) memory.updatedAt = new Date().toISOString(); }
 
 export function classifyAndRecordExecutionBehavior(memory, {
-  entityId = '', semanticKey = '', sourceFieldIds = [], observedValue = '', delta = {}
+  entityId = '', semanticKey = '', sourceFieldIds = [], delta = {}
 } = {}) {
   const entity = memory?.entities?.[entityId];
   if (!entity) throw new Error(`Cannot record execution behavior for unknown entity ${entityId}`);
@@ -25,7 +25,6 @@ export function classifyAndRecordExecutionBehavior(memory, {
       sourceFieldIds: [...new Set(arr(sourceFieldIds).map(String).filter(Boolean))],
       effect,
       effectSignature,
-      observedValues: [],
       observations: 0,
       firstObservedAt: new Date().toISOString(),
       lastObservedAt: ''
@@ -33,8 +32,6 @@ export function classifyAndRecordExecutionBehavior(memory, {
     classes.push(behaviorClass);
   }
 
-  const value = String(observedValue ?? '');
-  if (value && !behaviorClass.observedValues.includes(value)) behaviorClass.observedValues.push(value);
   behaviorClass.observations += 1;
   behaviorClass.lastObservedAt = new Date().toISOString();
   touch(memory);
