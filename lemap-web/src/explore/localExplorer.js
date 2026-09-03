@@ -7,10 +7,10 @@ import { isEmptyEntityDelta } from '../graph/workflowGraph.js';
 import { chooseBehaviorSamples, normalizeExternalEffect, clusterBehaviorEffects } from './behaviorSampling.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
-function stateId(state) { return `state:${crypto.createHash('sha1').update(JSON.stringify(state)).digest('hex').slice(0, 12)}`; }
-function observationId(index) { return `observation:local:${String(index).padStart(3, '0')}`; }
 function unique(values) { return [...new Set(values.filter(Boolean))]; }
 function quoteAttr(value) { return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
+function stateId(state) { return `state:${crypto.createHash('sha1').update(JSON.stringify(state)).digest('hex').slice(0, 12)}`; }
+function observationId(index) { return `observation:local:${String(index).padStart(3, '0')}`; }
 
 async function capture(page) {
   const snapshot = await snapshotPage(page);
@@ -23,14 +23,13 @@ function controlById(graph, fieldId) {
   return [...arr(graph?.fields), ...arr(graph?.actions)].find((field) => field.id === fieldId) || null;
 }
 
-function methodFor(graph, fieldId, predicate = () => true) {
-  const method = arr(graph?.methods).find((candidate) => candidate.fieldId === fieldId);
-  if (!method) return null;
-  return arr(method.actions).find(predicate) || null;
-}
-
 function groupById(graph, groupId) {
   return arr(graph?.groups).find((group) => group.id === groupId) || null;
+}
+
+function methodFor(graph, fieldId, predicate = () => true) {
+  const method = arr(graph?.methods).find((candidate) => candidate.fieldId === fieldId);
+  return arr(method?.actions).find(predicate) || null;
 }
 
 function fieldLocator(page, field) {
@@ -43,32 +42,8 @@ function fieldLocator(page, field) {
   throw new Error(`No browser locator evidence for ${field.id}`);
 }
 
-async function executeSafeAction(page, field, action) {
-  if (!action || action.safety !== 'safe') throw new Error(`Refusing non-safe action ${action?.id || ''}`);
-  const locator = fieldLocator(page, field);
-  if (field.type === 'radio' && action.kind === 'select') {
-    await locator.check();
-    return;
-  }
-  if (field.type === 'checkbox' && action.kind === 'toggle') {
-    if (action.value) await locator.check();
-    else await locator.uncheck();
-    return;
-  }
-  throw new Error(`Local explorer does not execute ${field.type}:${action.kind}`);
-}
-
-function affectedFieldIds(delta = {}) {
-  return unique([
-    ...arr(delta.fieldValuesChanged).map((change) => change.fieldId),
-    ...arr(delta.fieldsEnabled), ...arr(delta.fieldsDisabled), ...arr(delta.fieldsShown), ...arr(delta.fieldsHidden),
-    ...arr(delta.fieldsAdded), ...arr(delta.fieldsRemoved),
-    ...Object.keys(delta.optionsAdded || {}), ...Object.keys(delta.optionsRemoved || {})
-  ]);
-}
-
-function affectedActionIds(delta = {}) {
-  return unique([...arr(delta.actionsEnabled), ...arr(delta.actionsDisabled), ...arr(delta.actionsShown), ...arr(delta.actionsHidden)]);
+async function settle(page, settleMs) {
+  if (settleMs > 0) await page.waitForTimeout(settleMs);
 }
 
 function addRelationship(result, relationship) {
@@ -85,6 +60,23 @@ function addRelationship(result, relationship) {
   if (result._relationshipKeys.has(key)) return;
   result._relationshipKeys.add(key);
   result.learnedRelationships.push(relationship);
+}
+
+function affectedFieldIds(delta = {}) {
+  return unique([
+    ...arr(delta.fieldValuesChanged).map((change) => change.fieldId),
+    ...arr(delta.fieldsEnabled), ...arr(delta.fieldsDisabled),
+    ...arr(delta.fieldsShown), ...arr(delta.fieldsHidden),
+    ...arr(delta.fieldsAdded), ...arr(delta.fieldsRemoved),
+    ...Object.keys(delta.optionsAdded || {}), ...Object.keys(delta.optionsRemoved || {})
+  ]);
+}
+
+function affectedActionIds(delta = {}) {
+  return unique([
+    ...arr(delta.actionsEnabled), ...arr(delta.actionsDisabled),
+    ...arr(delta.actionsShown), ...arr(delta.actionsHidden)
+  ]);
 }
 
 function recordObservedEffect(result, before, after, field, action, purpose = '') {
@@ -120,7 +112,10 @@ function compactBehaviorClasses(clustered = {}) {
     id: item.id,
     sampleCount: item.sampleCount,
     wildcard: !!item.wildcard,
-    sampleValues: arr(item.samples).map((sample) => String(sample?.label || sample?.value || sample?.fieldId || '')).filter(Boolean).slice(0, 10),
+    sampleValues: arr(item.samples)
+      .map((sample) => String(sample?.label || sample?.value || sample?.fieldId || ''))
+      .filter(Boolean)
+      .slice(0, 10),
     effect: item.effect
   }));
 }
@@ -163,8 +158,45 @@ function learnEnabledGroups(result, before, after, sourceFieldId, evidenceId) {
   }
 }
 
-async function settle(page, settleMs) {
-  if (settleMs > 0) await page.waitForTimeout(settleMs);
+function comparableStructure(captured = {}) {
+  return JSON.stringify({
+    entityId: captured.graph?.entity?.id || '',
+    fields: arr(captured.graph?.fields).map((field) => [field.id, field.type]).sort((a, b) => a[0].localeCompare(b[0])),
+    groups: arr(captured.graph?.groups)
+      .map((group) => [group.id, group.groupType, [...arr(group.memberFieldIds)].sort()])
+      .sort((a, b) => a[0].localeCompare(b[0])),
+    actions: arr(captured.graph?.actions).map((action) => [action.id, action.type]).sort((a, b) => a[0].localeCompare(b[0]))
+  });
+}
+
+async function openDisposablePage(livePage, initial, options) {
+  const context = livePage.context();
+  const pagePromise = context.waitForEvent('page', { timeout: 7000 });
+  const opened = await livePage.evaluate((url) => !!window.open(url, '_blank'), livePage.url());
+  if (!opened) throw new Error('Browser blocked disposable exploration tab');
+  const probePage = await pagePromise;
+  await probePage.waitForLoadState('domcontentloaded');
+  await settle(probePage, Math.max(options.settleMs, 100));
+  const baseline = await capture(probePage);
+  if (comparableStructure(baseline) !== comparableStructure(initial)) {
+    await probePage.close().catch(() => {});
+    throw new Error('Disposable page does not reproduce the live structural baseline');
+  }
+  return { page: probePage, baseline };
+}
+
+async function withDisposablePage(livePage, initial, result, options, fn) {
+  let probePage;
+  try {
+    const opened = await openDisposablePage(livePage, initial, options);
+    probePage = opened.page;
+    return await fn(probePage, opened.baseline);
+  } catch (error) {
+    result.errors.push({ fieldId: '', message: `disposable exploration failed: ${error.message}` });
+    return null;
+  } finally {
+    await probePage?.close().catch(() => {});
+  }
 }
 
 async function selectShape(locator) {
@@ -201,7 +233,10 @@ async function readSelectableOptions(page, field) {
         .map((node) => ({
           value: String(node.getAttribute('data-value') || node.getAttribute('value') || node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
           label: String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
-          disabled: node.getAttribute('aria-disabled') === 'true' || node.hasAttribute('disabled'),
+          disabled: node.getAttribute('aria-disabled') === 'true'
+            || node.hasAttribute('disabled')
+            || node.classList.contains('mat-option-disabled')
+            || node.classList.contains('mdc-list-item--disabled'),
           selected: node.getAttribute('aria-selected') === 'true'
         }))
         .filter((option) => option.label));
@@ -211,28 +246,6 @@ async function readSelectableOptions(page, field) {
     }
   }
   return [];
-}
-
-async function discoverValueDomain(page, field, result, options) {
-  if (!['select', 'autocomplete'].includes(field.type)) return;
-  const selectable = await readSelectableOptions(page, field);
-  await settle(page, Math.min(options.settleMs, 100));
-  const values = unique(selectable.map((option) => option.label || option.value));
-  if (!values.length) return;
-  result.valueDomains[field.id] = values;
-  result.optionDomains[field.id] = selectable;
-  addRelationship(result, { kind: 'value_domain', sourceFieldId: field.id, values, evidenceIds: [] });
-}
-
-async function discoverValueDomains(page, graph, result, options) {
-  for (const field of arr(graph.fields)) {
-    if (!field.visible || field.disabled) continue;
-    try {
-      await discoverValueDomain(page, field, result, options);
-    } catch (error) {
-      result.errors.push({ fieldId: field.id, message: `value-domain discovery failed: ${error.message}` });
-    }
-  }
 }
 
 async function chooseSelectOption(page, field, option, settleMs) {
@@ -245,102 +258,91 @@ async function chooseSelectOption(page, field, option, settleMs) {
     return;
   }
   if (shape.tag === 'mat-select' || shape.role === 'combobox' || shape.role === 'listbox') {
-    let chosen = false;
-    try {
-      await locator.click();
-      await settle(page, Math.min(settleMs, 100));
-      const exact = page.getByRole('option', { name: option.label, exact: true }).first();
-      if (await exact.count()) await exact.click();
-      else await page.locator('[role="option"],mat-option').filter({ hasText: option.label }).first().click();
-      chosen = true;
-      await settle(page, settleMs);
-      return;
-    } finally {
-      if (!chosen) {
-        await page.keyboard.press('Escape').catch(() => {});
-        await settle(page, 25);
-      }
-    }
+    await locator.click();
+    await settle(page, Math.min(settleMs, 100));
+    const exact = page.getByRole('option', { name: option.label, exact: true }).first();
+    if (await exact.count()) await exact.click();
+    else await page.locator('[role="option"],mat-option').filter({ hasText: option.label }).first().click();
+    await settle(page, settleMs);
+    return;
   }
   throw new Error(`Unsupported selectable field ${field.id}`);
 }
 
-async function currentSelectIdentity(page, field) {
+async function executeSafeAction(page, field, action) {
+  if (!action || action.safety !== 'safe') throw new Error(`Refusing non-safe action ${action?.id || ''}`);
   const locator = fieldLocator(page, field);
-  const shape = await selectShape(locator);
-  if (shape.tag === 'select') {
-    return locator.evaluate((el) => {
-      const option = el.options?.[el.selectedIndex];
-      return { value: String(el.value ?? ''), label: String(option?.textContent || option?.label || '').replace(/\s+/g, ' ').trim(), kind: 'native' };
-    });
+  if (field.type === 'radio' && action.kind === 'select') {
+    await locator.check();
+    return;
   }
-  return { value: shape.value, label: shape.text, kind: 'composite' };
+  if (field.type === 'checkbox' && action.kind === 'toggle') {
+    if (action.value) await locator.check();
+    else await locator.uncheck();
+    return;
+  }
+  throw new Error(`Local explorer does not execute ${field.type}:${action.kind}`);
 }
 
-function reversibleSelectTarget(field, original, result) {
-  const choices = arr(result.optionDomains[field.id]);
-  if (original.kind === 'native') {
-    return choices.find((option) => option.value === original.value) || null;
+async function applyProbeStep(page, step, options) {
+  const current = await capture(page);
+  const field = controlById(current.graph, step.fieldId);
+  if (!field) throw new Error(`Probe prerequisite field ${step.fieldId} is missing`);
+  if (step.kind === 'select_option') {
+    await chooseSelectOption(page, field, step.option, options.settleMs);
+    return;
   }
-  return choices.find((option) => !option.disabled && (
-    option.selected
-    || (original.value && option.value === original.value)
-    || (original.label && option.label === original.label)
-  )) || null;
+  if (step.kind === 'radio_select') {
+    const action = methodFor(current.graph, field.id, (candidate) => candidate.kind === 'select');
+    await executeSafeAction(page, field, action);
+    await settle(page, options.settleMs);
+    return;
+  }
+  if (step.kind === 'checkbox_set') {
+    const action = methodFor(current.graph, field.id, (candidate) => candidate.kind === 'toggle' && candidate.value === step.checked);
+    await executeSafeAction(page, field, action);
+    await settle(page, options.settleMs);
+    return;
+  }
+  throw new Error(`Unknown probe prerequisite ${step.kind}`);
 }
 
-async function restoreSelect(page, originalField, original, result, options) {
-  try {
-    const locator = fieldLocator(page, originalField);
-    if (!(await locator.count())) throw new Error(`Missing original select locator for ${originalField.id}`);
-    const shape = await selectShape(locator);
+async function replayProbePath(page, steps, options) {
+  for (const step of arr(steps)) await applyProbeStep(page, step, options);
+}
 
-    if (shape.tag === 'select') {
-      await locator.selectOption({ value: String(original.value ?? '') })
-        .catch(async () => locator.selectOption({ label: original.label }));
-      await settle(page, options.settleMs);
-      return;
+async function discoverValueDomainsSandbox(livePage, initial, result, options) {
+  await withDisposablePage(livePage, initial, result, options, async (page, baseline) => {
+    for (const field of arr(baseline.graph.fields)) {
+      if (!field.visible || field.disabled || !['select', 'autocomplete'].includes(field.type)) continue;
+      try {
+        const selectable = await readSelectableOptions(page, field);
+        const values = unique(selectable.map((option) => option.label || option.value));
+        if (!values.length) continue;
+        result.valueDomains[field.id] = values;
+        result.optionDomains[field.id] = selectable;
+        addRelationship(result, { kind: 'value_domain', sourceFieldId: field.id, values, evidenceIds: [] });
+      } catch (error) {
+        result.errors.push({ fieldId: field.id, message: `value-domain discovery failed: ${error.message}` });
+      }
     }
-
-    const target = reversibleSelectTarget(originalField, original, result);
-    if (!target) throw new Error('No reversible original combobox option discovered');
-    await chooseSelectOption(page, originalField, target, options.settleMs);
-  } catch (error) {
-    result.errors.push({ fieldId: originalField.id, message: `select restore failed: ${error.message}` });
-  } finally {
-    await page.keyboard.press('Escape').catch(() => {});
-  }
-}
-
-function comparableStructure(captured = {}) {
-  return JSON.stringify({
-    entityId: captured.graph?.entity?.id || '',
-    fields: arr(captured.graph?.fields).map((field) => [field.id, field.type]).sort((a, b) => a[0].localeCompare(b[0])),
-    groups: arr(captured.graph?.groups).map((group) => [group.id, group.groupType, [...arr(group.memberFieldIds)].sort()]).sort((a, b) => a[0].localeCompare(b[0])),
-    actions: arr(captured.graph?.actions).map((action) => [action.id, action.type]).sort((a, b) => a[0].localeCompare(b[0]))
   });
 }
 
-async function setCheckbox(page, graph, fieldId, checked, settleMs) {
-  const field = controlById(graph, fieldId);
-  if (!field) throw new Error(`Missing checkbox ${fieldId}`);
-  const action = methodFor(graph, fieldId, (candidate) => candidate.kind === 'toggle' && candidate.value === checked);
-  if (!action) throw new Error(`Missing checkbox ${checked ? 'check' : 'uncheck'} action for ${fieldId}`);
-  await executeSafeAction(page, field, action);
-  await settle(page, settleMs);
-  return { field, action };
+async function inspectGroupAfterPath(livePage, initial, groupId, path, result, options) {
+  return withDisposablePage(livePage, initial, result, options, async (page) => {
+    await replayProbePath(page, path, options);
+    const current = await capture(page);
+    return { group: groupById(current.graph, groupId), current };
+  });
 }
 
-async function restoreCheckbox(page, fieldId, settleMs) {
-  const current = await capture(page);
-  if (current.state.fields[fieldId]?.checked !== true) return;
-  await setCheckbox(page, current.graph, fieldId, false, settleMs);
-}
+async function exploreCheckboxGroupSandbox(livePage, initial, groupId, result, options, path = []) {
+  const inspected = await inspectGroupAfterPath(livePage, initial, groupId, path, result, options);
+  const group = inspected?.group;
+  const base = inspected?.current;
+  if (!group || group.groupType !== 'checkbox' || !base) return;
 
-async function exploreCheckboxGroup(page, groupId, result, options) {
-  const base = await capture(page);
-  const group = groupById(base.graph, groupId);
-  if (!group || group.groupType !== 'checkbox') return;
   const candidates = arr(group.memberFieldIds).filter((fieldId) => {
     const state = base.state.fields[fieldId];
     return state?.enabled && state?.visible && state?.checked === false;
@@ -353,26 +355,28 @@ async function exploreCheckboxGroup(page, groupId, result, options) {
   });
   const sampled = chooseBehaviorSamples(choices, {
     maxSamples: options.maxBehaviorSamples,
-    seedKey: `${base.graph.entity.id}:${group.id}:checkbox`
+    seedKey: `${initial.graph.entity.id}:${group.id}:checkbox:${JSON.stringify(path)}`
   });
   const probes = [];
 
   for (const choice of sampled.samples) {
-    const fieldId = choice.fieldId;
-    try {
+    await withDisposablePage(livePage, initial, result, options, async (page) => {
+      await replayProbePath(page, path, options);
       const before = await capture(page);
-      const exec = await setCheckbox(page, before.graph, fieldId, true, options.settleMs);
+      const field = controlById(before.graph, choice.fieldId);
+      const action = methodFor(before.graph, choice.fieldId, (candidate) => candidate.kind === 'toggle' && candidate.value === true);
+      if (!field || !action || action.safety !== 'safe') return;
+      await executeSafeAction(page, field, action);
+      await settle(page, options.settleMs);
       const after = await capture(page);
-      const observation = recordObservedEffect(result, before, after, exec.field, exec.action, 'individual-probe');
+      const observation = recordObservedEffect(result, before, after, field, action, 'individual-probe');
       const delta = observation?.delta || computeEntityDelta(before.state, after.state);
       probes.push({
         sample: choice,
         effect: normalizeExternalEffect(delta, { sourceFieldIds: group.memberFieldIds }),
         evidenceId: observation?.id || ''
       });
-    } finally {
-      await restoreCheckbox(page, fieldId, options.settleMs);
-    }
+    });
   }
 
   recordBehaviorClasses(result, {
@@ -383,89 +387,64 @@ async function exploreCheckboxGroup(page, groupId, result, options) {
     coverage: sampled.coverage
   });
 
-  const combinationCandidates = sampled.samples.map((choice) => choice.fieldId);
-  if (combinationCandidates.length > 1) {
-    const firstId = combinationCandidates[0];
-    const secondId = combinationCandidates[1];
-    let combinationObservation = null;
-    try {
-      const beforeFirst = await capture(page);
-      await setCheckbox(page, beforeFirst.graph, firstId, true, options.settleMs);
+  if (sampled.samples.length > 1) {
+    const firstId = sampled.samples[0].fieldId;
+    const secondId = sampled.samples[1].fieldId;
+    await withDisposablePage(livePage, initial, result, options, async (page) => {
+      await replayProbePath(page, path, options);
+      await applyProbeStep(page, { kind: 'checkbox_set', fieldId: firstId, checked: true }, options);
       const beforeSecond = await capture(page);
-      const secondExec = await setCheckbox(page, beforeSecond.graph, secondId, true, options.settleMs);
+      const secondField = controlById(beforeSecond.graph, secondId);
+      const secondAction = methodFor(beforeSecond.graph, secondId, (candidate) => candidate.kind === 'toggle' && candidate.value === true);
+      if (!secondField || !secondAction || secondAction.safety !== 'safe') return;
+      await executeSafeAction(page, secondField, secondAction);
+      await settle(page, options.settleMs);
       const afterSecond = await capture(page);
-      combinationObservation = recordObservedEffect(result, beforeSecond, afterSecond, secondExec.field, secondExec.action, 'representative-combination');
+      const observation = recordObservedEffect(result, beforeSecond, afterSecond, secondField, secondAction, 'representative-combination');
       const firstStillChecked = afterSecond.state.fields[firstId]?.checked === true;
       const secondChecked = afterSecond.state.fields[secondId]?.checked === true;
       addRelationship(result, {
         kind: firstStillChecked && secondChecked ? 'multi_select' : 'mutually_exclusive',
-        groupType: 'checkbox', groupId: group.id, memberFieldIds: [...group.memberFieldIds], representativeFieldIds: [firstId, secondId],
-        evidenceIds: combinationObservation ? [combinationObservation.id] : []
+        groupType: 'checkbox',
+        groupId: group.id,
+        memberFieldIds: [...group.memberFieldIds],
+        representativeFieldIds: [firstId, secondId],
+        evidenceIds: observation ? [observation.id] : []
       });
-    } finally {
-      await restoreCheckbox(page, secondId, options.settleMs);
-      await restoreCheckbox(page, firstId, options.settleMs);
-    }
-  }
-}
-
-async function clearRadioGroup(page, graph, group, settleMs) {
-  for (const fieldId of arr(group.memberFieldIds)) {
-    const field = controlById(graph, fieldId);
-    if (!field) continue;
-    const locator = fieldLocator(page, field);
-    if (!(await locator.count())) continue;
-    await locator.evaluate((el) => {
-      if (!el.checked) return;
-      el.checked = false;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
     });
   }
-  await settle(page, settleMs);
 }
 
-async function restoreRadioGroup(page, group, originalId, result, options) {
-  try {
-    const current = await capture(page);
-    if (originalId) {
-      if (current.state.fields[originalId]?.checked === true) return;
-      const originalField = controlById(current.graph, originalId);
-      const restoreAction = methodFor(current.graph, originalId, (candidate) => candidate.kind === 'select');
-      if (originalField && restoreAction?.safety === 'safe') {
-        await executeSafeAction(page, originalField, restoreAction);
-        await settle(page, options.settleMs);
-      }
-      return;
-    }
-    await clearRadioGroup(page, current.graph, group, options.settleMs);
-  } catch (error) {
-    result.errors.push({ fieldId: originalId || group.id, message: `radio restore failed: ${error.message}` });
-  }
-}
+async function exploreRadioGroupSandbox(livePage, initial, groupId, result, options, path = []) {
+  const inspected = await inspectGroupAfterPath(livePage, initial, groupId, path, result, options);
+  const group = inspected?.group;
+  const base = inspected?.current;
+  if (!group || group.groupType !== 'radio' || !base) return;
 
-async function exploreRadioGroup(page, initial, group, result, options) {
-  const originalId = arr(group.memberFieldIds).find((fieldId) => initial.state.fields[fieldId]?.checked === true) || '';
-  const alternatives = arr(group.memberFieldIds).filter((fieldId) => fieldId !== originalId && initial.state.fields[fieldId]?.enabled && initial.state.fields[fieldId]?.visible);
+  const originalId = arr(group.memberFieldIds).find((fieldId) => base.state.fields[fieldId]?.checked === true) || '';
+  const alternatives = arr(group.memberFieldIds).filter((fieldId) => {
+    const state = base.state.fields[fieldId];
+    return fieldId !== originalId && state?.enabled && state?.visible;
+  });
   if (!alternatives.length) return;
 
   const choices = alternatives.map((fieldId) => {
-    const field = controlById(initial.graph, fieldId);
+    const field = controlById(base.graph, fieldId);
     return { fieldId, value: field?.value ?? fieldId, label: field?.label || String(field?.value ?? fieldId) };
   });
   const sampled = chooseBehaviorSamples(choices, {
     maxSamples: options.maxBehaviorSamples,
-    seedKey: `${initial.graph.entity.id}:${group.id}:radio`
+    seedKey: `${initial.graph.entity.id}:${group.id}:radio:${JSON.stringify(path)}`
   });
   const probes = [];
 
   for (const choice of sampled.samples) {
-    const fieldId = choice.fieldId;
-    const before = await capture(page);
-    const field = controlById(before.graph, fieldId);
-    const action = methodFor(before.graph, fieldId, (candidate) => candidate.kind === 'select');
-    if (!field || !action || action.safety !== 'safe') continue;
-    try {
+    await withDisposablePage(livePage, initial, result, options, async (page) => {
+      await replayProbePath(page, path, options);
+      const before = await capture(page);
+      const field = controlById(before.graph, choice.fieldId);
+      const action = methodFor(before.graph, choice.fieldId, (candidate) => candidate.kind === 'select');
+      if (!field || !action || action.safety !== 'safe') return;
       await executeSafeAction(page, field, action);
       await settle(page, options.settleMs);
       const after = await capture(page);
@@ -477,23 +456,27 @@ async function exploreRadioGroup(page, initial, group, result, options) {
         evidenceId: observation?.id || ''
       });
       if (observation) {
-        const selected = after.state.fields[fieldId]?.checked === true;
-        const otherSelected = arr(group.memberFieldIds).filter((memberId) => memberId !== fieldId && after.state.fields[memberId]?.checked === true);
-        if (selected && otherSelected.length === 0) addRelationship(result, {
-          kind: 'mutually_exclusive', groupType: 'radio', groupId: group.id, memberFieldIds: [...group.memberFieldIds], evidenceIds: [observation.id]
-        });
-        learnEnabledGroups(result, before, after, fieldId, observation.id);
+        const selected = after.state.fields[choice.fieldId]?.checked === true;
+        const otherSelected = arr(group.memberFieldIds).filter((memberId) => memberId !== choice.fieldId && after.state.fields[memberId]?.checked === true);
+        if (selected && otherSelected.length === 0) {
+          addRelationship(result, {
+            kind: 'mutually_exclusive',
+            groupType: 'radio',
+            groupId: group.id,
+            memberFieldIds: [...group.memberFieldIds],
+            evidenceIds: [observation.id]
+          });
+        }
+        learnEnabledGroups(result, before, after, choice.fieldId, observation.id);
       }
-      const enabledCheckboxGroupIds = arr(after.graph.groups)
-        .filter((candidate) => candidate.groupType === 'checkbox')
-        .filter((candidate) => arr(candidate.memberFieldIds).some((memberId) => after.state.fields[memberId]?.enabled && !before.state.fields[memberId]?.enabled))
-        .map((candidate) => candidate.id);
-      for (const checkboxGroupId of enabledCheckboxGroupIds) await exploreCheckboxGroup(page, checkboxGroupId, result, options);
-    } catch (error) {
-      result.errors.push({ fieldId, message: error.message });
-    } finally {
-      await restoreRadioGroup(page, group, originalId, result, options);
-    }
+
+      const nextPath = [...path, { kind: 'radio_select', fieldId: choice.fieldId }];
+      const newlyEnabledCheckboxGroups = arr(after.graph.groups).filter((candidate) => candidate.groupType === 'checkbox')
+        .filter((candidate) => arr(candidate.memberFieldIds).some((memberId) => after.state.fields[memberId]?.enabled && !before.state.fields[memberId]?.enabled));
+      for (const checkboxGroup of newlyEnabledCheckboxGroups) {
+        await exploreCheckboxGroupSandbox(livePage, initial, checkboxGroup.id, result, options, nextPath);
+      }
+    });
   }
 
   recordBehaviorClasses(result, {
@@ -505,9 +488,27 @@ async function exploreRadioGroup(page, initial, group, result, options) {
   });
 }
 
-async function probeSelectSamples(page, initial, field, selectable, result, options, { restore = null } = {}) {
-  const original = await currentSelectIdentity(page, field);
-  const alternatives = selectable.filter((option) => !(option.value === original.value || option.label === original.label));
+async function exploreSelectFieldSandbox(livePage, initial, field, result, options) {
+  const optionsForField = arr(result.optionDomains[field.id]);
+  if (!optionsForField.length) return;
+
+  const inspected = await withDisposablePage(livePage, initial, result, options, async (page, baseline) => {
+    const currentField = controlById(baseline.graph, field.id);
+    if (!currentField) return null;
+    const locator = fieldLocator(page, currentField);
+    const shape = await selectShape(locator);
+    if (shape.tag === 'select') {
+      const selected = optionsForField.find((option) => option.selected || option.value === shape.value);
+      return { value: selected?.value ?? shape.value, label: selected?.label || '', kind: 'native' };
+    }
+    return { value: shape.value, label: shape.text, kind: 'composite' };
+  });
+  if (!inspected) return;
+
+  const selectable = optionsForField.filter((option) => !option.disabled);
+  const alternatives = selectable.filter((option) => !(option.value === inspected.value || option.label === inspected.label));
+  if (!alternatives.length) return;
+
   const sampled = chooseBehaviorSamples(alternatives, {
     maxSamples: options.maxBehaviorSamples,
     seedKey: `${initial.graph.entity.id}:${field.id}:select`
@@ -516,13 +517,19 @@ async function probeSelectSamples(page, initial, field, selectable, result, opti
 
   for (let index = 0; index < sampled.samples.length; index += 1) {
     const option = sampled.samples[index];
-    try {
-      const before = await capture(page);
-      const currentField = controlById(before.graph, field.id) || field;
-      if (before.state.fields[field.id]?.enabled === false || before.state.fields[field.id]?.visible === false) continue;
+    await withDisposablePage(livePage, initial, result, options, async (page, baseline) => {
+      const before = baseline;
+      const currentField = controlById(before.graph, field.id);
+      if (!currentField || before.state.fields[field.id]?.enabled === false || before.state.fields[field.id]?.visible === false) return;
       await chooseSelectOption(page, currentField, option, options.settleMs);
       const after = await capture(page);
-      const action = { id: `probe:${field.id}:option:${index + 1}`, kind: 'select_option', value: option.label || option.value, purpose: 'option-probe', safety: 'safe' };
+      const action = {
+        id: `probe:${field.id}:option:${index + 1}`,
+        kind: 'select_option',
+        value: option.label || option.value,
+        purpose: 'option-probe',
+        safety: 'safe'
+      };
       const observation = recordObservedEffect(result, before, after, currentField, action, 'option-probe');
       const delta = observation?.delta || computeEntityDelta(before.state, after.state);
       probes.push({
@@ -532,17 +539,14 @@ async function probeSelectSamples(page, initial, field, selectable, result, opti
       });
       if (observation) learnEnabledGroups(result, before, after, field.id, observation.id);
 
+      const nextPath = [{ kind: 'select_option', fieldId: field.id, option }];
       const newlyEnabledGroups = arr(after.graph.groups).filter((group) => arr(group.memberFieldIds)
         .some((memberId) => after.state.fields[memberId]?.enabled && !before.state.fields[memberId]?.enabled));
       for (const group of newlyEnabledGroups) {
-        if (group.groupType === 'radio') await exploreRadioGroup(page, after, group, result, options);
-        if (group.groupType === 'checkbox') await exploreCheckboxGroup(page, group.id, result, options);
+        if (group.groupType === 'radio') await exploreRadioGroupSandbox(livePage, initial, group.id, result, options, nextPath);
+        if (group.groupType === 'checkbox') await exploreCheckboxGroupSandbox(livePage, initial, group.id, result, options, nextPath);
       }
-    } catch (error) {
-      result.errors.push({ fieldId: field.id, message: `select option probe failed: ${error.message}` });
-    } finally {
-      if (restore) await restore();
-    }
+    });
   }
 
   recordBehaviorClasses(result, {
@@ -550,77 +554,12 @@ async function probeSelectSamples(page, initial, field, selectable, result, opti
     probes,
     coverage: sampled.coverage
   });
-  return sampled.coverage;
-}
-
-async function openDisposablePage(livePage) {
-  const context = livePage.context();
-  const pagePromise = context.waitForEvent('page', { timeout: 5000 });
-  const opened = await livePage.evaluate((url) => !!window.open(url, '_blank'), livePage.url());
-  if (!opened) throw new Error('Browser blocked disposable exploration tab');
-  const probePage = await pagePromise;
-  await probePage.waitForLoadState('domcontentloaded');
-  return probePage;
-}
-
-async function exploreSelectInDisposablePage(livePage, initial, field, result, options) {
-  let probePage;
-  try {
-    probePage = await openDisposablePage(livePage);
-    await settle(probePage, Math.max(options.settleMs, 100));
-    let baseline = await capture(probePage);
-    if (comparableStructure(baseline) !== comparableStructure(initial)) throw new Error('Disposable page does not reproduce the current structural entity');
-    let probeField = controlById(baseline.graph, field.id);
-    if (!probeField) throw new Error(`Disposable page is missing select ${field.id}`);
-    const selectable = arr(await readSelectableOptions(probePage, probeField)).filter((option) => !option.disabled);
-    await settle(probePage, Math.min(options.settleMs, 100));
-    if (!selectable.length) throw new Error('Disposable select has no probeable options');
-
-    const reset = async () => {
-      await probePage.reload({ waitUntil: 'domcontentloaded' });
-      await settle(probePage, Math.max(options.settleMs, 100));
-      baseline = await capture(probePage);
-      if (comparableStructure(baseline) !== comparableStructure(initial)) throw new Error('Disposable page failed to restore structural baseline');
-      probeField = controlById(baseline.graph, field.id);
-      if (!probeField) throw new Error(`Disposable page lost select ${field.id}`);
-    };
-
-    const coverage = await probeSelectSamples(probePage, baseline, probeField, selectable, result, options, { restore: reset });
-    addRelationship(result, {
-      kind: 'disposable_probe',
-      sourceFieldId: field.id,
-      reason: 'irreversible_initial_state',
-      coverage,
-      evidenceIds: []
-    });
-    return true;
-  } catch (error) {
-    result.errors.push({ fieldId: field.id, message: `disposable select probe failed: ${error.message}` });
-    addRelationship(result, {
-      kind: 'probe_skipped',
-      sourceFieldId: field.id,
-      reason: 'irreversible_initial_state',
-      evidenceIds: []
-    });
-    return false;
-  } finally {
-    await probePage?.close().catch(() => {});
-  }
-}
-
-async function exploreSelectField(page, initial, field, result, options) {
-  const selectable = arr(result.optionDomains[field.id]).filter((option) => !option.disabled);
-  if (!selectable.length) return;
-  const original = await currentSelectIdentity(page, field);
-  const restoreTarget = reversibleSelectTarget(field, original, result);
-  if (!restoreTarget) {
-    await page.keyboard.press('Escape').catch(() => {});
-    await exploreSelectInDisposablePage(page, initial, field, result, options);
-    return;
-  }
-
-  await probeSelectSamples(page, initial, field, selectable, result, options, {
-    restore: async () => restoreSelect(page, field, original, result, options)
+  addRelationship(result, {
+    kind: 'disposable_probe',
+    sourceFieldId: field.id,
+    reason: 'behavioral_isolation',
+    coverage: sampled.coverage,
+    evidenceIds: probes.map((probe) => probe.evidenceId).filter(Boolean)
   });
 }
 
@@ -634,30 +573,40 @@ export async function exploreLocalEntity(page, options = {}) {
   const result = {
     entity: structuredClone(initial.graph.entity),
     initialStateId: initial.stateId,
-    finalStateId: '', observations: [], learnedRelationships: [], valueDomains: {}, optionDomains: {},
+    finalStateId: '',
+    observations: [],
+    learnedRelationships: [],
+    valueDomains: {},
+    optionDomains: {},
     probeBehavior: settings.probeBehavior,
     outgoingCandidates: arr(initial.graph.actions).map((actionField) => ({
-      fieldId: actionField.id, label: actionField.label, type: actionField.type, href: actionField.href || '',
+      fieldId: actionField.id,
+      label: actionField.label,
+      type: actionField.type,
+      href: actionField.href || '',
       executableNow: !!(actionField.visible && !actionField.disabled),
-      safety: methodFor(initial.graph, actionField.id)?.safety || methodFor(initial.graph, actionField.id)?.actions?.[0]?.safety || 'policy-required'
+      safety: methodFor(initial.graph, actionField.id)?.safety || 'policy-required'
     })),
-    restored: false, errors: [], _relationshipKeys: new Set()
+    restored: false,
+    errors: [],
+    _relationshipKeys: new Set()
   };
 
-  await discoverValueDomains(page, initial.graph, result, settings);
+  await discoverValueDomainsSandbox(page, initial, result, settings);
 
   if (settings.probeBehavior) {
     for (const field of arr(initial.graph.fields).filter((candidate) => candidate.type === 'select' && candidate.visible && !candidate.disabled)) {
-      await exploreSelectField(page, initial, field, result, settings);
+      await exploreSelectFieldSandbox(page, initial, field, result, settings);
     }
     for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'radio')) {
-      const current = await capture(page);
-      const currentGroup = groupById(current.graph, group.id);
-      if (currentGroup && arr(currentGroup.memberFieldIds).some((fieldId) => current.state.fields[fieldId]?.enabled)) await exploreRadioGroup(page, current, currentGroup, result, settings);
+      if (arr(group.memberFieldIds).some((fieldId) => initial.state.fields[fieldId]?.enabled && initial.state.fields[fieldId]?.visible)) {
+        await exploreRadioGroupSandbox(page, initial, group.id, result, settings, []);
+      }
     }
     for (const group of arr(initial.graph.groups).filter((candidate) => candidate.groupType === 'checkbox')) {
-      const current = await capture(page);
-      if (arr(group.memberFieldIds).some((fieldId) => current.state.fields[fieldId]?.enabled)) await exploreCheckboxGroup(page, group.id, result, settings);
+      if (arr(group.memberFieldIds).some((fieldId) => initial.state.fields[fieldId]?.enabled && initial.state.fields[fieldId]?.visible)) {
+        await exploreCheckboxGroupSandbox(page, initial, group.id, result, settings, []);
+      }
     }
   }
 
