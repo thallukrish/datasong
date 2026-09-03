@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildUserQuestions, normalizeUserAnswerResponse, buildUserAnswerPrompt, interpretUserAnswer } from '../src/agent/userInput.js';
 import { buildNavigationPrompt, normalizeNavigationResponse } from '../src/semantic/navigationScout.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition } from '../src/agent/memory.js';
-import { fieldInteractionKind } from '../src/agent/browserActions.js';
+import { chooseExecutableNavigation, fieldInteractionKind } from '../src/agent/browserActions.js';
 
 const graph = {
   entity: { id: 'entity:filing', label: 'Filing status' },
@@ -42,6 +42,16 @@ test('browser executor treats Angular Material select as a combobox instead of a
   assert.equal(fieldInteractionKind({ type: 'text', tag: 'mat-select', role: 'combobox' }), 'combobox');
   assert.equal(fieldInteractionKind({ type: 'select', tag: 'select', role: '' }), 'native_select');
   assert.equal(fieldInteractionKind({ type: 'text', tag: 'input', role: '' }), 'fillable');
+});
+
+test('intermediate Submit is allowed when it is a workflow continuation but final submission remains blocked', () => {
+  const score = { candidateId: 'submit-step', role: 'workflow_continuation', goalRelevance: 1, continuity: 1, forwardProgress: 1 };
+  const intermediate = chooseExecutableNavigation([score], [{ id: 'submit-step', label: 'Submit', kind: 'action', enabled: true, visible: true }]);
+  assert.equal(intermediate?.candidate?.id, 'submit-step');
+
+  const finalScore = { ...score, candidateId: 'final-submit' };
+  const final = chooseExecutableNavigation([finalScore], [{ id: 'final-submit', label: 'Final Submit', kind: 'action', enabled: true, visible: true }]);
+  assert.equal(final, null);
 });
 
 test('user answer model contract maps natural language to known structural options only', () => {
