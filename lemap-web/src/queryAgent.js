@@ -16,6 +16,7 @@ import { interpretUserAnswer } from './agent/userInput.js';
 import { applyQuestionAnswer, chooseExecutableNavigation, executeNavigationCandidate } from './agent/browserActions.js';
 import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition, recordSessionAnswer, startQuerySession } from './agent/memory.js';
 import { loadInstanceMemory, recordInstanceFact, saveInstanceMemory } from './agent/instanceMemory.js';
+import { uncoveredUserInputFields } from './agent/interactionCoverage.js';
 import {
   buildChangeSelectionQuestion,
   buildConfirmationSummary,
@@ -106,11 +107,6 @@ function knownEntityIsCompatible(entry, graph) {
   return !!entry?.semantic?.semanticName
     && Array.isArray(entry.semantic.interactions)
     && structuralSignatureFromMemory(entry) === structuralSignatureFromGraph(graph);
-}
-function uncoveredUserInputFields(graph = {}, state = {}, semanticEntity = {}) {
-  const covered = new Set(arr(semanticEntity.interactions).flatMap((item) => arr(item.structuralFieldIds)).map(String));
-  const inputTypes = new Set(['text', 'number', 'date', 'select', 'autocomplete', 'radio', 'checkbox']);
-  return arr(graph.fields).filter((field) => inputTypes.has(field.type) && state.fields?.[field.id]?.visible && state.fields?.[field.id]?.enabled && !covered.has(String(field.id)));
 }
 function workflowContext(memory, session, userAnswers, semanticEntity, currentEntityId, semanticPath) {
   const pathEdges = new Set(session.path || []);
