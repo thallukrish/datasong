@@ -5,6 +5,11 @@ function nonEmpty(value) { return value !== null && value !== undefined && Strin
 
 export function interactionFields(graph = {}, interaction = {}) {
   const ids = new Set(arr(interaction.structuralFieldIds).map(String));
+  for (const group of arr(graph.groups)) {
+    if (!['radio', 'checkbox'].includes(String(group?.groupType || ''))) continue;
+    const members = arr(group.memberFieldIds).map(String);
+    if (members.some((fieldId) => ids.has(fieldId))) members.forEach((fieldId) => ids.add(fieldId));
+  }
   return arr(graph.fields).filter((field) => ids.has(String(field.id)));
 }
 
