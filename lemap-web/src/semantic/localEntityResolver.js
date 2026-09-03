@@ -9,16 +9,25 @@ function clamp01(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
 }
+function compactWorkflowContext(context = {}) {
+  return {
+    goal: text(context.goal, 220),
+    previousSemanticEntity: text(context.previousSemanticEntity, 180),
+    recentSemanticPath: arr(context.recentSemanticPath).slice(-4).map((item) => text(item, 180)),
+    recentSelections: arr(context.recentSelections).slice(-6).map((item) => text(item, 180))
+  };
+}
 
 const SYSTEM = `You are DataSong LeMap-Web's LOCAL ENTITY SEMANTIC RESOLVER.
-You receive deterministic structural evidence for one locally explored browser context: fields, groups, actions, observed input→state effects and learned structural relationships.
+You receive deterministic structural evidence for one locally explored browser context: fields, groups, actions, observed input→state effects and learned structural relationships, plus a compact semantic workflow arc.
 A rendered browser context may contain one business entity or several related business entities. Browser/page boundaries are presentation evidence only.
 Browser mechanics and observed behavior are already established by deterministic evidence. Interpret only their business/user meaning and do not invent unsupported behavior.
-Name and describe the parent semantic context, any coherent semantic sub-entities, fields, relationships and actions that the evidence supports.
+Name and describe the semantic entities, fields, relationships and actions. For user-input entities, also learn reusable interaction semantics: a concise explanation, a friendly question, useful examples, value reuse scope/policy, and confirmation wording. These interaction semantics describe HOW to ask about the application concept; they must never contain or infer a particular user's value.
 Return strict compact JSON only.`;
 
-export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], learnedRelationships = [] } = {}) {
+export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], learnedRelationships = [], workflowContext = {} } = {}) {
   const payload = {
+    workflowArc: compactWorkflowContext(workflowContext),
     entity: entityGraph.entity || {},
     fields: arr(entityGraph.fields).map((field) => ({
       id: field.id,
@@ -37,10 +46,12 @@ export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], le
     observations,
     learnedRelationships
   };
-  return `MODE web-local-entity-v1\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Browser mechanics are already established. The rendered context may contain several business entities, so identify coherent semantic sub-entities when supported by fields/groups/behavior. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], localCompletion, confidence.`;
+  return `MODE web-local-entity-v1\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Browser mechanics are already established. Identify coherent semantic entities/sub-entities and their relationships. For every coherent user-input concept, return one reusable interaction entry covering the structural field(s). Keep explanations/questions concise and understandable to a normal user, explaining domain jargon when the evidence supports it. Do not invent legal/business meaning beyond the supplied evidence/workflow arc. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds}], actions:[{structuralFieldId,semanticName,description}], interactions:[{semanticKey,semanticName,structuralFieldIds,explanation,question,examples,valueScope,reusePolicy,confirmationQuestion}], completionInteraction:{confirmationIntro,confirmationQuestion,changeQuestion}, localCompletion, confidence. valueScope must be global|taxpayer|workflow|assessment_year|filing_instance. reusePolicy must be always|same_scope|confirm|never.`;
 }
 
 export function normalizeLocalEntityResponse(raw = {}) {
+  const validScopes = new Set(['global', 'taxpayer', 'workflow', 'assessment_year', 'filing_instance']);
+  const validReuse = new Set(['always', 'same_scope', 'confirm', 'never']);
   return {
     semanticName: text(raw.semanticName, 180),
     description: text(raw.description, 600),
@@ -65,13 +76,29 @@ export function normalizeLocalEntityResponse(raw = {}) {
       semanticName: text(action?.semanticName, 180),
       description: text(action?.description, 420)
     })).filter((action) => action.structuralFieldId || action.semanticName),
+    interactions: arr(raw.interactions).map((interaction, index) => ({
+      semanticKey: text(interaction?.semanticKey || interaction?.semanticName || `interaction-${index + 1}`, 180).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      semanticName: text(interaction?.semanticName, 180),
+      structuralFieldIds: [...new Set(arr(interaction?.structuralFieldIds).map(String).filter(Boolean))],
+      explanation: text(interaction?.explanation, 520),
+      question: text(interaction?.question, 360),
+      examples: arr(interaction?.examples).slice(0, 5).map((item) => text(item, 180)).filter(Boolean),
+      valueScope: validScopes.has(interaction?.valueScope) ? interaction.valueScope : 'filing_instance',
+      reusePolicy: validReuse.has(interaction?.reusePolicy) ? interaction.reusePolicy : 'never',
+      confirmationQuestion: text(interaction?.confirmationQuestion, 300)
+    })).filter((interaction) => interaction.structuralFieldIds.length && interaction.question),
+    completionInteraction: {
+      confirmationIntro: text(raw.completionInteraction?.confirmationIntro, 320),
+      confirmationQuestion: text(raw.completionInteraction?.confirmationQuestion, 320),
+      changeQuestion: text(raw.completionInteraction?.changeQuestion, 260)
+    },
     localCompletion: text(raw.localCompletion, 520),
     confidence: clamp01(raw.confidence)
   };
 }
 
-export async function resolveLocalEntity({ client, model, entityGraph, observations = [], learnedRelationships = [] } = {}) {
-  const userPrompt = buildLocalEntityPrompt({ entityGraph, observations, learnedRelationships });
+export async function resolveLocalEntity({ client, model, entityGraph, observations = [], learnedRelationships = [], workflowContext = {} } = {}) {
+  const userPrompt = buildLocalEntityPrompt({ entityGraph, observations, learnedRelationships, workflowContext });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
   return normalizeLocalEntityResponse(response.parsed);
 }
