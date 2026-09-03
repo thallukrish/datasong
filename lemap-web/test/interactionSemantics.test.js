@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeLocalEntityResponse, buildLocalEntityPrompt } from '../src/semantic/localEntityResolver.js';
+import { normalizeLocalEntityResponse, buildLocalEntityPrompt, expandInteractionBindings } from '../src/semantic/localEntityResolver.js';
 
 test('semantic resolution persists reusable interaction semantics without user values', () => {
   const normalized = normalizeLocalEntityResponse({
@@ -44,26 +44,43 @@ test('semantic prompt receives only compact workflow arc context', () => {
   assert.equal(prompt.includes('x'.repeat(5000)), false);
 });
 
-test('behavior classes replace repetitive raw finite-choice probe evidence in semantic prompt', () => {
+test('semantic prompt prefers finite-choice behavior classes over repetitive raw probes', () => {
+  const behavior = {
+    kind: 'behavior_classes',
+    sourceFieldId: 'field:year',
+    coverage: { domainSize: 21, probedCount: 10, exhaustive: false, samplingMethod: 'seeded_random' },
+    classes: [{ id: 'behavior-class:01', samples: [{ label: '2026-27' }, { label: '2024-25' }], effect: { actionsEnabled: ['field:continue'] }, wildcard: false }]
+  };
   const prompt = buildLocalEntityPrompt({
-    entityGraph: {
-      entity: { id: 'entity:1', label: 'Filing setup' },
-      fields: [{ id: 'field:year', label: 'Assessment Year', type: 'select', visible: true, disabled: false, valueDomain: ['2026-27', '2025-26'] }],
-      actions: [], groups: []
-    },
+    entityGraph: { entity: { id: 'entity:1', label: 'Filing setup' }, fields: [], actions: [], groups: [] },
     observations: [
-      { id: 'obs:1', fieldId: 'field:year', action: { purpose: 'option-probe', value: '2026-27' }, delta: { actionsEnabled: ['continue'] } },
-      { id: 'obs:2', fieldId: 'field:year', action: { purpose: 'option-probe', value: '2025-26' }, delta: { actionsEnabled: ['continue'] } }
+      { id: 'observation:local:001', fieldId: 'field:year', action: { kind: 'select_option', value: '2026-27', purpose: 'option-probe' }, delta: { actionsEnabled: ['field:continue'] } },
+      { id: 'observation:local:002', fieldId: 'field:year', action: { kind: 'select_option', value: '2025-26', purpose: 'option-probe' }, delta: { actionsEnabled: ['field:continue'] } }
     ],
-    learnedRelationships: [{
-      kind: 'behavior_classes', sourceFieldId: 'field:year',
-      coverage: { domainSize: 21, probedCount: 10, exhaustive: false, samplingMethod: 'seeded_random' },
-      classes: [{ id: 'behavior-class:01', sampleCount: 10, wildcard: false, sampleValues: ['2026-27', '2025-26'], effect: { actionsEnabled: ['continue'] } }]
-    }]
+    learnedRelationships: [
+      { kind: 'action_effect', sourceFieldId: 'field:year', actionId: 'probe:1' },
+      behavior
+    ]
   });
-
   assert.match(prompt, /behavior_classes/);
   assert.match(prompt, /seeded_random/);
-  assert.equal(prompt.includes('"id":"obs:1"'), false);
-  assert.equal(prompt.includes('"id":"obs:2"'), false);
+  assert.equal(prompt.includes('observation:local:001'), false);
+  assert.equal(prompt.includes('probe:1'), false);
+});
+
+test('semantic interaction bound to one radio member expands deterministically to the whole group', () => {
+  const semantic = normalizeLocalEntityResponse({
+    semanticName: 'Filing setup',
+    interactions: [{
+      semanticKey: 'itr-mode',
+      structuralFieldIds: ['field:online'],
+      question: 'Online or offline?',
+      valueScope: 'workflow',
+      reusePolicy: 'same_scope'
+    }]
+  });
+  const expanded = expandInteractionBindings(semantic, {
+    groups: [{ id: 'group:mode', groupType: 'radio', memberFieldIds: ['field:online', 'field:offline'] }]
+  });
+  assert.deepEqual(expanded.interactions[0].structuralFieldIds.sort(), ['field:offline', 'field:online']);
 });
