@@ -1,4 +1,6 @@
 function arr(value) { return Array.isArray(value) ? value : []; }
+let activeMemory = null;
+
 function normalize(value = '') {
   return String(value)
     .trim()
@@ -7,6 +9,10 @@ function normalize(value = '') {
     .replace(/\b(selected|current)\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function setControlScopeMemory(memory = null) {
+  activeMemory = memory;
 }
 
 export function controlScopeKey(field = {}) {
@@ -34,12 +40,11 @@ export function globalControlKeys(memory = {}, { minDistinctEntities = 2 } = {})
 export function controlScope(memory = {}, field = {}, currentEntityId = '') {
   const key = controlScopeKey(field);
   if (!key) return 'entity';
-  const global = globalControlKeys(memory);
-  if (global.has(key)) return 'application';
-
-  // Current entity id is intentionally not special-cased: recurrence is proven from
-  // the persisted semantic map across distinct entities, never from repeated renders
-  // of one entity.
+  if (globalControlKeys(memory).has(key)) return 'application';
   void currentEntityId;
   return 'entity';
+}
+
+export function currentControlScope(field = {}, currentEntityId = '') {
+  return controlScope(activeMemory || {}, field, currentEntityId);
 }
