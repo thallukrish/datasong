@@ -38,6 +38,23 @@ test('interaction layer distinguishes prefilled remembered and missing without c
   assert.equal(items.find((item) => item.semanticKey === 'filing-section').status, 'missing');
 });
 
+test('remembered interaction is deferred while its controls are disabled', () => {
+  const state = { fields: {
+    'field:year': { enabled: true, visible: true, value: '' },
+    'field:mode-online': { enabled: false, visible: true, checked: false, value: null },
+    'field:mode-offline': { enabled: false, visible: true, checked: false, value: null },
+    'field:section': { enabled: true, visible: true, value: '' }
+  }};
+  const instance = createInstanceMemory();
+  recordInstanceFact(instance, { semanticKey: 'filing-mode', value: 'Online', optionLabel: 'Online', source: 'user', scope: 'workflow', workflowKey: 'itr-3', scopeKey: 'itr-3' });
+
+  const items = classifyInteractionItems({ graph, state, semanticEntity, instanceMemory: instance, workflowKey: 'itr-3', scopeKeys: { assessment_year: '', workflow: 'itr-3', filing_instance: 'run-1' } });
+  const mode = items.find((item) => item.semanticKey === 'filing-mode');
+  assert.equal(mode.status, 'blocked');
+  assert.equal(mode.displayValue, 'Online');
+  assert.equal(mode.rememberedFact?.optionLabel, 'Online');
+});
+
 test('interaction binding to one finite-choice member expands to the whole structural group', () => {
   const fields = interactionFields(graph, { structuralFieldIds: ['field:mode-online'] });
   assert.deepEqual(fields.map((field) => field.id).sort(), ['field:mode-offline', 'field:mode-online']);
