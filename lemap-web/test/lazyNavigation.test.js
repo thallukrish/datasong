@@ -62,6 +62,33 @@ test('information-need planner selects only user-specific questions required for
   assert.deepEqual(plan.questionIds, ['group:filing-reason']);
 });
 
+test('planner context excludes resolved interaction semantics when there are no candidate questions', () => {
+  const prompt = buildInformationNeedPrompt({
+    userGoal: 'I want to file ITR-3',
+    semanticContext: {
+      semanticName: 'File Income Tax Return – ITR-3',
+      description: 'Assessment year and filing mode have been established.',
+      interactions: [
+        { semanticKey: 'assessment-year', semanticName: 'Assessment Year', question: 'Which assessment year?', explanation: 'Required filing period.' },
+        { semanticKey: 'filing-mode', semanticName: 'Filing Mode', question: 'Online or offline?', explanation: 'Filing channel.' }
+      ]
+    },
+    workflowContext: {
+      semanticPath: ['File Income Tax Return – ITR-3'],
+      userAnswers: [
+        { question: 'Which assessment year?', valueProvided: true },
+        { question: 'Online or offline?', selectedLabels: ['Online (Recommended)'] }
+      ]
+    },
+    candidateQuestions: [],
+    navigationCandidates
+  });
+  assert.doesNotMatch(prompt, /"semanticKey":"assessment-year"/);
+  assert.doesNotMatch(prompt, /"semanticKey":"filing-mode"/);
+  assert.match(prompt, /"candidateQuestions":\[\]/);
+  assert.match(prompt, /"label":"Continue"/);
+});
+
 test('local semantic resolver can describe multiple semantic entities in one rendered context', () => {
   const semantic = normalizeLocalEntityResponse({
     semanticName: 'Return Filing Setup',
