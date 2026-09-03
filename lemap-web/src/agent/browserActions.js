@@ -69,7 +69,7 @@ export async function applyQuestionAnswer(page, graph, question, interpretation)
   if (field.type === 'autocomplete') await locator.press('Tab');
 }
 
-const BLOCKED_NAVIGATION = /\b(submit|verify|verification|pay|payment|delete|remove|logout|log out|file return|final submit)\b/i;
+const BLOCKED_NAVIGATION = /\b(final\s+submit|submit\s+(?:return|itr)|verify|verification|pay|payment|delete|remove|logout|log out|file return)\b/i;
 const ALLOWED_ROLES = new Set(['workflow_continuation', 'workflow_branch', 'related_entity']);
 
 export function chooseExecutableNavigation(scores = [], candidates = []) {
