@@ -25,7 +25,6 @@ test('execution behavior is novel once, then reused across values with the same 
     entityId: 'entity:return',
     semanticKey: 'assessment_year',
     sourceFieldIds: ['field:year'],
-    observedValue: '2026-27',
     delta: delta({
       fieldValuesChanged: [{ fieldId: 'field:year', before: '', after: '2026-27' }],
       fieldsEnabled: ['field:online', 'field:offline']
@@ -39,7 +38,6 @@ test('execution behavior is novel once, then reused across values with the same 
     entityId: 'entity:return',
     semanticKey: 'assessment_year',
     sourceFieldIds: ['field:year'],
-    observedValue: '2025-26',
     delta: delta({
       fieldValuesChanged: [{ fieldId: 'field:year', before: '', after: '2025-26' }],
       fieldsEnabled: ['field:offline', 'field:online']
@@ -48,7 +46,9 @@ test('execution behavior is novel once, then reused across values with the same 
 
   assert.equal(second.novel, false);
   assert.equal(second.classId, first.classId);
-  assert.deepEqual(memory.entities['entity:return'].executionBehaviors.assessment_year[0].observedValues.sort(), ['2025-26', '2026-27']);
+  const stored = memory.entities['entity:return'].executionBehaviors.assessment_year[0];
+  assert.equal(stored.observations, 2);
+  assert.equal(Object.prototype.hasOwnProperty.call(stored, 'observedValues'), false);
 });
 
 test('a different external structural effect creates a new behavior class', () => {
@@ -56,12 +56,12 @@ test('a different external structural effect creates a new behavior class', () =
   memory.entities['entity:return'] = { id: 'entity:return', semantic: { semanticName: 'Income Tax Return Filing', interactions: [] }, executionBehaviors: {} };
 
   classifyAndRecordExecutionBehavior(memory, {
-    entityId: 'entity:return', semanticKey: 'assessment_year', sourceFieldIds: ['field:year'], observedValue: '2026-27',
+    entityId: 'entity:return', semanticKey: 'assessment_year', sourceFieldIds: ['field:year'],
     delta: delta({ fieldsEnabled: ['field:online', 'field:offline'] })
   });
 
   const different = classifyAndRecordExecutionBehavior(memory, {
-    entityId: 'entity:return', semanticKey: 'assessment_year', sourceFieldIds: ['field:year'], observedValue: '2023-24',
+    entityId: 'entity:return', semanticKey: 'assessment_year', sourceFieldIds: ['field:year'],
     delta: delta({ fieldsEnabled: ['field:online', 'field:offline'], fieldsShown: ['field:legacy-declaration'] })
   });
 
