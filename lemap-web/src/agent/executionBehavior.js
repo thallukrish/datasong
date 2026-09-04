@@ -11,6 +11,10 @@ function hypothesisStatus(behaviorHypothesis = {}, classes = [], novel = false) 
   return 'consistent';
 }
 
+function storedHypothesis(entity = {}, semanticKey = '') {
+  return arr(entity?.semantic?.interactions).find((interaction) => interaction?.semanticKey === semanticKey)?.behaviorHypothesis || null;
+}
+
 export function classifyAndRecordExecutionBehavior(memory, {
   entityId = '', semanticKey = '', sourceFieldIds = [], delta = {}, behaviorHypothesis = null
 } = {}) {
@@ -18,6 +22,7 @@ export function classifyAndRecordExecutionBehavior(memory, {
   if (!entity) throw new Error(`Cannot record execution behavior for unknown entity ${entityId}`);
   if (!semanticKey) throw new Error('semanticKey is required for execution behavior');
 
+  const hypothesis = behaviorHypothesis || storedHypothesis(entity, semanticKey) || { mode: 'unknown', confidence: 0 };
   const effect = normalizeExternalEffect(delta, { sourceFieldIds });
   const effectSignature = signature(effect);
   entity.executionBehaviors ||= {};
@@ -48,7 +53,8 @@ export function classifyAndRecordExecutionBehavior(memory, {
     classId: behaviorClass.id,
     effect,
     behaviorClass,
-    hypothesisStatus: hypothesisStatus(behaviorHypothesis, classes, novel)
+    hypothesisStatus: hypothesisStatus(hypothesis, classes, novel),
+    hypothesisConfidence: Number(hypothesis?.confidence || 0)
   };
 }
 
