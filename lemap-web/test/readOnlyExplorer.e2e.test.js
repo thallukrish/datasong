@@ -29,6 +29,30 @@ async function startServer() {
   return { url: `http://127.0.0.1:${address.port}/`, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
+async function startMaterialLikeServer() {
+  const html = `<!doctype html><html><body><main><h1>Setup</h1>
+  <script>
+    window.__liveChangeCount = 0;
+    document.addEventListener('change', () => { window.__liveChangeCount += 1; }, true);
+    function openOptions() {
+      if (document.getElementById('overlay')) return;
+      const overlay = document.createElement('div');
+      overlay.id = 'overlay';
+      overlay.innerHTML = '<div role="option">2025-26</div><div role="option">2026-27</div>';
+      document.body.appendChild(overlay);
+    }
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') document.getElementById('overlay')?.remove();
+    });
+  </script>
+  <mat-select id="year" role="combobox" aria-label="Assessment Year" onclick="openOptions()"></mat-select>
+  </main></body></html>`;
+  const server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  return { url: `http://127.0.0.1:${address.port}/`, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
 test('read-only explorer opens no disposable tab and emits no live change event', async (t) => {
   const fixture = await startServer();
   const browser = await launchChrome();
@@ -42,5 +66,23 @@ test('read-only explorer opens no disposable tab and emits no live change event'
   assert.equal(await page.evaluate(() => window.__openCount), 0);
   assert.equal(await page.evaluate(() => window.__liveChangeCount), 0);
   assert.equal(result.observations.length, 0);
+  assert.equal(result.restored, true);
+});
+
+test('read-only explorer enumerates a closed finite combobox domain without selecting a value', async (t) => {
+  const fixture = await startMaterialLikeServer();
+  const browser = await launchChrome();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  t.after(async () => { await context.close(); await browser.close(); await fixture.close(); });
+  await page.goto(fixture.url);
+
+  const result = await exploreReadOnlyEntity(page);
+  const select = result.graph.fields.find((field) => field.domId === 'year');
+
+  assert.ok(select);
+  assert.deepEqual(result.valueDomains[select.id], ['2025-26', '2026-27']);
+  assert.equal(await page.evaluate(() => window.__liveChangeCount), 0);
+  assert.equal(await page.locator('#overlay').count(), 0);
   assert.equal(result.restored, true);
 });
