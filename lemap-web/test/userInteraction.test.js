@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyInteractionItems, buildConfirmationSummary, interactionFields, confirmationDecision } from '../src/agent/userInteraction.js';
+import { classifyInteractionItems, buildConfirmationSummary, interactionFields, confirmationDecision, buildQuestionFromInteraction } from '../src/agent/userInteraction.js';
 import { createInstanceMemory, recordInstanceFact } from '../src/agent/instanceMemory.js';
 
 const graph = {
@@ -21,6 +21,26 @@ const semanticEntity = {
   ],
   completionInteraction: { confirmationIntro: 'Before I continue, these details are already set:', confirmationQuestion: 'Are these correct, or tell me what to change?' }
 };
+
+test('finite select question exposes exact structural option domain and suppresses semantic example values', () => {
+  const question = buildQuestionFromInteraction({
+    graph,
+    interaction: {
+      semanticKey: 'region',
+      structuralFieldIds: ['field:region'],
+      question: 'Which delivery region should be used?',
+      explanation: 'Choose the destination region.',
+      examples: ['Region West', 'Region East']
+    }
+  });
+  assert.equal(question.answerKind, 'value');
+  assert.equal(question.inputType, 'select');
+  assert.deepEqual(question.options, [
+    { value: 'West', label: 'West' },
+    { value: 'East', label: 'East' }
+  ]);
+  assert.deepEqual(question.examples, []);
+});
 
 test('interaction layer distinguishes prefilled remembered and optional without changing semantic graph', () => {
   const state = { fields: {
