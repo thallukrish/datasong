@@ -14,7 +14,8 @@ const snapshot = {
         { control: true, tag: 'input', domId: 'online', name: 'mode', label: 'Online', type: 'radio', role: '', value: 'online', checked: false, hidden: false, disabled: false, options: [] },
         { control: true, tag: 'input', domId: 'offline', name: 'mode', label: 'Offline', type: 'radio', role: '', value: 'offline', checked: false, hidden: false, disabled: false, options: [] }
       ]},
-      { control: true, tag: 'button', domId: 'continue', name: '', label: 'Continue', type: '', role: '', value: null, hidden: false, disabled: true, options: [] }
+      { control: true, tag: 'button', domId: 'continue', name: '', label: 'Continue', type: '', role: '', value: null, hidden: false, disabled: true, options: [] },
+      { control: true, tag: 'a', domId: 'help', name: '', label: 'Help', type: '', role: 'link', href: '/help', value: null, hidden: false, disabled: false, options: [] }
     ]
   }
 };
@@ -27,6 +28,7 @@ test('browser structure becomes one array of page, group and ui-control entities
   const online = entities.find((entity) => entity.name === 'Online');
   const offline = entities.find((entity) => entity.name === 'Offline');
   const button = entities.find((entity) => entity.name === 'Continue');
+  const link = entities.find((entity) => entity.name === 'Help');
 
   assert.equal(page.type, 'page');
   assert.equal(year.type, 'ui_control');
@@ -36,10 +38,12 @@ test('browser structure becomes one array of page, group and ui-control entities
   assert.equal(group.structural.groupType, 'radio');
   assert.deepEqual(group.structural.values, ['Online', 'Offline']);
   assert.equal(button.structural.controlType, 'button');
+  assert.equal(link.structural.controlType, 'link');
+  assert.equal(link.structural.href, '/help');
 
-  assert.ok(page.links.some((link) => link.id === year.id && link.relationship === 'contains'));
-  assert.ok(year.links.some((link) => link.id === page.id && link.relationship === 'childOf'));
-  assert.ok(group.links.some((link) => link.id === online.id && link.relationship === 'contains'));
-  assert.ok(online.links.some((link) => link.id === group.id && link.relationship === 'partOf'));
-  assert.ok(group.links.some((link) => link.id === offline.id && link.relationship === 'contains'));
+  assert.ok(page.links.some((item) => item.id === year.id && item.relationship === 'contains'));
+  assert.ok(year.links.some((item) => item.id === page.id && item.relationship === 'childOf'));
+  assert.ok(group.links.some((item) => item.id === online.id && item.relationship === 'contains'));
+  assert.ok(online.links.some((item) => item.id === group.id && item.relationship === 'partOf'));
+  assert.ok(group.links.some((item) => item.id === offline.id && item.relationship === 'contains'));
 });
