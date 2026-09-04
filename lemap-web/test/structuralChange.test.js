@@ -44,3 +44,21 @@ test('changed existing entity becomes a version node while original state is pre
   assert.ok(version.links.some((link) => link.id === 'field:choice' && link.relationship === 'onModificationOf'));
   assert.ok(findEntity(graph, 'button:next').links.some((link) => link.id === version.id && link.relationship === 'hasCopy'));
 });
+
+test('a control that disappears is preserved as a hidden state version', () => {
+  const detail = { id: 'field:detail', name: 'Detail', type: 'ui_control', structural: { controlType: 'text', visible: true, disabled: false, value: '' }, semantic: { meaning: 'detail' }, links: [{ id: 'page:1', relationship: 'childOf' }] };
+  const graph = createEntityGraph([page, trigger, detail]);
+  const before = createEntityGraph([page, trigger, detail]);
+  const after = createEntityGraph([
+    page,
+    { ...trigger, structural: { ...trigger.structural, value: 'B' } }
+  ]);
+
+  const result = applyObservedStructuralChange(graph, { beforeEntities: before, afterEntities: after, triggerEntityId: 'field:choice', ignoredEntityIds: ['field:choice'] });
+  assert.equal(result.versionEntityIds.length, 1);
+  const hidden = findEntity(graph, result.versionEntityIds[0]);
+  assert.equal(hidden.structural.visible, false);
+  assert.equal(hidden.structural.present, false);
+  assert.ok(hidden.links.some((link) => link.id === 'field:detail' && link.relationship === 'copyOf'));
+  assert.ok(hidden.links.some((link) => link.id === 'field:choice' && link.relationship === 'onModificationOf'));
+});
