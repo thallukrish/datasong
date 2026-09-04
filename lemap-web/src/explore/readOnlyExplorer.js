@@ -24,10 +24,21 @@ function fieldLocator(page, field = {}) {
 
 function shouldEnumerateTransientDomain(field = {}, state = {}) {
   if (arr(state.options?.[field.id]).length) return false;
-  if (!field.visible || field.disabled) return false;
+  if (field.disabled) return false;
   const tag = String(field.tag || '').toLowerCase();
   const role = String(field.role || '').toLowerCase();
   return tag === 'mat-select' || role === 'combobox';
+}
+
+async function structurallyAvailable(locator) {
+  return locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && style.visibility !== 'collapse'
+      && !element.hasAttribute('hidden')
+      && element.getAttribute('aria-hidden') !== 'true';
+  }).catch(() => false);
 }
 
 async function visibleOptionLabels(page) {
@@ -48,10 +59,9 @@ async function openFiniteChoiceWithoutSelecting(locator) {
     await locator.click({ timeout: 750 });
     return;
   } catch {
-    // Structural discovery may identify a real control whose host has no clickable
-    // layout box (common with framework/custom-element wrappers and test fixtures).
-    // Domain enumeration only needs the control's own click handler to open; it does
-    // not select an option. Invoke the host click deterministically as a fallback.
+    // Some framework/custom-element hosts structurally own a control but have no
+    // clickable layout box themselves. Domain enumeration only opens the control;
+    // it never chooses an option, so invoking the host click handler is safe here.
     await locator.evaluate((element) => element.click());
   }
 }
@@ -59,6 +69,7 @@ async function openFiniteChoiceWithoutSelecting(locator) {
 async function enumerateTransientDomain(page, field) {
   const locator = fieldLocator(page, field);
   if (!locator || !await locator.count()) return [];
+  if (!await structurallyAvailable(locator)) return [];
   await openFiniteChoiceWithoutSelecting(locator);
   await page.waitForTimeout(50);
   const values = await visibleOptionLabels(page);
