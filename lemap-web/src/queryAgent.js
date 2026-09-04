@@ -29,14 +29,13 @@ const loadedEnvFiles = await loadDotEnv({ cwd: process.cwd(), env: process.env }
 const endpoint = process.env.LEMAP_CDP || 'http://127.0.0.1:9222';
 const settleMs = Number.isFinite(Number(process.env.LEMAP_SETTLE_MS)) ? Math.max(0, Number(process.env.LEMAP_SETTLE_MS)) : 500;
 const maxSteps = Number.isFinite(Number(process.env.LEMAP_MAX_STEPS)) ? Math.max(1, Number(process.env.LEMAP_MAX_STEPS)) : 30;
-const entityFile = path.resolve(process.env.LEMAP_ENTITY_GRAPH_FILE || process.env.LEMAP_MEMORY_FILE || path.join('data', 'entity-graph', 'web-map.json'));
+const entityFile = path.resolve(process.env.LEMAP_ENTITY_GRAPH_FILE || path.join('data', 'entity-graph', 'web-map.json'));
 const instanceFile = path.resolve(process.env.LEMAP_INSTANCE_FILE || path.join('data', 'instances', 'default.json'));
 const runLogDir = path.resolve(process.env.LEMAP_RUN_LOG_DIR || path.join('data', 'query-runs'));
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 function hash(value) { return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 12); }
 function workflowIdForGoal(goal) { return `workflow:${hash(String(goal || '').trim().toLowerCase())}`; }
-function hasSemantic(entity = {}) { return Object.keys(entity.semantic || {}).length > 0; }
 
 async function captureEntities(page) {
   const explored = await exploreReadOnlyEntity(page);
@@ -82,24 +81,19 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
 function needsSemantic(entity = {}) {
   const semantic = entity.semantic || {};
   if (!Object.keys(semantic).length) return true;
+  if (entity.type === 'workflow' && semantic.complete === undefined) return true;
   if (['action', 'navigation'].includes(semantic.interaction) && !semantic.consequence) return true;
   return false;
 }
 
 async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, force = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
-  const unresolved = currentEntities.filter((entity) => needsSemantic(findEntity(entityGraph, entity.id) || entity));
-  if (!force && !unresolved.length) return { called: false, workflowComplete: !!findEntity(entityGraph, workflowId)?.semantic?.complete };
-
   const workflow = findEntity(entityGraph, workflowId);
-  const result = await resolveEntitySemantics({
-    client,
-    model,
-    userGoal,
-    entities: currentEntities,
-    pageId,
-    knownWorkflow: workflow ? { id: workflow.id, name: workflow.name, semantic: workflow.semantic || {} } : null
-  });
+  const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
+  const unresolved = semanticEntities.filter((entity) => needsSemantic(findEntity(entityGraph, entity.id) || entity));
+  if (!force && !unresolved.length) return { called: false };
+
+  const result = await resolveEntitySemantics({ client, model, userGoal, entities: semanticEntities, pageId });
   const patched = new Set();
   for (const patch of result.entities) {
     patched.add(patch.id);
@@ -108,25 +102,14 @@ async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, cu
 
   for (const entity of unresolved) {
     if (patched.has(entity.id)) continue;
-    mergeSemanticPatch(entityGraph, entity.id, {
-      interaction: 'unknown',
-      relevantToGoal: false,
-      required: false,
-      workflowRole: 'unknown',
-      consequence: 'unknown'
-    });
+    const fallback = entity.type === 'workflow'
+      ? { relevantToGoal: true, complete: false }
+      : { interaction: 'unknown', relevantToGoal: false, required: false, workflowRole: 'unknown', consequence: 'unknown' };
+    mergeSemanticPatch(entityGraph, entity.id, fallback);
   }
 
-  if (result.workflow && workflow) {
-    workflow.semantic = {
-      ...workflow.semantic,
-      name: result.workflow.name || workflow.semantic?.name || '',
-      description: result.workflow.description || workflow.semantic?.description || '',
-      complete: !!result.workflow.complete
-    };
-  }
   applyKnownSemantics(currentEntities, entityGraph);
-  return { called: true, workflowComplete: !!workflow?.semantic?.complete };
+  return { called: true };
 }
 
 function printQuestion(question) {
