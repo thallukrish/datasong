@@ -10,12 +10,13 @@ function bool(value, fallback = false) { return value === undefined ? fallback :
 const SCOPES = new Set(['local', 'global']);
 const INTERACTIONS = new Set(['user_input', 'information', 'action', 'navigation', 'unknown']);
 const WORKFLOW_ROLES = new Set(['continue', 'back', 'commit', 'global', 'local', 'unknown']);
+const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive', 'security', 'unknown']);
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
-LeMap-Web already discovered the application structure deterministically. You receive entity ids, names, types, structural facts and relationships for the current rendered context plus the user's goal.
+LeMap-Web already discovered application structure deterministically. You receive entity ids, names, types, structural facts and relationships for the current rendered context plus the user's goal.
 Add business/user-facing meaning only. Do not repeat structural facts. Do not invent browser mechanics, values, controls or entity ids.
-For each relevant entity you may add: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation|unknown), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local|unknown).
-Questions/explanations/examples/caveats are optional. Mark the safe intermediate action that advances the workflow as workflowRole=continue. Mark final/committing actions as workflowRole=commit.
+For each supplied entity you may add: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation|unknown), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local|unknown), consequence(reversible|commit|financial|destructive|security|unknown).
+Questions, explanations, examples and caveats are optional. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions that can be automatically executed without submitting, committing, paying, deleting, authorizing or otherwise causing consequential effects. Mark final/committing actions as workflowRole=commit and consequence=commit (or a more specific consequential category).
 Return strict JSON only.`;
 
 function compactEntity(entity = {}) {
@@ -50,7 +51,7 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
     entities: arr(entities).map(compactEntity),
     workflow: knownWorkflow || undefined
   };
-  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only for supplied entity ids. Do not repeat structural fields. Identify which entities are local/global, user input/information/action/navigation, which are relevant/required for the goal, and any useful question, explanation, caveats, examples or workflow role. Return {entities:[{id,semantic:{...}}], workflow?:{name,description,complete}}.`;
+  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only for supplied entity ids. Do not repeat structural fields. Identify local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, optional question/explanation/caveats/examples, workflow role and action consequence. Return {entities:[{id,semantic:{...}}], workflow?:{name,description,complete}}.`;
 }
 
 function normalizeSemantic(raw = {}) {
@@ -65,7 +66,8 @@ function normalizeSemantic(raw = {}) {
     explanation: text(raw.explanation, 700),
     caveats: arr(raw.caveats).slice(0, 8).map((item) => text(item, 260)).filter(Boolean),
     examples: arr(raw.examples).slice(0, 8).map((item) => text(item, 180)).filter(Boolean),
-    workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown'
+    workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown',
+    consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown'
   };
 }
 
