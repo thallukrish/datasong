@@ -6,11 +6,27 @@ function visibleAndEnabled(entity = {}) {
   return structural.visible !== false && structural.disabled !== true;
 }
 
+function semanticInput(entity = {}) {
+  const semantic = entity.semantic || {};
+  return semantic.interaction === 'user_input'
+    && semantic.relevantToGoal === true
+    && semantic.required === true;
+}
+
+function shadowedBySemanticGroup(entity, byId) {
+  if (entity.type !== 'ui_control') return false;
+  return arr(entity.links)
+    .filter((link) => link.relationship === 'partOf')
+    .map((link) => byId.get(link.id))
+    .some((group) => group?.type === 'group' && semanticInput(group));
+}
+
 export function selectNextUserInput(entities = [], instances = []) {
-  return arr(entities).find((entity) => {
-    const semantic = entity.semantic || {};
-    if (semantic.interaction !== 'user_input') return false;
-    if (semantic.relevantToGoal !== true || semantic.required !== true) return false;
+  const all = arr(entities);
+  const byId = new Map(all.map((entity) => [entity.id, entity]));
+  return all.find((entity) => {
+    if (!semanticInput(entity)) return false;
+    if (shadowedBySemanticGroup(entity, byId)) return false;
     if (!visibleAndEnabled(entity)) return false;
     return !instanceForEntity(instances, entity.id);
   }) || null;
