@@ -27,6 +27,14 @@ test('next input is a relevant required enabled entity with no instance', () => 
   assert.equal(selectNextUserInput([page, year, online, offline, enabledMode, next], instances)?.id, 'group:mode');
 });
 
+test('semantic group shadows member controls even if model marks members as user input too', () => {
+  const instances = createInstanceGraph([{ id: 'instance:year', type: 'instance', value: '2026-27', links: [{ id: 'field:year', relationship: 'instanceOf' }] }]);
+  const enabledMode = { ...mode, structural: { ...mode.structural, disabled: false } };
+  const enabledOnline = { ...online, structural: { ...online.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
+  const enabledOffline = { ...offline, structural: { ...offline.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
+  assert.equal(selectNextUserInput([page, year, enabledOnline, enabledOffline, enabledMode, next], instances)?.id, 'group:mode');
+});
+
 test('finite questions expose structural options and resolve number locally', () => {
   const question = buildEntityQuestion(year, [page, year]);
   assert.deepEqual(question.options, ['2026-27', '2025-26']);
