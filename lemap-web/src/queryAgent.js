@@ -19,6 +19,7 @@ import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition, 
 import { loadInstanceMemory, recordInstanceFact, saveInstanceMemory } from './agent/instanceMemory.js';
 import { uncoveredUserInputFields } from './agent/interactionCoverage.js';
 import { classifyAndRecordExecutionBehavior } from './agent/executionBehavior.js';
+import { workflowKeyFromGoal } from './agent/workflowIdentity.js';
 import {
   buildChangeSelectionQuestion,
   buildConfirmationSummary,
@@ -42,15 +43,10 @@ const maxSteps = Number.isFinite(Number(process.env.LEMAP_MAX_STEPS)) ? Math.max
 const memoryFile = path.resolve(process.env.LEMAP_MEMORY_FILE || path.join('data', 'semantic-memory', 'web-map.json'));
 const instanceFile = path.resolve(process.env.LEMAP_INSTANCE_FILE || path.join('data', 'instances', 'default.json'));
 const runLogDir = path.resolve(process.env.LEMAP_RUN_LOG_DIR || path.join('data', 'query-runs'));
+const GENERIC_VALUE_SCOPES = new Set(['application', 'actor', 'workflow', 'workflow_instance']);
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 function unique(values) { return [...new Set(arr(values).map(String).filter(Boolean))]; }
-function slug(value = '') { return String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100); }
-function workflowKeyFromGoal(goal = '') {
-  const itr = String(goal).match(/\bITR\s*[- ]?\s*([1-7])\b/i);
-  return itr ? `itr-${itr[1]}` : slug(goal) || 'workflow';
-}
-function assessmentYearFromGoal(goal = '') { return String(goal).match(/\b20\d{2}-\d{2}\b/)?.[0] || ''; }
 async function capture(page) {
   const snapshot = await snapshotPage(page);
   const graph = preprocessEntity(snapshot);
@@ -107,9 +103,13 @@ function structuralSignatureFromMemory(entry = {}) {
     groups: arr(entry.structure?.groups).map((group) => [group.id, group.groupType, [...arr(group.memberFieldIds)].sort()]).sort((a, b) => a[0].localeCompare(b[0]))
   });
 }
+function semanticInteractionSchemaCompatible(entry = {}) {
+  return arr(entry.semantic?.interactions).every((interaction) => GENERIC_VALUE_SCOPES.has(interaction?.valueScope || 'workflow_instance'));
+}
 function knownEntityIsCompatible(entry, graph) {
   return !!entry?.semantic?.semanticName
     && Array.isArray(entry.semantic.interactions)
+    && semanticInteractionSchemaCompatible(entry)
     && structuralSignatureFromMemory(entry) === structuralSignatureFromGraph(graph);
 }
 function workflowContext(memory, session, userAnswers, semanticEntity, currentEntityId, semanticPath) {
@@ -188,12 +188,10 @@ async function learnFromExecution({
   if (!interaction?.semanticKey) return { novel: false, semanticRefresh: false, semanticEntity: null, behavior: null };
   const sourceFieldIds = unique([...arr(interaction.structuralFieldIds), ...arr(interpretation?.selectedFieldIds)]);
   const delta = computeEntityDelta(before.state, after.state);
-  const observedValue = labels.join(', ') || (interpretation?.value !== undefined ? String(interpretation.value) : '');
   const behavior = classifyAndRecordExecutionBehavior(memory, {
     entityId: before.graph.entity.id,
     semanticKey: interaction.semanticKey,
     sourceFieldIds,
-    observedValue,
     delta
   });
   await saveMemory(memory);
@@ -267,8 +265,8 @@ function semanticInteractionForQuestion(semanticEntity, question) {
   const semanticKey = String(question.questionId).slice('interaction:'.length);
   return arr(semanticEntity?.interactions).find((item) => item.semanticKey === semanticKey) || null;
 }
-function scopeKeyForFact(interaction, scopeKeys, workflowKey, fallback = '') {
-  return scopeKeyForInteraction(interaction, scopeKeys, workflowKey) || fallback;
+function scopeKeyForFact(interaction, scopeKeys, workflowKey) {
+  return scopeKeyForInteraction(interaction, scopeKeys, workflowKey);
 }
 function printTokenSummary(summary = {}) {
   const purposes = Object.entries(summary.byPurpose || {});
@@ -309,11 +307,10 @@ try {
 
   const workflowKey = workflowKeyFromGoal(userGoal);
   const scopeKeys = {
-    global: 'global',
-    taxpayer: process.env.LEMAP_TAXPAYER_SCOPE || '',
+    application: 'application',
+    actor: process.env.LEMAP_ACTOR_SCOPE || '',
     workflow: workflowKey,
-    assessment_year: assessmentYearFromGoal(userGoal),
-    filing_instance: session.id
+    workflow_instance: session.id
   };
 
   browser = await chromium.connectOverCDP(endpoint);
@@ -554,7 +551,6 @@ try {
             const fact = buildInstanceFact({ interaction, question: editQuestion, interpretation: editInterpretation, workflowKey, scopeKeys, source: 'user' });
             if (fact.scopeKey) {
               recordInstanceFact(instanceMemory, fact);
-              if (fact.scope === 'assessment_year') scopeKeys.assessment_year = fact.scopeKey;
               await saveInstanceMemory(instanceFile, instanceMemory);
             }
             await runLogger.write('instance_write', { semanticKey, source: 'user', scope: fact.scope, value: 'stored' });
@@ -598,19 +594,18 @@ try {
               }
             }
 
-            const scopeKey = scopeKeyForFact(interaction, scopeKeys, workflowKey, interaction.valueScope === 'assessment_year' ? item.displayValue : '');
+            const scopeKey = scopeKeyForFact(interaction, scopeKeys, workflowKey);
             if (!scopeKey) continue;
             recordInstanceFact(instanceMemory, {
               semanticKey: interaction.semanticKey,
               value: item.currentValue || item.rememberedFact?.value || item.displayValue,
               optionLabel: item.displayValue,
               source: item.status === 'remembered' ? 'remembered' : 'prefill',
-              scope: interaction.valueScope || 'filing_instance',
+              scope: interaction.valueScope || 'workflow_instance',
               workflowKey,
               scopeKey,
               confirmed: true
             });
-            if (interaction.valueScope === 'assessment_year') scopeKeys.assessment_year = scopeKey;
           }
           await saveInstanceMemory(instanceFile, instanceMemory);
           await runLogger.write('confirmation', { accepted: true, count: summary.items.length, semanticKeys: summary.items.map((item) => item.semanticKey), executedPrefill: executedConfirmedPrefill });
@@ -704,7 +699,6 @@ try {
         const fact = buildInstanceFact({ interaction, question, interpretation, workflowKey, scopeKeys, source: 'user' });
         if (fact.scopeKey) {
           recordInstanceFact(instanceMemory, fact);
-          if (fact.scope === 'assessment_year') scopeKeys.assessment_year = fact.scopeKey;
           await saveInstanceMemory(instanceFile, instanceMemory);
           await runLogger.write('instance_write', { semanticKey: interaction.semanticKey, source: 'user', scope: fact.scope, value: 'stored' });
         }
@@ -750,10 +744,10 @@ try {
     console.log('\n[LeMap-Web] navigation ranking:');
     for (const score of scores.slice(0, 8)) {
       const candidate = candidates.find((item) => item.id === score.candidateId);
-      console.log(`  ${(candidate?.label || score.candidateId)} :: goal=${score.goalRelevance.toFixed(2)} continuity=${score.continuity.toFixed(2)} forward=${score.forwardProgress.toFixed(2)} role=${score.role}`);
+      console.log(`  ${(candidate?.label || score.candidateId)} :: goal=${score.goalRelevance.toFixed(2)} continuity=${score.continuity.toFixed(2)} forward=${score.forwardProgress.toFixed(2)} role=${score.role} consequence=${score.consequence}`);
     }
     await runLogger.write('navigation_ranking', {
-      top: scores.slice(0, 8).map((score) => ({ candidateId: score.candidateId, label: candidates.find((item) => item.id === score.candidateId)?.label || '', goal: score.goalRelevance, continuity: score.continuity, forward: score.forwardProgress, role: score.role }))
+      top: scores.slice(0, 8).map((score) => ({ candidateId: score.candidateId, label: candidates.find((item) => item.id === score.candidateId)?.label || '', goal: score.goalRelevance, continuity: score.continuity, forward: score.forwardProgress, role: score.role, consequence: score.consequence }))
     });
 
     const selected = chooseExecutableNavigation(scores, candidates);
@@ -764,9 +758,9 @@ try {
     }
 
     const sourceEntityId = completed.graph.entity.id;
-    console.log(`[LeMap-Web] navigating via: ${selected.candidate.label} (${selected.score.role})`);
-    await runLogger.write('navigation_selected', { sourceEntityId, candidateId: selected.candidate.id, label: selected.candidate.label, role: selected.score.role });
-    await executeNavigationCandidate(page, selected.candidate);
+    console.log(`[LeMap-Web] navigating via: ${selected.candidate.label} (${selected.score.role}, ${selected.score.consequence})`);
+    await runLogger.write('navigation_selected', { sourceEntityId, candidateId: selected.candidate.id, label: selected.candidate.label, role: selected.score.role, consequence: selected.score.consequence });
+    await executeNavigationCandidate(page, selected.candidate, selected.score);
     if (settleMs) await page.waitForTimeout(settleMs);
     const target = await capture(page);
 
