@@ -3,13 +3,21 @@ function diffAdded(before = [], after = []) { const a = new Set(before || []); r
 function diffRemoved(before = [], after = []) { const a = new Set(after || []); return (before || []).filter((x) => !a.has(x)); }
 
 export function computeEntityDelta(before = {}, after = {}) {
+  const fromRoute = before.presentation?.route || '';
+  const toRoute = after.presentation?.route || '';
+  const fromEntityId = before.entityId || '';
+  const toEntityId = after.entityId || '';
   const result = {
     fieldValuesChanged: [], fieldsEnabled: [], fieldsDisabled: [], fieldsShown: [], fieldsHidden: [], fieldsAdded: [], fieldsRemoved: [],
     actionsEnabled: [], actionsDisabled: [], actionsShown: [], actionsHidden: [], regionsShown: [], regionsHidden: [],
     validationMessagesAdded: diffAdded(before.validations, after.validations), validationMessagesRemoved: diffRemoved(before.validations, after.validations),
     optionsAdded: {}, optionsRemoved: {},
-    routeChanged: before.presentation?.route !== after.presentation?.route,
-    entityChanged: before.entityId !== after.entityId
+    routeChanged: fromRoute !== toRoute,
+    entityChanged: fromEntityId !== toEntityId,
+    fromRoute,
+    toRoute,
+    fromEntityId,
+    toEntityId
   };
 
   const beforeFields = before.fields || {};
