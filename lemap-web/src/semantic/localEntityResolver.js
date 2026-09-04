@@ -99,7 +99,7 @@ export function buildLocalEntityPrompt({ entityGraph = {}, observations = [], le
     observations: evidence.observations,
     learnedRelationships: evidence.learnedRelationships
   };
-  return `MODE web-local-entity-v2\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Identify coherent semantic entities/sub-entities and relationships. Decide which user-facing controls are relevant to the ORIGINAL GOAL and where user interaction should begin. Return an ordered interaction plan rather than DOM order. Disabled controls may still be meaningful but should depend on the interaction(s) likely to make them available. For every coherent user-input concept return one interaction entry covering its structural fields. Explain domain jargon only when supported by evidence/context. For finite choices, behaviorHypothesis may propose same_effect_across_domain, value_specific or unknown with a confidence score; this is a hypothesis, not proof. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds,triggerSemanticKey,behaviorClassId}], actions:[{structuralFieldId,semanticName,description,role}], interactions:[{semanticKey,semanticName,structuralFieldIds,explanation,question,examples,valueScope,reusePolicy,confirmationQuestion,goalRelevance,priority,requiredForGoal,dependsOnSemanticKeys,behaviorHypothesis:{mode,confidence,description}}], completionInteraction:{confirmationIntro,confirmationQuestion,changeQuestion}, localCompletion, confidence. valueScope must be application|actor|workflow|workflow_instance. reusePolicy must be always|same_scope|confirm|never. action role must be local_entity_action|branch_action|workflow_continuation|workflow_reverse|global_navigation|unknown.`;
+  return `MODE web-local-entity-v2\nLOCAL STRUCTURAL ENTITY EVIDENCE:\n${JSON.stringify(payload)}\n\nTASK:\nInterpret only the supplied deterministic evidence. Identify coherent semantic entities/sub-entities and relationships. Decide which user-facing controls are relevant to the ORIGINAL GOAL and where user interaction should begin. Return an ordered interaction plan rather than DOM order. Disabled controls may still be meaningful but should depend on the interaction(s) likely to make them available. For every coherent user-input concept return one interaction entry covering its structural fields. Do not return multiple interaction entries for the same structural radio/checkbox group. Explain domain jargon only when supported by evidence/context. For finite choices, behaviorHypothesis may propose same_effect_across_domain, value_specific or unknown with a confidence score; this is a hypothesis, not proof. Return JSON with semanticName, description, subEntities:[{semanticName,description,structuralFieldIds,relationshipToParent}], fields:[{structuralFieldId,semanticName,description}], relationships:[{kind,description,evidenceIds,triggerSemanticKey,behaviorClassId}], actions:[{structuralFieldId,semanticName,description,role}], interactions:[{semanticKey,semanticName,structuralFieldIds,explanation,question,examples,valueScope,reusePolicy,confirmationQuestion,goalRelevance,priority,requiredForGoal,dependsOnSemanticKeys,behaviorHypothesis:{mode,confidence,description}}], completionInteraction:{confirmationIntro,confirmationQuestion,changeQuestion}, localCompletion, confidence. valueScope must be application|actor|workflow|workflow_instance. reusePolicy must be always|same_scope|confirm|never. action role must be local_entity_action|branch_action|workflow_continuation|workflow_reverse|global_navigation|unknown.`;
 }
 
 export function normalizeLocalEntityResponse(raw = {}) {
@@ -179,8 +179,76 @@ export function expandInteractionBindings(semanticEntity = {}, entityGraph = {})
   };
 }
 
+function bindingKey(interaction = {}) {
+  return [...new Set(arr(interaction.structuralFieldIds).map(String).filter(Boolean))].sort().join('|');
+}
+
+function resolveAlias(aliasMap, key) {
+  let current = String(key || '');
+  const seen = new Set();
+  while (aliasMap.has(current) && !seen.has(current)) {
+    seen.add(current);
+    current = aliasMap.get(current);
+  }
+  return current;
+}
+
+function dedupeInteractionBindings(interactions = []) {
+  const byBinding = new Map();
+  const aliasMap = new Map();
+  for (const interaction of arr(interactions)) {
+    const key = bindingKey(interaction);
+    if (!key) continue;
+    const previous = byBinding.get(key);
+    if (previous?.semanticKey && previous.semanticKey !== interaction.semanticKey) aliasMap.set(previous.semanticKey, interaction.semanticKey);
+    byBinding.set(key, interaction);
+  }
+  const retained = [...byBinding.values()];
+  const retainedKeys = new Set(retained.map((interaction) => interaction.semanticKey));
+  return retained.map((interaction) => ({
+    ...interaction,
+    dependsOnSemanticKeys: [...new Set(arr(interaction.dependsOnSemanticKeys)
+      .map((key) => resolveAlias(aliasMap, key))
+      .filter((key) => key && key !== interaction.semanticKey && retainedKeys.has(key)))]
+  }));
+}
+
+export function mergeSemanticEntityPlans(previous = {}, current = {}, entityGraph = {}) {
+  const validFieldIds = new Set(arr(entityGraph.fields).map((field) => String(field.id || '')).filter(Boolean));
+  const previousInteractions = arr(previous.interactions).map((interaction) => ({ ...interaction }));
+  const currentInteractions = arr(current.interactions).map((interaction) => ({ ...interaction }));
+  const bySemanticKey = new Map();
+  for (const interaction of [...previousInteractions, ...currentInteractions]) {
+    const structuralFieldIds = [...new Set(arr(interaction.structuralFieldIds).map(String).filter((id) => validFieldIds.has(id)))];
+    if (!interaction.semanticKey || !structuralFieldIds.length) continue;
+    bySemanticKey.set(interaction.semanticKey, { ...interaction, structuralFieldIds });
+  }
+
+  const merged = {
+    ...previous,
+    ...current,
+    semanticName: current.semanticName || previous.semanticName || '',
+    description: current.description || previous.description || '',
+    subEntities: current.subEntities?.length ? current.subEntities : arr(previous.subEntities),
+    fields: current.fields?.length ? current.fields : arr(previous.fields),
+    relationships: current.relationships?.length ? current.relationships : arr(previous.relationships),
+    actions: current.actions?.length ? current.actions : arr(previous.actions),
+    completionInteraction: {
+      ...(previous.completionInteraction || {}),
+      ...(current.completionInteraction || {})
+    },
+    localCompletion: current.localCompletion || previous.localCompletion || '',
+    confidence: Math.max(Number(previous.confidence || 0), Number(current.confidence || 0)),
+    interactions: [...bySemanticKey.values()]
+  };
+
+  const expanded = expandInteractionBindings(merged, entityGraph);
+  return { ...expanded, interactions: dedupeInteractionBindings(expanded.interactions) };
+}
+
 export async function resolveLocalEntity({ client, model, entityGraph, observations = [], learnedRelationships = [], workflowContext = {} } = {}) {
   const userPrompt = buildLocalEntityPrompt({ entityGraph, observations, learnedRelationships, workflowContext });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
-  return expandInteractionBindings(normalizeLocalEntityResponse(response.parsed), entityGraph);
+  const normalized = normalizeLocalEntityResponse(response.parsed);
+  return mergeSemanticEntityPlans({}, normalized, entityGraph);
 }
