@@ -15,9 +15,9 @@ const ALLOWED_CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'dest
 
 const SYSTEM = `You are DataSong LeMap-Web's GOAL-DIRECTED NAVIGATION SCOUT.
 The current local entity has already been structurally explored and semantically resolved.
-You receive the original user goal, a compact resolved entity summary, current workflow context, and outgoing button/link candidates.
-Score each candidate for advancing the original user goal while preserving the active workflow context.
-Also classify the consequence of executing each candidate from the supplied semantics: reversible ordinary navigation/workflow progress, external commit, financial commitment, destructive mutation, security-sensitive action, or unknown.
+You receive the original user goal, a compact resolved entity summary, learned semantic action roles, current workflow context, and outgoing button/link candidates.
+Score each candidate for advancing the original user goal while preserving the active workflow context. Treat learned local action roles as semantic evidence, not as proof of safety.
+Also classify the consequence of executing each candidate: reversible ordinary navigation/workflow progress, external commit, financial commitment, destructive mutation, security-sensitive action, or unknown.
 Do not execute anything. Return strict compact JSON only.`;
 
 function compactEntity(semanticEntity = {}) {
@@ -27,7 +27,12 @@ function compactEntity(semanticEntity = {}) {
     localCompletion: text(semanticEntity.localCompletion, 260),
     subEntities: arr(semanticEntity.subEntities).slice(0, 8).map((item) => text(item?.semanticName, 160)).filter(Boolean),
     relationships: arr(semanticEntity.relationships).slice(0, 8).map((item) => ({ kind: text(item?.kind, 100), description: text(item?.description, 220) })),
-    actions: arr(semanticEntity.actions).slice(0, 10).map((item) => ({ semanticName: text(item?.semanticName, 160), description: text(item?.description, 220) }))
+    actions: arr(semanticEntity.actions).slice(0, 12).map((item) => ({
+      structuralFieldId: text(item?.structuralFieldId, 180),
+      semanticName: text(item?.semanticName, 160),
+      description: text(item?.description, 220),
+      role: text(item?.role, 80)
+    }))
   };
 }
 
@@ -43,13 +48,14 @@ export function buildNavigationPrompt({ userGoal = '', semanticEntity = {}, work
     },
     candidates: arr(candidates).slice(0, 30).map((candidate) => ({
       candidateId: candidate.id,
+      fieldId: candidate.fieldId || '',
       label: candidate.label || '',
       kind: candidate.kind || '',
       href: candidate.href || '',
       enabled: candidate.enabled !== false
     }))
   };
-  return `MODE web-goal-navigation-v1\nCURRENT GOAL + RESOLVED ENTITY + OUTGOING CANDIDATES:\n${JSON.stringify(payload)}\n\nTASK:\nScore every candidate against the ORIGINAL USER GOAL and current workflow context. Return JSON {scores:[{candidateId,goalRelevance,continuity,forwardProgress,role,consequence,reason}]}. role must be workflow_continuation|workflow_branch|related_entity|workflow_reverse|ancestor_workflow|workflow_exit|side_context|site_chrome|unknown. consequence must be reversible|commit|financial|destructive|security|unknown. Use reversible only for ordinary navigation or workflow progress that does not itself create an external commitment, payment, destructive mutation, or security-sensitive effect. Prefer candidates that safely advance the user goal; do not reward unrelated site chrome merely because it is globally important.`;
+  return `MODE web-goal-navigation-v2\nCURRENT GOAL + RESOLVED ENTITY + OUTGOING CANDIDATES:\n${JSON.stringify(payload)}\n\nTASK:\nScore every candidate against the ORIGINAL USER GOAL and current workflow context. Return JSON {scores:[{candidateId,goalRelevance,continuity,forwardProgress,role,consequence,reason}]}. role must be workflow_continuation|workflow_branch|related_entity|workflow_reverse|ancestor_workflow|workflow_exit|side_context|site_chrome|unknown. consequence must be reversible|commit|financial|destructive|security|unknown. Use reversible only for ordinary navigation or workflow progress that does not itself create an external commitment, payment, destructive mutation, or security-sensitive effect. Prefer candidates that safely advance the user goal; do not reward unrelated site chrome merely because it is globally important.`;
 }
 
 export function normalizeNavigationResponse(raw = {}, candidates = []) {
