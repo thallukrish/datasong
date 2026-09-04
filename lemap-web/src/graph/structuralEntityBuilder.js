@@ -61,13 +61,19 @@ export function buildStructuralEntities(snapshot = {}) {
     const members = arr(group.memberFieldIds)
       .map((id) => controls.find((field) => field.id === id))
       .filter(Boolean);
+    const selected = members.find((member) => member.checked === true);
     upsertEntity(graph, {
       id: group.id,
       name: group.label || group.groupType || group.id,
       type: 'group',
       structural: {
         groupType: group.groupType || '',
-        values: members.map((member) => member.label || member.value).filter(Boolean)
+        defaultValue: selected ? (selected.label || selected.value || null) : null,
+        value: selected ? (selected.label || selected.value || null) : null,
+        values: members.map((member) => member.label || member.value).filter(Boolean),
+        visible: members.some((member) => member.visible !== false),
+        disabled: members.length > 0 && members.every((member) => !!member.disabled),
+        required: members.some((member) => !!member.required)
       },
       semantic: {},
       links: []
