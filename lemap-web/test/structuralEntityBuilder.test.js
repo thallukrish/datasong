@@ -8,14 +8,17 @@ const snapshot = {
   url: 'https://example.test/setup',
   overlay: { active: false },
   dom: {
-    tag: 'main', label: 'Setup', hidden: false, children: [
-      { control: true, tag: 'select', domId: 'year', name: 'year', label: 'Assessment Year', type: '', role: '', value: '', hidden: false, disabled: false, options: ['2026-27', '2025-26'] },
-      { tag: 'fieldset', label: 'Filing Mode', hidden: false, children: [
-        { control: true, tag: 'input', domId: 'online', name: 'mode', label: 'Online', type: 'radio', role: '', value: 'online', checked: false, hidden: false, disabled: false, options: [] },
-        { control: true, tag: 'input', domId: 'offline', name: 'mode', label: 'Offline', type: 'radio', role: '', value: 'offline', checked: false, hidden: false, disabled: false, options: [] }
-      ]},
-      { control: true, tag: 'button', domId: 'continue', name: '', label: 'Continue', type: '', role: '', value: null, hidden: false, disabled: true, options: [] },
-      { control: true, tag: 'a', domId: 'help', name: '', label: 'Help', type: '', role: 'link', href: '/help', value: null, hidden: false, disabled: false, options: [] }
+    tag: 'body', label: 'Setup', hidden: false, children: [
+      { control: true, tag: 'button', domId: 'menu', name: '', label: 'Menu', type: '', role: '', value: null, hidden: false, disabled: false, options: [] },
+      { tag: 'main', label: 'Setup', hidden: false, children: [
+        { control: true, tag: 'select', domId: 'year', name: 'year', label: 'Assessment Year', type: '', role: '', value: '', hidden: false, disabled: false, options: ['2026-27', '2025-26'] },
+        { tag: 'fieldset', label: 'Filing Mode', hidden: false, children: [
+          { control: true, tag: 'input', domId: 'online', name: 'mode', label: 'Online', type: 'radio', role: '', value: 'online', checked: false, hidden: false, disabled: false, options: [] },
+          { control: true, tag: 'input', domId: 'offline', name: 'mode', label: 'Offline', type: 'radio', role: '', value: 'offline', checked: false, hidden: false, disabled: false, options: [] }
+        ]},
+        { control: true, tag: 'button', domId: 'continue', name: '', label: 'Continue', type: '', role: '', value: null, hidden: false, disabled: true, options: [] },
+        { control: true, tag: 'a', domId: 'help', name: '', label: 'Help', type: '', role: 'link', href: '/help', value: null, hidden: false, disabled: false, options: [] }
+      ]}
     ]
   }
 };
@@ -46,4 +49,10 @@ test('browser structure becomes one array of page, group and ui-control entities
   assert.ok(group.links.some((item) => item.id === online.id && item.relationship === 'contains'));
   assert.ok(online.links.some((item) => item.id === group.id && item.relationship === 'partOf'));
   assert.ok(group.links.some((item) => item.id === offline.id && item.relationship === 'contains'));
+});
+
+test('all rendered controls are entities; semantic model decides local versus global later', () => {
+  const { entities } = buildStructuralEntities(snapshot);
+  assert.ok(entities.some((entity) => entity.name === 'Menu' && entity.type === 'ui_control'));
+  assert.ok(entities.some((entity) => entity.name === 'Assessment Year' && entity.type === 'ui_control'));
 });
