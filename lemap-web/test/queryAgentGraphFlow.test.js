@@ -15,7 +15,7 @@ const year = { id: 'field:year', name: 'Assessment Year', type: 'ui_control', st
 const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online', visible: true, disabled: true, checked: false }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
 const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline', visible: true, disabled: true, checked: false }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
 const mode = { id: 'group:mode', name: 'Filing Mode', type: 'group', structural: { groupType: 'radio', values: ['Online', 'Offline'], value: null, visible: true, disabled: true }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'How do you want to file?' }, links: [{ id: 'field:online', relationship: 'contains' }, { id: 'field:offline', relationship: 'contains' }] };
-const next = { id: 'button:next', name: 'Continue', type: 'ui_control', structural: { controlType: 'button', visible: true, disabled: false }, semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue' }, links: [] };
+const next = { id: 'button:next', name: 'Continue', type: 'ui_control', structural: { controlType: 'button', visible: true, disabled: false }, semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' }, links: [] };
 
 test('next input is a relevant required enabled entity with no instance', () => {
   const entities = [page, year, online, offline, mode, next];
@@ -36,7 +36,7 @@ test('semantic group shadows member controls even if model marks members as user
   assert.equal(selectNextUserInput([page, year, enabledOnline, enabledOffline, enabledMode, next], instances)?.id, 'group:mode');
 });
 
-test('stored instance reuse also prefers the group over member controls', () => {
+test('stored instance reuse prefers the group over member controls', () => {
   const instances = createInstanceGraph([
     { id: 'instance:year', type: 'instance', value: '2026-27', links: [{ id: 'field:year', relationship: 'instanceOf' }] },
     { id: 'instance:mode', type: 'instance', value: 'Online', links: [{ id: 'group:mode', relationship: 'instanceOf' }] },
@@ -61,6 +61,8 @@ test('group interaction ignores direct member state changes as user instance sta
   assert.deepEqual(ignoredSourceEntityIds(mode), ['group:mode', 'field:online', 'field:offline']);
 });
 
-test('workflow continuation comes directly from entity semantics', () => {
+test('workflow continuation comes directly from safe entity semantics', () => {
   assert.equal(selectWorkflowContinuation([page, year, mode, next])?.id, 'button:next');
+  const commit = { ...next, id: 'button:submit', name: 'Submit', semantic: { ...next.semantic, workflowRole: 'commit', consequence: 'commit' } };
+  assert.equal(selectWorkflowContinuation([page, commit]), null);
 });
