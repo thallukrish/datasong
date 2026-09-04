@@ -4,6 +4,7 @@ export function recordInteractionWorkflowTransition(memory, {
   session = null,
   sourceEntityId = '',
   targetEntityId = '',
+  targetRoute = '',
   interaction = {},
   behavior = null
 } = {}) {
@@ -12,7 +13,7 @@ export function recordInteractionWorkflowTransition(memory, {
     id: `interaction:${interaction.semanticKey}:${behavior.classId}`,
     label: interaction.semanticName || interaction.semanticKey,
     kind: 'interaction',
-    href: ''
+    href: targetRoute || ''
   };
   const score = {
     role: 'workflow_branch',
