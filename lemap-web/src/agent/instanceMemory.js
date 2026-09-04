@@ -7,19 +7,19 @@ function text(value, max = 240) {
   return s.length > max ? s.slice(0, max) : s;
 }
 
-const VALID_SCOPES = new Set(['global', 'taxpayer', 'workflow', 'assessment_year', 'filing_instance']);
+const VALID_SCOPES = new Set(['application', 'actor', 'workflow', 'workflow_instance']);
 
 export function createInstanceMemory() {
-  return { version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), facts: [] };
+  return { version: 2, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), facts: [] };
 }
 
 function normalizeScope(scope) {
-  return VALID_SCOPES.has(scope) ? scope : 'filing_instance';
+  return VALID_SCOPES.has(scope) ? scope : 'workflow_instance';
 }
 
 function keyParts(fact = {}) {
   const scope = normalizeScope(fact.scope);
-  const workflowKey = ['workflow', 'assessment_year', 'filing_instance'].includes(scope) ? text(fact.workflowKey) : '';
+  const workflowKey = ['workflow', 'workflow_instance'].includes(scope) ? text(fact.workflowKey) : '';
   return [text(fact.semanticKey), scope, workflowKey, text(fact.scopeKey)];
 }
 function factKey(fact = {}) { return keyParts(fact).join('|'); }
@@ -47,7 +47,7 @@ export function recordInstanceFact(memory, fact = {}) {
   return normalized;
 }
 
-export function findApplicableFact(memory, { semanticKey = '', workflowKey = '', scope = 'filing_instance', scopeKey = '' } = {}) {
+export function findApplicableFact(memory, { semanticKey = '', workflowKey = '', scope = 'workflow_instance', scopeKey = '' } = {}) {
   const probe = { semanticKey, workflowKey, scope, scopeKey };
   const key = factKey(probe);
   const fact = arr(memory?.facts).find((item) => factKey(item) === key && item.confirmed !== false);
@@ -58,6 +58,7 @@ export async function loadInstanceMemory(file) {
   try {
     const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
     parsed.facts = arr(parsed.facts);
+    parsed.version = 2;
     return parsed;
   } catch {
     return createInstanceMemory();
