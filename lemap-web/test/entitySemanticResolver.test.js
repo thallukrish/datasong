@@ -7,36 +7,36 @@ import {
 } from '../src/semantic/entitySemanticResolver.js';
 
 const entities = [
-  { id: 'page:1', name: 'Setup', type: 'page', structural: { route: '/setup' }, semantic: {}, links: [{ id: 'field:year', relationship: 'contains' }] },
+  { id: 'workflow:1', name: 'Complete setup', type: 'workflow', structural: { goal: 'Complete setup' }, semantic: {}, links: [{ id: 'page:1', relationship: 'contains' }] },
+  { id: 'page:1', name: 'Setup', type: 'page', structural: { route: '/setup' }, semantic: {}, links: [{ id: 'workflow:1', relationship: 'partOfWorkflow' }, { id: 'field:year', relationship: 'contains' }] },
   { id: 'field:year', name: 'Assessment Year', type: 'ui_control', structural: { controlType: 'select', values: ['2026-27', '2025-26'], disabled: false }, semantic: {}, links: [{ id: 'page:1', relationship: 'childOf' }] },
   { id: 'button:continue', name: 'Continue', type: 'ui_control', structural: { controlType: 'button', disabled: true }, semantic: {}, links: [{ id: 'page:1', relationship: 'childOf' }] }
 ];
 
-test('semantic resolver prompt sends entity ids and structure but asks model to return semantics only', () => {
+test('semantic resolver prompt sends workflow, page and controls as ordinary entities', () => {
   const prompt = buildEntitySemanticPrompt({ userGoal: 'Complete setup', entities, pageId: 'page:1' });
   assert.match(prompt, /web-entity-semantics-v1/);
+  assert.match(prompt, /workflow:1/);
   assert.match(prompt, /field:year/);
-  assert.match(prompt, /Assessment Year/);
   assert.match(prompt, /semantic additions only/i);
-  assert.match(prompt, /consequence/i);
+  assert.doesNotMatch(prompt, /workflow\?:/i);
 });
 
-test('semantic response accepts only known entity ids and optional semantic fields', () => {
+test('semantic response accepts workflow completion as a normal semantic patch', () => {
   const result = normalizeEntitySemanticResponse({
     entities: [
+      { id: 'workflow:1', semantic: { meaning: 'complete setup', description: 'Move through setup.', complete: false, relevantToGoal: true } },
       { id: 'field:year', semantic: { meaning: 'assessment year', scope: 'local', interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which year?', explanation: 'Choose the year.', caveats: ['Use the applicable year.'], examples: ['2026-27'] } },
       { id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'continue', consequence: 'reversible', relevantToGoal: true } },
       { id: 'made-up', semantic: { meaning: 'invented' } }
-    ],
-    workflow: { name: 'Complete setup', description: 'Move through setup.' }
+    ]
   }, entities);
 
-  assert.equal(result.entities.length, 2);
-  assert.equal(result.entities[0].id, 'field:year');
-  assert.equal(result.entities[0].semantic.scope, 'local');
-  assert.equal(result.entities[0].semantic.interaction, 'user_input');
-  assert.deepEqual(result.entities[0].semantic.examples, ['2026-27']);
-  assert.equal(result.entities[1].semantic.consequence, 'reversible');
+  assert.equal(result.entities.length, 3);
+  const workflow = result.entities.find((item) => item.id === 'workflow:1');
+  assert.equal(workflow.semantic.complete, false);
+  assert.equal(workflow.semantic.description, 'Move through setup.');
+  assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.consequence, 'reversible');
 });
 
 test('semantic resolver executes through injected model client', async () => {
