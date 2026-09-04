@@ -38,11 +38,12 @@ export function currentInteractionValue(graph = {}, state = {}, interaction = {}
 }
 
 export function scopeKeyForInteraction(interaction = {}, scopeKeys = {}, workflowKey = '') {
-  const scope = interaction.valueScope || 'filing_instance';
-  if (scope === 'global') return 'global';
-  if (scope === 'taxpayer') return scopeKeys.taxpayer || '';
+  const scope = interaction.valueScope || 'workflow_instance';
+  if (scope === 'application') return scopeKeys.application || 'application';
+  if (scope === 'actor') return scopeKeys.actor || '';
   if (scope === 'workflow') return scopeKeys.workflow || workflowKey;
-  return scopeKeys[scope] || '';
+  if (scope === 'workflow_instance') return scopeKeys.workflow_instance || '';
+  return '';
 }
 
 export function classifyInteractionItems({ graph = {}, state = {}, semanticEntity = {}, instanceMemory = null, workflowKey = '', scopeKeys = {} } = {}) {
@@ -51,7 +52,7 @@ export function classifyInteractionItems({ graph = {}, state = {}, semanticEntit
     if (current.optionLabel) return { ...interaction, status: 'prefilled', displayValue: current.optionLabel, currentValue: current.value, source: 'prefill', rememberedFact: null };
 
     const reusePolicy = interaction.reusePolicy || 'never';
-    const scope = interaction.valueScope || 'filing_instance';
+    const scope = interaction.valueScope || 'workflow_instance';
     const scopeKey = scopeKeyForInteraction(interaction, scopeKeys, workflowKey);
     const rememberedFact = reusePolicy !== 'never' && scopeKey
       ? findApplicableFact(instanceMemory, { semanticKey: interaction.semanticKey, workflowKey, scope, scopeKey })
@@ -142,14 +143,13 @@ export function displayValueFromInterpretation(question = {}, interpretation = {
 
 export function buildInstanceFact({ interaction = {}, question = {}, interpretation = {}, workflowKey = '', scopeKeys = {}, source = 'user' } = {}) {
   const displayValue = displayValueFromInterpretation(question, interpretation);
-  let scopeKey = scopeKeyForInteraction(interaction, scopeKeys, workflowKey);
-  if (!scopeKey && interaction.valueScope === 'assessment_year' && /assessment.?year/i.test(`${interaction.semanticKey} ${interaction.semanticName}`)) scopeKey = displayValue;
+  const scopeKey = scopeKeyForInteraction(interaction, scopeKeys, workflowKey);
   return {
     semanticKey: interaction.semanticKey,
     value: question.answerKind === 'value' ? interpretation.value : displayValue,
     optionLabel: displayValue,
     source,
-    scope: interaction.valueScope || 'filing_instance',
+    scope: interaction.valueScope || 'workflow_instance',
     workflowKey,
     scopeKey,
     confirmed: true
