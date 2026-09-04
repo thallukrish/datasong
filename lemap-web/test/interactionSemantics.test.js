@@ -28,6 +28,71 @@ test('semantic resolution persists reusable interaction semantics without user v
   assert.match(normalized.completionInteraction.confirmationQuestion, /correct/i);
 });
 
+test('local semantic resolver returns a goal-directed page interaction plan', () => {
+  const normalized = normalizeLocalEntityResponse({
+    semanticName: 'Shipment setup',
+    interactions: [{
+      semanticKey: 'delivery-region',
+      semanticName: 'Delivery Region',
+      structuralFieldIds: ['field:region'],
+      question: 'Which delivery region should be used?',
+      valueScope: 'workflow',
+      reusePolicy: 'same_scope',
+      goalRelevance: 0.95,
+      priority: 1,
+      requiredForGoal: true,
+      dependsOnSemanticKeys: [],
+      behaviorHypothesis: {
+        mode: 'same_effect_across_domain',
+        confidence: 0.9,
+        description: 'Region choices are expected to expose the same next-step controls.'
+      }
+    }],
+    actions: [{
+      structuralFieldId: 'field:continue',
+      semanticName: 'Continue shipment',
+      description: 'Moves to the next workflow step.',
+      role: 'workflow_continuation'
+    }]
+  });
+
+  const interaction = normalized.interactions[0];
+  assert.equal(interaction.goalRelevance, 0.95);
+  assert.equal(interaction.priority, 1);
+  assert.equal(interaction.requiredForGoal, true);
+  assert.deepEqual(interaction.dependsOnSemanticKeys, []);
+  assert.equal(interaction.behaviorHypothesis.mode, 'same_effect_across_domain');
+  assert.equal(interaction.behaviorHypothesis.confidence, 0.9);
+  assert.equal(normalized.actions[0].role, 'workflow_continuation');
+});
+
+test('page semantic prompt includes compact hierarchy and asks model to identify where user interaction begins', () => {
+  const prompt = buildLocalEntityPrompt({
+    entityGraph: {
+      entity: { id: 'entity:1', label: 'Shipment setup' },
+      hierarchy: {
+        entityId: 'entity:1',
+        label: 'Shipment setup',
+        fieldIds: ['field:region'],
+        regions: [{ label: 'Delivery details', fieldIds: ['field:mode'], regions: [] }]
+      },
+      fields: [
+        { id: 'field:region', label: 'Delivery region', type: 'select', visible: true, disabled: false, valueDomain: ['West', 'East'] },
+        { id: 'field:mode', label: 'Delivery mode', type: 'radio', parentGroupId: 'group:mode', visible: true, disabled: true }
+      ],
+      actions: [{ id: 'field:continue', label: 'Continue', type: 'button', visible: true, disabled: true }],
+      groups: [{ id: 'group:mode', label: 'Delivery mode', groupType: 'radio', memberFieldIds: ['field:mode'] }]
+    },
+    workflowContext: { goal: 'Create a shipment' }
+  });
+
+  assert.match(prompt, /Delivery details/);
+  assert.match(prompt, /goalRelevance/);
+  assert.match(prompt, /priority/);
+  assert.match(prompt, /behaviorHypothesis/);
+  assert.match(prompt, /workflow_continuation/);
+});
+
 test('unknown domain-specific value scopes fall back to workflow_instance', () => {
   const normalized = normalizeLocalEntityResponse({
     semanticName: 'Setup',
