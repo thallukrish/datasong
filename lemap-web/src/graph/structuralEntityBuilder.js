@@ -24,21 +24,21 @@ function controlStructural(field = {}) {
   };
 }
 
-export function buildStructuralEntities(snapshot = {}) {
-  const parsed = preprocessEntity(snapshot);
+export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
   const graph = createEntityGraph();
-  const pageId = parsed.entity.presentation?.pageId || parsed.entity.id;
+  const pageId = parsed.entity?.presentation?.pageId || parsed.entity?.id;
+  if (!pageId) return { entities: graph, pageId: '' };
 
   upsertEntity(graph, {
     id: pageId,
-    name: parsed.entity.label || snapshot.page || snapshot.title || '',
-    type: parsed.entity.presentation?.overlay ? 'modal' : 'page',
+    name: parsed.entity?.label || '',
+    type: parsed.entity?.presentation?.overlay ? 'modal' : 'page',
     structural: {
-      url: parsed.entity.presentation?.url || snapshot.url || '',
-      route: parsed.entity.presentation?.route || '',
-      title: parsed.entity.presentation?.title || snapshot.title || '',
-      rootTag: parsed.entity.presentation?.rootTag || '',
-      overlay: !!parsed.entity.presentation?.overlay
+      url: parsed.entity?.presentation?.url || '',
+      route: parsed.entity?.presentation?.route || '',
+      title: parsed.entity?.presentation?.title || '',
+      rootTag: parsed.entity?.presentation?.rootTag || '',
+      overlay: !!parsed.entity?.presentation?.overlay
     },
     semantic: {},
     links: []
@@ -83,4 +83,8 @@ export function buildStructuralEntities(snapshot = {}) {
   }
 
   return { entities: graph, pageId };
+}
+
+export function buildStructuralEntities(snapshot = {}) {
+  return buildStructuralEntitiesFromPreprocessed(preprocessEntity(snapshot));
 }
