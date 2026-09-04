@@ -10,8 +10,8 @@ export function preprocessEntity(snapshot = {}) {
   const entity = buildEntityIdentity(snapshot, root);
   const controls = discoverInputs(root, entity.id);
   const groups = discoverGroups(controls, entity.id);
-  const fields = controls.filter((control) => control.type !== 'button');
-  const actions = controls.filter((control) => control.type === 'button');
+  const fields = controls.filter((control) => !['button', 'link'].includes(control.type));
+  const actions = controls.filter((control) => ['button', 'link'].includes(control.type));
   const hierarchy = buildEntityHierarchy(controls, entity);
   const methods = controls.map((field) => ({
     fieldId: field.id,
