@@ -8,7 +8,6 @@ const REVERSE = new Map([
   ['contains', 'childOf'],
   ['childOf', 'contains'],
   ['partOf', 'contains'],
-  ['instanceOf', 'hasInstance'],
   ['transitionsTo', 'reachedFrom'],
   ['reachedFrom', 'transitionsTo'],
   ['partOfWorkflow', 'contains'],
@@ -21,7 +20,9 @@ const REVERSE = new Map([
 ]);
 
 function comparableStructural(entity = {}) {
-  return structuredClone(entity.structural || {});
+  const structural = structuredClone(entity.structural || {});
+  delete structural.defaultValue;
+  return structural;
 }
 
 function sameStructure(a = {}, b = {}) {
@@ -46,13 +47,22 @@ function addNewEntity(graph, entity, triggerEntityId) {
   return node;
 }
 
+function versionStructural(original = {}, observed = {}) {
+  const structural = structuredClone(observed.structural || {});
+  if (Object.prototype.hasOwnProperty.call(original.structural || {}, 'defaultValue')) {
+    structural.defaultValue = structuredClone(original.structural.defaultValue);
+  }
+  return structural;
+}
+
 function addVersionEntity(graph, original, observed, triggerEntityId) {
-  const versionId = `${original.id}:state:${hash(JSON.stringify(observed.structural || {}))}`;
+  const structural = versionStructural(original, observed);
+  const versionId = `${original.id}:state:${hash(JSON.stringify(structural))}`;
   const node = upsertEntity(graph, {
     id: versionId,
     name: observed.name || original.name,
     type: observed.type || original.type,
-    structural: structuredClone(observed.structural || {}),
+    structural,
     semantic: structuredClone(original.semantic || observed.semantic || {}),
     links: []
   });
