@@ -65,7 +65,7 @@ test('read-only explorer opens no disposable tab and emits no live change event'
 
   assert.equal(await page.evaluate(() => window.__openCount), 0);
   assert.equal(await page.evaluate(() => window.__liveChangeCount), 0);
-  assert.equal(result.observations.length, 0);
+  assert.ok(result.graph.fields.some((field) => field.label === 'Assessment Year'));
   assert.equal(result.restored, true);
 });
 
@@ -81,7 +81,7 @@ test('read-only explorer enumerates a closed finite combobox domain without sele
   const select = result.graph.fields.find((field) => field.domId === 'year');
 
   assert.ok(select);
-  assert.deepEqual(result.valueDomains[select.id], ['2025-26', '2026-27']);
+  assert.deepEqual(select.valueDomain, ['2025-26', '2026-27']);
   assert.equal(await page.evaluate(() => window.__liveChangeCount), 0);
   assert.equal(await page.locator('#overlay').count(), 0);
   assert.equal(result.restored, true);
