@@ -55,7 +55,7 @@ test('lightweight selector ranks bounded structural paths without code/repositor
 
 test('local entity semantic resolver receives deterministic fields, behavior and relationships', () => {
   const prompt = buildLocalEntityPrompt({ entityGraph: localEntity, observations: localObservations, learnedRelationships: localRelationships });
-  assert.match(prompt, /web-local-entity-v1/);
+  assert.match(prompt, /web-local-entity-v2/);
   assert.match(prompt, /Seventh Proviso/);
   assert.match(prompt, /enables_group/);
   assert.doesNotMatch(prompt, /infer browser mechanics/i);
@@ -78,7 +78,7 @@ test('navigation scout scores outgoing candidates against original user goal and
     { id: 'link:dashboard', label: 'Dashboard', kind: 'link', href: '/dashboard' }
   ];
   const prompt = buildNavigationPrompt({ userGoal: 'I want to file ITR-3', semanticEntity, workflowContext: { title: 'File ITR-3', path: ['Filing Reason'] }, candidates });
-  assert.match(prompt, /web-goal-navigation-v1/);
+  assert.match(prompt, /web-goal-navigation-v2/);
   assert.match(prompt, /I want to file ITR-3/);
   assert.match(prompt, /Continue/);
   assert.match(prompt, /Dashboard/);
