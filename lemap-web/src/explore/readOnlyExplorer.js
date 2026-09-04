@@ -1,18 +1,7 @@
-import crypto from 'node:crypto';
 import { snapshotPage } from '../browserCapture.js';
 import { preprocessEntity } from '../graph/entityPreprocessor.js';
-import { projectEntityState } from '../graph/entityState.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
-function stateId(state) {
-  return `state:${crypto.createHash('sha1').update(JSON.stringify(state)).digest('hex').slice(0, 12)}`;
-}
-
-function methodSafety(graph = {}, fieldId = '') {
-  const method = arr(graph.methods).find((candidate) => candidate.fieldId === fieldId);
-  return arr(method?.actions)[0]?.safety || 'policy-required';
-}
-
 function quoteAttr(value) { return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
 
 function fieldLocator(page, field = {}) {
@@ -22,8 +11,8 @@ function fieldLocator(page, field = {}) {
   return null;
 }
 
-function shouldEnumerateTransientDomain(field = {}, state = {}) {
-  if (arr(state.options?.[field.id]).length) return false;
+function shouldEnumerateTransientDomain(field = {}) {
+  if (arr(field.valueDomain).length) return false;
   if (field.disabled) return false;
   const tag = String(field.tag || '').toLowerCase();
   const role = String(field.role || '').toLowerCase();
@@ -54,23 +43,17 @@ async function visibleOptionLabels(page) {
   return [...new Set(labels)];
 }
 
-async function openFiniteChoiceWithoutSelecting(locator) {
-  try {
-    await locator.click({ timeout: 750 });
-    return;
-  } catch {
-    // Some framework/custom-element hosts structurally own a control but have no
-    // clickable layout box themselves. Domain enumeration only opens the control;
-    // it never chooses an option, so invoking the host click handler is safe here.
-    await locator.evaluate((element) => element.click());
-  }
-}
-
 async function enumerateTransientDomain(page, field) {
   const locator = fieldLocator(page, field);
   if (!locator || !await locator.count()) return [];
   if (!await structurallyAvailable(locator)) return [];
-  await openFiniteChoiceWithoutSelecting(locator);
+
+  try {
+    await locator.click({ timeout: 750 });
+  } catch {
+    await locator.evaluate((element) => element.click());
+  }
+
   await page.waitForTimeout(50);
   const values = await visibleOptionLabels(page);
   await page.keyboard.press('Escape').catch(() => {});
@@ -81,58 +64,34 @@ async function enumerateTransientDomain(page, field) {
 export async function exploreReadOnlyEntity(page) {
   const snapshot = await snapshotPage(page);
   const graph = preprocessEntity(snapshot);
-  const state = projectEntityState(snapshot, graph);
-  const id = stateId(state);
-  const valueDomains = {};
-  const learnedRelationships = [];
   const errors = [];
-  let restored = true;
 
   for (const field of arr(graph.fields)) {
-    let values = arr(state.options?.[field.id]);
-    if (!values.length && shouldEnumerateTransientDomain(field, state)) {
-      try {
-        values = await enumerateTransientDomain(page, field);
-      } catch (error) {
-        errors.push({ fieldId: field.id, stage: 'enumerate_value_domain', message: String(error?.message || error).slice(0, 300) });
-      }
+    if (!shouldEnumerateTransientDomain(field)) continue;
+    try {
+      const values = await enumerateTransientDomain(page, field);
+      if (values.length) field.valueDomain = values;
+    } catch (error) {
+      errors.push({
+        fieldId: field.id,
+        stage: 'enumerate_value_domain',
+        message: String(error?.message || error).slice(0, 300)
+      });
     }
-    if (!values.length) continue;
-    valueDomains[field.id] = [...values];
-    field.valueDomain = [...values];
-    learnedRelationships.push({
-      kind: 'value_domain',
-      sourceFieldId: field.id,
-      values: [...values],
-      evidenceIds: []
-    });
   }
 
   const remainingVisibleOptions = await visibleOptionLabels(page).catch(() => []);
   if (remainingVisibleOptions.length) {
-    restored = false;
-    errors.push({ stage: 'restore_value_domain_overlay', message: 'Finite-choice option overlay remained visible after enumeration.' });
+    errors.push({
+      stage: 'restore_value_domain_overlay',
+      message: 'Finite-choice option overlay remained visible after enumeration.'
+    });
   }
 
   return {
-    entity: structuredClone(graph.entity),
+    snapshot,
     graph,
-    state,
-    initialStateId: id,
-    finalStateId: id,
-    observations: [],
-    learnedRelationships,
-    valueDomains,
-    probeBehavior: false,
-    outgoingCandidates: arr(graph.actions).map((actionField) => ({
-      fieldId: actionField.id,
-      label: actionField.label,
-      type: actionField.type,
-      href: actionField.href || '',
-      executableNow: !!(actionField.visible && !actionField.disabled),
-      safety: methodSafety(graph, actionField.id)
-    })),
-    restored,
+    restored: remainingVisibleOptions.length === 0,
     errors
   };
 }
