@@ -1,10 +1,9 @@
 import { buildEntityIdentity } from './entityIdentity.js';
-import { selectEntityRoot } from './entityRoot.js';
 import { discoverInputs } from '../preprocess/inputDiscovery.js';
 import { discoverGroups } from '../preprocess/groupDiscovery.js';
 
 export function preprocessEntity(snapshot = {}) {
-  const root = selectEntityRoot(snapshot.dom || {});
+  const root = snapshot.dom || {};
   const entity = buildEntityIdentity(snapshot, root);
   const controls = discoverInputs(root, entity.id);
   const groups = discoverGroups(controls, entity.id);
