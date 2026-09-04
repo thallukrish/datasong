@@ -28,10 +28,18 @@ export async function snapshotPage(page) {
   return page.evaluate(() => {
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
     const interactiveRoles = new Set(['button', 'radio', 'checkbox', 'textbox', 'combobox', 'spinbutton', 'listbox', 'link']);
-    const visible = (el) => {
+    const rendered = (el) => {
       const style = getComputedStyle(el);
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && style.visibility !== 'collapse'
+        && !el.hasAttribute('hidden')
+        && el.getAttribute?.('aria-hidden') !== 'true';
+    };
+    const visible = (el) => {
+      if (!rendered(el)) return false;
       const rect = el.getBoundingClientRect();
-      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      return rect.width > 0 && rect.height > 0;
     };
     const textWithoutControls = (el) => {
       if (!el) return '';
@@ -45,7 +53,6 @@ export async function snapshotPage(page) {
       if (closest && !associated.includes(closest)) associated.push(closest);
       const associatedText = clean(associated.map(textWithoutControls).filter(Boolean).join(' '));
       if (associatedText) return associatedText;
-
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
       const labelledBy = el.getAttribute?.('aria-labelledby');
@@ -53,14 +60,12 @@ export async function snapshotPage(page) {
         const text = clean(labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || '').join(' '));
         if (text) return text;
       }
-
       const tag = el.tagName?.toLowerCase();
       const role = clean(el.getAttribute?.('role') || '').toLowerCase();
       if (tag === 'button' || role === 'button' || tag === 'a' || role === 'link') {
         const controlText = clean(el.innerText || el.textContent);
         if (controlText) return controlText;
       }
-
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.getAttribute?.('name') || el.id || '');
     };
     const regionLabel = (el) => {
@@ -108,18 +113,17 @@ export async function snapshotPage(page) {
         || (tag === 'a' && !!el.getAttribute?.('href'))
         || interactiveRoles.has(role);
     };
-
     const semanticChildren = (el, depth = 0) => {
       if (depth > 24) return [];
       const output = [];
       for (const child of Array.from(el.children || [])) {
         if (isControl(child)) {
-          output.push(control(child));
+          if (rendered(child)) output.push(control(child));
           continue;
         }
         const nested = semanticChildren(child, depth + 1);
         const label = regionLabel(child);
-        if (label) output.push({ tag: child.tagName?.toLowerCase() || 'div', label, hidden: !visible(child), children: nested });
+        if (label && rendered(child)) output.push({ tag: child.tagName?.toLowerCase() || 'div', label, hidden: !visible(child), children: nested });
         else output.push(...nested);
       }
       return output;
@@ -142,8 +146,7 @@ export async function snapshotPage(page) {
       return (br.width * br.height) - (ar.width * ar.height);
     });
     const blockingOverlay = overlayCandidates[0] || null;
-
-    const normalRoot = document.querySelector('main,[role="main"]') || document.body;
+    const normalRoot = document.body;
     const root = blockingOverlay || normalRoot;
     const overlayText = blockingOverlay ? clean(blockingOverlay.innerText || blockingOverlay.textContent || '') : '';
     const overlayHeading = blockingOverlay?.querySelector?.('h1,h2,h3,h4,h5,h6,[role="heading"]');
@@ -155,7 +158,7 @@ export async function snapshotPage(page) {
 
     const values = {};
     for (const el of scope.querySelectorAll('input,select,textarea,[role="combobox"],[role="spinbutton"]')) {
-      if ((el.type || '').toLowerCase() === 'hidden') continue;
+      if ((el.type || '').toLowerCase() === 'hidden' || !rendered(el)) continue;
       const key = labelFor(el) || clean(el.name || el.id);
       if (!key) continue;
       if (el.type === 'radio') {
@@ -168,7 +171,7 @@ export async function snapshotPage(page) {
     const regions = {};
     for (const el of scope.querySelectorAll('section,fieldset,[role="region"],div')) {
       const label = regionLabel(el);
-      if (label) regions[label] = { visible: visible(el) };
+      if (label && rendered(el)) regions[label] = { visible: visible(el) };
     }
 
     const validations = [];
@@ -181,6 +184,7 @@ export async function snapshotPage(page) {
 
     const options = {};
     for (const el of scope.querySelectorAll('select,[role="combobox"]')) {
+      if (!rendered(el)) continue;
       const key = labelFor(el) || clean(el.name || el.id);
       if (!key) continue;
       let valuesForInput = optionsFor(el);
