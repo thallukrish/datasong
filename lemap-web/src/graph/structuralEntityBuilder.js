@@ -12,7 +12,7 @@ function controlStructural(field = {}) {
     name: field.name || '',
     rawType: field.rawType || '',
     href: field.href || '',
-    defaultValue: field.value ?? null,
+    defaultValue: field.defaultValue ?? null,
     value: field.value ?? null,
     values: [...arr(field.valueDomain)],
     visible: field.visible !== false,
@@ -20,6 +20,7 @@ function controlStructural(field = {}) {
     required: !!field.required,
     readonly: !!field.readonly,
     checked: typeof field.checked === 'boolean' ? field.checked : null,
+    defaultChecked: typeof field.defaultChecked === 'boolean' ? field.defaultChecked : null,
     placeholder: field.placeholder || '',
     attributes: structuredClone(field.attributes || {})
   };
@@ -63,13 +64,14 @@ export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
       .map((id) => controls.find((field) => field.id === id))
       .filter(Boolean);
     const selected = members.find((member) => member.checked === true);
+    const defaultSelected = members.find((member) => member.defaultChecked === true);
     upsertEntity(graph, {
       id: group.id,
       name: group.label || group.groupType || group.id,
       type: 'group',
       structural: {
         groupType: group.groupType || '',
-        defaultValue: selected ? (selected.label || selected.value || null) : null,
+        defaultValue: defaultSelected ? (defaultSelected.label || defaultSelected.value || null) : null,
         value: selected ? (selected.label || selected.value || null) : null,
         values: members.map((member) => member.label || member.value).filter(Boolean),
         visible: members.some((member) => member.visible !== false),
