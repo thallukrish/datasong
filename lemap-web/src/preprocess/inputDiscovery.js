@@ -58,8 +58,10 @@ export function discoverInputs(root = {}, entityId = '') {
           visible: !node.hidden,
           readonly: !!node.readonly,
           checked: typeof node.checked === 'boolean' ? node.checked : null,
+          defaultChecked: typeof node.defaultChecked === 'boolean' ? node.defaultChecked : null,
           placeholder: String(node.placeholder || ''),
           value: node.value ?? null,
+          defaultValue: node.defaultValue ?? null,
           valueDomain: Array.isArray(node.options) ? [...node.options] : [],
           attributes: {
             min: node.min ?? null,
