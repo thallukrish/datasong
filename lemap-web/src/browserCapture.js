@@ -27,7 +27,7 @@ export function summarizeNetworkEvent(event = {}) {
 export async function snapshotPage(page) {
   return page.evaluate(() => {
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
-    const interactiveRoles = new Set(['button', 'radio', 'checkbox', 'textbox', 'combobox', 'spinbutton', 'listbox']);
+    const interactiveRoles = new Set(['button', 'radio', 'checkbox', 'textbox', 'combobox', 'spinbutton', 'listbox', 'link']);
     const visible = (el) => {
       const style = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
@@ -36,7 +36,7 @@ export async function snapshotPage(page) {
     const textWithoutControls = (el) => {
       if (!el) return '';
       const clone = el.cloneNode(true);
-      clone.querySelectorAll?.('input,select,textarea,button,[role="button"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
+      clone.querySelectorAll?.('input,select,textarea,button,a,[role="button"],[role="link"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
       return clean(clone.textContent || '');
     };
     const labelFor = (el) => {
@@ -56,9 +56,9 @@ export async function snapshotPage(page) {
 
       const tag = el.tagName?.toLowerCase();
       const role = clean(el.getAttribute?.('role') || '').toLowerCase();
-      if (tag === 'button' || role === 'button') {
-        const buttonText = clean(el.innerText || el.textContent);
-        if (buttonText) return buttonText;
+      if (tag === 'button' || role === 'button' || tag === 'a' || role === 'link') {
+        const controlText = clean(el.innerText || el.textContent);
+        if (controlText) return controlText;
       }
 
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.getAttribute?.('name') || el.id || '');
@@ -83,6 +83,7 @@ export async function snapshotPage(page) {
         role: clean(el.getAttribute?.('role') || ''),
         domId: clean(el.id || ''),
         name: clean(el.name || el.id || ''),
+        href: clean(el.getAttribute?.('href') || ''),
         value: 'value' in el ? el.value : el.getAttribute?.('aria-valuenow') ?? null,
         checked: ['radio', 'checkbox'].includes(type) ? !!el.checked : null,
         label: labelFor(el),
@@ -103,7 +104,9 @@ export async function snapshotPage(page) {
     const isControl = (el) => {
       const tag = el.tagName?.toLowerCase();
       const role = clean(el.getAttribute?.('role') || '').toLowerCase();
-      return ['input', 'button', 'select', 'textarea'].includes(tag) || interactiveRoles.has(role);
+      return ['input', 'button', 'select', 'textarea'].includes(tag)
+        || (tag === 'a' && !!el.getAttribute?.('href'))
+        || interactiveRoles.has(role);
     };
 
     const semanticChildren = (el, depth = 0) => {
@@ -213,7 +216,7 @@ export async function installUserEventProbe(page) {
     const textWithoutControls = (el) => {
       if (!el) return '';
       const clone = el.cloneNode(true);
-      clone.querySelectorAll?.('input,select,textarea,button,[role="button"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
+      clone.querySelectorAll?.('input,select,textarea,button,a,[role="button"],[role="link"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
       return clean(clone.textContent || '');
     };
     const labelFor = (el) => {
@@ -227,9 +230,9 @@ export async function installUserEventProbe(page) {
       if (aria) return clean(aria);
       const tag = el.tagName?.toLowerCase();
       const role = clean(el.getAttribute?.('role') || '').toLowerCase();
-      if (tag === 'button' || role === 'button') {
-        const buttonText = clean(el.innerText || el.textContent);
-        if (buttonText) return buttonText;
+      if (tag === 'button' || role === 'button' || tag === 'a' || role === 'link') {
+        const controlText = clean(el.innerText || el.textContent);
+        if (controlText) return controlText;
       }
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.name || el.id || '');
     };
