@@ -11,6 +11,7 @@ function controlStructural(field = {}) {
     domId: field.domId || '',
     name: field.name || '',
     rawType: field.rawType || '',
+    href: field.href || '',
     defaultValue: field.value ?? null,
     value: field.value ?? null,
     values: [...arr(field.valueDomain)],
