@@ -111,16 +111,18 @@ export function buildQuestionFromInteraction({ graph = {}, interaction = {} } = 
     };
   }
   const field = fields[0];
+  const valueDomain = arr(field.valueDomain).map((value) => String(value));
+  const finiteChoice = ['select', 'autocomplete'].includes(String(field.type || '').toLowerCase()) && valueDomain.length > 0;
   return {
     questionId: `interaction:${interaction.semanticKey}`,
     answerKind: 'value',
     fieldId: field.id,
     label: interaction.question || interaction.explanation || field.label,
     information: interaction.explanation || '',
-    examples: arr(interaction.examples),
+    examples: finiteChoice ? [] : arr(interaction.examples),
     inputType: field.type,
-    cardinality: 'single_value',
-    options: arr(field.valueDomain).map((value) => ({ value: String(value), label: String(value) }))
+    cardinality: finiteChoice ? 'exactly_one' : 'single_value',
+    options: valueDomain.map((value) => ({ value, label: value }))
   };
 }
 
