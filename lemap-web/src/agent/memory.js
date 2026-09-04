@@ -1,4 +1,5 @@
 import { setControlScopeMemory } from './controlScope.js';
+import { mergeSemanticEntityPlans } from '../semantic/localEntityResolver.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 
@@ -68,13 +69,18 @@ export function recordEntityKnowledge(memory, { structuralEntity = {}, structura
     groups: arr(structuralGraph.groups).map((group) => ({ id: group.id, label: group.label, groupType: group.groupType, memberFieldIds: [...arr(group.memberFieldIds)] })),
     actions: arr(structuralGraph.actions).map((action) => ({ id: action.id, label: action.label, type: action.type }))
   };
+  const mergedSemantic = mergeSemanticEntityPlans(previous.semantic || {}, semanticEntity, structuralGraph);
+  if (semanticEntity && typeof semanticEntity === 'object') {
+    for (const key of Object.keys(semanticEntity)) delete semanticEntity[key];
+    Object.assign(semanticEntity, structuredClone(mergedSemantic));
+  }
   const entry = {
     ...previous,
     id,
     label: structuralEntity.label || previous.label || '',
     presentation: structuralEntity.presentation || previous.presentation || {},
     structure,
-    semantic: semanticEntity,
+    semantic: mergedSemantic,
     learnedRelationships: mergedRelationships,
     evidenceIds,
     lastObservedAt: new Date().toISOString()
