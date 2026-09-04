@@ -19,6 +19,7 @@ import { createSemanticMemory, recordEntityKnowledge, recordSelectedTransition, 
 import { loadInstanceMemory, recordInstanceFact, saveInstanceMemory } from './agent/instanceMemory.js';
 import { uncoveredUserInputFields } from './agent/interactionCoverage.js';
 import { classifyAndRecordExecutionBehavior } from './agent/executionBehavior.js';
+import { recordInteractionWorkflowTransition } from './agent/interactionTransition.js';
 import { workflowKeyFromGoal } from './agent/workflowIdentity.js';
 import {
   buildChangeSelectionQuestion,
@@ -44,6 +45,7 @@ const memoryFile = path.resolve(process.env.LEMAP_MEMORY_FILE || path.join('data
 const instanceFile = path.resolve(process.env.LEMAP_INSTANCE_FILE || path.join('data', 'instances', 'default.json'));
 const runLogDir = path.resolve(process.env.LEMAP_RUN_LOG_DIR || path.join('data', 'query-runs'));
 const GENERIC_VALUE_SCOPES = new Set(['application', 'actor', 'workflow', 'workflow_instance']);
+const BEHAVIOR_HYPOTHESIS_MODES = new Set(['same_effect_across_domain', 'value_specific', 'unknown']);
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 function unique(values) { return [...new Set(arr(values).map(String).filter(Boolean))]; }
@@ -104,7 +106,15 @@ function structuralSignatureFromMemory(entry = {}) {
   });
 }
 function semanticInteractionSchemaCompatible(entry = {}) {
-  return arr(entry.semantic?.interactions).every((interaction) => GENERIC_VALUE_SCOPES.has(interaction?.valueScope || 'workflow_instance'));
+  return arr(entry.semantic?.interactions).every((interaction) => {
+    const hypothesis = interaction?.behaviorHypothesis || {};
+    return GENERIC_VALUE_SCOPES.has(interaction?.valueScope || 'workflow_instance')
+      && typeof interaction?.requiredForGoal === 'boolean'
+      && Number.isFinite(Number(interaction?.goalRelevance))
+      && Number.isFinite(Number(interaction?.priority))
+      && Array.isArray(interaction?.dependsOnSemanticKeys)
+      && BEHAVIOR_HYPOTHESIS_MODES.has(hypothesis.mode || 'unknown');
+  });
 }
 function knownEntityIsCompatible(entry, graph) {
   return !!entry?.semantic?.semanticName
@@ -183,24 +193,26 @@ function hasExternalStructuralEffect(effect = {}) {
   ].some((value) => arr(value).length > 0);
 }
 async function learnFromExecution({
-  before, after, interaction, interpretation, labels = [], source = 'user', client, model, memory, workflowArc = {}
+  before, after, interaction, interpretation, source = 'user', client, model, memory, workflowArc = {}
 }) {
-  if (!interaction?.semanticKey) return { novel: false, semanticRefresh: false, semanticEntity: null, behavior: null };
+  if (!interaction?.semanticKey) return { novel: false, semanticRefresh: false, semanticEntity: null, behavior: null, contextChanged: false };
   const sourceFieldIds = unique([...arr(interaction.structuralFieldIds), ...arr(interpretation?.selectedFieldIds)]);
   const delta = computeEntityDelta(before.state, after.state);
   const behavior = classifyAndRecordExecutionBehavior(memory, {
     entityId: before.graph.entity.id,
     semanticKey: interaction.semanticKey,
     sourceFieldIds,
-    delta
+    delta,
+    behaviorHypothesis: interaction.behaviorHypothesis
   });
   await saveMemory(memory);
 
-  if (!behavior.novel || !hasExternalStructuralEffect(behavior.effect)) {
-    return { novel: behavior.novel, semanticRefresh: false, semanticEntity: null, behavior };
+  const contextChanged = !!behavior.effect.entityChanged || !!behavior.effect.routeChanged;
+  if (contextChanged) {
+    return { novel: behavior.novel, semanticRefresh: false, semanticEntity: null, behavior, contextChanged: true };
   }
-  if (after.graph.entity.id !== before.graph.entity.id) {
-    return { novel: true, semanticRefresh: false, semanticEntity: null, behavior, entityChanged: true };
+  if (!behavior.novel || !hasExternalStructuralEffect(behavior.effect)) {
+    return { novel: behavior.novel, semanticRefresh: false, semanticEntity: null, behavior, contextChanged: false };
   }
 
   const evidenceId = `execution:${before.graph.entity.id}:${interaction.semanticKey}:${behavior.classId}`;
@@ -219,6 +231,7 @@ async function learnFromExecution({
   const relationship = {
     kind: 'execution_effect',
     semanticKey: interaction.semanticKey,
+    triggerSemanticKey: interaction.semanticKey,
     behaviorClassId: behavior.classId,
     sourceFieldId: sourceFieldIds[0] || '',
     memberFieldIds: sourceFieldIds,
@@ -243,7 +256,29 @@ async function learnFromExecution({
     observations: [observation]
   });
   await saveMemory(memory);
-  return { novel: true, semanticRefresh: true, semanticEntity, behavior };
+  return { novel: true, semanticRefresh: true, semanticEntity, behavior, contextChanged: false };
+}
+async function persistInteractionContextTransition({ memory, session, runLogger, beforeExecution, afterExecution, interaction, behaviorResult, source }) {
+  if (!behaviorResult?.contextChanged || !interaction || !behaviorResult.behavior) return false;
+  const edge = recordInteractionWorkflowTransition(memory, {
+    session,
+    sourceEntityId: beforeExecution.graph.entity.id,
+    targetEntityId: afterExecution.graph.entity.id,
+    targetRoute: afterExecution.graph.entity.presentation?.route || '',
+    interaction,
+    behavior: behaviorResult.behavior
+  });
+  if (!edge) return false;
+  await saveMemory(memory);
+  await runLogger.write('interaction_transition', {
+    semanticKey: interaction.semanticKey,
+    behaviorClassId: behaviorResult.behavior.classId || '',
+    sourceEntityId: beforeExecution.graph.entity.id,
+    targetEntityId: afterExecution.graph.entity.id,
+    targetRoute: afterExecution.graph.entity.presentation?.route || '',
+    source
+  });
+  return true;
 }
 function modelConsoleLine(summary = {}) {
   const t = summary.tokens || {};
@@ -267,6 +302,18 @@ function semanticInteractionForQuestion(semanticEntity, question) {
 }
 function scopeKeyForFact(interaction, scopeKeys, workflowKey) {
   return scopeKeyForInteraction(interaction, scopeKeys, workflowKey);
+}
+function executionBehaviorLog(interaction = {}, behaviorResult = {}, source = '') {
+  return {
+    semanticKey: interaction.semanticKey || '',
+    classId: behaviorResult.behavior?.classId || '',
+    novel: !!behaviorResult.novel,
+    semanticRefresh: !!behaviorResult.semanticRefresh,
+    contextChanged: !!behaviorResult.contextChanged,
+    hypothesisStatus: behaviorResult.behavior?.hypothesisStatus || 'not_applicable',
+    hypothesisConfidence: Number(behaviorResult.behavior?.hypothesisConfidence || 0),
+    source
+  };
 }
 function printTokenSummary(summary = {}) {
   const purposes = Object.entries(summary.byPurpose || {});
@@ -355,7 +402,7 @@ try {
       captured = learned.captured;
       semanticEntity = learned.semanticEntity;
       valueDomains = learned.valueDomains;
-      console.log('[LeMap-Web] local learn: read-only structure + option evidence + interaction semantics');
+      console.log('[LeMap-Web] local learn: read-only structure + option evidence + semantic interaction plan');
       await runLogger.write('learn', {
         mode: 'read_only', entityId: captured.graph.entity.id,
         fields: arr(captured.graph.fields).length, groups: arr(captured.graph.groups).length,
@@ -374,7 +421,14 @@ try {
       entityId: captured.graph.entity.id,
       semanticName: semanticEntity.semanticName || '',
       subEntities: arr(semanticEntity.subEntities).map((entity) => entity.semanticName).filter(Boolean).slice(0, 10),
-      interactionKeys: arr(semanticEntity.interactions).map((item) => item.semanticKey).filter(Boolean).slice(0, 12),
+      interactions: arr(semanticEntity.interactions).slice(0, 16).map((item) => ({
+        semanticKey: item.semanticKey,
+        requiredForGoal: item.requiredForGoal !== false,
+        goalRelevance: Number(item.goalRelevance || 0),
+        priority: Number(item.priority || 100),
+        dependsOnSemanticKeys: arr(item.dependsOnSemanticKeys),
+        behaviorMode: item.behaviorHypothesis?.mode || 'unknown'
+      })),
       description: String(semanticEntity.description || '').slice(0, 400)
     });
 
@@ -383,6 +437,7 @@ try {
     const reusedSemanticKeys = new Set();
     const confirmationItems = new Map();
     let forceStop = false;
+    let interactionContextChanged = false;
     let interactionGapRefreshCount = 0;
     let pendingExecutionReconcile = false;
     let completed;
@@ -437,7 +492,6 @@ try {
             after: afterExecution,
             interaction: remembered,
             interpretation: rememberedInterpretation,
-            labels: [remembered.displayValue].filter(Boolean),
             source: 'remembered',
             client, model, memory,
             workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
@@ -446,18 +500,18 @@ try {
             semanticEntity = behaviorResult.semanticEntity;
             valueDomains = { ...valueDomains, ...valueDomainsFromMemory(memory.entities[entityId]) };
           }
-          await runLogger.write('execution_behavior', {
-            semanticKey: remembered.semanticKey,
-            classId: behaviorResult.behavior?.classId || '',
-            novel: !!behaviorResult.novel,
-            semanticRefresh: !!behaviorResult.semanticRefresh,
-            source: 'remembered'
-          });
+          await runLogger.write('execution_behavior', executionBehaviorLog(remembered, behaviorResult, 'remembered'));
           reusedSemanticKeys.add(remembered.semanticKey);
           confirmationItems.set(remembered.semanticKey, { ...remembered, status: 'remembered' });
           console.log(`[LeMap-Web] reused remembered value for ${remembered.semanticName || remembered.semanticKey}`);
           await runLogger.write('instance_reuse', { semanticKey: remembered.semanticKey, scope: remembered.valueScope || '', source: 'remembered' });
           interactionGapRefreshCount = 0;
+
+          if (await persistInteractionContextTransition({ memory, session, runLogger, beforeExecution, afterExecution, interaction: remembered, behaviorResult, source: 'remembered' })) {
+            interactionContextChanged = true;
+            completed = afterExecution;
+            break;
+          }
           pendingExecutionReconcile = true;
           continue;
         }
@@ -479,6 +533,7 @@ try {
       await runLogger.write('planner', {
         decision: informationPlan.decision,
         confidence: informationPlan.confidence,
+        goalComplete: !!informationPlan.goalComplete,
         questionIds: arr(informationPlan.questionIds),
         candidateQuestionCount: candidateQuestions.length,
         navigationCandidateCount: candidates.length,
@@ -527,25 +582,17 @@ try {
             await applyQuestionAnswer(page, current.graph, editQuestion, editInterpretation);
             if (settleMs) await page.waitForTimeout(settleMs);
             const afterExecution = await capture(page);
-            const editLabels = selectedLabels(editQuestion, editInterpretation);
             const behaviorResult = await learnFromExecution({
               before: beforeExecution,
               after: afterExecution,
               interaction,
               interpretation: editInterpretation,
-              labels: editLabels,
               source: 'user',
               client, model, memory,
               workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
             });
             if (behaviorResult.semanticRefresh && behaviorResult.semanticEntity) semanticEntity = behaviorResult.semanticEntity;
-            await runLogger.write('execution_behavior', {
-              semanticKey,
-              classId: behaviorResult.behavior?.classId || '',
-              novel: !!behaviorResult.novel,
-              semanticRefresh: !!behaviorResult.semanticRefresh,
-              source: 'user'
-            });
+            await runLogger.write('execution_behavior', executionBehaviorLog(interaction, behaviorResult, 'user'));
             providedSemanticKeys.add(semanticKey);
             confirmationItems.delete(semanticKey);
             const fact = buildInstanceFact({ interaction, question: editQuestion, interpretation: editInterpretation, workflowKey, scopeKeys, source: 'user' });
@@ -555,6 +602,12 @@ try {
             }
             await runLogger.write('instance_write', { semanticKey, source: 'user', scope: fact.scope, value: 'stored' });
             interactionGapRefreshCount = 0;
+
+            if (await persistInteractionContextTransition({ memory, session, runLogger, beforeExecution, afterExecution, interaction, behaviorResult, source: 'user' })) {
+              interactionContextChanged = true;
+              completed = afterExecution;
+              break;
+            }
             pendingExecutionReconcile = true;
             continue;
           }
@@ -576,41 +629,42 @@ try {
                   after: afterExecution,
                   interaction,
                   interpretation,
-                  labels: [item.displayValue].filter(Boolean),
                   source: 'confirmed_prefill',
                   client, model, memory,
                   workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
                 });
                 if (behaviorResult.semanticRefresh && behaviorResult.semanticEntity) semanticEntity = behaviorResult.semanticEntity;
-                await runLogger.write('execution_behavior', {
-                  semanticKey: interaction.semanticKey,
-                  classId: behaviorResult.behavior?.classId || '',
-                  novel: !!behaviorResult.novel,
-                  semanticRefresh: !!behaviorResult.semanticRefresh,
-                  source: 'confirmed_prefill'
-                });
+                await runLogger.write('execution_behavior', executionBehaviorLog(interaction, behaviorResult, 'confirmed_prefill'));
                 providedSemanticKeys.add(interaction.semanticKey);
                 executedConfirmedPrefill = true;
+
+                if (await persistInteractionContextTransition({ memory, session, runLogger, beforeExecution: executionCapture, afterExecution, interaction, behaviorResult, source: 'confirmed_prefill' })) {
+                  interactionContextChanged = true;
+                  completed = afterExecution;
+                }
               }
             }
 
             const scopeKey = scopeKeyForFact(interaction, scopeKeys, workflowKey);
-            if (!scopeKey) continue;
-            recordInstanceFact(instanceMemory, {
-              semanticKey: interaction.semanticKey,
-              value: item.currentValue || item.rememberedFact?.value || item.displayValue,
-              optionLabel: item.displayValue,
-              source: item.status === 'remembered' ? 'remembered' : 'prefill',
-              scope: interaction.valueScope || 'workflow_instance',
-              workflowKey,
-              scopeKey,
-              confirmed: true
-            });
+            if (scopeKey) {
+              recordInstanceFact(instanceMemory, {
+                semanticKey: interaction.semanticKey,
+                value: item.currentValue || item.rememberedFact?.value || item.displayValue,
+                optionLabel: item.displayValue,
+                source: item.status === 'remembered' ? 'remembered' : 'prefill',
+                scope: interaction.valueScope || 'workflow_instance',
+                workflowKey,
+                scopeKey,
+                confirmed: true
+              });
+            }
+            if (interactionContextChanged) break;
           }
           await saveInstanceMemory(instanceFile, instanceMemory);
           await runLogger.write('confirmation', { accepted: true, count: summary.items.length, semanticKeys: summary.items.map((item) => item.semanticKey), executedPrefill: executedConfirmedPrefill });
           confirmationItems.clear();
 
+          if (interactionContextChanged) break;
           if (executedConfirmedPrefill) {
             pendingExecutionReconcile = true;
             interactionGapRefreshCount = 0;
@@ -622,15 +676,13 @@ try {
       }
 
       if (informationPlan.decision === 'stop') {
-        console.log('[LeMap-Web] Planner cannot safely advance from current evidence. Stopping with learned memory persisted.');
-        await runLogger.write('stop', { reason: 'planner_stop' });
-        forceStop = true;
-        break;
-      }
-
-      if (informationPlan.decision === 'explore_more') {
-        console.log('[LeMap-Web] Planner requested speculative exploration, but execution-trace mode does not mutate unchosen paths. Stopping with learned memory persisted.');
-        await runLogger.write('stop', { reason: 'speculative_exploration_disabled' });
+        if (informationPlan.goalComplete) {
+          console.log('[LeMap-Web] original user goal is complete according to current structural and semantic evidence.');
+          await runLogger.write('stop', { reason: 'goal_complete', goalComplete: true, confidence: informationPlan.confidence });
+        } else {
+          console.log('[LeMap-Web] Planner cannot safely advance from current evidence. Stopping with learned memory persisted.');
+          await runLogger.write('stop', { reason: 'planner_stop', goalComplete: false, confidence: informationPlan.confidence });
+        }
         forceStop = true;
         break;
       }
@@ -669,14 +721,13 @@ try {
       answeredQuestionIds.add(question.questionId);
       const labels = selectedLabels(question, interpretation);
 
-      let behaviorResult = { novel: false, semanticRefresh: false, behavior: null, semanticEntity: null };
+      let behaviorResult = { novel: false, semanticRefresh: false, behavior: null, semanticEntity: null, contextChanged: false };
       if (interaction) {
         behaviorResult = await learnFromExecution({
           before: beforeExecution,
           after: afterExecution,
           interaction,
           interpretation,
-          labels,
           source: 'user',
           client, model, memory,
           workflowArc: semanticLearningContext(userGoal, semanticPath, userAnswers)
@@ -686,13 +737,7 @@ try {
           valueDomains = { ...valueDomains, ...valueDomainsFromMemory(memory.entities[entityId]) };
           console.log(`[LeMap-Web] new structural behavior learned for ${interaction.semanticName || interaction.semanticKey}`);
         }
-        await runLogger.write('execution_behavior', {
-          semanticKey: interaction.semanticKey,
-          classId: behaviorResult.behavior?.classId || '',
-          novel: !!behaviorResult.novel,
-          semanticRefresh: !!behaviorResult.semanticRefresh,
-          source: 'user'
-        });
+        await runLogger.write('execution_behavior', executionBehaviorLog(interaction, behaviorResult, 'user'));
 
         providedSemanticKeys.add(interaction.semanticKey);
         confirmationItems.delete(interaction.semanticKey);
@@ -723,17 +768,25 @@ try {
       await runLogger.write('user_answer', { ...interactionLog, mode: interpretation.local ? 'local' : 'model' });
 
       interactionGapRefreshCount = 0;
-      pendingExecutionReconcile = true;
       await runLogger.write('instance_state_change', {
         semanticKey: interaction?.semanticKey || '',
         source: 'user',
         behaviorClassId: behaviorResult.behavior?.classId || '',
         behaviorNovel: !!behaviorResult.novel,
-        semanticRefresh: !!behaviorResult.semanticRefresh
+        semanticRefresh: !!behaviorResult.semanticRefresh,
+        contextChanged: !!behaviorResult.contextChanged
       });
+
+      if (interaction && await persistInteractionContextTransition({ memory, session, runLogger, beforeExecution, afterExecution, interaction, behaviorResult, source: 'user' })) {
+        interactionContextChanged = true;
+        completed = afterExecution;
+        break;
+      }
+      pendingExecutionReconcile = true;
     }
 
     if (forceStop) break;
+    if (interactionContextChanged) continue;
     if (!completed) completed = await capture(page);
     applyValueDomains(completed.graph, valueDomains);
     if (!candidates.length) candidates = await collectNavigationCandidates(page, completed.graph);
