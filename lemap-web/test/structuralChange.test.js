@@ -4,17 +4,17 @@ import { createEntityGraph, findEntity } from '../src/graph/entityGraph.js';
 import { applyObservedStructuralChange } from '../src/graph/structuralChange.js';
 
 const page = { id: 'page:1', name: 'Setup', type: 'page', structural: { route: '/setup' }, semantic: {}, links: [] };
-const trigger = { id: 'field:choice', name: 'Choice', type: 'ui_control', structural: { controlType: 'select', value: '', values: ['A', 'B'], visible: true, disabled: false }, semantic: { meaning: 'choice' }, links: [{ id: 'page:1', relationship: 'childOf' }] };
-const buttonDisabled = { id: 'button:next', name: 'Next', type: 'ui_control', structural: { controlType: 'button', visible: true, disabled: true }, semantic: { workflowRole: 'continue' }, links: [{ id: 'page:1', relationship: 'childOf' }] };
+const trigger = { id: 'field:choice', name: 'Choice', type: 'ui_control', structural: { controlType: 'select', defaultValue: '', value: '', values: ['A', 'B'], visible: true, disabled: false }, semantic: { meaning: 'choice' }, links: [{ id: 'page:1', relationship: 'childOf' }] };
+const buttonDisabled = { id: 'button:next', name: 'Next', type: 'ui_control', structural: { controlType: 'button', defaultValue: null, value: null, visible: true, disabled: true }, semantic: { workflowRole: 'continue' }, links: [{ id: 'page:1', relationship: 'childOf' }] };
 
 test('newly appearing entity is added and linked causally to the triggering field', () => {
   const graph = createEntityGraph([page, trigger, buttonDisabled]);
   const before = createEntityGraph([page, trigger, buttonDisabled]);
   const after = createEntityGraph([
     page,
-    { ...trigger, structural: { ...trigger.structural, value: 'A' } },
+    { ...trigger, structural: { ...trigger.structural, defaultValue: 'A', value: 'A' } },
     buttonDisabled,
-    { id: 'field:detail', name: 'Detail', type: 'ui_control', structural: { controlType: 'text', visible: true, disabled: false, value: '' }, semantic: {}, links: [{ id: 'page:1', relationship: 'childOf' }] }
+    { id: 'field:detail', name: 'Detail', type: 'ui_control', structural: { controlType: 'text', defaultValue: '', value: '', visible: true, disabled: false }, semantic: {}, links: [{ id: 'page:1', relationship: 'childOf' }] }
   ]);
 
   const result = applyObservedStructuralChange(graph, { beforeEntities: before, afterEntities: after, triggerEntityId: 'field:choice', ignoredEntityIds: ['field:choice'] });
@@ -25,13 +25,13 @@ test('newly appearing entity is added and linked causally to the triggering fiel
   assert.ok(findEntity(graph, 'field:choice').links.some((link) => link.id === 'field:detail' && link.relationship === 'causesAppearanceOf'));
 });
 
-test('changed existing entity becomes a version node while original state is preserved', () => {
+test('changed existing entity becomes a version node while original state and defaults are preserved', () => {
   const graph = createEntityGraph([page, trigger, buttonDisabled]);
   const before = createEntityGraph([page, trigger, buttonDisabled]);
   const after = createEntityGraph([
     page,
-    { ...trigger, structural: { ...trigger.structural, value: 'A' } },
-    { ...buttonDisabled, structural: { ...buttonDisabled.structural, disabled: false } }
+    { ...trigger, structural: { ...trigger.structural, defaultValue: 'A', value: 'A' } },
+    { ...buttonDisabled, structural: { ...buttonDisabled.structural, defaultValue: 'framework-current-value', disabled: false } }
   ]);
 
   const result = applyObservedStructuralChange(graph, { beforeEntities: before, afterEntities: after, triggerEntityId: 'field:choice', ignoredEntityIds: ['field:choice'] });
@@ -40,18 +40,19 @@ test('changed existing entity becomes a version node while original state is pre
 
   const version = findEntity(graph, result.versionEntityIds[0]);
   assert.equal(version.structural.disabled, false);
+  assert.equal(version.structural.defaultValue, null);
   assert.ok(version.links.some((link) => link.id === 'button:next' && link.relationship === 'copyOf'));
   assert.ok(version.links.some((link) => link.id === 'field:choice' && link.relationship === 'onModificationOf'));
   assert.ok(findEntity(graph, 'button:next').links.some((link) => link.id === version.id && link.relationship === 'hasCopy'));
 });
 
 test('a control that disappears is preserved as a hidden state version', () => {
-  const detail = { id: 'field:detail', name: 'Detail', type: 'ui_control', structural: { controlType: 'text', visible: true, disabled: false, value: '' }, semantic: { meaning: 'detail' }, links: [{ id: 'page:1', relationship: 'childOf' }] };
+  const detail = { id: 'field:detail', name: 'Detail', type: 'ui_control', structural: { controlType: 'text', defaultValue: '', value: '', visible: true, disabled: false }, semantic: { meaning: 'detail' }, links: [{ id: 'page:1', relationship: 'childOf' }] };
   const graph = createEntityGraph([page, trigger, detail]);
   const before = createEntityGraph([page, trigger, detail]);
   const after = createEntityGraph([
     page,
-    { ...trigger, structural: { ...trigger.structural, value: 'B' } }
+    { ...trigger, structural: { ...trigger.structural, defaultValue: 'B', value: 'B' } }
   ]);
 
   const result = applyObservedStructuralChange(graph, { beforeEntities: before, afterEntities: after, triggerEntityId: 'field:choice', ignoredEntityIds: ['field:choice'] });
@@ -59,6 +60,7 @@ test('a control that disappears is preserved as a hidden state version', () => {
   const hidden = findEntity(graph, result.versionEntityIds[0]);
   assert.equal(hidden.structural.visible, false);
   assert.equal(hidden.structural.present, false);
+  assert.equal(hidden.structural.defaultValue, '');
   assert.ok(hidden.links.some((link) => link.id === 'field:detail' && link.relationship === 'copyOf'));
   assert.ok(hidden.links.some((link) => link.id === 'field:choice' && link.relationship === 'onModificationOf'));
 });
