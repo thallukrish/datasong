@@ -1,7 +1,6 @@
 import { instanceForEntity } from '../graph/instanceGraph.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
-function normalize(value) { return String(value ?? '').trim().toLowerCase(); }
 function visibleAndEnabled(entity = {}) {
   const structural = entity.structural || {};
   return structural.visible !== false && structural.disabled !== true;
@@ -22,34 +21,15 @@ function shadowedBySemanticGroup(entity, byId) {
     .some((group) => group?.type === 'group' && semanticInput(group));
 }
 
-function currentValueMatches(entity = {}, value = null) {
-  const structural = entity.structural || {};
-  if (entity.type === 'group') return normalize(structural.value) === normalize(value);
-  if (structural.controlType === 'checkbox') return !!structural.checked === !!value;
-  if (structural.controlType === 'radio') return structural.checked === true;
-  if (structural.value === null || structural.value === undefined || structural.value === '') return false;
-  return normalize(structural.value) === normalize(value);
-}
-
-function candidateInputs(entities = []) {
+export function selectNextUserInput(entities = [], instances = []) {
   const all = arr(entities);
   const byId = new Map(all.map((entity) => [entity.id, entity]));
-  return all.filter((entity) => semanticInput(entity)
-    && !shadowedBySemanticGroup(entity, byId)
-    && visibleAndEnabled(entity));
-}
-
-export function selectNextUserInput(entities = [], instances = []) {
-  return candidateInputs(entities).find((entity) => !instanceForEntity(instances, entity.id)) || null;
-}
-
-export function selectReusableUserInput(entities = [], instances = []) {
-  for (const entity of candidateInputs(entities)) {
-    const instance = instanceForEntity(instances, entity.id);
-    if (!instance || currentValueMatches(entity, instance.value)) continue;
-    return { entity, instance };
-  }
-  return null;
+  return all.find((entity) => {
+    if (!semanticInput(entity)) return false;
+    if (shadowedBySemanticGroup(entity, byId)) return false;
+    if (!visibleAndEnabled(entity)) return false;
+    return !instanceForEntity(instances, entity.id);
+  }) || null;
 }
 
 export function buildEntityQuestion(entity = {}, entities = []) {
@@ -103,6 +83,7 @@ export function selectWorkflowContinuation(entities = []) {
     return visibleAndEnabled(entity)
       && semantic.relevantToGoal === true
       && semantic.workflowRole === 'continue'
+      && semantic.consequence === 'reversible'
       && ['navigation', 'action'].includes(semantic.interaction);
   }) || null;
 }
