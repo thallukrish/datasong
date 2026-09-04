@@ -6,15 +6,16 @@ import {
   resolveEntitySemantics
 } from '../src/semantic/entitySemanticResolver.js';
 
-const entities = [
-  { id: 'workflow:1', name: 'Complete setup', type: 'workflow', structural: { goal: 'Complete setup' }, semantic: {}, links: [{ id: 'page:1', relationship: 'contains' }] },
+const workflow = { id: 'workflow:1', name: 'Complete setup', type: 'workflow', structural: { goal: 'Complete setup' }, semantic: {}, links: [{ id: 'page:1', relationship: 'contains' }] };
+const pageEntities = [
   { id: 'page:1', name: 'Setup', type: 'page', structural: { route: '/setup' }, semantic: {}, links: [{ id: 'workflow:1', relationship: 'partOfWorkflow' }, { id: 'field:year', relationship: 'contains' }] },
   { id: 'field:year', name: 'Assessment Year', type: 'ui_control', structural: { controlType: 'select', values: ['2026-27', '2025-26'], disabled: false }, semantic: {}, links: [{ id: 'page:1', relationship: 'childOf' }] },
   { id: 'button:continue', name: 'Continue', type: 'ui_control', structural: { controlType: 'button', disabled: true }, semantic: {}, links: [{ id: 'page:1', relationship: 'childOf' }] }
 ];
+const entities = [workflow, ...pageEntities];
 
 test('semantic resolver prompt sends workflow, page and controls as ordinary entities', () => {
-  const prompt = buildEntitySemanticPrompt({ userGoal: 'Complete setup', entities, pageId: 'page:1' });
+  const prompt = buildEntitySemanticPrompt({ userGoal: 'Complete setup', entities: pageEntities, pageId: 'page:1', knownWorkflow: workflow });
   assert.match(prompt, /web-entity-semantics-v1/);
   assert.match(prompt, /workflow:1/);
   assert.match(prompt, /field:year/);
@@ -33,20 +34,27 @@ test('semantic response accepts workflow completion as a normal semantic patch',
   }, entities);
 
   assert.equal(result.entities.length, 3);
-  const workflow = result.entities.find((item) => item.id === 'workflow:1');
-  assert.equal(workflow.semantic.complete, false);
-  assert.equal(workflow.semantic.description, 'Move through setup.');
+  const workflowPatch = result.entities.find((item) => item.id === 'workflow:1');
+  assert.equal(workflowPatch.semantic.complete, false);
+  assert.equal(workflowPatch.semantic.description, 'Move through setup.');
   assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.consequence, 'reversible');
 });
 
-test('semantic resolver executes through injected model client', async () => {
-  const client = { chat: { completions: { create: async () => ({
-    choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ entities: [{ id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'continue', consequence: 'reversible', relevantToGoal: true } }] }) } }],
-    usage: { total_tokens: 10 }
-  }) } } };
+test('semantic resolver injects known workflow into the same model entity set', async () => {
+  let sentPrompt = '';
+  const client = { chat: { completions: { create: async ({ messages }) => {
+    sentPrompt = messages[1].content;
+    return {
+      choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ entities: [
+        { id: 'workflow:1', semantic: { description: 'Move through setup.', complete: false, relevantToGoal: true } },
+        { id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'continue', consequence: 'reversible', relevantToGoal: true } }
+      ] }) } }],
+      usage: { total_tokens: 10 }
+    };
+  } } } };
 
-  const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities, pageId: 'page:1' });
-  assert.equal(result.entities[0].id, 'button:continue');
-  assert.equal(result.entities[0].semantic.workflowRole, 'continue');
-  assert.equal(result.entities[0].semantic.consequence, 'reversible');
+  const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities: pageEntities, pageId: 'page:1', knownWorkflow: workflow });
+  assert.match(sentPrompt, /workflow:1/);
+  assert.equal(result.entities.find((item) => item.id === 'workflow:1').semantic.complete, false);
+  assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.consequence, 'reversible');
 });
