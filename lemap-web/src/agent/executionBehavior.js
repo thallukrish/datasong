@@ -15,6 +15,22 @@ function storedHypothesis(entity = {}, semanticKey = '') {
   return arr(entity?.semantic?.interactions).find((interaction) => interaction?.semanticKey === semanticKey)?.behaviorHypothesis || null;
 }
 
+function recordExecutionTransition(entity = {}, { semanticKey = '', behaviorClassId = '', sourceFieldIds = [], effect = {} } = {}) {
+  if (!effect.entityChanged && !effect.routeChanged) return null;
+  const transition = {
+    semanticKey,
+    behaviorClassId,
+    sourceFieldIds: [...new Set(arr(sourceFieldIds).map(String).filter(Boolean))],
+    targetEntityId: effect.toEntityId || '',
+    targetRoute: effect.toRoute || ''
+  };
+  entity.executionTransitions ||= [];
+  const key = JSON.stringify(transition);
+  const exists = entity.executionTransitions.some((item) => JSON.stringify(item) === key);
+  if (!exists) entity.executionTransitions.push(transition);
+  return transition;
+}
+
 export function classifyAndRecordExecutionBehavior(memory, {
   entityId = '', semanticKey = '', sourceFieldIds = [], delta = {}, behaviorHypothesis = null
 } = {}) {
@@ -46,6 +62,12 @@ export function classifyAndRecordExecutionBehavior(memory, {
 
   behaviorClass.observations += 1;
   behaviorClass.lastObservedAt = new Date().toISOString();
+  const executionTransition = recordExecutionTransition(entity, {
+    semanticKey,
+    behaviorClassId: behaviorClass.id,
+    sourceFieldIds,
+    effect
+  });
   touch(memory);
 
   return {
@@ -53,6 +75,7 @@ export function classifyAndRecordExecutionBehavior(memory, {
     classId: behaviorClass.id,
     effect,
     behaviorClass,
+    executionTransition,
     hypothesisStatus: hypothesisStatus(hypothesis, classes, novel),
     hypothesisConfidence: Number(hypothesis?.confidence || 0)
   };
