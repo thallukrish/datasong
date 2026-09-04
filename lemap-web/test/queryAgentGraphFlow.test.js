@@ -5,15 +5,16 @@ import {
   ignoredSourceEntityIds,
   resolveEntityAnswer,
   selectNextUserInput,
+  selectReusableUserInput,
   selectWorkflowContinuation
 } from '../src/agent/entityFlow.js';
 import { createInstanceGraph, upsertInstanceValue } from '../src/graph/instanceGraph.js';
 
 const page = { id: 'page:1', name: 'Setup', type: 'page', structural: {}, semantic: {}, links: [] };
-const year = { id: 'field:year', name: 'Assessment Year', type: 'ui_control', structural: { controlType: 'select', values: ['2026-27', '2025-26'], visible: true, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which year?' }, links: [] };
-const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online', visible: true, disabled: true }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
-const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline', visible: true, disabled: true }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
-const mode = { id: 'group:mode', name: 'Filing Mode', type: 'group', structural: { groupType: 'radio', values: ['Online', 'Offline'], visible: true, disabled: true }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'How do you want to file?' }, links: [{ id: 'field:online', relationship: 'contains' }, { id: 'field:offline', relationship: 'contains' }] };
+const year = { id: 'field:year', name: 'Assessment Year', type: 'ui_control', structural: { controlType: 'select', values: ['2026-27', '2025-26'], value: '', visible: true, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which year?' }, links: [] };
+const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online', visible: true, disabled: true, checked: false }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
+const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline', visible: true, disabled: true, checked: false }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
+const mode = { id: 'group:mode', name: 'Filing Mode', type: 'group', structural: { groupType: 'radio', values: ['Online', 'Offline'], value: null, visible: true, disabled: true }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'How do you want to file?' }, links: [{ id: 'field:online', relationship: 'contains' }, { id: 'field:offline', relationship: 'contains' }] };
 const next = { id: 'button:next', name: 'Continue', type: 'ui_control', structural: { controlType: 'button', visible: true, disabled: false }, semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue' }, links: [] };
 
 test('next input is a relevant required enabled entity with no instance', () => {
@@ -33,6 +34,20 @@ test('semantic group shadows member controls even if model marks members as user
   const enabledOnline = { ...online, structural: { ...online.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
   const enabledOffline = { ...offline, structural: { ...offline.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
   assert.equal(selectNextUserInput([page, year, enabledOnline, enabledOffline, enabledMode, next], instances)?.id, 'group:mode');
+});
+
+test('stored instance reuse also prefers the group over member controls', () => {
+  const instances = createInstanceGraph([
+    { id: 'instance:year', type: 'instance', value: '2026-27', links: [{ id: 'field:year', relationship: 'instanceOf' }] },
+    { id: 'instance:mode', type: 'instance', value: 'Online', links: [{ id: 'group:mode', relationship: 'instanceOf' }] },
+    { id: 'instance:online', type: 'instance', value: true, links: [{ id: 'field:online', relationship: 'instanceOf' }] }
+  ]);
+  const enabledMode = { ...mode, structural: { ...mode.structural, disabled: false } };
+  const enabledOnline = { ...online, structural: { ...online.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
+  const enabledOffline = { ...offline, structural: { ...offline.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
+  const reusable = selectReusableUserInput([page, year, enabledOnline, enabledOffline, enabledMode, next], instances);
+  assert.equal(reusable?.entity.id, 'group:mode');
+  assert.equal(reusable?.instance.value, 'Online');
 });
 
 test('finite questions expose structural options and resolve number locally', () => {
