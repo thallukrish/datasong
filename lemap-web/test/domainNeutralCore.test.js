@@ -5,12 +5,15 @@ import path from 'node:path';
 
 const coreFiles = [
   'src/queryAgent.js',
-  'src/agent/workflowIdentity.js',
-  'src/agent/instanceMemory.js',
-  'src/agent/userInteraction.js',
-  'src/agent/browserActions.js',
-  'src/semantic/localEntityResolver.js',
-  'src/semantic/navigationScout.js'
+  'src/browserCapture.js',
+  'src/graph/entityGraph.js',
+  'src/graph/instanceGraph.js',
+  'src/graph/graphStore.js',
+  'src/graph/structuralEntityBuilder.js',
+  'src/graph/structuralChange.js',
+  'src/agent/entityFlow.js',
+  'src/agent/entityBrowserActions.js',
+  'src/semantic/entitySemanticResolver.js'
 ];
 
 const forbiddenDomainTerms = [
