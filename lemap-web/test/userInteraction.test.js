@@ -15,14 +15,14 @@ const graph = {
 
 const semanticEntity = {
   interactions: [
-    { semanticKey: 'region', structuralFieldIds: ['field:region'], explanation: 'The active region.', question: 'Which region?', valueScope: 'actor', reusePolicy: 'same_scope' },
-    { semanticKey: 'delivery-mode', structuralFieldIds: ['field:mode-standard', 'field:mode-express'], explanation: 'How the item will be delivered.', question: 'Standard or express?', valueScope: 'workflow', reusePolicy: 'same_scope' },
-    { semanticKey: 'note', structuralFieldIds: ['field:note'], explanation: 'Optional note.', question: 'Add a note?', valueScope: 'workflow_instance', reusePolicy: 'never' }
+    { semanticKey: 'region', structuralFieldIds: ['field:region'], explanation: 'The active region.', question: 'Which region?', valueScope: 'actor', reusePolicy: 'same_scope', requiredForGoal: true, goalRelevance: 0.95, priority: 1 },
+    { semanticKey: 'delivery-mode', structuralFieldIds: ['field:mode-standard', 'field:mode-express'], explanation: 'How the item will be delivered.', question: 'Standard or express?', valueScope: 'workflow', reusePolicy: 'same_scope', requiredForGoal: true, goalRelevance: 0.8, priority: 2, dependsOnSemanticKeys: ['region'] },
+    { semanticKey: 'note', structuralFieldIds: ['field:note'], explanation: 'Optional note.', question: 'Add a note?', valueScope: 'workflow_instance', reusePolicy: 'never', requiredForGoal: false, goalRelevance: 0.1, priority: 99 }
   ],
   completionInteraction: { confirmationIntro: 'Before I continue, these details are already set:', confirmationQuestion: 'Are these correct, or tell me what to change?' }
 };
 
-test('interaction layer distinguishes prefilled remembered and missing without changing semantic graph', () => {
+test('interaction layer distinguishes prefilled remembered and optional without changing semantic graph', () => {
   const state = { fields: {
     'field:region': { enabled: true, visible: true, value: 'West' },
     'field:mode-standard': { enabled: true, visible: true, checked: false, value: null },
@@ -35,12 +35,41 @@ test('interaction layer distinguishes prefilled remembered and missing without c
   const items = classifyInteractionItems({ graph, state, semanticEntity, instanceMemory: instance, workflowKey: 'create-shipment', scopeKeys: { actor: 'actor-1', workflow: 'create-shipment', workflow_instance: 'run-1' } });
   assert.equal(items.find((item) => item.semanticKey === 'region').status, 'prefilled');
   assert.equal(items.find((item) => item.semanticKey === 'delivery-mode').status, 'remembered');
-  assert.equal(items.find((item) => item.semanticKey === 'note').status, 'missing');
+  assert.equal(items.find((item) => item.semanticKey === 'note').status, 'optional');
+});
+
+test('semantic dependencies block later user questions until prerequisite has state', () => {
+  const state = { fields: {
+    'field:region': { enabled: true, visible: true, value: '' },
+    'field:mode-standard': { enabled: true, visible: true, checked: false, value: null },
+    'field:mode-express': { enabled: true, visible: true, checked: false, value: null },
+    'field:note': { enabled: true, visible: true, value: '' }
+  }};
+  const items = classifyInteractionItems({ graph, state, semanticEntity, instanceMemory: createInstanceMemory(), workflowKey: 'create-shipment', scopeKeys: { actor: 'actor-1', workflow: 'create-shipment', workflow_instance: 'run-1' } });
+  assert.equal(items.find((item) => item.semanticKey === 'region').status, 'missing');
+  assert.equal(items.find((item) => item.semanticKey === 'delivery-mode').status, 'blocked');
+  assert.equal(items[0].semanticKey, 'region');
+});
+
+test('model priority and goal relevance determine interaction ordering, not structural field order', () => {
+  const reordered = {
+    interactions: [
+      { semanticKey: 'delivery-mode', structuralFieldIds: ['field:mode-standard', 'field:mode-express'], question: 'Mode?', requiredForGoal: true, goalRelevance: 0.8, priority: 20 },
+      { semanticKey: 'region', structuralFieldIds: ['field:region'], question: 'Region?', requiredForGoal: true, goalRelevance: 0.95, priority: 10 }
+    ]
+  };
+  const state = { fields: {
+    'field:region': { enabled: true, visible: true, value: '' },
+    'field:mode-standard': { enabled: true, visible: true, checked: false, value: null },
+    'field:mode-express': { enabled: true, visible: true, checked: false, value: null }
+  }};
+  const items = classifyInteractionItems({ graph, state, semanticEntity: reordered, instanceMemory: createInstanceMemory(), workflowKey: 'create-shipment', scopeKeys: { workflow: 'create-shipment', workflow_instance: 'run-1' } });
+  assert.deepEqual(items.filter((item) => item.status === 'missing').map((item) => item.semanticKey), ['region', 'delivery-mode']);
 });
 
 test('remembered interaction is deferred while its controls are disabled', () => {
   const state = { fields: {
-    'field:region': { enabled: true, visible: true, value: '' },
+    'field:region': { enabled: true, visible: true, value: 'West' },
     'field:mode-standard': { enabled: false, visible: true, checked: false, value: null },
     'field:mode-express': { enabled: false, visible: true, checked: false, value: null },
     'field:note': { enabled: true, visible: true, value: '' }
@@ -66,7 +95,7 @@ test('confirmation summary includes only prefilled or reused values', () => {
     items: [
       { semanticKey: 'region', status: 'prefilled', displayValue: 'West' },
       { semanticKey: 'delivery-mode', status: 'remembered', displayValue: 'Express' },
-      { semanticKey: 'note', status: 'missing', displayValue: '' }
+      { semanticKey: 'note', status: 'optional', displayValue: '' }
     ]
   });
   assert.equal(summary.items.length, 2);
