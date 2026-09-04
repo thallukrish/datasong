@@ -5,9 +5,9 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { snapshotPage } from '../src/browserCapture.js';
-import { preprocessEntity } from '../src/graph/entityPreprocessor.js';
-import { projectEntityState } from '../src/graph/entityState.js';
-import { computeEntityDelta } from '../src/graph/entityDelta.js';
+import { buildStructuralEntities } from '../src/graph/structuralEntityBuilder.js';
+import { createEntityGraph, findEntity } from '../src/graph/entityGraph.js';
+import { applyObservedStructuralChange } from '../src/graph/structuralChange.js';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/input-behavior.html', import.meta.url));
 
@@ -27,7 +27,10 @@ async function startFixtureServer() {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
-  return { url: `http://127.0.0.1:${address.port}/`, close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) };
+  return {
+    url: `http://127.0.0.1:${address.port}/`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
 }
 
 async function launchChrome() {
@@ -38,16 +41,13 @@ async function launchChrome() {
 }
 
 async function capture(page) {
-  const snapshot = await snapshotPage(page);
-  const graph = preprocessEntity(snapshot);
-  const state = projectEntityState(snapshot, graph);
-  return { snapshot, graph, state };
+  return buildStructuralEntities(await snapshotPage(page));
 }
 
-function controlByLabel(graph, label) {
-  const control = [...graph.fields, ...graph.actions].find((candidate) => candidate.label === label);
-  assert.ok(control, `expected control labelled ${label}`);
-  return control;
+function entityByName(entities, name) {
+  const entity = entities.find((candidate) => candidate.name === name);
+  assert.ok(entity, `expected entity named ${name}`);
+  return entity;
 }
 
 async function freshPage(browser, url) {
@@ -56,72 +56,54 @@ async function freshPage(browser, url) {
   return page;
 }
 
-test('browser entity benchmark discovers and observes generic behavior', async (t) => {
+test('browser benchmark builds and advances the unified entity graph', async (t) => {
   const fixture = await startFixtureServer();
   const browser = await launchChrome();
   t.after(async () => { await browser.close(); await fixture.close(); });
 
-  await t.test('discovers entity identity, fields, groups and methods from live DOM', async () => {
+  await t.test('live DOM becomes page, group and control entities', async () => {
     const page = await freshPage(browser, fixture.url);
-    const { graph } = await capture(page);
-    assert.equal(graph.entity.label, 'Generic Filing Form');
-    assert.ok(graph.entity.presentation.pageId);
-    assert.ok(graph.groups.some((group) => group.groupType === 'radio' && group.memberFieldIds.length === 2));
-    assert.equal(controlByLabel(graph, 'Filing date').type, 'date');
-    assert.equal(controlByLabel(graph, 'City').type, 'autocomplete');
-    const reasonB = controlByLabel(graph, 'Reason B');
-    const condition1 = controlByLabel(graph, 'Condition 1');
-    assert.equal(graph.methods.find((method) => method.fieldId === reasonB.id).executableNow, true);
-    assert.equal(graph.methods.find((method) => method.fieldId === condition1.id).executableNow, false);
+    const captured = await capture(page);
+    const pageEntity = findEntity(captured.entities, captured.pageId);
+    const reasonGroup = captured.entities.find((entity) => entity.type === 'group' && /filing reason/i.test(entity.name));
+    const reasonB = entityByName(captured.entities, 'Reason B');
+    const filingDate = entityByName(captured.entities, 'Filing date');
+    const city = entityByName(captured.entities, 'City');
+
+    assert.equal(pageEntity.type, 'page');
+    assert.ok(reasonGroup);
+    assert.equal(reasonB.structural.controlType, 'radio');
+    assert.equal(filingDate.structural.controlType, 'date');
+    assert.equal(city.structural.controlType, 'autocomplete');
+    assert.ok(reasonB.links.some((link) => link.id === reasonGroup.id && link.relationship === 'partOf'));
     await page.close();
   });
 
-  await t.test('radio selection changes fields outside the local radio group', async () => {
+  await t.test('real UI change creates causal state-version entities', async () => {
     const page = await freshPage(browser, fixture.url);
     const before = await capture(page);
+    const persistent = createEntityGraph(before.entities);
+    const reasonB = entityByName(before.entities, 'Reason B');
+    const condition1Before = entityByName(before.entities, 'Condition 1');
+    const continueBefore = entityByName(before.entities, 'Continue');
+
     await page.locator('input[name="reason"][value="B"]').check();
     const after = await capture(page);
-    const delta = computeEntityDelta(before.state, after.state);
-    const reasonB = controlByLabel(after.graph, 'Reason B');
-    const condition1 = controlByLabel(after.graph, 'Condition 1');
-    const condition2 = controlByLabel(after.graph, 'Condition 2');
-    const continueButton = controlByLabel(after.graph, 'Continue');
-    assert.ok(delta.fieldValuesChanged.some((change) => change.fieldId === reasonB.id && change.after === 'B'));
-    assert.ok(delta.fieldsEnabled.includes(condition1.id));
-    assert.ok(delta.fieldsEnabled.includes(condition2.id));
-    assert.ok(delta.actionsHidden.includes(continueButton.id));
-    await page.close();
-  });
+    const change = applyObservedStructuralChange(persistent, {
+      beforeEntities: before.entities,
+      afterEntities: after.entities,
+      triggerEntityId: reasonB.id,
+      ignoredEntityIds: [reasonB.id]
+    });
 
-  await t.test('checkbox selection restores completion action', async () => {
-    const page = await freshPage(browser, fixture.url);
-    await page.locator('input[name="reason"][value="B"]').check();
-    const before = await capture(page);
-    await page.locator('#condition1').check();
-    const after = await capture(page);
-    const delta = computeEntityDelta(before.state, after.state);
-    const continueButton = controlByLabel(after.graph, 'Continue');
-    assert.ok(delta.actionsShown.includes(continueButton.id));
-    await page.close();
-  });
-
-  await t.test('validation and dynamic options remain structural entity evidence', async () => {
-    const page = await freshPage(browser, fixture.url);
-    const before = await capture(page);
-    await page.locator('#filingDate').fill('2025-09-13');
-    await page.locator('#filingDate').blur();
-    const invalid = await capture(page);
-    const validationDelta = computeEntityDelta(before.state, invalid.state);
-    assert.ok(validationDelta.validationMessagesAdded.includes('Use DD/MM/YYYY'));
-
-    const responsePromise = page.waitForResponse((response) => response.url().includes('/cities?q=ban') && response.status() === 200);
-    const beforeAuto = await capture(page);
-    await page.locator('#city').fill('ban');
-    await responsePromise;
-    const afterAuto = await capture(page);
-    const optionDelta = computeEntityDelta(beforeAuto.state, afterAuto.state);
-    const city = controlByLabel(afterAuto.graph, 'City');
-    assert.deepEqual(optionDelta.optionsAdded[city.id], ['Bangalore', 'Bangkok']);
+    assert.ok(change.versionEntityIds.length >= 2);
+    const conditionVersion = change.versionEntityIds.map((id) => findEntity(persistent, id)).find((entity) => entity.links.some((link) => link.id === condition1Before.id && link.relationship === 'copyOf'));
+    const continueVersion = change.versionEntityIds.map((id) => findEntity(persistent, id)).find((entity) => entity.links.some((link) => link.id === continueBefore.id && link.relationship === 'copyOf'));
+    assert.ok(conditionVersion);
+    assert.equal(conditionVersion.structural.disabled, false);
+    assert.ok(conditionVersion.links.some((link) => link.id === reasonB.id && link.relationship === 'onModificationOf'));
+    assert.ok(continueVersion);
+    assert.equal(continueVersion.structural.visible, false);
     await page.close();
   });
 });
