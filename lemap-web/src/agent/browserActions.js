@@ -69,7 +69,6 @@ export async function applyQuestionAnswer(page, graph, question, interpretation)
   if (field.type === 'autocomplete') await locator.press('Tab');
 }
 
-const BLOCKED_NAVIGATION = /\b(final\s+submit|submit\s+(?:return|itr)|verify|verification|pay|payment|delete|remove|logout|log out|file return)\b/i;
 const ALLOWED_ROLES = new Set(['workflow_continuation', 'workflow_branch', 'related_entity']);
 
 export function chooseExecutableNavigation(scores = [], candidates = []) {
@@ -78,15 +77,15 @@ export function chooseExecutableNavigation(scores = [], candidates = []) {
     const candidate = byId.get(score.candidateId);
     if (!candidate || candidate.enabled === false || candidate.visible === false) continue;
     if (!ALLOWED_ROLES.has(score.role)) continue;
-    if (BLOCKED_NAVIGATION.test(candidate.label || '')) continue;
+    if (score.consequence !== 'reversible') continue;
     return { candidate, score };
   }
   return null;
 }
 
-export async function executeNavigationCandidate(page, candidate) {
+export async function executeNavigationCandidate(page, candidate, score = {}) {
   if (!candidate) throw new Error('Missing navigation candidate');
-  if (BLOCKED_NAVIGATION.test(candidate.label || '')) throw new Error(`Blocked consequential navigation: ${candidate.label}`);
+  if (score.consequence !== 'reversible') throw new Error(`Refusing non-reversible navigation consequence: ${score.consequence || 'unknown'}`);
   if (candidate.kind === 'action') {
     if (candidate.presentation?.domId) {
       const byId = page.locator(`[id="${quoteAttr(candidate.presentation.domId)}"]`).first();
