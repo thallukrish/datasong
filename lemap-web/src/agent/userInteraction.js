@@ -3,6 +3,8 @@ import { findApplicableFact } from './instanceMemory.js';
 function arr(value) { return Array.isArray(value) ? value : []; }
 function nonEmpty(value) { return value !== null && value !== undefined && String(value).trim() !== ''; }
 function norm(value = '') { return String(value).trim().toLowerCase().replace(/\s+/g, ' '); }
+function priorityOf(item = {}) { return Number.isFinite(Number(item.priority)) ? Number(item.priority) : 100; }
+function relevanceOf(item = {}) { return Number.isFinite(Number(item.goalRelevance)) ? Number(item.goalRelevance) : 0.5; }
 
 export function interactionFields(graph = {}, interaction = {}) {
   const ids = new Set(arr(interaction.structuralFieldIds).map(String));
@@ -46,29 +48,55 @@ export function scopeKeyForInteraction(interaction = {}, scopeKeys = {}, workflo
   return '';
 }
 
-export function classifyInteractionItems({ graph = {}, state = {}, semanticEntity = {}, instanceMemory = null, workflowKey = '', scopeKeys = {} } = {}) {
-  return arr(semanticEntity.interactions).map((interaction) => {
+function classifyOne({ graph, state, interaction, instanceMemory, workflowKey, scopeKeys }) {
+  if (interaction.requiredForGoal === false) {
     const current = currentInteractionValue(graph, state, interaction);
-    if (current.optionLabel) return { ...interaction, status: 'prefilled', displayValue: current.optionLabel, currentValue: current.value, source: 'prefill', rememberedFact: null };
+    return { ...interaction, status: 'optional', displayValue: current.optionLabel || '', currentValue: current.value || '', source: current.optionLabel ? 'prefill' : 'user', rememberedFact: null };
+  }
 
-    const reusePolicy = interaction.reusePolicy || 'never';
-    const scope = interaction.valueScope || 'workflow_instance';
-    const scopeKey = scopeKeyForInteraction(interaction, scopeKeys, workflowKey);
-    const rememberedFact = reusePolicy !== 'never' && scopeKey
-      ? findApplicableFact(instanceMemory, { semanticKey: interaction.semanticKey, workflowKey, scope, scopeKey })
-      : null;
-    if (rememberedFact) {
-      const executable = interactionExecutable(graph, state, interaction);
-      return {
-        ...interaction,
-        status: executable ? 'remembered' : 'blocked',
-        displayValue: rememberedFact.optionLabel || (nonEmpty(rememberedFact.value) ? String(rememberedFact.value) : ''),
-        currentValue: '',
-        source: 'remembered',
-        rememberedFact
-      };
-    }
-    return { ...interaction, status: 'missing', displayValue: '', currentValue: '', source: 'user', rememberedFact: null };
+  const current = currentInteractionValue(graph, state, interaction);
+  if (current.optionLabel) return { ...interaction, status: 'prefilled', displayValue: current.optionLabel, currentValue: current.value, source: 'prefill', rememberedFact: null };
+
+  const reusePolicy = interaction.reusePolicy || 'never';
+  const scope = interaction.valueScope || 'workflow_instance';
+  const scopeKey = scopeKeyForInteraction(interaction, scopeKeys, workflowKey);
+  const rememberedFact = reusePolicy !== 'never' && scopeKey
+    ? findApplicableFact(instanceMemory, { semanticKey: interaction.semanticKey, workflowKey, scope, scopeKey })
+    : null;
+  if (rememberedFact) {
+    const executable = interactionExecutable(graph, state, interaction);
+    return {
+      ...interaction,
+      status: executable ? 'remembered' : 'blocked',
+      displayValue: rememberedFact.optionLabel || (nonEmpty(rememberedFact.value) ? String(rememberedFact.value) : ''),
+      currentValue: '',
+      source: 'remembered',
+      rememberedFact
+    };
+  }
+  return { ...interaction, status: interactionExecutable(graph, state, interaction) ? 'missing' : 'blocked', displayValue: '', currentValue: '', source: 'user', rememberedFact: null };
+}
+
+export function classifyInteractionItems({ graph = {}, state = {}, semanticEntity = {}, instanceMemory = null, workflowKey = '', scopeKeys = {} } = {}) {
+  const items = arr(semanticEntity.interactions).map((interaction) => classifyOne({ graph, state, interaction, instanceMemory, workflowKey, scopeKeys }));
+  const byKey = new Map(items.map((item) => [String(item.semanticKey || ''), item]));
+
+  for (const item of items) {
+    if (item.status !== 'missing') continue;
+    const dependencies = arr(item.dependsOnSemanticKeys).map(String).filter(Boolean);
+    if (!dependencies.length) continue;
+    const unresolved = dependencies.some((key) => {
+      const dependency = byKey.get(key);
+      return !dependency || ['missing', 'blocked', 'optional'].includes(dependency.status);
+    });
+    if (unresolved) item.status = 'blocked';
+  }
+
+  return items.sort((a, b) => {
+    const priorityDelta = priorityOf(a) - priorityOf(b);
+    if (priorityDelta) return priorityDelta;
+    const relevanceDelta = relevanceOf(b) - relevanceOf(a);
+    return relevanceDelta || String(a.semanticKey || '').localeCompare(String(b.semanticKey || ''));
   });
 }
 
