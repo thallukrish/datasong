@@ -31,7 +31,7 @@ function shouldEnumerateTransientDomain(field = {}, state = {}) {
 }
 
 async function visibleOptionLabels(page) {
-  const options = page.getByRole('option');
+  const options = page.locator('[role="option"]');
   const count = await options.count();
   const labels = [];
   for (let index = 0; index < count; index += 1) {
@@ -43,10 +43,23 @@ async function visibleOptionLabels(page) {
   return [...new Set(labels)];
 }
 
+async function openFiniteChoiceWithoutSelecting(locator) {
+  try {
+    await locator.click({ timeout: 750 });
+    return;
+  } catch {
+    // Structural discovery may identify a real control whose host has no clickable
+    // layout box (common with framework/custom-element wrappers and test fixtures).
+    // Domain enumeration only needs the control's own click handler to open; it does
+    // not select an option. Invoke the host click deterministically as a fallback.
+    await locator.evaluate((element) => element.click());
+  }
+}
+
 async function enumerateTransientDomain(page, field) {
   const locator = fieldLocator(page, field);
   if (!locator || !await locator.count()) return [];
-  await locator.click();
+  await openFiniteChoiceWithoutSelecting(locator);
   await page.waitForTimeout(50);
   const values = await visibleOptionLabels(page);
   await page.keyboard.press('Escape').catch(() => {});
