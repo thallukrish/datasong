@@ -154,3 +154,36 @@ test('persistent memory records learned entity knowledge and only the selected t
   assert.equal(memory.workflow.edges[0].candidateId, 'continue');
   assert.deepEqual(memory.workflow.edges[0].retainedCandidateIds, ['dashboard']);
 });
+
+test('semantic refresh preserves previous interaction in memory and mutates caller to merged plan', () => {
+  const memory = createSemanticMemory('Configure setup');
+  const structuralGraph = {
+    entity: { id: 'entity:refresh', label: 'Setup' },
+    fields: [
+      { id: 'field:period', label: 'Period', type: 'select' },
+      { id: 'field:mode-a', label: 'Mode A', type: 'radio', parentGroupId: 'group:mode' },
+      { id: 'field:mode-b', label: 'Mode B', type: 'radio', parentGroupId: 'group:mode' }
+    ],
+    groups: [{ id: 'group:mode', label: 'Mode', groupType: 'radio', memberFieldIds: ['field:mode-a', 'field:mode-b'] }],
+    actions: []
+  };
+  const first = {
+    semanticName: 'Setup', description: '', subEntities: [], fields: [], relationships: [], actions: [],
+    interactions: [
+      { semanticKey: 'period', semanticName: 'Period', structuralFieldIds: ['field:period'], question: 'Which period?', valueScope: 'workflow_instance', reusePolicy: 'never', goalRelevance: 1, priority: 1, requiredForGoal: true, dependsOnSemanticKeys: [], behaviorHypothesis: { mode: 'unknown', confidence: 0, description: '' } }
+    ], completionInteraction: {}, localCompletion: '', confidence: 0.8
+  };
+  recordEntityKnowledge(memory, { structuralEntity: structuralGraph.entity, structuralGraph, semanticEntity: first });
+
+  const refresh = {
+    semanticName: 'Setup', description: '', subEntities: [], fields: [], relationships: [], actions: [],
+    interactions: [
+      { semanticKey: 'mode', semanticName: 'Mode', structuralFieldIds: ['field:mode-a'], question: 'Which mode?', valueScope: 'workflow_instance', reusePolicy: 'never', goalRelevance: 1, priority: 2, requiredForGoal: true, dependsOnSemanticKeys: ['period'], behaviorHypothesis: { mode: 'unknown', confidence: 0, description: '' } }
+    ], completionInteraction: {}, localCompletion: '', confidence: 0.9
+  };
+  recordEntityKnowledge(memory, { structuralEntity: structuralGraph.entity, structuralGraph, semanticEntity: refresh });
+
+  assert.deepEqual(refresh.interactions.map((item) => item.semanticKey).sort(), ['mode', 'period']);
+  assert.deepEqual(memory.entities['entity:refresh'].semantic.interactions.map((item) => item.semanticKey).sort(), ['mode', 'period']);
+  assert.deepEqual(refresh.interactions.find((item) => item.semanticKey === 'mode').dependsOnSemanticKeys, ['period']);
+});
