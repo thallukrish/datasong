@@ -77,20 +77,34 @@ export function applyObservedStructuralChange(graph = [], {
   triggerEntityId = '',
   ignoredEntityIds = []
 } = {}) {
-  const beforeById = new Map(arr(beforeEntities).map((entity) => [entity.id, entity]));
+  const before = arr(beforeEntities);
+  const after = arr(afterEntities);
+  const beforeById = new Map(before.map((entity) => [entity.id, entity]));
+  const afterById = new Map(after.map((entity) => [entity.id, entity]));
   const ignored = new Set(arr(ignoredEntityIds).map(String));
   const addedEntityIds = [];
   const versionEntityIds = [];
 
-  for (const observed of arr(afterEntities)) {
-    const before = beforeById.get(observed.id);
-    if (!before) {
+  for (const observed of after) {
+    const prior = beforeById.get(observed.id);
+    if (!prior) {
       addNewEntity(graph, observed, triggerEntityId);
       addedEntityIds.push(observed.id);
       continue;
     }
-    if (ignored.has(observed.id) || sameStructure(before, observed)) continue;
-    const version = addVersionEntity(graph, before, observed, triggerEntityId);
+    if (ignored.has(observed.id) || sameStructure(prior, observed)) continue;
+    const version = addVersionEntity(graph, prior, observed, triggerEntityId);
+    versionEntityIds.push(version.id);
+  }
+
+  for (const prior of before) {
+    if (ignored.has(prior.id) || afterById.has(prior.id)) continue;
+    if (prior.type === 'page' || prior.type === 'modal' || prior.type === 'workflow') continue;
+    const disappeared = {
+      ...structuredClone(prior),
+      structural: { ...structuredClone(prior.structural || {}), visible: false, present: false }
+    };
+    const version = addVersionEntity(graph, prior, disappeared, triggerEntityId);
     versionEntityIds.push(version.id);
   }
 
