@@ -8,7 +8,7 @@ import { exploreReadOnlyEntity } from './explore/readOnlyExplorer.js';
 import { buildStructuralEntitiesFromPreprocessed } from './graph/structuralEntityBuilder.js';
 import { applyObservedStructuralChange } from './graph/structuralChange.js';
 import { findEntity, linkEntities, mergeSemanticPatch, upsertEntity } from './graph/entityGraph.js';
-import { instanceForEntity, upsertInstanceValue } from './graph/instanceGraph.js';
+import { upsertInstanceValue } from './graph/instanceGraph.js';
 import { loadEntityGraph, loadInstanceGraph, saveEntityGraph, saveInstanceGraph } from './graph/graphStore.js';
 import { resolveEntitySemantics } from './semantic/entitySemanticResolver.js';
 import { setModelCallLogger } from './semantic/modelCall.js';
@@ -18,6 +18,7 @@ import {
   ignoredSourceEntityIds,
   resolveEntityAnswer,
   selectNextUserInput,
+  selectReusableUserInput,
   selectWorkflowContinuation
 } from './agent/entityFlow.js';
 import { createModelClient, modelConfigFromEnv } from './agent/modelClient.js';
@@ -36,7 +37,6 @@ function arr(value) { return Array.isArray(value) ? value : []; }
 function hash(value) { return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 12); }
 function workflowIdForGoal(goal) { return `workflow:${hash(String(goal || '').trim().toLowerCase())}`; }
 function hasSemantic(entity = {}) { return Object.keys(entity.semantic || {}).length > 0; }
-function normalized(value) { return String(value ?? '').trim().toLowerCase(); }
 
 async function captureEntities(page) {
   const explored = await exploreReadOnlyEntity(page);
@@ -79,9 +79,16 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   return findEntity(entityGraph, workflowId);
 }
 
+function needsSemantic(entity = {}) {
+  const semantic = entity.semantic || {};
+  if (!Object.keys(semantic).length) return true;
+  if (['action', 'navigation'].includes(semantic.interaction) && !semantic.consequence) return true;
+  return false;
+}
+
 async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, force = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
-  const unresolved = currentEntities.filter((entity) => !hasSemantic(findEntity(entityGraph, entity.id)));
+  const unresolved = currentEntities.filter((entity) => needsSemantic(findEntity(entityGraph, entity.id) || entity));
   if (!force && !unresolved.length) return { called: false, workflowComplete: !!findEntity(entityGraph, workflowId)?.semantic?.complete };
 
   const workflow = findEntity(entityGraph, workflowId);
@@ -105,7 +112,8 @@ async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, cu
       interaction: 'unknown',
       relevantToGoal: false,
       required: false,
-      workflowRole: 'unknown'
+      workflowRole: 'unknown',
+      consequence: 'unknown'
     });
   }
 
@@ -128,25 +136,6 @@ function printQuestion(question) {
   console.log(`[LeMap-Web] ${question.label}`);
   if (question.options.length) question.options.forEach((option, index) => console.log(`  ${index + 1}. ${option}`));
   else if (question.examples.length) console.log(`  Examples: ${question.examples.slice(0, 4).join(' • ')}`);
-}
-
-function currentValueMatches(entity, value) {
-  const structural = entity.structural || {};
-  if (entity.type === 'group') return normalized(structural.value) === normalized(value);
-  if (structural.controlType === 'checkbox') return !!structural.checked === !!value;
-  if (structural.controlType === 'radio') return structural.checked === true;
-  if (structural.value === null || structural.value === undefined || structural.value === '') return false;
-  return normalized(structural.value) === normalized(value);
-}
-
-function reusableInput(currentEntities, instances) {
-  return currentEntities.find((entity) => {
-    const semantic = entity.semantic || {};
-    if (semantic.interaction !== 'user_input' || semantic.relevantToGoal !== true || semantic.required !== true) return false;
-    if (entity.structural?.visible === false || entity.structural?.disabled === true) return false;
-    const instance = instanceForEntity(instances, entity.id);
-    return !!instance && !currentValueMatches(entity, instance.value);
-  }) || null;
 }
 
 function contextTransition(entityGraph, workflowId, triggerId, afterCapture) {
@@ -244,23 +233,22 @@ try {
       break;
     }
 
-    const reused = reusableInput(capture.entities, instances);
-    if (reused) {
-      const instance = instanceForEntity(instances, reused.id);
-      console.log(`[LeMap-Web] applying stored instance value for ${reused.name}`);
+    const reusable = selectReusableUserInput(capture.entities, instances);
+    if (reusable) {
+      console.log(`[LeMap-Web] applying stored instance value for ${reusable.entity.name}`);
       const before = capture;
-      await applyEntityValue(page, capture.entities, reused, instance.value);
+      await applyEntityValue(page, capture.entities, reusable.entity, reusable.instance.value);
       if (settleMs) await page.waitForTimeout(settleMs);
       const after = await captureEntities(page);
 
       if (after.pageId !== before.pageId) {
-        contextTransition(entityGraph, workflowId, reused.id, after);
+        contextTransition(entityGraph, workflowId, reusable.entity.id, after);
       } else {
         applyObservedStructuralChange(entityGraph, {
           beforeEntities: before.entities,
           afterEntities: after.entities,
-          triggerEntityId: reused.id,
-          ignoredEntityIds: ignoredSourceEntityIds(reused)
+          triggerEntityId: reusable.entity.id,
+          ignoredEntityIds: ignoredSourceEntityIds(reusable.entity)
         });
       }
       addMissingStructuralEntities(entityGraph, after.entities);
@@ -311,8 +299,10 @@ try {
 
     const continuation = selectWorkflowContinuation(capture.entities);
     if (!continuation) {
-      console.log('[LeMap-Web] no goal-relevant executable user input or safe workflow continuation is currently known.');
-      await runLogger.write('stop', { reason: 'no_executable_entity' });
+      const blockedCommit = capture.entities.find((entity) => entity.semantic?.workflowRole === 'commit' && entity.structural?.visible !== false);
+      if (blockedCommit) console.log(`[LeMap-Web] reached consequential action "${blockedCommit.name}"; not executing automatically.`);
+      else console.log('[LeMap-Web] no goal-relevant executable user input or reversible workflow continuation is currently known.');
+      await runLogger.write('stop', { reason: blockedCommit ? 'consequential_action' : 'no_executable_entity', entityId: blockedCommit?.id || '' });
       break;
     }
 
@@ -338,6 +328,7 @@ try {
         await runLogger.write('stop', { reason: 'continuation_no_structural_change' });
         break;
       }
+      await runLogger.write('structural_change', change);
     }
 
     addMissingStructuralEntities(entityGraph, after.entities);
