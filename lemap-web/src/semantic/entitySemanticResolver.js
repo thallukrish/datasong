@@ -45,27 +45,11 @@ function compactEntity(entity = {}) {
   };
 }
 
-function semanticEntitySet(entities = [], knownWorkflow = null) {
-  const all = arr(entities).map((entity) => structuredClone(entity));
-  if (knownWorkflow?.id && !all.some((entity) => entity.id === knownWorkflow.id)) {
-    all.unshift({
-      id: String(knownWorkflow.id),
-      name: String(knownWorkflow.name || 'Workflow'),
-      type: 'workflow',
-      structural: structuredClone(knownWorkflow.structural || {}),
-      semantic: structuredClone(knownWorkflow.semantic || {}),
-      links: arr(knownWorkflow.links).map((link) => ({ ...link }))
-    });
-  }
-  return all;
-}
-
-export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
-  const semanticEntities = semanticEntitySet(entities, knownWorkflow);
+export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '' } = {}) {
   const payload = {
     goal: text(userGoal, 300),
     pageId: String(pageId || ''),
-    entities: semanticEntities.map(compactEntity)
+    entities: arr(entities).map(compactEntity)
   };
   return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only for supplied entity ids. Do not repeat structural fields. Treat workflow exactly like the other entities. Identify local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, optional question/explanation/caveats/examples, workflow role, action consequence, and workflow description/completion where applicable. Return {entities:[{id,semantic:{...}}]}.`;
 }
@@ -92,15 +76,15 @@ function normalizeSemantic(raw = {}) {
 
 export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   const known = new Set(arr(knownEntities).map((entity) => entity.id));
-  const entities = arr(raw.entities)
-    .filter((item) => known.has(String(item?.id || '')))
-    .map((item) => ({ id: String(item.id), semantic: normalizeSemantic(item.semantic || {}) }));
-  return { entities };
+  return {
+    entities: arr(raw.entities)
+      .filter((item) => known.has(String(item?.id || '')))
+      .map((item) => ({ id: String(item.id), semantic: normalizeSemantic(item.semantic || {}) }))
+  };
 }
 
-export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
-  const semanticEntities = semanticEntitySet(entities, knownWorkflow);
-  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities: semanticEntities, pageId });
+export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '' } = {}) {
+  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities, pageId });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
-  return normalizeEntitySemanticResponse(response.parsed, semanticEntities);
+  return normalizeEntitySemanticResponse(response.parsed, entities);
 }
