@@ -9,12 +9,13 @@ function bool(value, fallback = false) { return value === undefined ? fallback :
 
 const SCOPES = new Set(['local', 'global']);
 const INTERACTIONS = new Set(['user_input', 'information', 'action', 'navigation', 'unknown']);
+const WORKFLOW_ROLES = new Set(['continue', 'back', 'commit', 'global', 'local', 'unknown']);
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
 LeMap-Web already discovered the application structure deterministically. You receive entity ids, names, types, structural facts and relationships for the current rendered context plus the user's goal.
 Add business/user-facing meaning only. Do not repeat structural facts. Do not invent browser mechanics, values, controls or entity ids.
-For each relevant entity you may add: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation|unknown), relevantToGoal, required, question, explanation, caveats, examples, workflowRole.
-Questions/explanations/examples/caveats are optional. A workflow role may describe how an action/page participates in advancing the goal.
+For each relevant entity you may add: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation|unknown), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local|unknown).
+Questions/explanations/examples/caveats are optional. Mark the safe intermediate action that advances the workflow as workflowRole=continue. Mark final/committing actions as workflowRole=commit.
 Return strict JSON only.`;
 
 function compactEntity(entity = {}) {
@@ -64,7 +65,7 @@ function normalizeSemantic(raw = {}) {
     explanation: text(raw.explanation, 700),
     caveats: arr(raw.caveats).slice(0, 8).map((item) => text(item, 260)).filter(Boolean),
     examples: arr(raw.examples).slice(0, 8).map((item) => text(item, 180)).filter(Boolean),
-    workflowRole: text(raw.workflowRole, 180)
+    workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown'
   };
 }
 
