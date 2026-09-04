@@ -79,6 +79,16 @@ export async function snapshotPage(page) {
       if (el.tagName?.toLowerCase() === 'select') return Array.from(el.options || []).map((option) => clean(option.value || option.textContent)).filter(Boolean);
       return [];
     };
+    const defaultValueFor = (el) => {
+      const tag = el.tagName?.toLowerCase();
+      if (tag === 'select') {
+        const options = Array.from(el.options || []);
+        const selected = options.find((option) => option.defaultSelected) || options[0] || null;
+        return selected ? clean(selected.value || selected.textContent) : null;
+      }
+      if ('defaultValue' in el) return el.defaultValue;
+      return null;
+    };
     const control = (el) => {
       const type = clean(el.type || '').toLowerCase();
       return {
@@ -90,7 +100,9 @@ export async function snapshotPage(page) {
         name: clean(el.name || el.id || ''),
         href: clean(el.getAttribute?.('href') || ''),
         value: 'value' in el ? el.value : el.getAttribute?.('aria-valuenow') ?? null,
+        defaultValue: defaultValueFor(el),
         checked: ['radio', 'checkbox'].includes(type) ? !!el.checked : null,
+        defaultChecked: ['radio', 'checkbox'].includes(type) ? !!el.defaultChecked : null,
         label: labelFor(el),
         disabled: !!el.disabled || el.getAttribute?.('aria-disabled') === 'true',
         hidden: !visible(el),
