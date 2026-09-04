@@ -83,9 +83,9 @@ export function chooseExecutableNavigation(scores = [], candidates = []) {
   return null;
 }
 
-export async function executeNavigationCandidate(page, candidate, score = {}) {
+export async function executeNavigationCandidate(page, candidate, score = null) {
   if (!candidate) throw new Error('Missing navigation candidate');
-  if (score.consequence !== 'reversible') throw new Error(`Refusing non-reversible navigation consequence: ${score.consequence || 'unknown'}`);
+  if (score && score.consequence !== 'reversible') throw new Error(`Refusing non-reversible navigation consequence: ${score.consequence || 'unknown'}`);
   if (candidate.kind === 'action') {
     if (candidate.presentation?.domId) {
       const byId = page.locator(`[id="${quoteAttr(candidate.presentation.domId)}"]`).first();
