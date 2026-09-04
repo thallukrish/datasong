@@ -4,8 +4,15 @@ function arr(value) { return Array.isArray(value) ? value : []; }
 function signature(effect = {}) { return JSON.stringify(effect); }
 function touch(memory) { if (memory) memory.updatedAt = new Date().toISOString(); }
 
+function hypothesisStatus(behaviorHypothesis = {}, classes = [], novel = false) {
+  const mode = behaviorHypothesis?.mode || 'unknown';
+  if (mode !== 'same_effect_across_domain') return 'not_applicable';
+  if (novel && classes.length > 1) return 'falsified';
+  return 'consistent';
+}
+
 export function classifyAndRecordExecutionBehavior(memory, {
-  entityId = '', semanticKey = '', sourceFieldIds = [], delta = {}
+  entityId = '', semanticKey = '', sourceFieldIds = [], delta = {}, behaviorHypothesis = null
 } = {}) {
   const entity = memory?.entities?.[entityId];
   if (!entity) throw new Error(`Cannot record execution behavior for unknown entity ${entityId}`);
@@ -40,7 +47,8 @@ export function classifyAndRecordExecutionBehavior(memory, {
     novel,
     classId: behaviorClass.id,
     effect,
-    behaviorClass
+    behaviorClass,
+    hypothesisStatus: hypothesisStatus(behaviorHypothesis, classes, novel)
   };
 }
 
