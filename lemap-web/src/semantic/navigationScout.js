@@ -11,11 +11,13 @@ function clamp01(value) {
 }
 
 const ALLOWED_ROLES = new Set(['workflow_continuation', 'workflow_branch', 'related_entity', 'workflow_reverse', 'ancestor_workflow', 'workflow_exit', 'side_context', 'site_chrome', 'unknown']);
+const ALLOWED_CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive', 'security', 'unknown']);
 
 const SYSTEM = `You are DataSong LeMap-Web's GOAL-DIRECTED NAVIGATION SCOUT.
 The current local entity has already been structurally explored and semantically resolved.
 You receive the original user goal, a compact resolved entity summary, current workflow context, and outgoing button/link candidates.
-Score each candidate for advancing the original user goal while preserving the active workflow context. A generally important portal destination can still be irrelevant to the user's goal.
+Score each candidate for advancing the original user goal while preserving the active workflow context.
+Also classify the consequence of executing each candidate from the supplied semantics: reversible ordinary navigation/workflow progress, external commit, financial commitment, destructive mutation, security-sensitive action, or unknown.
 Do not execute anything. Return strict compact JSON only.`;
 
 function compactEntity(semanticEntity = {}) {
@@ -44,11 +46,10 @@ export function buildNavigationPrompt({ userGoal = '', semanticEntity = {}, work
       label: candidate.label || '',
       kind: candidate.kind || '',
       href: candidate.href || '',
-      enabled: candidate.enabled !== false,
-      safety: candidate.safety || ''
+      enabled: candidate.enabled !== false
     }))
   };
-  return `MODE web-goal-navigation-v1\nCURRENT GOAL + RESOLVED ENTITY + OUTGOING CANDIDATES:\n${JSON.stringify(payload)}\n\nTASK:\nScore every candidate against the ORIGINAL USER GOAL and current workflow context. Return JSON {scores:[{candidateId,goalRelevance,continuity,forwardProgress,role,reason}]}. role must be workflow_continuation|workflow_branch|related_entity|workflow_reverse|ancestor_workflow|workflow_exit|side_context|site_chrome|unknown. Prefer candidates that safely advance the user goal; do not reward unrelated site chrome merely because it is globally important.`;
+  return `MODE web-goal-navigation-v2\nCURRENT GOAL + RESOLVED ENTITY + OUTGOING CANDIDATES:\n${JSON.stringify(payload)}\n\nTASK:\nScore every candidate against the ORIGINAL USER GOAL and current workflow context. Return JSON {scores:[{candidateId,goalRelevance,continuity,forwardProgress,role,consequence,reason}]}. role must be workflow_continuation|workflow_branch|related_entity|workflow_reverse|ancestor_workflow|workflow_exit|side_context|site_chrome|unknown. consequence must be reversible|commit|financial|destructive|security|unknown. Use reversible only for ordinary navigation or workflow progress that does not itself create an external commitment, payment, destructive mutation, or security-sensitive effect. Prefer candidates that safely advance the user goal; do not reward unrelated site chrome merely because it is globally important.`;
 }
 
 export function normalizeNavigationResponse(raw = {}, candidates = []) {
@@ -59,6 +60,7 @@ export function normalizeNavigationResponse(raw = {}, candidates = []) {
     continuity: clamp01(item?.continuity),
     forwardProgress: clamp01(item?.forwardProgress),
     role: ALLOWED_ROLES.has(item?.role) ? item.role : 'unknown',
+    consequence: ALLOWED_CONSEQUENCES.has(item?.consequence) ? item.consequence : 'unknown',
     reason: text(item?.reason, 420)
   })).filter((item) => item.candidateId && candidateIds.has(item.candidateId));
 
@@ -66,7 +68,7 @@ export function normalizeNavigationResponse(raw = {}, candidates = []) {
   for (const candidate of arr(candidates)) {
     const candidateId = String(candidate?.id || '');
     if (!candidateId || seen.has(candidateId)) continue;
-    scores.push({ candidateId, goalRelevance: 0, continuity: 0, forwardProgress: 0, role: 'unknown', reason: 'Model did not score this candidate.' });
+    scores.push({ candidateId, goalRelevance: 0, continuity: 0, forwardProgress: 0, role: 'unknown', consequence: 'unknown', reason: 'Model did not score this candidate.' });
   }
   return scores.sort((a, b) => {
     const aTotal = a.goalRelevance * 0.5 + a.continuity * 0.3 + a.forwardProgress * 0.2;
