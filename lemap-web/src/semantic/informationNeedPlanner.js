@@ -10,12 +10,14 @@ function clamp01(value) {
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
 }
 
-const DECISIONS = new Set(['navigate', 'ask_user', 'explore_more', 'stop']);
+const DECISIONS = new Set(['navigate', 'ask_user', 'stop']);
 
 const SYSTEM = `You are DataSong LeMap-Web's INFORMATION-NEED PLANNER.
-LeMap-Web is a lazy goal-directed navigator. The current rendered context has already been structurally inspected and semantically interpreted.
-Your job is NOT to ask for every empty field. Decide whether the agent already knows enough to navigate toward the original user goal, whether safe local exploration is still needed, or whether a genuinely user-specific/business fact must be requested from the user.
-Only interactions represented by supplied candidate question IDs are currently unresolved. Resolved interaction semantics are deliberately omitted. If candidateQuestions is empty, do not choose ask_user.
+LeMap-Web is a lazy goal-directed navigator. The current rendered context has already been structurally inspected and semantically interpreted, and structural novelty has already been handled before you are called.
+Your job is NOT to ask for every empty field. Decide whether the agent already knows enough to navigate toward the original user goal, whether a genuinely user-specific/business fact must be requested, or whether execution should stop.
+Only interactions represented by supplied candidate question IDs are currently unresolved and goal-relevant. Resolved/optional interaction semantics are deliberately omitted. If candidateQuestions is empty, do not choose ask_user.
+When choosing stop, explicitly distinguish goal completion from inability to advance using goalComplete. Set goalComplete=true only when the supplied semantic/workflow evidence indicates the ORIGINAL USER GOAL has been completed. Otherwise false.
+Do not request speculative exploration; real execution and structural-delta handling happen outside this planner.
 Use only supplied candidate question IDs. Never invent browser state or user facts. Return strict compact JSON only.`;
 
 function compactSemanticContext(semanticContext = {}, candidateQuestions = []) {
@@ -32,7 +34,16 @@ function compactSemanticContext(semanticContext = {}, candidateQuestions = []) {
     interactions: arr(semanticContext.interactions)
       .filter((item) => wantedKeys.has(String(item?.semanticKey || '')))
       .slice(0, 8)
-      .map((item) => ({ semanticKey: text(item?.semanticKey, 140), semanticName: text(item?.semanticName, 160), explanation: text(item?.explanation, 260), question: text(item?.question, 220), valueScope: text(item?.valueScope, 60) }))
+      .map((item) => ({
+        semanticKey: text(item?.semanticKey, 140),
+        semanticName: text(item?.semanticName, 160),
+        explanation: text(item?.explanation, 260),
+        question: text(item?.question, 220),
+        valueScope: text(item?.valueScope, 60),
+        goalRelevance: clamp01(item?.goalRelevance),
+        priority: Number.isFinite(Number(item?.priority)) ? Number(item.priority) : 100,
+        requiredForGoal: item?.requiredForGoal !== false
+      }))
   };
 }
 
@@ -59,11 +70,10 @@ export function buildInformationNeedPrompt({ userGoal = '', semanticContext = {}
       candidateId: candidate.id,
       label: candidate.label || '',
       kind: candidate.kind || '',
-      enabled: candidate.enabled !== false,
-      safety: candidate.safety || ''
+      enabled: candidate.enabled !== false
     }))
   };
-  return `MODE web-information-need-v1\nCURRENT GOAL + COMPACT SEMANTIC CONTEXT:\n${JSON.stringify(payload)}\n\nTASK:\nChoose exactly one decision: navigate | ask_user | explore_more | stop.\n- navigate: enough is known to score/follow a safe outgoing transition now; do not ask merely because an input is empty.\n- ask_user: progress is blocked by genuinely user-specific/business information represented by one or more supplied candidateQuestions. Return only the minimal supplied questionIds needed now, in order. Never choose ask_user when candidateQuestions is empty.\n- explore_more: safe local structural/behavioral exploration could resolve the uncertainty without asking the user.\n- stop: the goal cannot be safely advanced from supplied evidence.\nReturn JSON {decision,questionIds,reason,confidence}.`;
+  return `MODE web-information-need-v2\nCURRENT GOAL + COMPACT SEMANTIC CONTEXT:\n${JSON.stringify(payload)}\n\nTASK:\nChoose exactly one decision: navigate | ask_user | stop.\n- navigate: enough is known to score/follow a safe outgoing transition now.\n- ask_user: progress is blocked by genuinely user-specific/business information represented by one or more supplied candidateQuestions. Return only the minimal supplied questionIds needed now, in order. Never choose ask_user when candidateQuestions is empty.\n- stop: no further interaction/navigation should be attempted from the supplied evidence. Set goalComplete=true only if the ORIGINAL USER GOAL is semantically completed; otherwise false.\nReturn JSON {decision,questionIds,reason,confidence,goalComplete}.`;
 }
 
 export function normalizeInformationNeedResponse(raw = {}, candidateQuestions = []) {
@@ -72,11 +82,13 @@ export function normalizeInformationNeedResponse(raw = {}, candidateQuestions = 
   const questionIds = decision === 'ask_user'
     ? [...new Set(arr(raw.questionIds).map(String).filter((id) => allowed.has(id)))]
     : [];
+  const normalizedDecision = decision === 'ask_user' && questionIds.length === 0 ? 'stop' : decision;
   return {
-    decision: decision === 'ask_user' && questionIds.length === 0 ? 'stop' : decision,
+    decision: normalizedDecision,
     questionIds,
     reason: text(raw.reason, 520),
-    confidence: clamp01(raw.confidence)
+    confidence: clamp01(raw.confidence),
+    goalComplete: normalizedDecision === 'stop' && raw.goalComplete === true
   };
 }
 
