@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import { classifyInput } from './inputClassifier.js';
 
-const CONTROL_TAGS = new Set(['input', 'button', 'select', 'textarea']);
-const CONTROL_ROLES = new Set(['button', 'radio', 'checkbox', 'textbox', 'combobox', 'spinbutton', 'listbox']);
+const CONTROL_TAGS = new Set(['input', 'button', 'select', 'textarea', 'a']);
+const CONTROL_ROLES = new Set(['button', 'radio', 'checkbox', 'textbox', 'combobox', 'spinbutton', 'listbox', 'link']);
 function hash(value) { return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 12); }
 function isControlNode(node = {}) {
   return CONTROL_TAGS.has(String(node.tag || '').toLowerCase()) || CONTROL_ROLES.has(String(node.role || '').toLowerCase()) || node.control === true;
@@ -35,7 +35,8 @@ export function discoverInputs(root = {}, entityId = '') {
           stableChoiceIdentity(node, normalizedType),
           tag,
           node.type || '',
-          node.role || ''
+          node.role || '',
+          node.href || ''
         ].join('|');
         inputs.push({
           id: `field:${hash(identityBasis)}`,
@@ -47,6 +48,7 @@ export function discoverInputs(root = {}, entityId = '') {
           rawType: String(node.type || ''),
           role: String(node.role || ''),
           tag,
+          href: String(node.href || ''),
           parentRegionLabel: parent?.label || '',
           parentRegionTag: parent?.tag || '',
           regionPath: ancestry.map((x) => x.label),
