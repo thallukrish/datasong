@@ -67,6 +67,8 @@ function filterOptionMap(map = {}, sources) {
 
 export function normalizeExternalEffect(delta = {}, options = {}) {
   const sources = sourceSet(options);
+  const routeChanged = !!delta.routeChanged;
+  const entityChanged = !!delta.entityChanged;
   return {
     fieldValuesChanged: arr(delta.fieldValuesChanged)
       .filter((change) => !sources.has(String(change?.fieldId)))
@@ -88,8 +90,12 @@ export function normalizeExternalEffect(delta = {}, options = {}) {
     validationMessagesRemoved: sortedUnique(delta.validationMessagesRemoved),
     optionsAdded: filterOptionMap(delta.optionsAdded, sources),
     optionsRemoved: filterOptionMap(delta.optionsRemoved, sources),
-    routeChanged: !!delta.routeChanged,
-    entityChanged: !!delta.entityChanged
+    routeChanged,
+    entityChanged,
+    fromRoute: routeChanged ? String(delta.fromRoute || '') : '',
+    toRoute: routeChanged ? String(delta.toRoute || '') : '',
+    fromEntityId: entityChanged ? String(delta.fromEntityId || '') : '',
+    toEntityId: entityChanged ? String(delta.toEntityId || '') : ''
   };
 }
 
