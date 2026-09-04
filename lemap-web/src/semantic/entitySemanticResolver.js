@@ -14,14 +14,15 @@ const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive'
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
 LeMap-Web already discovered application structure deterministically. You receive entity ids, names, types, structural facts and relationships for the current rendered context plus the user's goal.
-Add business/user-facing meaning only. Do not repeat structural facts. Do not invent browser mechanics, values, controls or entity ids.
-For each supplied entity you may add: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation|unknown), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local|unknown), consequence(reversible|commit|financial|destructive|security|unknown).
-Questions, explanations, examples and caveats are optional. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions that can be automatically executed without submitting, committing, paying, deleting, authorizing or otherwise causing consequential effects. Mark final/committing actions as workflowRole=commit and consequence=commit (or a more specific consequential category).
-Return strict JSON only.`;
+Every supplied item, including a workflow, is an entity. Add business/user-facing meaning only to those entity ids. Do not repeat structural facts. Do not invent browser mechanics, values, controls or entity ids.
+For each supplied entity you may add: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation|unknown), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local|unknown), consequence(reversible|commit|financial|destructive|security|unknown), description, complete.
+Questions, explanations, examples, caveats, description and complete are optional. complete is meaningful primarily for workflow entities. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions that can be automatically executed without submitting, committing, paying, deleting, authorizing or otherwise causing consequential effects. Mark final/committing actions as workflowRole=commit and consequence=commit (or a more specific consequential category).
+Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
 
 function compactEntity(entity = {}) {
   const structural = entity.structural || {};
   const safeStructural = {
+    goal: entity.type === 'workflow' ? structural.goal || undefined : undefined,
     controlType: structural.controlType || undefined,
     groupType: structural.groupType || undefined,
     tag: structural.tag || undefined,
@@ -44,18 +45,17 @@ function compactEntity(entity = {}) {
   };
 }
 
-export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
+export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '' } = {}) {
   const payload = {
     goal: text(userGoal, 300),
     pageId: String(pageId || ''),
-    entities: arr(entities).map(compactEntity),
-    workflow: knownWorkflow || undefined
+    entities: arr(entities).map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only for supplied entity ids. Do not repeat structural fields. Identify local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, optional question/explanation/caveats/examples, workflow role and action consequence. Return {entities:[{id,semantic:{...}}], workflow?:{name,description,complete}}.`;
+  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only for supplied entity ids. Do not repeat structural fields. Treat workflow exactly like the other entities. Identify local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, optional question/explanation/caveats/examples, workflow role, action consequence, and workflow description/completion where applicable. Return {entities:[{id,semantic:{...}}]}.`;
 }
 
 function normalizeSemantic(raw = {}) {
-  return {
+  const semantic = {
     meaning: text(raw.meaning, 240),
     semanticType: text(raw.semanticType, 160),
     scope: SCOPES.has(raw.scope) ? raw.scope : undefined,
@@ -67,8 +67,11 @@ function normalizeSemantic(raw = {}) {
     caveats: arr(raw.caveats).slice(0, 8).map((item) => text(item, 260)).filter(Boolean),
     examples: arr(raw.examples).slice(0, 8).map((item) => text(item, 180)).filter(Boolean),
     workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown',
-    consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown'
+    consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown',
+    description: text(raw.description, 700)
   };
+  if (raw.complete !== undefined) semantic.complete = !!raw.complete;
+  return semantic;
 }
 
 export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
@@ -76,16 +79,11 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   const entities = arr(raw.entities)
     .filter((item) => known.has(String(item?.id || '')))
     .map((item) => ({ id: String(item.id), semantic: normalizeSemantic(item.semantic || {}) }));
-  const workflow = raw.workflow && typeof raw.workflow === 'object' ? {
-    name: text(raw.workflow.name, 240),
-    description: text(raw.workflow.description, 700),
-    complete: !!raw.workflow.complete
-  } : null;
-  return { entities, workflow };
+  return { entities };
 }
 
-export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
-  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities, pageId, knownWorkflow });
+export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '' } = {}) {
+  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities, pageId });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
   return normalizeEntitySemanticResponse(response.parsed, entities);
 }
