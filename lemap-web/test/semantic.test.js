@@ -5,7 +5,7 @@ import { buildPass1Prompt, normalizePass1Response } from '../src/semantic/pass1.
 import { buildPass2Prompt, normalizePass2Response } from '../src/semantic/pass2.js';
 import { materializeSemanticGraph } from '../src/semantic/semanticGraph.js';
 import { learnSemanticPath } from '../src/semantic/semanticLearner.js';
-import { buildLocalEntityPrompt, normalizeLocalEntityResponse, resolveLocalEntity } from '../src/semantic/localEntityResolver.js';
+import { buildLocalEntityPrompt, normalizeLocalEntityResponse, resolveLocalEntity, mergeSemanticEntityPlans } from '../src/semantic/localEntityResolver.js';
 import { buildNavigationPrompt, normalizeNavigationResponse, scoreNavigationCandidates } from '../src/semantic/navigationScout.js';
 
 const workflow = {
@@ -69,6 +69,39 @@ test('local entity semantic resolver receives deterministic fields, behavior and
   });
   assert.equal(parsed.semanticName, 'Filing Reason');
   assert.equal(parsed.localCompletion.length > 0, true);
+});
+
+test('semantic refresh preserves satisfied prerequisites and collapses duplicate interactions for one structural choice group', () => {
+  const graph = {
+    entity: { id: 'entity:setup', label: 'Setup' },
+    fields: [
+      { id: 'field:period', label: 'Period', type: 'select' },
+      { id: 'field:mode-a', label: 'Mode A', type: 'radio', parentGroupId: 'group:mode' },
+      { id: 'field:mode-b', label: 'Mode B', type: 'radio', parentGroupId: 'group:mode' }
+    ],
+    groups: [{ id: 'group:mode', groupType: 'radio', memberFieldIds: ['field:mode-a', 'field:mode-b'] }]
+  };
+  const previous = normalizeLocalEntityResponse({
+    semanticName: 'Setup',
+    interactions: [
+      { semanticKey: 'period', semanticName: 'Period', structuralFieldIds: ['field:period'], question: 'Which period?', requiredForGoal: true, priority: 1 },
+      { semanticKey: 'mode', semanticName: 'Mode', structuralFieldIds: ['field:mode-a'], question: 'Which mode?', requiredForGoal: true, priority: 2, dependsOnSemanticKeys: ['period'] }
+    ]
+  });
+  const refreshed = normalizeLocalEntityResponse({
+    semanticName: 'Setup',
+    interactions: [
+      { semanticKey: 'mode', semanticName: 'Mode', structuralFieldIds: ['field:mode-a'], question: 'Which mode?', requiredForGoal: true, priority: 2, dependsOnSemanticKeys: ['period'] },
+      { semanticKey: 'mode-choice', semanticName: 'Mode Choice', structuralFieldIds: ['field:mode-b'], question: 'Choose a mode', requiredForGoal: true, priority: 3, dependsOnSemanticKeys: ['period'] }
+    ]
+  });
+
+  const merged = mergeSemanticEntityPlans(previous, refreshed, graph);
+  assert.equal(merged.interactions.length, 2);
+  assert.ok(merged.interactions.some((item) => item.semanticKey === 'period'));
+  const mode = merged.interactions.find((item) => item.semanticKey !== 'period');
+  assert.deepEqual([...mode.structuralFieldIds].sort(), ['field:mode-a', 'field:mode-b']);
+  assert.deepEqual(mode.dependsOnSemanticKeys, ['period']);
 });
 
 test('navigation scout scores outgoing candidates against original user goal and workflow context', () => {
