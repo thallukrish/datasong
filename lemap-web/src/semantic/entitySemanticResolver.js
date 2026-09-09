@@ -45,11 +45,18 @@ function compactEntity(entity = {}) {
   };
 }
 
-export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '' } = {}) {
+function withWorkflow(entities = [], knownWorkflow = null) {
+  const all = arr(entities);
+  if (!knownWorkflow?.id || all.some((entity) => entity.id === knownWorkflow.id)) return all;
+  return [knownWorkflow, ...all];
+}
+
+export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
+  const modelEntities = withWorkflow(entities, knownWorkflow);
   const payload = {
     goal: text(userGoal, 300),
     pageId: String(pageId || ''),
-    entities: arr(entities).map(compactEntity)
+    entities: modelEntities.map(compactEntity)
   };
   return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only for supplied entity ids. Do not repeat structural fields. Treat workflow exactly like the other entities. Identify local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, optional question/explanation/caveats/examples, workflow role, action consequence, and workflow description/completion where applicable. Return {entities:[{id,semantic:{...}}]}.`;
 }
@@ -83,8 +90,9 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   };
 }
 
-export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '' } = {}) {
-  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities, pageId });
+export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
+  const modelEntities = withWorkflow(entities, knownWorkflow);
+  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities: modelEntities, pageId });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
-  return normalizeEntitySemanticResponse(response.parsed, entities);
+  return normalizeEntitySemanticResponse(response.parsed, modelEntities);
 }
