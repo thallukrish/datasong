@@ -120,6 +120,7 @@ function printQuestion(question) {
   if (question.information) console.log(`[LeMap-Web] ${question.information}`);
   for (const caveat of arr(question.caveats)) console.log(`[LeMap-Web] Note: ${caveat}`);
   console.log(`[LeMap-Web] ${question.label}`);
+  if (question.instruction) console.log(`[LeMap-Web] ${question.instruction}`);
   if (question.options.length) question.options.forEach((option, index) => console.log(`  ${index + 1}. ${option}`));
   else if (question.examples.length) console.log(`  Examples: ${question.examples.slice(0, 4).join(' • ')}`);
 }
