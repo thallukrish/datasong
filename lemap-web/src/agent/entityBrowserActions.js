@@ -1,6 +1,6 @@
 function arr(value) { return Array.isArray(value) ? value : []; }
 function quoteAttr(value) { return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
-function normalize(value) { return String(value ?? '').trim().toLowerCase(); }
+function normalize(value) { return String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase(); }
 
 function locatorForEntity(page, entity = {}) {
   const structural = entity.structural || {};
@@ -35,14 +35,32 @@ export function memberEntityForGroupValue(entities = [], group = {}, value = '')
     .find((member) => member && [member.name, member.structural?.value].some((candidate) => normalize(candidate) === wanted)) || null;
 }
 
+export function optionCandidateMatches(candidate = {}, value = '') {
+  const wanted = normalize(value);
+  return [candidate.text, candidate.ariaLabel, candidate.dataValue, candidate.value]
+    .some((item) => normalize(item) === wanted);
+}
+
 async function chooseComboboxOption(page, locator, value) {
   await locator.click();
   const wanted = String(value).trim();
-  const exact = page.getByRole('option', { name: wanted, exact: true }).first();
-  if (await exact.count()) {
-    await exact.click();
+  const options = page.locator('[role="option"],mat-option');
+  const count = await options.count();
+
+  for (let index = 0; index < count; index += 1) {
+    const option = options.nth(index);
+    if (!await option.isVisible().catch(() => false)) continue;
+    const candidate = await option.evaluate((element) => ({
+      text: element.innerText || element.textContent || '',
+      ariaLabel: element.getAttribute?.('aria-label') || '',
+      dataValue: element.getAttribute?.('data-value') || '',
+      value: element.getAttribute?.('value') || ''
+    })).catch(() => ({}));
+    if (!optionCandidateMatches(candidate, wanted)) continue;
+    await option.click();
     return;
   }
+
   throw new Error(`Could not find combobox option matching "${wanted}"`);
 }
 
