@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { chromium } from 'playwright-core';
-import { exploreReadOnlyEntity } from '../src/explore/readOnlyExplorer.js';
+import { enumerateEntityValueDomain, exploreReadOnlyEntity } from '../src/explore/readOnlyExplorer.js';
 
 async function launchChrome() {
   const options = { headless: true };
@@ -33,8 +33,10 @@ async function startMaterialLikeServer() {
   const html = `<!doctype html><html><body><main><h1>Setup</h1>
   <script>
     window.__liveChangeCount = 0;
+    window.__optionOpenCount = 0;
     document.addEventListener('change', () => { window.__liveChangeCount += 1; }, true);
     function openOptions() {
+      window.__optionOpenCount += 1;
       if (document.getElementById('overlay')) return;
       const overlay = document.createElement('div');
       overlay.id = 'overlay';
@@ -69,7 +71,7 @@ test('read-only explorer opens no disposable tab and emits no live change event'
   assert.equal(result.restored, true);
 });
 
-test('read-only explorer enumerates a closed finite combobox domain without selecting a value', async (t) => {
+test('read-only page exploration does not eagerly open transient comboboxes', async (t) => {
   const fixture = await startMaterialLikeServer();
   const browser = await launchChrome();
   const context = await browser.newContext();
@@ -81,8 +83,25 @@ test('read-only explorer enumerates a closed finite combobox domain without sele
   const select = result.graph.fields.find((field) => field.domId === 'year');
 
   assert.ok(select);
-  assert.deepEqual(select.valueDomain, ['2025-26', '2026-27']);
+  assert.deepEqual(select.valueDomain, []);
+  assert.equal(await page.evaluate(() => window.__optionOpenCount), 0);
+  assert.equal(result.restored, true);
+});
+
+test('finite combobox options are enumerated only when the selected entity needs them', async (t) => {
+  const fixture = await startMaterialLikeServer();
+  const browser = await launchChrome();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  t.after(async () => { await context.close(); await browser.close(); await fixture.close(); });
+  await page.goto(fixture.url);
+
+  const result = await exploreReadOnlyEntity(page);
+  const select = result.graph.fields.find((field) => field.domId === 'year');
+  const values = await enumerateEntityValueDomain(page, select);
+
+  assert.deepEqual(values, ['2025-26', '2026-27']);
+  assert.equal(await page.evaluate(() => window.__optionOpenCount), 1);
   assert.equal(await page.evaluate(() => window.__liveChangeCount), 0);
   assert.equal(await page.locator('#overlay').count(), 0);
-  assert.equal(result.restored, true);
 });
