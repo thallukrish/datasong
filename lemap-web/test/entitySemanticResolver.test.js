@@ -20,6 +20,7 @@ test('semantic resolver prompt sends workflow, page and controls as ordinary ent
   assert.match(prompt, /workflow:1/);
   assert.match(prompt, /field:year/);
   assert.match(prompt, /semantic additions only/i);
+  assert.match(prompt, /omit irrelevant/i);
   assert.doesNotMatch(prompt, /workflow\?:/i);
 });
 
