@@ -14,8 +14,9 @@ const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive'
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
 LeMap-Web already discovered application structure deterministically. You receive a compact semantic view of entity ids, names, types, selected structural facts and relationships for the current rendered context plus the user's goal.
-Every supplied item, including a workflow, is an entity. Add business/user-facing meaning only to those entity ids. Do not repeat structural facts. Do not invent browser mechanics, values, controls or entity ids.
-Return only semantic fields that materially add meaning. Omit empty, unknown, default or redundant fields. Do not explain ordinary controls unless an explanation is useful to the user. Do not echo option lists.
+Every supplied item, including a workflow, is an entity. Add business/user-facing meaning only to supplied entity ids. Do not repeat structural facts. Do not invent browser mechanics, values, controls or entity ids.
+Return the workflow entity and only entities that materially matter to the current goal or workflow. Omit irrelevant global navigation, decorative, support, chrome and unrelated controls entirely. Omission means the entity is not currently relevant to the goal.
+For returned entities, include only semantic fields that materially add meaning. Omit empty, unknown, default or redundant fields. Do not explain ordinary controls unless an explanation is useful to the user. Do not echo option lists.
 Useful fields include: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local), consequence(reversible|commit|financial|destructive|security), description, complete.
 complete is meaningful primarily for workflow entities. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions that can be automatically executed without submitting, committing, paying, deleting, authorizing or otherwise causing consequential effects. Mark final/committing actions as workflowRole=commit and consequence=commit (or a more specific consequential category).
 Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
@@ -67,7 +68,7 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
     pageId: String(pageId || ''),
     entities: modelEntities.map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn minimal semantic additions only for supplied entity ids. Treat workflow exactly like the other entities. Infer meaning, local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, workflow role and action consequence. Add question/explanation/caveats/examples only when genuinely useful. optionSample is illustrative only; the complete option domain remains local to LeMap-Web and must not be echoed. Return {entities:[{id,semantic:{...}}]}.`;
+  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn minimal semantic additions for the workflow and only goal-relevant entities. Omit irrelevant entities entirely; omission means not relevant for this goal. Treat workflow exactly like the other entities. Infer meaning, local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, workflow role and action consequence. Add question/explanation/caveats/examples only when genuinely useful. optionSample is illustrative only; the complete option domain remains local to LeMap-Web and must not be echoed. Return {entities:[{id,semantic:{...}}]}.`;
 }
 
 function normalizeSemantic(raw = {}) {
