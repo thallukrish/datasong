@@ -14,12 +14,13 @@ function semanticInput(entity = {}) {
     && semantic.required === true;
 }
 
-function shadowedBySemanticGroup(entity, byId) {
+function groupedChoiceMember(entity, byId) {
   if (entity.type !== 'ui_control') return false;
+  if (!['radio', 'checkbox'].includes(entity.structural?.controlType)) return false;
   return arr(entity.links)
     .filter((link) => link.relationship === 'partOf')
     .map((link) => byId.get(link.id))
-    .some((group) => group?.type === 'group' && semanticInput(group));
+    .some((group) => group?.type === 'group');
 }
 
 function currentValueMatches(entity = {}, value) {
@@ -36,7 +37,7 @@ export function selectNextUserInput(entities = [], instances = []) {
   const byId = new Map(all.map((entity) => [entity.id, entity]));
   return all.find((entity) => {
     if (!semanticInput(entity)) return false;
-    if (shadowedBySemanticGroup(entity, byId)) return false;
+    if (groupedChoiceMember(entity, byId)) return false;
     if (!visibleAndEnabled(entity)) return false;
     return !instanceForEntity(instances, entity.id);
   }) || null;
@@ -49,7 +50,7 @@ export function selectReusableUserInput(entities = [], instances = [], skipEntit
   for (const entity of all) {
     if (skipped.has(entity.id)) continue;
     if (!semanticInput(entity)) continue;
-    if (shadowedBySemanticGroup(entity, byId)) continue;
+    if (groupedChoiceMember(entity, byId)) continue;
     if (!visibleAndEnabled(entity)) continue;
     const instance = instanceForEntity(instances, entity.id);
     if (!instance || currentValueMatches(entity, instance.value)) continue;
