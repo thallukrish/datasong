@@ -14,7 +14,7 @@ const page = { id: 'page:1', name: 'Setup', type: 'page', structural: {}, semant
 const year = { id: 'field:year', name: 'Assessment Year', type: 'ui_control', structural: { controlType: 'select', values: ['2026-27', '2025-26'], value: '', visible: true, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which year?' }, links: [] };
 const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online', visible: true, disabled: true, checked: false }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
 const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline', visible: true, disabled: true, checked: false }, semantic: {}, links: [{ id: 'group:mode', relationship: 'partOf' }] };
-const mode = { id: 'group:mode', name: 'Filing Mode', type: 'group', structural: { groupType: 'radio', values: ['Online', 'Offline'], value: null, visible: true, disabled: true }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'How do you want to file?' }, links: [{ id: 'field:online', relationship: 'contains' }, { id: 'field:offline', relationship: 'contains' }] };
+const mode = { id: 'group:mode', name: 'Filing Mode', type: 'group', structural: { groupType: 'radio', cardinality: 'exactlyOne', values: ['Online', 'Offline'], value: null, visible: true, disabled: true }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, selectionRule: 'exactlyOne', question: 'How do you want to file?' }, links: [{ id: 'field:online', relationship: 'contains' }, { id: 'field:offline', relationship: 'contains' }] };
 const next = { id: 'button:next', name: 'Continue', type: 'ui_control', structural: { controlType: 'button', visible: true, disabled: false }, semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' }, links: [] };
 
 test('next input is a relevant required enabled entity with no instance', () => {
@@ -61,6 +61,47 @@ test('stored instance reuse skips an entity already applied in the current page 
   const customCombobox = { ...year, structural: { ...year.structural, controlType: 'autocomplete', value: '', values: ['2025-26', '2026-27 (Current A.Y.)'] } };
   assert.equal(selectReusableUserInput([page, customCombobox], instances)?.entity.id, 'field:year');
   assert.equal(selectReusableUserInput([page, customCombobox], instances, new Set(['field:year'])), null);
+});
+
+test('exactly-one group question accepts one option', () => {
+  const question = buildEntityQuestion(mode, [page, online, offline, mode]);
+  assert.equal(question.selectionRule, 'exactlyOne');
+  assert.equal(question.multiple, false);
+  assert.match(question.instruction, /choose one/i);
+  assert.deepEqual(question.options, ['Online', 'Offline']);
+  assert.equal(resolveEntityAnswer(question, '2'), 'Offline');
+});
+
+test('checkbox group question accepts multiple selections using semantic rule', () => {
+  const conditions = {
+    id: 'group:conditions',
+    name: 'Applicable Conditions',
+    type: 'group',
+    structural: { groupType: 'checkbox', cardinality: 'zeroOrMore', values: ['Condition A', 'Condition B', 'Condition C'] },
+    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, selectionRule: 'atLeastOne', question: 'Which conditions apply?' },
+    links: []
+  };
+  const question = buildEntityQuestion(conditions, [conditions]);
+  assert.equal(question.selectionRule, 'atLeastOne');
+  assert.equal(question.multiple, true);
+  assert.match(question.instruction, /one or more/i);
+  assert.deepEqual(resolveEntityAnswer(question, '1, 3'), ['Condition A', 'Condition C']);
+  assert.deepEqual(resolveEntityAnswer(question, 'Condition A, Condition B'), ['Condition A', 'Condition B']);
+  assert.equal(resolveEntityAnswer(question, 'none'), null);
+});
+
+test('zero-or-more checkbox group accepts none explicitly', () => {
+  const conditions = {
+    id: 'group:conditions',
+    name: 'Applicable Conditions',
+    type: 'group',
+    structural: { groupType: 'checkbox', cardinality: 'zeroOrMore', values: ['Condition A', 'Condition B'] },
+    semantic: { interaction: 'user_input', relevantToGoal: true, required: true },
+    links: []
+  };
+  const question = buildEntityQuestion(conditions, [conditions]);
+  assert.equal(question.selectionRule, 'zeroOrMore');
+  assert.deepEqual(resolveEntityAnswer(question, 'none'), []);
 });
 
 test('finite questions expose structural options and resolve number locally', () => {
