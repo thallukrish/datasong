@@ -16,6 +16,10 @@ const snapshot = {
           { control: true, tag: 'input', domId: 'online', name: 'mode', label: 'Online', type: 'radio', role: '', value: 'online', checked: true, defaultChecked: false, hidden: false, disabled: false, options: [] },
           { control: true, tag: 'input', domId: 'offline', name: 'mode', label: 'Offline', type: 'radio', role: '', value: 'offline', checked: false, defaultChecked: true, hidden: false, disabled: false, options: [] }
         ]},
+        { tag: 'fieldset', label: 'Applicable Conditions', hidden: false, children: [
+          { control: true, tag: 'input', domId: 'condition-a', name: 'conditionA', label: 'Condition A', type: 'checkbox', role: '', value: 'a', checked: false, defaultChecked: false, hidden: false, disabled: false, options: [] },
+          { control: true, tag: 'input', domId: 'condition-b', name: 'conditionB', label: 'Condition B', type: 'checkbox', role: '', value: 'b', checked: true, defaultChecked: false, hidden: false, disabled: false, options: [] }
+        ]},
         { control: true, tag: 'button', domId: 'continue', name: '', label: 'Continue', type: '', role: '', value: null, defaultValue: null, hidden: false, disabled: true, options: [] },
         { control: true, tag: 'a', domId: 'help', name: '', label: 'Help', type: '', role: 'link', href: '/help', value: null, defaultValue: null, hidden: false, disabled: false, options: [] }
       ]}
@@ -39,6 +43,7 @@ test('browser structure becomes one array of page, group and ui-control entities
   assert.deepEqual(year.structural.values, ['2026-27', '2025-26']);
   assert.equal(group.type, 'group');
   assert.equal(group.structural.groupType, 'radio');
+  assert.equal(group.structural.cardinality, 'exactlyOne');
   assert.deepEqual(group.structural.values, ['Online', 'Offline']);
   assert.equal(button.structural.controlType, 'button');
   assert.equal(link.structural.controlType, 'link');
@@ -49,6 +54,15 @@ test('browser structure becomes one array of page, group and ui-control entities
   assert.ok(group.links.some((item) => item.id === online.id && item.relationship === 'contains'));
   assert.ok(online.links.some((item) => item.id === group.id && item.relationship === 'partOf'));
   assert.ok(group.links.some((item) => item.id === offline.id && item.relationship === 'contains'));
+});
+
+test('checkbox groups carry zero-or-more structural cardinality', () => {
+  const { entities } = buildStructuralEntities(snapshot);
+  const group = entities.find((entity) => entity.type === 'group' && entity.name === 'Applicable Conditions');
+  assert.ok(group);
+  assert.equal(group.structural.groupType, 'checkbox');
+  assert.equal(group.structural.cardinality, 'zeroOrMore');
+  assert.deepEqual(group.structural.values, ['Condition A', 'Condition B']);
 });
 
 test('entity structure keeps deterministic default value separate from current value', () => {
