@@ -4,14 +4,32 @@ import { preprocessEntity } from '../graph/entityPreprocessor.js';
 function arr(value) { return Array.isArray(value) ? value : []; }
 function quoteAttr(value) { return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
 
-function fieldLocator(page, field = {}) {
+function fieldShape(entityOrField = {}) {
+  if (entityOrField.structural) {
+    return {
+      id: entityOrField.id,
+      domId: entityOrField.structural.domId || '',
+      name: entityOrField.structural.name || '',
+      label: entityOrField.name || '',
+      disabled: !!entityOrField.structural.disabled,
+      tag: entityOrField.structural.tag || '',
+      role: entityOrField.structural.role || '',
+      valueDomain: arr(entityOrField.structural.values)
+    };
+  }
+  return entityOrField;
+}
+
+function fieldLocator(page, entityOrField = {}) {
+  const field = fieldShape(entityOrField);
   if (field.domId) return page.locator(`[id="${quoteAttr(field.domId)}"]`).first();
   if (field.name) return page.locator(`[name="${quoteAttr(field.name)}"]`).first();
   if (field.label) return page.getByLabel(field.label, { exact: true }).first();
   return null;
 }
 
-function shouldEnumerateTransientDomain(field = {}) {
+function canEnumerateTransientDomain(entityOrField = {}) {
+  const field = fieldShape(entityOrField);
   if (arr(field.valueDomain).length) return false;
   if (field.disabled) return false;
   const tag = String(field.tag || '').toLowerCase();
@@ -43,8 +61,9 @@ async function visibleOptionLabels(page) {
   return [...new Set(labels)];
 }
 
-async function enumerateTransientDomain(page, field) {
-  const locator = fieldLocator(page, field);
+export async function enumerateEntityValueDomain(page, entityOrField = {}) {
+  if (!canEnumerateTransientDomain(entityOrField)) return [...arr(fieldShape(entityOrField).valueDomain)];
+  const locator = fieldLocator(page, entityOrField);
   if (!locator || !await locator.count()) return [];
   if (!await structurallyAvailable(locator)) return [];
 
@@ -64,27 +83,12 @@ async function enumerateTransientDomain(page, field) {
 export async function exploreReadOnlyEntity(page) {
   const snapshot = await snapshotPage(page);
   const graph = preprocessEntity(snapshot);
-  const errors = [];
-
-  for (const field of arr(graph.fields)) {
-    if (!shouldEnumerateTransientDomain(field)) continue;
-    try {
-      const values = await enumerateTransientDomain(page, field);
-      if (values.length) field.valueDomain = values;
-    } catch (error) {
-      errors.push({
-        fieldId: field.id,
-        stage: 'enumerate_value_domain',
-        message: String(error?.message || error).slice(0, 300)
-      });
-    }
-  }
-
   const remainingVisibleOptions = await visibleOptionLabels(page).catch(() => []);
+  const errors = [];
   if (remainingVisibleOptions.length) {
     errors.push({
-      stage: 'restore_value_domain_overlay',
-      message: 'Finite-choice option overlay remained visible after enumeration.'
+      stage: 'unexpected_value_domain_overlay',
+      message: 'A finite-choice option overlay was already visible during page capture.'
     });
   }
 
