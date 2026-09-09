@@ -10,7 +10,7 @@ import { applyObservedStructuralChange } from './graph/structuralChange.js';
 import { findEntity, linkEntities, mergeSemanticPatch, upsertEntity } from './graph/entityGraph.js';
 import { upsertInstanceValue } from './graph/instanceGraph.js';
 import { loadEntityGraph, loadInstanceGraph, saveEntityGraph, saveInstanceGraph } from './graph/graphStore.js';
-import { resolveEntitySemantics } from './semantic/entitySemanticResolver.js';
+import { entitiesNeedingSemantics, resolveEntitySemantics } from './semantic/entitySemanticResolver.js';
 import { setModelCallLogger } from './semantic/modelCall.js';
 import { applyEntityValue, executeEntityAction } from './agent/entityBrowserActions.js';
 import {
@@ -78,22 +78,15 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   return findEntity(entityGraph, workflowId);
 }
 
-function needsSemantic(entity = {}) {
-  const semantic = entity.semantic || {};
-  if (!Object.keys(semantic).length) return true;
-  if (entity.type === 'workflow' && semantic.complete === undefined) return true;
-  if (['action', 'navigation'].includes(semantic.interaction) && !semantic.consequence) return true;
-  return false;
-}
-
 async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, force = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
   const workflow = findEntity(entityGraph, workflowId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
-  const unresolved = semanticEntities.filter((entity) => needsSemantic(findEntity(entityGraph, entity.id) || entity));
-  if (!force && !unresolved.length) return { called: false };
+  const unresolved = entitiesNeedingSemantics(semanticEntities.map((entity) => findEntity(entityGraph, entity.id) || entity));
+  const candidates = force ? semanticEntities : unresolved;
+  if (!candidates.length) return { called: false, count: 0 };
 
-  const result = await resolveEntitySemantics({ client, model, userGoal, entities: semanticEntities, pageId });
+  const result = await resolveEntitySemantics({ client, model, userGoal, entities: candidates, pageId });
   const patched = new Set();
   for (const patch of result.entities) {
     patched.add(patch.id);
@@ -109,7 +102,7 @@ async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, cu
   }
 
   applyKnownSemantics(currentEntities, entityGraph);
-  return { called: true };
+  return { called: true, count: candidates.length };
 }
 
 async function ensureInputOptions(page, entity, entityGraph) {
@@ -218,7 +211,7 @@ try {
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
     await saveEntityGraph(entityFile, entityGraph);
-    if (semanticResult.called) console.log('[LeMap-Web] semantic additions merged into entity graph');
+    if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved entities`);
 
     const workflow = findEntity(entityGraph, workflowId);
     if (workflow?.semantic?.complete) {
