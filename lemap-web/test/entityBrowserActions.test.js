@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { memberEntityForGroupValue, entityInteractionKind } from '../src/agent/entityBrowserActions.js';
+import { memberEntityForGroupValue, entityInteractionKind, optionCandidateMatches } from '../src/agent/entityBrowserActions.js';
 
 const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online' }, links: [] };
 const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline' }, links: [] };
@@ -16,4 +16,11 @@ test('entity interaction kind follows structural control type', () => {
   assert.equal(entityInteractionKind({ structural: { controlType: 'select', tag: 'mat-select', role: 'combobox' } }), 'combobox');
   assert.equal(entityInteractionKind({ structural: { controlType: 'select', tag: 'select' } }), 'native_select');
   assert.equal(entityInteractionKind({ structural: { controlType: 'text', tag: 'input' } }), 'fillable');
+});
+
+test('combobox option matching uses the same visible/value evidence captured during discovery', () => {
+  assert.equal(optionCandidateMatches({ text: '2026-27\n(Current A.Y.)' }, '2026-27 (Current A.Y.)'), true);
+  assert.equal(optionCandidateMatches({ ariaLabel: 'Assessment year', dataValue: '2026-27 (Current A.Y.)' }, '2026-27 (Current A.Y.)'), true);
+  assert.equal(optionCandidateMatches({ value: '2026-27' }, '2026-27'), true);
+  assert.equal(optionCandidateMatches({ text: '2025-26' }, '2026-27 (Current A.Y.)'), false);
 });
