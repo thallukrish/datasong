@@ -4,7 +4,7 @@ import process from 'node:process';
 import readline from 'node:readline/promises';
 import { chromium } from 'playwright-core';
 import { choosePage } from './browserCapture.js';
-import { exploreReadOnlyEntity } from './explore/readOnlyExplorer.js';
+import { enumerateEntityValueDomain, exploreReadOnlyEntity } from './explore/readOnlyExplorer.js';
 import { buildStructuralEntitiesFromPreprocessed } from './graph/structuralEntityBuilder.js';
 import { applyObservedStructuralChange } from './graph/structuralChange.js';
 import { findEntity, linkEntities, mergeSemanticPatch, upsertEntity } from './graph/entityGraph.js';
@@ -112,6 +112,16 @@ async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, cu
   return { called: true };
 }
 
+async function ensureInputOptions(page, entity, entityGraph) {
+  if (arr(entity?.structural?.values).length) return entity;
+  const values = await enumerateEntityValueDomain(page, entity);
+  if (!values.length) return entity;
+  entity.structural = { ...entity.structural, values: [...values] };
+  const persisted = findEntity(entityGraph, entity.id);
+  if (persisted) persisted.structural = { ...persisted.structural, values: [...values] };
+  return entity;
+}
+
 function printQuestion(question) {
   console.log('');
   if (question.information) console.log(`[LeMap-Web] ${question.information}`);
@@ -171,6 +181,7 @@ try {
   const entityGraph = await loadEntityGraph(entityFile);
   const instances = await loadInstanceGraph(instanceFile);
   const workflowId = workflowIdForGoal(userGoal);
+  const appliedInstanceEntityIds = new Set();
 
   browser = await chromium.connectOverCDP(endpoint);
   const pages = browser.contexts().flatMap((context) => context.pages());
@@ -216,17 +227,20 @@ try {
       break;
     }
 
-    const reusable = selectReusableUserInput(capture.entities, instances);
+    const reusable = selectReusableUserInput(capture.entities, instances, appliedInstanceEntityIds);
     if (reusable) {
       console.log(`[LeMap-Web] applying stored instance value for ${reusable.entity.name}`);
+      await runLogger.write('instance_apply', { entityId: reusable.entity.id, source: 'stored' });
       const before = capture;
       await applyEntityValue(page, capture.entities, reusable.entity, reusable.instance.value);
       if (settleMs) await page.waitForTimeout(settleMs);
       const after = await captureEntities(page);
 
       if (after.pageId !== before.pageId) {
+        appliedInstanceEntityIds.clear();
         contextTransition(entityGraph, workflowId, reusable.entity.id, after);
       } else {
+        appliedInstanceEntityIds.add(reusable.entity.id);
         applyObservedStructuralChange(entityGraph, {
           beforeEntities: before.entities,
           afterEntities: after.entities,
@@ -242,6 +256,8 @@ try {
 
     const input = selectNextUserInput(capture.entities, instances);
     if (input) {
+      await ensureInputOptions(page, input, entityGraph);
+      await saveEntityGraph(entityFile, entityGraph);
       const question = buildEntityQuestion(input, capture.entities);
       printQuestion(question);
       let value = null;
@@ -261,8 +277,10 @@ try {
       const after = await captureEntities(page);
 
       if (after.pageId !== before.pageId) {
+        appliedInstanceEntityIds.clear();
         contextTransition(entityGraph, workflowId, input.id, after);
       } else {
+        appliedInstanceEntityIds.add(input.id);
         const change = applyObservedStructuralChange(entityGraph, {
           beforeEntities: before.entities,
           afterEntities: after.entities,
@@ -296,6 +314,7 @@ try {
     const after = await captureEntities(page);
 
     if (after.pageId !== before.pageId) {
+      appliedInstanceEntityIds.clear();
       contextTransition(entityGraph, workflowId, continuation.id, after);
       console.log(`[LeMap-Web] transition: ${before.pageId} -> ${after.pageId}`);
       await runLogger.write('transition', { sourcePageId: before.pageId, actionEntityId: continuation.id, targetPageId: after.pageId });
