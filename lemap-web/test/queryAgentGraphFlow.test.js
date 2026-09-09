@@ -51,6 +51,15 @@ test('stored instance reuse prefers the group over member controls', () => {
   assert.equal(reusable?.instance.value, 'Online');
 });
 
+test('stored instance reuse skips an entity already applied in the current page state', () => {
+  const instances = createInstanceGraph([
+    { id: 'instance:year', type: 'instance', value: '2026-27 (Current A.Y.)', links: [{ id: 'field:year', relationship: 'instanceOf' }] }
+  ]);
+  const customCombobox = { ...year, structural: { ...year.structural, controlType: 'autocomplete', value: '', values: ['2025-26', '2026-27 (Current A.Y.)'] } };
+  assert.equal(selectReusableUserInput([page, customCombobox], instances)?.entity.id, 'field:year');
+  assert.equal(selectReusableUserInput([page, customCombobox], instances, new Set(['field:year'])), null);
+});
+
 test('finite questions expose structural options and resolve number locally', () => {
   const question = buildEntityQuestion(year, [page, year]);
   assert.deepEqual(question.options, ['2026-27', '2025-26']);
