@@ -13,35 +13,44 @@ const WORKFLOW_ROLES = new Set(['continue', 'back', 'commit', 'global', 'local',
 const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive', 'security', 'unknown']);
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
-LeMap-Web already discovered application structure deterministically. You receive entity ids, names, types, structural facts and relationships for the current rendered context plus the user's goal.
+LeMap-Web already discovered application structure deterministically. You receive a compact semantic view of entity ids, names, types, selected structural facts and relationships for the current rendered context plus the user's goal.
 Every supplied item, including a workflow, is an entity. Add business/user-facing meaning only to those entity ids. Do not repeat structural facts. Do not invent browser mechanics, values, controls or entity ids.
-For each supplied entity you may add: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation|unknown), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local|unknown), consequence(reversible|commit|financial|destructive|security|unknown), description, complete.
-Questions, explanations, examples, caveats, description and complete are optional. complete is meaningful primarily for workflow entities. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions that can be automatically executed without submitting, committing, paying, deleting, authorizing or otherwise causing consequential effects. Mark final/committing actions as workflowRole=commit and consequence=commit (or a more specific consequential category).
+Return only semantic fields that materially add meaning. Omit empty, unknown, default or redundant fields. Do not explain ordinary controls unless an explanation is useful to the user. Do not echo option lists.
+Useful fields include: meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local), consequence(reversible|commit|financial|destructive|security), description, complete.
+complete is meaningful primarily for workflow entities. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions that can be automatically executed without submitting, committing, paying, deleting, authorizing or otherwise causing consequential effects. Mark final/committing actions as workflowRole=commit and consequence=commit (or a more specific consequential category).
 Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
+
+function compactLinks(links = []) {
+  return arr(links).slice(0, 8).map((link) => ({
+    id: String(link?.id || ''),
+    relationship: String(link?.relationship || '')
+  })).filter((link) => link.id && link.relationship);
+}
 
 function compactEntity(entity = {}) {
   const structural = entity.structural || {};
+  const values = arr(structural.values);
   const safeStructural = {
     goal: entity.type === 'workflow' ? structural.goal || undefined : undefined,
+    route: entity.type === 'page' || entity.type === 'modal' ? structural.route || undefined : undefined,
     controlType: structural.controlType || undefined,
     groupType: structural.groupType || undefined,
-    tag: structural.tag || undefined,
-    role: structural.role || undefined,
-    route: structural.route || undefined,
-    visible: structural.visible,
-    disabled: structural.disabled,
-    required: structural.required,
-    readonly: structural.readonly,
-    checked: structural.checked,
-    hasValue: structural.value !== undefined && structural.value !== null && String(structural.value).trim() !== '',
-    values: arr(structural.values).slice(0, 60)
+    required: structural.required === true ? true : undefined,
+    disabled: structural.disabled === true ? true : undefined,
+    readonly: structural.readonly === true ? true : undefined,
+    checked: typeof structural.checked === 'boolean' ? structural.checked : undefined,
+    hasValue: structural.value !== undefined && structural.value !== null && String(structural.value).trim() !== '' ? true : undefined,
+    optionCount: values.length || undefined,
+    optionSample: values.length ? values.slice(0, 4) : undefined
   };
+  const links = compactLinks(entity.links);
   return {
     id: entity.id,
     name: entity.name,
     type: entity.type,
     structural: Object.fromEntries(Object.entries(safeStructural).filter(([, value]) => value !== undefined)),
-    links: arr(entity.links).slice(0, 80)
+    linkCount: arr(entity.links).length || undefined,
+    links: links.length ? links : undefined
   };
 }
 
@@ -58,7 +67,7 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
     pageId: String(pageId || ''),
     entities: modelEntities.map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only for supplied entity ids. Do not repeat structural fields. Treat workflow exactly like the other entities. Identify local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, optional question/explanation/caveats/examples, workflow role, action consequence, and workflow description/completion where applicable. Return {entities:[{id,semantic:{...}}]}.`;
+  return `MODE web-entity-semantics-v1\nENTITY STRUCTURE:\n${JSON.stringify(payload)}\n\nTASK:\nReturn minimal semantic additions only for supplied entity ids. Treat workflow exactly like the other entities. Infer meaning, local/global scope, user-input/information/action/navigation role, goal relevance/requiredness, workflow role and action consequence. Add question/explanation/caveats/examples only when genuinely useful. optionSample is illustrative only; the complete option domain remains local to LeMap-Web and must not be echoed. Return {entities:[{id,semantic:{...}}]}.`;
 }
 
 function normalizeSemantic(raw = {}) {
