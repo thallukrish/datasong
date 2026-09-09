@@ -65,6 +65,45 @@ test('only entities without completed semantics are selected for model enrichmen
   assert.deepEqual(selected.map((entity) => entity.id), ['button:continue']);
 });
 
+test('grouped radio members are structural choices, not separate semantic entities', () => {
+  const group = {
+    id: 'group:mode',
+    name: 'Filing Mode',
+    type: 'group',
+    structural: { groupType: 'radio', values: ['Online (Recommended)', 'Offline'] },
+    semantic: {},
+    links: [
+      { id: 'field:online', relationship: 'contains' },
+      { id: 'field:offline', relationship: 'contains' }
+    ]
+  };
+  const online = {
+    id: 'field:online',
+    name: 'Online (Recommended)',
+    type: 'ui_control',
+    structural: { controlType: 'radio' },
+    semantic: {},
+    links: [{ id: 'group:mode', relationship: 'partOf' }]
+  };
+  const offline = {
+    id: 'field:offline',
+    name: 'Offline',
+    type: 'ui_control',
+    structural: { controlType: 'radio' },
+    semantic: {},
+    links: [{ id: 'group:mode', relationship: 'partOf' }]
+  };
+
+  const selected = entitiesNeedingSemantics([group, online, offline]);
+  assert.deepEqual(selected.map((entity) => entity.id), ['group:mode']);
+
+  const prompt = buildEntitySemanticPrompt({ userGoal: 'File a return', entities: selected });
+  assert.match(prompt, /group:mode/);
+  assert.match(prompt, /Online \(Recommended\)/);
+  assert.match(prompt, /Offline/);
+  assert.doesNotMatch(prompt, /field:online|field:offline/);
+});
+
 test('semantic response accepts workflow completion as a normal semantic patch', () => {
   const result = normalizeEntitySemanticResponse({
     entities: [
