@@ -15,6 +15,7 @@ const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive'
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
 LeMap-Web already owns the complete structural entity graph. You receive only entities that still need semantic interpretation plus the user's goal.
 For each supplied entity, return only its id and semantic additions. Never repeat structural facts, option lists, links, browser mechanics or user values. Never invent entity ids.
+A group entity represents one user-facing choice. Radio/checkbox member controls inside a supplied group are structural implementation details and are not separate semantic questions.
 Omit irrelevant entities entirely. For relevant entities, add only useful semantic fields such as meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation), relevantToGoal, required, question, explanation, caveats, examples, workflowRole(continue|back|commit|global|local), consequence(reversible|commit|financial|destructive|security), description, complete.
 complete is primarily for workflow entities. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions. Mark final/committing actions as workflowRole=commit and consequence=commit or a more specific consequential category.
 Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
@@ -24,11 +25,18 @@ function compactEntity(entity = {}) {
   const hint = entity.type === 'workflow'
     ? { goal: structural.goal || undefined }
     : entity.type === 'group'
-      ? { groupType: structural.groupType || undefined }
+      ? {
+          groupType: structural.groupType || undefined,
+          choices: arr(structural.values).slice(0, 6).map((value) => text(value, 100)).filter(Boolean)
+        }
       : entity.type === 'ui_control'
         ? { controlType: structural.controlType || undefined }
         : {};
-  const structuralHint = Object.fromEntries(Object.entries(hint).filter(([, value]) => value !== undefined));
+  const structuralHint = Object.fromEntries(Object.entries(hint).filter(([, value]) => {
+    if (value === undefined) return false;
+    if (Array.isArray(value) && !value.length) return false;
+    return true;
+  }));
   return {
     id: String(entity.id || ''),
     name: text(entity.name, 180),
@@ -43,8 +51,20 @@ function withWorkflow(entities = [], knownWorkflow = null) {
   return [knownWorkflow, ...all];
 }
 
+function groupedChoiceMember(entity = {}, byId = new Map()) {
+  if (entity?.type !== 'ui_control') return false;
+  if (!['radio', 'checkbox'].includes(entity?.structural?.controlType)) return false;
+  return arr(entity.links)
+    .filter((link) => link.relationship === 'partOf')
+    .map((link) => byId.get(link.id))
+    .some((group) => group?.type === 'group');
+}
+
 export function entitiesNeedingSemantics(entities = []) {
-  return arr(entities).filter((entity) => {
+  const all = arr(entities);
+  const byId = new Map(all.map((entity) => [entity.id, entity]));
+  return all.filter((entity) => {
+    if (groupedChoiceMember(entity, byId)) return false;
     const semantic = entity?.semantic || {};
     if (!Object.keys(semantic).length) return true;
     if (entity?.type === 'workflow' && semantic.complete === undefined) return true;
@@ -60,7 +80,7 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
     pageId: String(pageId || ''),
     entities: modelEntities.map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. Do not echo structure, values or relationships.`;
+  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. A group is one semantic interaction; do not split its choices into separate questions. Do not echo structure, values or relationships.`;
 }
 
 function normalizeSemantic(raw = {}) {
