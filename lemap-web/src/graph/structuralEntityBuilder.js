@@ -26,6 +26,19 @@ function controlStructural(field = {}) {
   };
 }
 
+function groupCardinality(groupType = '') {
+  if (groupType === 'radio') return 'exactlyOne';
+  if (groupType === 'checkbox') return 'zeroOrMore';
+  return 'unknown';
+}
+
+function groupSelectionValue(members = [], flag = 'checked', groupType = '') {
+  const selected = arr(members).filter((member) => member?.[flag] === true);
+  const labels = selected.map((member) => member.label || member.value).filter(Boolean);
+  if (groupType === 'checkbox') return labels;
+  return labels[0] ?? null;
+}
+
 export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
   const graph = createEntityGraph();
   const pageId = parsed.entity?.presentation?.pageId || parsed.entity?.id;
@@ -63,16 +76,16 @@ export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
     const members = arr(group.memberFieldIds)
       .map((id) => controls.find((field) => field.id === id))
       .filter(Boolean);
-    const selected = members.find((member) => member.checked === true);
-    const defaultSelected = members.find((member) => member.defaultChecked === true);
+    const groupType = group.groupType || '';
     upsertEntity(graph, {
       id: group.id,
-      name: group.label || group.groupType || group.id,
+      name: group.label || groupType || group.id,
       type: 'group',
       structural: {
-        groupType: group.groupType || '',
-        defaultValue: defaultSelected ? (defaultSelected.label || defaultSelected.value || null) : null,
-        value: selected ? (selected.label || selected.value || null) : null,
+        groupType,
+        cardinality: groupCardinality(groupType),
+        defaultValue: groupSelectionValue(members, 'defaultChecked', groupType),
+        value: groupSelectionValue(members, 'checked', groupType),
         values: members.map((member) => member.label || member.value).filter(Boolean),
         visible: members.some((member) => member.visible !== false),
         disabled: members.length > 0 && members.every((member) => !!member.disabled),
