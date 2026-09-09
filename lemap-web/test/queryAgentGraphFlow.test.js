@@ -42,10 +42,11 @@ test('stored instance reuse prefers the group over member controls', () => {
     { id: 'instance:mode', type: 'instance', value: 'Online', links: [{ id: 'group:mode', relationship: 'instanceOf' }] },
     { id: 'instance:online', type: 'instance', value: true, links: [{ id: 'field:online', relationship: 'instanceOf' }] }
   ]);
+  const appliedYear = { ...year, structural: { ...year.structural, value: '2026-27' } };
   const enabledMode = { ...mode, structural: { ...mode.structural, disabled: false } };
   const enabledOnline = { ...online, structural: { ...online.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
   const enabledOffline = { ...offline, structural: { ...offline.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
-  const reusable = selectReusableUserInput([page, year, enabledOnline, enabledOffline, enabledMode, next], instances);
+  const reusable = selectReusableUserInput([page, appliedYear, enabledOnline, enabledOffline, enabledMode, next], instances);
   assert.equal(reusable?.entity.id, 'group:mode');
   assert.equal(reusable?.instance.value, 'Online');
 });
