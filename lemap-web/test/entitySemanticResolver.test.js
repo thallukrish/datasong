@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildEntitySemanticPrompt,
+  entitiesNeedingSemantics,
   normalizeEntitySemanticResponse,
   resolveEntitySemantics
 } from '../src/semantic/entitySemanticResolver.js';
@@ -24,7 +25,7 @@ test('semantic resolver prompt sends workflow, page and controls as ordinary ent
   assert.doesNotMatch(prompt, /workflow\?:/i);
 });
 
-test('semantic prompt keeps full option domains out of the model payload', () => {
+test('semantic prompt sends only identity and minimal interpretation hints, not graph payload', () => {
   const manyValues = Array.from({ length: 20 }, (_, index) => `value-${index + 1}`);
   const manyLinks = Array.from({ length: 20 }, (_, index) => ({ id: `entity:${index + 1}`, relationship: 'contains' }));
   const prompt = buildEntitySemanticPrompt({
@@ -39,12 +40,29 @@ test('semantic prompt keeps full option domains out of the model payload', () =>
     }]
   });
 
-  assert.match(prompt, /"optionCount":20/);
-  assert.match(prompt, /"optionSample":\["value-1","value-2","value-3","value-4"\]/);
-  assert.doesNotMatch(prompt, /value-5/);
-  assert.match(prompt, /"linkCount":20/);
-  assert.match(prompt, /entity:8/);
-  assert.doesNotMatch(prompt, /entity:9/);
+  assert.match(prompt, /"id":"field:large"/);
+  assert.match(prompt, /"name":"Large Choice"/);
+  assert.match(prompt, /"type":"ui_control"/);
+  assert.match(prompt, /"controlType":"select"/);
+  assert.doesNotMatch(prompt, /optionCount|optionSample|value-1|linkCount|entity:1/);
+});
+
+test('only entities without completed semantics are selected for model enrichment', () => {
+  const resolvedInput = {
+    ...pageEntities[1],
+    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, meaning: 'assessment year' }
+  };
+  const unresolvedAction = {
+    ...pageEntities[2],
+    semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue' }
+  };
+  const resolvedWorkflow = {
+    ...workflow,
+    semantic: { relevantToGoal: true, complete: false, description: 'Complete setup' }
+  };
+
+  const selected = entitiesNeedingSemantics([resolvedWorkflow, resolvedInput, unresolvedAction]);
+  assert.deepEqual(selected.map((entity) => entity.id), ['button:continue']);
 });
 
 test('semantic response accepts workflow completion as a normal semantic patch', () => {
