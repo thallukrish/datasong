@@ -28,11 +28,14 @@ test('next input is a relevant required enabled entity with no instance', () => 
   assert.equal(selectNextUserInput([page, year, online, offline, enabledMode, next], instances)?.id, 'group:mode');
 });
 
-test('semantic group shadows member controls even if model marks members as user input too', () => {
+test('structural group always shadows member controls even if stale member semantics say user input', () => {
   const instances = createInstanceGraph([{ id: 'instance:year', type: 'instance', value: '2026-27', links: [{ id: 'field:year', relationship: 'instanceOf' }] }]);
-  const enabledMode = { ...mode, structural: { ...mode.structural, disabled: false } };
+  const unresolvedMode = { ...mode, structural: { ...mode.structural, disabled: false }, semantic: {} };
   const enabledOnline = { ...online, structural: { ...online.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
   const enabledOffline = { ...offline, structural: { ...offline.structural, disabled: false }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true } };
+  assert.equal(selectNextUserInput([page, year, enabledOnline, enabledOffline, unresolvedMode, next], instances), null);
+
+  const enabledMode = { ...mode, structural: { ...mode.structural, disabled: false } };
   assert.equal(selectNextUserInput([page, year, enabledOnline, enabledOffline, enabledMode, next], instances)?.id, 'group:mode');
 });
 
