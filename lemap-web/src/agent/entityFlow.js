@@ -42,10 +42,12 @@ export function selectNextUserInput(entities = [], instances = []) {
   }) || null;
 }
 
-export function selectReusableUserInput(entities = [], instances = []) {
+export function selectReusableUserInput(entities = [], instances = [], skipEntityIds = new Set()) {
   const all = arr(entities);
   const byId = new Map(all.map((entity) => [entity.id, entity]));
+  const skipped = skipEntityIds instanceof Set ? skipEntityIds : new Set(arr(skipEntityIds).map(String));
   for (const entity of all) {
+    if (skipped.has(entity.id)) continue;
     if (!semanticInput(entity)) continue;
     if (shadowedBySemanticGroup(entity, byId)) continue;
     if (!visibleAndEnabled(entity)) continue;
