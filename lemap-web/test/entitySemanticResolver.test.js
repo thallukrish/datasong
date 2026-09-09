@@ -70,7 +70,7 @@ test('grouped radio members are structural choices, not separate semantic entiti
     id: 'group:mode',
     name: 'Filing Mode',
     type: 'group',
-    structural: { groupType: 'radio', values: ['Online (Recommended)', 'Offline'] },
+    structural: { groupType: 'radio', cardinality: 'exactlyOne', values: ['Online (Recommended)', 'Offline'] },
     semantic: {},
     links: [
       { id: 'field:online', relationship: 'contains' },
@@ -99,9 +99,18 @@ test('grouped radio members are structural choices, not separate semantic entiti
 
   const prompt = buildEntitySemanticPrompt({ userGoal: 'File a return', entities: selected });
   assert.match(prompt, /group:mode/);
+  assert.match(prompt, /"cardinality":"exactlyOne"/);
   assert.match(prompt, /Online \(Recommended\)/);
   assert.match(prompt, /Offline/);
   assert.doesNotMatch(prompt, /field:online|field:offline/);
+});
+
+test('semantic response can refine a group selection rule', () => {
+  const group = { id: 'group:conditions', name: 'Applicable Conditions', type: 'group', structural: { groupType: 'checkbox', cardinality: 'zeroOrMore' }, semantic: {}, links: [] };
+  const result = normalizeEntitySemanticResponse({
+    entities: [{ id: 'group:conditions', semantic: { interaction: 'user_input', relevantToGoal: true, required: true, selectionRule: 'atLeastOne', question: 'Which conditions apply?' } }]
+  }, [group]);
+  assert.equal(result.entities[0].semantic.selectionRule, 'atLeastOne');
 });
 
 test('semantic response accepts workflow completion as a normal semantic patch', () => {
