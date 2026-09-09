@@ -23,6 +23,29 @@ test('semantic resolver prompt sends workflow, page and controls as ordinary ent
   assert.doesNotMatch(prompt, /workflow\?:/i);
 });
 
+test('semantic prompt keeps full option domains out of the model payload', () => {
+  const manyValues = Array.from({ length: 20 }, (_, index) => `value-${index + 1}`);
+  const manyLinks = Array.from({ length: 20 }, (_, index) => ({ id: `entity:${index + 1}`, relationship: 'contains' }));
+  const prompt = buildEntitySemanticPrompt({
+    userGoal: 'Choose a value',
+    entities: [{
+      id: 'field:large',
+      name: 'Large Choice',
+      type: 'ui_control',
+      structural: { controlType: 'select', values: manyValues, visible: true, disabled: false, required: true },
+      semantic: {},
+      links: manyLinks
+    }]
+  });
+
+  assert.match(prompt, /"optionCount":20/);
+  assert.match(prompt, /"optionSample":\["value-1","value-2","value-3","value-4"\]/);
+  assert.doesNotMatch(prompt, /value-5/);
+  assert.match(prompt, /"linkCount":20/);
+  assert.match(prompt, /entity:8/);
+  assert.doesNotMatch(prompt, /entity:9/);
+});
+
 test('semantic response accepts workflow completion as a normal semantic patch', () => {
   const result = normalizeEntitySemanticResponse({
     entities: [
