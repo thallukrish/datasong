@@ -11,7 +11,7 @@ export function preprocessEntity(snapshot = {}) {
   const actions = controls.filter((control) => ['button', 'link'].includes(control.type));
 
   return {
-    version: 3,
+    version: 4,
     entity,
     fields,
     actions,
