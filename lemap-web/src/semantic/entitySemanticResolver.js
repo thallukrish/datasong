@@ -196,15 +196,9 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = [], { 
         const learningAnswer = learning && item?.learningAnswer !== undefined && item?.learningAnswer !== null
           ? String(item.learningAnswer).trim().slice(0, 300)
           : '';
-        const semantic = normalizeSemantic(item.semantic || {});
-        if (learningAnswer) {
-          semantic.interaction = 'user_input';
-          semantic.relevantToGoal = true;
-          semantic.required = true;
-        }
         return {
           id: String(item.id),
-          semantic,
+          semantic: normalizeSemantic(item.semantic || {}),
           ...(learningAnswer ? { learningAnswer } : {})
         };
       })
