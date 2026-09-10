@@ -2,24 +2,36 @@ function arr(value) { return Array.isArray(value) ? value : []; }
 function quoteAttr(value) { return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
 function normalize(value) { return String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase(); }
 
-async function firstVisible(locator, entity = {}) {
+async function firstVisible(locator) {
   const count = await locator.count();
   for (let index = 0; index < count; index += 1) {
     const candidate = locator.nth(index);
     if (await candidate.isVisible().catch(() => false)) return candidate;
   }
-  throw new Error(`No visible locator match for ${entity.id || entity.name || 'entity'}`);
+  return null;
 }
 
 async function locatorForEntity(page, entity = {}) {
   const structural = entity.structural || {};
-  if (structural.domId) return firstVisible(page.locator(`[id="${quoteAttr(structural.domId)}"]`), entity);
-  if (structural.name && structural.controlType === 'radio' && structural.value !== null && structural.value !== undefined) {
-    return firstVisible(page.locator(`input[name="${quoteAttr(structural.name)}"][value="${quoteAttr(structural.value)}"]`), entity);
+  let locator = null;
+
+  if (structural.domId) {
+    locator = await firstVisible(page.locator(`[id="${quoteAttr(structural.domId)}"]`));
+    if (locator) return locator;
   }
-  if (structural.name) return firstVisible(page.locator(`[name="${quoteAttr(structural.name)}"]`), entity);
-  if (entity.name) return firstVisible(page.getByLabel(entity.name, { exact: true }), entity);
-  throw new Error(`No locator evidence for ${entity.id || entity.name || 'entity'}`);
+  if (structural.name && structural.controlType === 'radio' && structural.value !== null && structural.value !== undefined) {
+    locator = await firstVisible(page.locator(`input[name="${quoteAttr(structural.name)}"][value="${quoteAttr(structural.value)}"]`));
+    if (locator) return locator;
+  }
+  if (structural.name) {
+    locator = await firstVisible(page.locator(`[name="${quoteAttr(structural.name)}"]`));
+    if (locator) return locator;
+  }
+  if (entity.name) {
+    locator = await firstVisible(page.getByLabel(entity.name, { exact: true }));
+    if (locator) return locator;
+  }
+  throw new Error(`No visible locator match for ${entity.id || entity.name || 'entity'}`);
 }
 
 export function entityInteractionKind(entity = {}) {
