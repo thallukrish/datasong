@@ -10,7 +10,7 @@ const group = {
   name: 'Preparation mode',
   type: 'group',
   structural: { cardinality: 'exactlyOne', values: ['Online', 'Offline'], visible: true, disabled: false },
-  semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which mode?' },
+  semantic: {},
   links: []
 };
 
@@ -23,7 +23,7 @@ const textInput = {
   links: []
 };
 
-test('learning semantic prompt adds only compact answer choices to the existing semantic call', () => {
+test('learning semantic prompt adds compact answer choices on the first semantic call', () => {
   const prompt = buildEntitySemanticPrompt({
     userGoal: 'Complete setup',
     entities: [group, textInput],
