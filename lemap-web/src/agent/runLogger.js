@@ -90,6 +90,16 @@ export function summarizeUserInteraction({ question = {}, interpretation = {} } 
   return { ...base, inputType: clean(question.inputType, 40), answer: 'value provided' };
 }
 
+function sanitizeEventData(type, data = {}) {
+  if (type === 'attached') {
+    return {
+      model: clean(data.model, 120),
+      workflowId: clean(data.workflowId, 160)
+    };
+  }
+  return data;
+}
+
 export async function createRunLogger({ baseDir = path.join('data', 'query-runs'), goal = '' } = {}) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const file = path.resolve(baseDir, `${stamp}.jsonl`);
@@ -97,7 +107,7 @@ export async function createRunLogger({ baseDir = path.join('data', 'query-runs'
   let sequence = 0;
   const tokenLedger = createTokenLedger();
   const write = async (type, data = {}) => {
-    const event = { seq: ++sequence, at: new Date().toISOString(), type, ...data };
+    const event = { seq: ++sequence, at: new Date().toISOString(), type, ...sanitizeEventData(type, data) };
     await fs.appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
     return event;
   };
