@@ -121,24 +121,44 @@ test('workflow continuation comes directly from safe entity semantics', () => {
   assert.equal(selectWorkflowContinuation([page, commit]), null);
 });
 
-test('workflow continuation prefers a required forward action and avoids a known visited back-edge', () => {
-  const selectStatus = {
-    id: 'button:status', name: 'Select Status', type: 'ui_control',
-    structural: { controlType: 'button', visible: true, disabled: false },
-    semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' },
-    links: []
+test('workflow continuation prefers required action controls over optional navigation links', () => {
+  const breadcrumb = {
+    id: 'link:breadcrumb', name: 'Previous filing step', type: 'ui_control',
+    structural: { controlType: 'link', visible: true, disabled: false },
+    semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' }, links: []
   };
-  const fileItr3 = {
-    id: 'button:itr3', name: 'ITR - 3', type: 'ui_control',
+  const forward = {
+    id: 'button:forward', name: 'Start filing', type: 'ui_control',
     structural: { controlType: 'button', visible: true, disabled: false },
-    semantic: { interaction: 'action', relevantToGoal: true, required: true, workflowRole: 'continue', consequence: 'reversible' },
-    links: []
+    semantic: { interaction: 'action', relevantToGoal: true, required: true, workflowRole: 'continue', consequence: 'reversible' }, links: []
   };
-  const graph = [
-    { ...selectStatus, links: [{ id: 'page:status', relationship: 'transitionsTo' }] },
-    fileItr3,
-    { id: 'page:status', type: 'page', links: [] }
-  ];
-  const selected = selectWorkflowContinuation([selectStatus, fileItr3], { entityGraph: graph, visitedPageIds: new Set(['page:status']) });
-  assert.equal(selected?.id, 'button:itr3');
+  assert.equal(selectWorkflowContinuation([breadcrumb, forward])?.id, 'button:forward');
+});
+
+test('known transition is blocked only when it points to an earlier page in learned order', () => {
+  const action = {
+    id: 'button:route', name: 'Route', type: 'ui_control',
+    structural: { controlType: 'button', visible: true, disabled: false },
+    semantic: { interaction: 'action', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' }, links: []
+  };
+  const graph = [{ ...action, links: [{ id: 'page:target', relationship: 'transitionsTo' }] }];
+  const order = new Map([['page:old', 1], ['page:current', 3], ['page:target', 2]]);
+  assert.equal(selectWorkflowContinuation([action], { entityGraph: graph, currentPageId: 'page:current', pageVisitOrder: order }), null);
+
+  const forwardOrder = new Map([['page:current', 1], ['page:target', 2]]);
+  assert.equal(selectWorkflowContinuation([action], { entityGraph: graph, currentPageId: 'page:current', pageVisitOrder: forwardOrder })?.id, action.id);
+});
+
+test('optional caveated bypass is lower priority than an ordinary forward action', () => {
+  const bypass = {
+    id: 'button:bypass', name: 'Bypass', type: 'ui_control',
+    structural: { controlType: 'button', visible: true, disabled: false },
+    semantic: { interaction: 'action', relevantToGoal: true, required: false, workflowRole: 'continue', consequence: 'reversible', caveats: ['May skip useful steps'] }, links: []
+  };
+  const forward = {
+    id: 'button:forward', name: 'Continue', type: 'ui_control',
+    structural: { controlType: 'button', visible: true, disabled: false },
+    semantic: { interaction: 'action', relevantToGoal: true, required: false, workflowRole: 'continue', consequence: 'reversible' }, links: []
+  };
+  assert.equal(selectWorkflowContinuation([bypass, forward])?.id, 'button:forward');
 });
