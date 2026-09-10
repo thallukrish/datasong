@@ -47,6 +47,11 @@ export async function snapshotPage(page) {
       clone.querySelectorAll?.('input,select,textarea,button,a,[role="button"],[role="link"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
       return clean(clone.textContent || '');
     };
+    const labelledByText = (el) => {
+      const labelledBy = el?.getAttribute?.('aria-labelledby');
+      if (!labelledBy) return '';
+      return clean(labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || '').join(' '));
+    };
     const labelFor = (el) => {
       const associated = el.labels?.length ? Array.from(el.labels) : [];
       const closest = el.closest?.('label');
@@ -55,15 +60,16 @@ export async function snapshotPage(page) {
       if (associatedText) return associatedText;
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
-      const labelledBy = el.getAttribute?.('aria-labelledby');
-      if (labelledBy) {
-        const text = clean(labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || '').join(' '));
-        if (text) return text;
-      }
+      const labelled = labelledByText(el);
+      if (labelled) return labelled;
       const tag = el.tagName?.toLowerCase();
       const role = clean(el.getAttribute?.('role') || '').toLowerCase();
       if (tag === 'button' || role === 'button' || tag === 'a' || role === 'link') {
         const controlText = clean(el.innerText || el.textContent);
+        if (controlText) return controlText;
+      }
+      if (role === 'radio' || role === 'checkbox') {
+        const controlText = textWithoutControls(el) || clean(el.innerText || el.textContent);
         if (controlText) return controlText;
       }
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.getAttribute?.('name') || el.id || '');
@@ -72,6 +78,8 @@ export async function snapshotPage(page) {
     const regionLabel = (el) => {
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
+      const labelled = labelledByText(el);
+      if (labelled) return labelled;
       const heading = el.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > [role="heading"], :scope > legend');
       if (heading) return clean(heading.innerText || heading.textContent);
 
@@ -98,17 +106,22 @@ export async function snapshotPage(page) {
     };
     const control = (el) => {
       const type = clean(el.type || '').toLowerCase();
+      const role = clean(el.getAttribute?.('role') || '').toLowerCase();
+      const choice = ['radio', 'checkbox'].includes(type) || ['radio', 'checkbox'].includes(role);
+      const checked = choice
+        ? ('checked' in el ? !!el.checked : el.getAttribute?.('aria-checked') === 'true')
+        : null;
       return {
         control: true,
         tag: el.tagName.toLowerCase(),
         type,
-        role: clean(el.getAttribute?.('role') || ''),
+        role,
         domId: clean(el.id || ''),
         name: clean(el.getAttribute?.('name') || ''),
         href: clean(el.getAttribute?.('href') || ''),
-        value: 'value' in el ? el.value : el.getAttribute?.('aria-valuenow') ?? null,
+        value: 'value' in el ? el.value : el.getAttribute?.('data-value') ?? el.getAttribute?.('aria-valuenow') ?? null,
         defaultValue: defaultValueFor(el),
-        checked: ['radio', 'checkbox'].includes(type) ? !!el.checked : null,
+        checked,
         defaultChecked: ['radio', 'checkbox'].includes(type) ? !!el.defaultChecked : null,
         label: labelFor(el),
         disabled: !!el.disabled || el.getAttribute?.('aria-disabled') === 'true',
@@ -137,12 +150,17 @@ export async function snapshotPage(page) {
       const output = [];
       for (const child of Array.from(el.children || [])) {
         if (isControl(child)) {
-          if (visible(child)) output.push(control(child));
+          if (visible(child)) {
+            const captured = control(child);
+            const nested = semanticChildren(child, depth + 1);
+            if (nested.length) captured.children = nested;
+            output.push(captured);
+          }
           continue;
         }
         const nested = semanticChildren(child, depth + 1);
         const label = regionLabel(child);
-        if (label && visible(child)) output.push({ tag: child.tagName?.toLowerCase() || 'div', label, hidden: false, children: nested });
+        if (label && visible(child)) output.push({ tag: child.tagName?.toLowerCase() || 'div', role: clean(child.getAttribute?.('role') || '').toLowerCase(), label, hidden: false, children: nested });
         else output.push(...nested);
       }
       return output;
@@ -251,10 +269,19 @@ export async function installUserEventProbe(page) {
       if (associatedText) return associatedText;
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
+      const labelledBy = el.getAttribute?.('aria-labelledby');
+      if (labelledBy) {
+        const text = clean(labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || '').join(' '));
+        if (text) return text;
+      }
       const tag = el.tagName?.toLowerCase();
       const role = clean(el.getAttribute?.('role') || '').toLowerCase();
       if (tag === 'button' || role === 'button' || tag === 'a' || role === 'link') {
         const controlText = clean(el.innerText || el.textContent);
+        if (controlText) return controlText;
+      }
+      if (role === 'radio' || role === 'checkbox') {
+        const controlText = textWithoutControls(el) || clean(el.innerText || el.textContent);
         if (controlText) return controlText;
       }
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.name || el.id || '');
