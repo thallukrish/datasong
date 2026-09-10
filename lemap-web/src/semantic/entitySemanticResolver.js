@@ -35,6 +35,7 @@ Given the active workflow goal, current page context, ordered recentPageTrail, a
 workflowRole and navigationPriority are state-relative and must be reconsidered each time the current page state changes; do not assume an action keeps the same role from an earlier state.
 recentPageTrail is the ordered sequence of workflow pages already traversed in this run, ending at the current page. Use it to recognize links that return to an earlier workflow step. A control whose label refers to an earlier step should normally be workflowRole=back, not continue, unless the current page context clearly shows that it advances the workflow.
 When a page-specific Continue, Proceed, Next, Save, or other direct forward action is currently available, prior-step links such as Select Status/Edit Previous Step must not be classified or ranked as the preferred continuation.
+A plain intermediate Continue, Next, Proceed, or Save and Continue control is normally reversible. Do not classify it as commit merely because the overall workflow will eventually file, submit, pay, or save something. Use commit/financial/destructive/security only when that specific click itself performs the consequential act, such as an explicit Submit, File Return, Pay, Delete, or equivalent final action.
 Account/profile/avatar controls, language/theme controls, help/contact controls, generic site menus and other site chrome are not workflow continuation by default. Classify them as global or local unless the user's goal explicitly concerns that account/profile/menu function. Never rank site chrome above a page-specific workflow action such as Continue, Proceed, Next, Save, or a direct goal-specific choice.
 Return only: interaction(action|navigation), relevantToGoal, required, workflowRole(continue|back|branch|global|exit|commit|local|unknown), navigationPriority(0-100), consequence(reversible|commit|financial|destructive|security|unknown).
 Use continue only for direct forward progress toward the goal. back returns to an earlier workflow step. branch is a relevant alternate route. global is site-wide/top navigation. exit leaves or abandons the workflow. commit is final or consequential. local is a relevant action that does not navigate the workflow.
@@ -125,6 +126,11 @@ function executableActionableControl(entity = {}) {
     && entity.structural?.disabled !== true;
 }
 
+function plainIntermediateProgress(entity = {}) {
+  const label = String(entity?.name || '').trim().toLowerCase().replace(/[>›→»]+$/g, '').trim();
+  return ['continue', 'next', 'proceed', 'save and continue'].includes(label);
+}
+
 export function partitionSemanticCandidates(entities = []) {
   const navigation = [];
   const entity = [];
@@ -183,7 +189,7 @@ export function buildNavigationSemanticPrompt({ userGoal = '', entities = [], pa
     ...(compactPageTrail(recentPageTrail).length ? { recentPageTrail: compactPageTrail(recentPageTrail) } : {}),
     actions: arr(entities).map(compactNavigationEntity)
   };
-  return `MODE web-navigation-semantics-v1\n${JSON.stringify(payload)}\n\nTASK:\nFor each action return only {id,semantic:{interaction,relevantToGoal,required,workflowRole,navigationPriority,consequence}}. workflowRole must be continue|back|branch|global|exit|commit|local|unknown. navigationPriority is 0-100. Re-rank every supplied action for the current page state. Use continue only for direct forward progress. Use recentPageTrail to identify controls that return to an earlier workflow step. Account/profile/menu/site chrome is not continue unless the goal explicitly concerns it.`;
+  return `MODE web-navigation-semantics-v1\n${JSON.stringify(payload)}\n\nTASK:\nFor each action return only {id,semantic:{interaction,relevantToGoal,required,workflowRole,navigationPriority,consequence}}. workflowRole must be continue|back|branch|global|exit|commit|local|unknown. navigationPriority is 0-100. Re-rank every supplied action for the current page state. Use continue only for direct forward progress. Plain Continue/Next/Proceed controls are reversible unless that specific click performs a final consequential action. Use recentPageTrail to identify controls that return to an earlier workflow step. Account/profile/menu/site chrome is not continue unless the goal explicitly concerns it.`;
 }
 
 function normalizeSemantic(raw = {}) {
@@ -213,15 +219,18 @@ function normalizeSemantic(raw = {}) {
   }));
 }
 
-function normalizeNavigationSemantic(raw = {}) {
+function normalizeNavigationSemantic(raw = {}, entity = {}) {
   const interaction = ['action', 'navigation'].includes(raw.interaction) ? raw.interaction : 'navigation';
+  const workflowRole = WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown';
+  let consequence = CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown';
+  if (workflowRole === 'continue' && consequence === 'commit' && plainIntermediateProgress(entity)) consequence = 'reversible';
   return {
     interaction,
     relevantToGoal: bool(raw.relevantToGoal, false),
     required: bool(raw.required, false),
-    workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown',
+    workflowRole,
     navigationPriority: priority(raw.navigationPriority) ?? 0,
-    consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown'
+    consequence
   };
 }
 
@@ -235,11 +244,11 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
 }
 
 export function normalizeNavigationSemanticResponse(raw = {}, knownEntities = []) {
-  const known = new Set(arr(knownEntities).map((entity) => entity.id));
+  const byId = new Map(arr(knownEntities).map((entity) => [entity.id, entity]));
   return {
     entities: arr(raw.entities)
-      .filter((item) => known.has(String(item?.id || '')))
-      .map((item) => ({ id: String(item.id), semantic: normalizeNavigationSemantic(item.semantic || {}) }))
+      .filter((item) => byId.has(String(item?.id || '')))
+      .map((item) => ({ id: String(item.id), semantic: normalizeNavigationSemantic(item.semantic || {}, byId.get(String(item.id))) }))
   };
 }
 
