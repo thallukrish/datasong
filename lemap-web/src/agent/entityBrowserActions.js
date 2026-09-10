@@ -46,6 +46,18 @@ async function locatorForEntity(page, entity = {}) {
   throw new Error(`No visible locator match for ${entity.id || entity.name || 'entity'}`);
 }
 
+export async function entityActionAvailable(page, entity = {}) {
+  if (entity.type !== 'ui_control') return false;
+  if (!['button', 'link'].includes(String(entity.structural?.controlType || ''))) return false;
+  if (entity.structural?.visible === false || entity.structural?.disabled === true) return false;
+  try {
+    return !!(await locatorForEntity(page, entity));
+  } catch (error) {
+    if (/^No visible locator match for /.test(String(error?.message || ''))) return false;
+    throw error;
+  }
+}
+
 export function entityInteractionKind(entity = {}) {
   const structural = entity.structural || {};
   const tag = String(structural.tag || '').toLowerCase();
