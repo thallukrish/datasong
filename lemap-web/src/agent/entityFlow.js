@@ -29,13 +29,16 @@ function normalizedSet(value) {
 
 function currentValueMatches(entity = {}, value) {
   const structural = entity.structural || {};
-  if (entity.type === 'group' && structural.groupType === 'checkbox') {
-    const current = normalizedSet(structural.value);
-    const wanted = normalizedSet(value);
-    return current.size === wanted.size && [...current].every((item) => wanted.has(item));
+  if (entity.type === 'group') {
+    const cardinality = structural.cardinality || 'exactlyOne';
+    if (['zeroOrMore', 'oneOrMore'].includes(cardinality)) {
+      const current = normalizedSet(structural.value);
+      const wanted = normalizedSet(value);
+      return current.size === wanted.size && [...current].every((item) => wanted.has(item));
+    }
+    if (structural.value === null || structural.value === undefined || structural.value === '') return false;
+    return normalize(structural.value) === normalize(value);
   }
-  if (entity.type === 'group' && structural.groupType === 'choice') return false;
-  if (entity.type === 'group') return normalize(structural.value) === normalize(value);
   if (structural.controlType === 'checkbox') return !!structural.checked === !!value;
   if (structural.controlType === 'radio') return structural.checked === true;
   if (structural.value === null || structural.value === undefined || structural.value === '') return false;
@@ -72,9 +75,9 @@ export function selectReusableUserInput(entities = [], instances = [], skipEntit
 function selectionRuleFor(entity = {}) {
   if (entity.type !== 'group') return 'exactlyOne';
   if (entity.semantic?.selectionRule) return entity.semantic.selectionRule;
-  if (entity.structural?.cardinality) return entity.structural.cardinality;
-  if (entity.structural?.groupType === 'radio' || entity.structural?.groupType === 'choice') return 'exactlyOne';
-  if (entity.structural?.groupType === 'checkbox') return 'zeroOrMore';
+  const cardinality = entity.structural?.cardinality;
+  if (cardinality === 'oneOrMore') return 'atLeastOne';
+  if (cardinality === 'zeroOrMore') return 'anyOf';
   return 'exactlyOne';
 }
 
@@ -133,8 +136,8 @@ export function resolveEntityAnswer(question = {}, rawAnswer = '') {
 
   if (!question.multiple) return resolveOneOption(options, raw);
 
-  const rule = question.selectionRule || 'zeroOrMore';
-  if (/^(none|no|nothing)$/i.test(raw)) return rule === 'zeroOrMore' || rule === 'anyOf' ? [] : null;
+  const rule = question.selectionRule || 'anyOf';
+  if (/^(none|no|nothing)$/i.test(raw)) return rule === 'anyOf' ? [] : null;
   if (/^all$/i.test(raw)) return [...options];
 
   const tokens = raw.split(',').map((item) => item.trim()).filter(Boolean);
