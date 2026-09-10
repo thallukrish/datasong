@@ -15,14 +15,14 @@ import { entitiesNeedingSemantics, resolveEntitySemantics } from './semantic/ent
 import { setModelCallLogger } from './semantic/modelCall.js';
 import { applyEntityValue, executeEntityAction } from './agent/entityBrowserActions.js';
 import { waitForStructuralCaptureChange } from './agent/captureSettlement.js';
-import { resolveNavigationTopology } from './agent/navigationTopology.js';
+import { chooseNavigationCandidate } from './agent/navigationDecision.js';
+import { planNavigation } from './agent/navigationPlanner.js';
 import {
   buildEntityQuestion,
   ignoredSourceEntityIds,
   resolveEntityAnswer,
   selectNextUserInput,
-  selectReusableUserInput,
-  selectWorkflowContinuation
+  selectReusableUserInput
 } from './agent/entityFlow.js';
 import { createModelClient, modelConfigFromEnv } from './agent/modelClient.js';
 import { loadDotEnv } from './agent/env.js';
@@ -41,6 +41,9 @@ const runLogDir = path.resolve(process.env.LEMAP_RUN_LOG_DIR || path.join('data'
 function arr(value) { return Array.isArray(value) ? value : []; }
 function hash(value) { return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 12); }
 function workflowIdForGoal(goal) { return `workflow:${hash(String(goal || '').trim().toLowerCase())}`; }
+function actionableControl(entity = {}) {
+  return entity.type === 'ui_control' && ['button', 'link'].includes(String(entity.structural?.controlType || ''));
+}
 
 async function captureEntities(page) {
   const explored = await exploreReadOnlyEntity(page);
@@ -78,16 +81,6 @@ function applyKnownSemantics(currentEntities, entityGraph) {
   return currentEntities;
 }
 
-function applyEphemeralSemanticPatches(currentEntities, patches = []) {
-  const byId = new Map(arr(currentEntities).map((entity) => [entity.id, entity]));
-  for (const patch of arr(patches)) {
-    const current = byId.get(patch.id);
-    if (!current) continue;
-    current.semantic = { ...current.semantic, ...structuredClone(patch.semantic || {}) };
-  }
-  return currentEntities;
-}
-
 function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   if (!findEntity(entityGraph, workflowId)) {
     upsertEntity(entityGraph, {
@@ -105,30 +98,18 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   return findEntity(entityGraph, workflowId);
 }
 
-async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, recentPageTrail = [], force = false }) {
+async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, force = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
-
-  const topology = resolveNavigationTopology({
-    entityGraph,
-    currentEntities,
-    currentPageId: pageId,
-    recentPageTrail
-  });
-  const topologyIds = new Set(topology.deterministicPatches.map((patch) => patch.id));
 
   const workflow = findEntity(entityGraph, workflowId);
   const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
-  const unresolved = entitiesNeedingSemantics(semanticEntities).filter((entity) => !topologyIds.has(entity.id));
-  const sourceCandidates = force ? semanticEntities : unresolved;
-  const candidates = sourceCandidates.filter((entity) => !topologyIds.has(entity.id));
+  const unresolved = entitiesNeedingSemantics(semanticEntities).filter((entity) => !actionableControl(entity));
+  const sourceCandidates = force ? semanticEntities.filter((entity) => !actionableControl(entity)) : unresolved;
 
-  if (!candidates.length) {
-    applyEphemeralSemanticPatches(currentEntities, topology.deterministicPatches);
-    return { called: false, count: 0, topologyCount: topology.deterministicPatches.length };
-  }
+  if (!sourceCandidates.length) return { called: false, count: 0 };
 
-  const result = await resolveEntitySemantics({ client, model, userGoal, entities: candidates, pageId, pageContext, recentPageTrail });
+  const result = await resolveEntitySemantics({ client, model, userGoal, entities: sourceCandidates, pageId, pageContext });
   const patched = new Set();
   for (const patch of result.entities) {
     patched.add(patch.id);
@@ -139,13 +120,12 @@ async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, cu
     if (patched.has(entity.id)) continue;
     const fallback = entity.type === 'workflow'
       ? { relevantToGoal: true, complete: false }
-      : { interaction: 'unknown', relevantToGoal: false, required: false, workflowRole: 'unknown', navigationPriority: 0, consequence: 'unknown' };
+      : { interaction: 'unknown', relevantToGoal: false, required: false };
     mergeSemanticPatch(entityGraph, entity.id, fallback);
   }
 
   applyKnownSemantics(currentEntities, entityGraph);
-  applyEphemeralSemanticPatches(currentEntities, topology.deterministicPatches);
-  return { called: true, count: candidates.length, topologyCount: topology.deterministicPatches.length };
+  return { called: true, count: sourceCandidates.length };
 }
 
 async function ensureInputOptions(page, entity, entityGraph) {
@@ -239,7 +219,7 @@ try {
   if (loadedEnvFiles.length) console.log(`[LeMap-Web] env: ${loadedEnvFiles.join(', ')}`);
   console.log(`[LeMap-Web] entity graph: ${entityFile}`);
   console.log(`[LeMap-Web] instance graph: ${instanceFile}`);
-  console.log('[LeMap-Web] learning state: provisional until a clean terminal state');
+  console.log('[LeMap-Web] learning state: checkpointed unless the run errors or is interrupted');
   console.log(`[LeMap-Web] run log: ${runLogger.file}`);
   await runLogger.write('attached', { title: await page.title(), route: page.url(), model, workflowId });
 
@@ -266,10 +246,8 @@ try {
       currentEntities: capture.entities,
       pageId: capture.pageId,
       workflowId,
-      recentPageTrail,
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
-    if (semanticResult.topologyCount) console.log(`[LeMap-Web] topology resolved ${semanticResult.topologyCount} navigation entities without the model`);
     if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved entities`);
 
     const workflow = findEntity(entityGraph, workflowId);
@@ -350,18 +328,27 @@ try {
         .filter((entity) => executedContinuationKeys.has(`${capture.pageId}|${entity.id}`))
         .map((entity) => entity.id)
     );
-    const continuation = selectWorkflowContinuation(capture.entities, { blockedEntityIds });
+    const pageContext = capture.entities.find((entity) => entity.id === capture.pageId) || findEntity(entityGraph, capture.pageId);
+    const navigation = await planNavigation({
+      entityGraph,
+      currentEntities: capture.entities,
+      currentPageId: capture.pageId,
+      recentPageTrail,
+      blockedEntityIds,
+      choose: ({ candidates }) => chooseNavigationCandidate({ client, model, userGoal, candidates, pageContext, recentPageTrail })
+    });
+    if (navigation.topologyCount) console.log(`[LeMap-Web] topology filtered/resolved ${navigation.topologyCount} navigation entities without the model`);
+    const continuation = navigation.entity;
     if (!continuation) {
-      const blockedCommit = capture.entities.find((entity) => entity.semantic?.workflowRole === 'commit' && entity.structural?.visible !== false);
-      stopReason = blockedCommit ? 'consequential_action' : 'no_executable_entity';
-      if (blockedCommit) console.log(`[LeMap-Web] reached consequential action "${blockedCommit.name}"; not executing automatically.`);
-      else console.log('[LeMap-Web] no goal-relevant executable user input or reversible workflow continuation is currently known.');
-      await runLogger.write('stop', { reason: stopReason, entityId: blockedCommit?.id || '' });
+      stopReason = 'no_executable_entity';
+      console.log('[LeMap-Web] no unresolved clickable action can currently continue the workflow.');
+      await runLogger.write('stop', { reason: stopReason });
       break;
     }
 
     executedContinuationKeys.add(`${capture.pageId}|${continuation.id}`);
-    console.log(`[LeMap-Web] continuing via: ${continuation.name}${Number.isFinite(Number(continuation.semantic?.navigationPriority)) ? ` [priority ${continuation.semantic.navigationPriority}]` : ''}`);
+    console.log(`[LeMap-Web] continuing via: ${continuation.name} [${navigation.source}]`);
+    await runLogger.write('navigation_choice', { pageId: capture.pageId, entityId: continuation.id, source: navigation.source });
     const before = capture;
     const execution = await executeEntityAction(page, continuation);
     if (execution?.executed === false && execution.reason === 'locator_miss') {
