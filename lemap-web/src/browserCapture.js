@@ -28,6 +28,7 @@ export async function snapshotPage(page) {
   return page.evaluate(() => {
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
     const interactiveRoles = new Set(['button', 'radio', 'checkbox', 'textbox', 'combobox', 'spinbutton', 'listbox', 'link']);
+    const controlSelector = 'input,select,textarea,button,a,[role="button"],[role="link"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"]';
     const rendered = (el) => {
       const style = getComputedStyle(el);
       return style.display !== 'none'
@@ -44,7 +45,7 @@ export async function snapshotPage(page) {
     const textWithoutControls = (el) => {
       if (!el) return '';
       const clone = el.cloneNode(true);
-      clone.querySelectorAll?.('input,select,textarea,button,a,[role="button"],[role="link"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
+      clone.querySelectorAll?.(`${controlSelector},option`).forEach((node) => node.remove());
       return clean(clone.textContent || '');
     };
     const labelledByText = (el) => {
@@ -75,6 +76,19 @@ export async function snapshotPage(page) {
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.getAttribute?.('name') || el.id || '');
     };
     const visibleChoicePeers = (el) => Array.from(el.querySelectorAll?.('input[type="radio"],input[type="checkbox"],button,[role="button"],[role="radio"],[role="checkbox"]') || []).filter(visible);
+    const leadingContextText = (el) => {
+      const parts = [];
+      for (const child of Array.from(el.children || [])) {
+        const childIsControl = child.matches?.(controlSelector);
+        const containsControl = childIsControl || !!child.querySelector?.(controlSelector);
+        if (containsControl) break;
+        const value = clean(child.innerText || child.textContent);
+        if (value) parts.push(value);
+        if (parts.join(' ').length > 600) break;
+      }
+      const value = clean(parts.join(' '));
+      return value.length <= 600 ? value : value.slice(0, 600);
+    };
     const regionLabel = (el) => {
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
@@ -82,6 +96,9 @@ export async function snapshotPage(page) {
       if (labelled) return labelled;
       const heading = el.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > [role="heading"], :scope > legend');
       if (heading) return clean(heading.innerText || heading.textContent);
+
+      const leading = leadingContextText(el);
+      if (leading.length >= 3) return leading;
 
       const peers = visibleChoicePeers(el);
       if (peers.length >= 2 && peers.length <= 8) {
