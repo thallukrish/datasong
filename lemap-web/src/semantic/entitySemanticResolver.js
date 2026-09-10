@@ -1,4 +1,9 @@
 import { callJsonModel } from './modelCall.js';
+import {
+  buildNavigationChoicePrompt,
+  chooseNavigationCandidate,
+  normalizeNavigationChoiceResponse
+} from '../agent/navigationDecision.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 function text(value, max = 600) {
@@ -7,16 +12,9 @@ function text(value, max = 600) {
 }
 function bool(value, fallback = false) { return value === undefined ? fallback : !!value; }
 function optionalBool(value) { return value === undefined ? undefined : !!value; }
-function priority(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return undefined;
-  return Math.max(0, Math.min(100, Math.round(n)));
-}
 
 const SCOPES = new Set(['local', 'global']);
 const INTERACTIONS = new Set(['user_input', 'information', 'action', 'navigation', 'unknown']);
-const WORKFLOW_ROLES = new Set(['continue', 'back', 'branch', 'global', 'exit', 'commit', 'local', 'unknown']);
-const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive', 'security', 'unknown']);
 const SELECTION_RULES = new Set(['exactlyOne', 'anyOf', 'allOf', 'atLeastOne']);
 const ACTION_CONTROL_TYPES = new Set(['button', 'link']);
 
@@ -29,18 +27,6 @@ For every relevant group, you MUST return interaction=user_input, relevantToGoal
 For relevant user-input entities, return interaction=user_input, relevantToGoal, required, and a concise question; add meaning, semanticType, scope, explanation only when needed, caveats only when needed, examples only when useful, and selectionRule when applicable.
 For page/workflow/information entities, add only minimal useful meaning/description/relevance. complete is primarily for workflow entities.
 Omit irrelevant entities entirely. Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
-
-const NAVIGATION_SYSTEM = `You are DataSong LeMap-Web's page navigation classifier.
-Given the active workflow goal, current page context, ordered recentPageTrail, and the currently visible enabled actionable controls, rank each control relative to the CURRENT page state and workflow progress.
-workflowRole and navigationPriority are state-relative and must be reconsidered each time the current page state changes; do not assume an action keeps the same role from an earlier state.
-recentPageTrail is the ordered sequence of workflow pages already traversed in this run, ending at the current page. Use it to recognize links that return to an earlier workflow step. A control whose label refers to an earlier step should normally be workflowRole=back, not continue, unless the current page context clearly shows that it advances the workflow.
-When a page-specific Continue, Proceed, Next, Save, or other direct forward action is currently available, prior-step links such as Edit Previous Step must not be classified or ranked as the preferred continuation.
-A plain intermediate Continue, Next, Proceed, or Save and Continue control is normally reversible. Do not classify it as commit merely because the overall workflow will eventually perform a consequential action. Use commit/financial/destructive/security only when that specific click itself performs the consequential act, such as an explicit Submit, Confirm, Pay, Delete, Publish, Send, or equivalent final action.
-Account/profile/avatar controls, language/theme controls, help/contact controls, generic site menus and other site chrome are not workflow continuation by default. Classify them as global or local unless the user's goal explicitly concerns that account/profile/menu function. Never rank site chrome above a page-specific workflow action such as Continue, Proceed, Next, Save, or a direct goal-specific choice.
-Return only: interaction(action|navigation), relevantToGoal, required, workflowRole(continue|back|branch|global|exit|commit|local|unknown), navigationPriority(0-100), consequence(reversible|commit|financial|destructive|security|unknown).
-Use continue only for direct forward progress toward the goal. back returns to an earlier workflow step. branch is a relevant alternate route. global is site-wide/top navigation. exit leaves or abandons the workflow. commit is final or consequential. local is a relevant action that does not navigate the workflow.
-Rank the best direct forward action highest. Breadcrumbs, prior-step links, help, skip/bypass, alternate routes, global navigation and exits must not outrank the direct forward action.
-Do not return explanations, descriptions, caveats, questions, structural data, links, browser mechanics, or user values. Never invent ids. Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
 
 function compactEntity(entity = {}) {
   const structural = entity.structural || {};
@@ -67,14 +53,6 @@ function compactEntity(entity = {}) {
   };
 }
 
-function compactNavigationEntity(entity = {}) {
-  return {
-    id: String(entity.id || ''),
-    name: text(entity.name, 220),
-    controlType: String(entity.structural?.controlType || '')
-  };
-}
-
 function compactPageContext(page = null) {
   if (!page?.id) return undefined;
   return {
@@ -84,22 +62,6 @@ function compactPageContext(page = null) {
     ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 360) } : {}),
     ...(page.semantic?.description ? { description: text(page.semantic.description, 500) } : {})
   };
-}
-
-function compactNavigationPageContext(page = null) {
-  if (!page?.id) return undefined;
-  return {
-    id: String(page.id),
-    name: text(page.name, 260),
-    ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 260) } : {})
-  };
-}
-
-function compactPageTrail(recentPageTrail = []) {
-  return arr(recentPageTrail).slice(-8).map((page) => ({
-    id: String(page?.id || ''),
-    name: text(page?.name, 180)
-  })).filter((page) => page.id);
 }
 
 function withWorkflow(entities = [], knownWorkflow = null) {
@@ -126,9 +88,26 @@ function executableActionableControl(entity = {}) {
     && entity.structural?.disabled !== true;
 }
 
-function plainIntermediateProgress(entity = {}) {
-  const label = String(entity?.name || '').trim().toLowerCase().replace(/[>›→»]+$/g, '').trim();
-  return ['continue', 'next', 'proceed', 'save and continue'].includes(label);
+function hasCurrentValue(entity = {}) {
+  const structural = entity.structural || {};
+  if (entity.type === 'group') {
+    if (Array.isArray(structural.value)) return structural.value.length > 0;
+    return structural.value !== undefined && structural.value !== null && structural.value !== '';
+  }
+  if (structural.controlType === 'checkbox' || structural.controlType === 'radio') return structural.checked === true;
+  return structural.value !== undefined && structural.value !== null && structural.value !== '';
+}
+
+function semanticForEntity(entity = {}, patches = new Map()) {
+  return patches.get(entity.id) || entity.semantic || {};
+}
+
+function pendingRequiredInput(entity = {}, semantic = {}) {
+  return ['ui_control', 'group'].includes(entity.type)
+    && semantic.interaction === 'user_input'
+    && semantic.relevantToGoal === true
+    && semantic.required === true
+    && !hasCurrentValue(entity);
 }
 
 export function partitionSemanticCandidates(entities = []) {
@@ -146,14 +125,12 @@ export function entitiesNeedingSemantics(entities = []) {
   const byId = new Map(all.map((entity) => [entity.id, entity]));
   return all.filter((entity) => {
     if (groupedChoiceMember(entity, byId)) return false;
-
-    // Navigation semantics are contextual to the current workflow/page state.
-    // Re-rank every visible+enabled action together, even if it has old semantics.
     if (actionableControl(entity)) return executableActionableControl(entity);
 
     const semantic = entity?.semantic || {};
     if (!Object.keys(semantic).length) return true;
     if (entity?.type === 'workflow' && semantic.complete === undefined) return true;
+    if (pendingRequiredInput(entity, semantic)) return true;
     if (entity?.type === 'group' && semantic.relevantToGoal !== false) {
       if (semantic.interaction !== 'user_input') return true;
       if (semantic.required === undefined) return true;
@@ -182,14 +159,14 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
   return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. A relevant group is one user_input interaction and must include required plus a concise question; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, links, browser mechanics or user values.`;
 }
 
-export function buildNavigationSemanticPrompt({ userGoal = '', entities = [], pageContext = null, recentPageTrail = [] } = {}) {
-  const payload = {
-    goal: text(userGoal, 300),
-    ...(compactNavigationPageContext(pageContext) ? { page: compactNavigationPageContext(pageContext) } : {}),
-    ...(compactPageTrail(recentPageTrail).length ? { recentPageTrail: compactPageTrail(recentPageTrail) } : {}),
-    actions: arr(entities).map(compactNavigationEntity)
-  };
-  return `MODE web-navigation-semantics-v1\n${JSON.stringify(payload)}\n\nTASK:\nFor each action return only {id,semantic:{interaction,relevantToGoal,required,workflowRole,navigationPriority,consequence}}. workflowRole must be continue|back|branch|global|exit|commit|local|unknown. navigationPriority is 0-100. Re-rank every supplied action for the current page state. Use continue only for direct forward progress. Plain Continue/Next/Proceed controls are reversible unless that specific click performs a final consequential action. Use recentPageTrail to identify controls that return to an earlier workflow step. Account/profile/menu/site chrome is not continue unless the goal explicitly concerns it.`;
+// Compatibility export: navigation is now a choice problem, not per-action semantic classification.
+export function buildNavigationSemanticPrompt(args = {}) {
+  return buildNavigationChoicePrompt({
+    userGoal: args.userGoal,
+    candidates: args.entities,
+    pageContext: args.pageContext,
+    recentPageTrail: args.recentPageTrail
+  });
 }
 
 function normalizeSemantic(raw = {}) {
@@ -206,9 +183,6 @@ function normalizeSemantic(raw = {}) {
     caveats: arr(raw.caveats).slice(0, 8).map((item) => text(item, 260)).filter(Boolean),
     examples: arr(raw.examples).slice(0, 8).map((item) => text(item, 180)).filter(Boolean),
     selectionRule: SELECTION_RULES.has(raw.selectionRule) ? raw.selectionRule : undefined,
-    workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown',
-    navigationPriority: priority(raw.navigationPriority) ?? (['action', 'navigation'].includes(interaction) ? 0 : undefined),
-    consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown',
     description: text(raw.description, 700)
   };
   if (raw.complete !== undefined) semantic.complete = !!raw.complete;
@@ -217,21 +191,6 @@ function normalizeSemantic(raw = {}) {
     if (Array.isArray(value) && value.length === 0) return false;
     return true;
   }));
-}
-
-function normalizeNavigationSemantic(raw = {}, entity = {}) {
-  const interaction = ['action', 'navigation'].includes(raw.interaction) ? raw.interaction : 'navigation';
-  const workflowRole = WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown';
-  let consequence = CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown';
-  if (workflowRole === 'continue' && consequence === 'commit' && plainIntermediateProgress(entity)) consequence = 'reversible';
-  return {
-    interaction,
-    relevantToGoal: bool(raw.relevantToGoal, false),
-    required: bool(raw.required, false),
-    workflowRole,
-    navigationPriority: priority(raw.navigationPriority) ?? 0,
-    consequence
-  };
 }
 
 export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
@@ -243,12 +202,22 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   };
 }
 
+// Compatibility export for tests/callers migrating from the old navigation classifier.
 export function normalizeNavigationSemanticResponse(raw = {}, knownEntities = []) {
-  const byId = new Map(arr(knownEntities).map((entity) => [entity.id, entity]));
+  const normalized = normalizeNavigationChoiceResponse(raw, knownEntities);
+  if (!normalized.selectedEntityId) return { entities: [] };
   return {
-    entities: arr(raw.entities)
-      .filter((item) => byId.has(String(item?.id || '')))
-      .map((item) => ({ id: String(item.id), semantic: normalizeNavigationSemantic(item.semantic || {}, byId.get(String(item.id))) }))
+    entities: [{
+      id: normalized.selectedEntityId,
+      semantic: {
+        interaction: 'navigation',
+        relevantToGoal: true,
+        required: false,
+        workflowRole: 'continue',
+        navigationPriority: 100,
+        consequence: 'reversible'
+      }
+    }]
   };
 }
 
@@ -260,22 +229,39 @@ async function resolveGeneralSemantics({ client, model, userGoal = '', entities 
 }
 
 export async function resolveNavigationSemantics({ client, model, userGoal = '', entities = [], pageContext = null, recentPageTrail = [] } = {}) {
-  const actions = arr(entities).filter(actionableControl);
-  if (!actions.length) return { entities: [] };
-  const userPrompt = buildNavigationSemanticPrompt({ userGoal, entities: actions, pageContext, recentPageTrail });
-  const response = await callJsonModel({ client, model, systemPrompt: NAVIGATION_SYSTEM, userPrompt });
-  return normalizeNavigationSemanticResponse(response.parsed, actions);
+  const actions = arr(entities).filter(executableActionableControl);
+  const selected = await chooseNavigationCandidate({ client, model, userGoal, candidates: actions, pageContext, recentPageTrail });
+  if (!selected) return { entities: [] };
+  return {
+    entities: [{
+      id: selected.id,
+      semantic: {
+        interaction: 'navigation',
+        relevantToGoal: true,
+        required: false,
+        workflowRole: 'continue',
+        navigationPriority: 100,
+        consequence: 'reversible'
+      }
+    }]
+  };
 }
 
 export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null, recentPageTrail = [] } = {}) {
   const modelEntities = withWorkflow(entities, knownWorkflow);
   const split = partitionSemanticCandidates(modelEntities);
   const results = [];
+  let general = { entities: [] };
 
   if (split.entity.length) {
-    results.push(await resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext }));
+    general = await resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext });
+    results.push(general);
   }
-  if (split.navigation.length) {
+
+  const patchById = new Map(general.entities.map((item) => [item.id, item.semantic]));
+  const hasPendingInput = split.entity.some((entity) => pendingRequiredInput(entity, semanticForEntity(entity, patchById)));
+
+  if (!hasPendingInput && split.navigation.length) {
     results.push(await resolveNavigationSemantics({ client, model, userGoal, entities: split.navigation, pageContext, recentPageTrail }));
   }
 
