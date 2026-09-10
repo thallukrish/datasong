@@ -222,17 +222,9 @@ export async function resolveNavigationSemantics({ client, model, userGoal = '',
   };
 }
 
-export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null, recentPageTrail = [] } = {}) {
+export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
   const modelEntities = withWorkflow(entities, knownWorkflow);
   const split = partitionSemanticCandidates(modelEntities);
-  const results = [];
-
-  if (split.entity.length) {
-    results.push(await resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext }));
-  }
-  if (split.navigation.length) {
-    results.push(await resolveNavigationSemantics({ client, model, userGoal, entities: split.navigation, pageContext, recentPageTrail }));
-  }
-
-  return { entities: results.flatMap((result) => arr(result.entities)) };
+  if (!split.entity.length) return { entities: [] };
+  return resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext });
 }
