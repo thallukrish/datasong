@@ -25,6 +25,38 @@ test('combobox option matching uses the same visible/value evidence captured dur
   assert.equal(optionCandidateMatches({ text: '2025-26' }, '2026-27 (Current A.Y.)'), false);
 });
 
+test('role-based radio resolves by accessible name before generic shared name', async () => {
+  const calls = [];
+  const missing = { count: async () => 0, nth: () => missing };
+  const visible = {
+    count: async () => 1,
+    nth: () => visible,
+    isVisible: async () => true,
+    isChecked: async () => false,
+    check: async () => { calls.push(['check']); }
+  };
+  const page = {
+    url: () => 'https://example.test/workflow',
+    locator: (selector) => { calls.push(['locator', selector]); return missing; },
+    getByRole: (role, options) => {
+      calls.push(['role', role, options]);
+      return role === 'radio' && options?.name === 'Reason B' ? visible : missing;
+    },
+    getByLabel: () => missing
+  };
+
+  const result = await executeEntityAction(page, {
+    id: 'field:reason-b',
+    name: 'Reason B',
+    type: 'ui_control',
+    structural: { controlType: 'radio', role: 'radio', name: 'shared-group-name' }
+  });
+
+  assert.deepEqual(result, { executed: true });
+  assert.ok(calls.some((call) => call[0] === 'role' && call[1] === 'radio' && call[2]?.name === 'Reason B'));
+  assert.ok(calls.some((call) => call[0] === 'check'));
+});
+
 test('stale action locator is recoverable instead of aborting the run', async () => {
   const emptyLocator = {
     count: async () => 0,
