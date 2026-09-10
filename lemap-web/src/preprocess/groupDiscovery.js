@@ -65,7 +65,7 @@ export function discoverGroups(fields = [], entityId = '') {
 
     const label = contextFor(members[0]) || members[0].name || 'Choice';
     const cardinality = cardinalityFor(members);
-    const id = `group:${hash(`${entityId}|choice|${key}|${label}`)}`;
+    const id = `group:${hash(`${entityId}|choice|${key}`)}`;
     groups.push({
       id,
       entityId,
