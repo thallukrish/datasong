@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { compactModelResult, createRunLogger, createTokenLedger, summarizeUserInteraction } from '../src/agent/runLogger.js';
 import { callJsonModel, setModelCallLogger } from '../src/semantic/modelCall.js';
+import { clearRegisteredSensitiveValues, registerSensitiveValuesFromEntities } from '../src/semantic/modelPrivacy.js';
 
 test('model result logging keeps decisions and token usage compact', () => {
   const summary = compactModelResult({
@@ -78,6 +79,29 @@ test('run JSONL omits raw goal, page title and attached URL', async () => {
   assert.equal(content.includes('private-token'), false);
   assert.match(content, /goalProvided/);
   assert.match(content, /workflow:1/);
+});
+
+test('all JSONL string fields redact registered live values recursively', async () => {
+  const privateValue = 'ZXCVB1234Q';
+  clearRegisteredSensitiveValues();
+  registerSensitiveValuesFromEntities([{
+    id: 'field:1',
+    type: 'ui_control',
+    structural: { controlType: 'text', value: privateValue, defaultValue: null, values: [] }
+  }]);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-log-'));
+  const logger = await createRunLogger({ baseDir: dir, goal: '' });
+  try {
+    await logger.write('error', {
+      message: `Locator failed for ${privateValue}`,
+      nested: { detail: `Rendered value ${privateValue}` }
+    });
+    const content = await fs.readFile(logger.file, 'utf8');
+    assert.equal(content.includes(privateValue), false);
+    assert.match(content, /\[redacted\]/i);
+  } finally {
+    clearRegisteredSensitiveValues();
+  }
 });
 
 test('token ledger aggregates model usage by purpose and total', () => {
