@@ -30,13 +30,6 @@ export function learningCandidates(entities = [], instances = [], proposedEntity
     && !instanceForEntity(instances, entity.id));
 }
 
-export function selectProposedLearningInput(entities = [], instances = [], proposals = new Map()) {
-  const proposalMap = proposals instanceof Map ? proposals : new Map();
-  return arr(entities).find((entity) => visibleEnabledInput(entity)
-    && proposalMap.has(entity.id)
-    && !instanceForEntity(instances, entity.id)) || null;
-}
-
 export function proposalForEntity(result = {}, entityId = '') {
   const item = arr(result.entities).find((entity) => entity?.id === entityId);
   if (item?.learningAnswer === undefined || item?.learningAnswer === null || item?.learningAnswer === '') return null;
