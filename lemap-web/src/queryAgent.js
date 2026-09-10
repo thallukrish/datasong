@@ -31,7 +31,7 @@ import { compactModelResult, createRunLogger } from './agent/runLogger.js';
 const loadedEnvFiles = await loadDotEnv({ cwd: process.cwd(), env: process.env });
 const endpoint = process.env.LEMAP_CDP || 'http://127.0.0.1:9222';
 const settleMs = Number.isFinite(Number(process.env.LEMAP_SETTLE_MS)) ? Math.max(0, Number(process.env.LEMAP_SETTLE_MS)) : 500;
-const structuralSettleMs = Number.isFinite(Number(process.env.LEMAP_STRUCTURAL_SETTLE_MS)) ? Math.max(0, Number(process.env.LEMAP_STRUCTURAL_SETTLE_MS)) : 3000;
+const structuralSettleMs = Number.isFinite(Number(process.env.LEMAP_STRUCTURAL_SETTLE_MS)) ? Math.max(0, Number(process.env.LEMAP_STRUCTURAL_SETTLE_MS)) : 10000;
 const structuralPollMs = Number.isFinite(Number(process.env.LEMAP_STRUCTURAL_POLL_MS)) ? Math.max(25, Number(process.env.LEMAP_STRUCTURAL_POLL_MS)) : 150;
 const maxSteps = Number.isFinite(Number(process.env.LEMAP_MAX_STEPS)) ? Math.max(1, Number(process.env.LEMAP_MAX_STEPS)) : 30;
 const entityFile = path.resolve(process.env.LEMAP_ENTITY_GRAPH_FILE || path.join('data', 'entity-graph', 'web-map.json'));
