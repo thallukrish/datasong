@@ -58,3 +58,16 @@ test('stable name and radio value distinguish choices when dom id is absent', ()
 
   assert.notEqual(online.id, offline.id);
 });
+
+test('structural site chrome provenance survives input discovery', () => {
+  const profile = discoverInputs(rootWith({
+    control: true,
+    tag: 'button',
+    type: 'button',
+    label: 'Example Private Person',
+    siteChrome: true,
+    hidden: false
+  }), 'entity:page')[0];
+
+  assert.equal(profile.siteChrome, true);
+});
