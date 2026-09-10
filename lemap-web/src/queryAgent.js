@@ -17,12 +17,8 @@ import { applyEntityValue, entityActionAvailable, executeEntityAction } from './
 import { waitForStructuralCaptureChange } from './agent/captureSettlement.js';
 import { chooseNavigationCandidate } from './agent/navigationDecision.js';
 import { planNavigation } from './agent/navigationPlanner.js';
-import {
-  learningCandidates,
-  learningConfigFromEnv,
-  newValidationMessages,
-  proposalForEntity
-} from './agent/learningMode.js';
+import { learningConfigFromEnv, newValidationMessages } from './agent/learningMode.js';
+import { resolveLearningValue } from './agent/learningValueResolver.js';
 import {
   buildEntityQuestion,
   ignoredSourceEntityIds,
@@ -33,6 +29,8 @@ import {
 import { createModelClient, modelConfigFromEnv } from './agent/modelClient.js';
 import { loadDotEnv } from './agent/env.js';
 import { compactModelResult, createRunLogger } from './agent/runLogger.js';
+import { redactModelText } from './semantic/modelPrivacy.js';
+import { resolveNavigationTopology } from './agent/navigationTopology.js';
 
 const loadedEnvFiles = await loadDotEnv({ cwd: process.cwd(), env: process.env });
 const endpoint = process.env.LEMAP_CDP || 'http://127.0.0.1:9222';
@@ -50,10 +48,6 @@ function hash(value) { return crypto.createHash('sha1').update(String(value)).di
 function workflowIdForGoal(goal) { return `workflow:${hash(String(goal || '').trim().toLowerCase())}`; }
 function actionableControl(entity = {}) {
   return entity.type === 'ui_control' && ['button', 'link'].includes(String(entity.structural?.controlType || ''));
-}
-function uniqueById(entities = []) {
-  const seen = new Set();
-  return arr(entities).filter((entity) => entity?.id && !seen.has(entity.id) && seen.add(entity.id));
 }
 
 async function captureEntities(page) {
@@ -117,10 +111,7 @@ async function enrichCurrentSemantics({
   currentEntities,
   pageId,
   workflowId,
-  instances = [],
-  proposedEntityIds = new Set(),
-  force = false,
-  learningMode = false
+  force = false
 }) {
   applyKnownSemantics(currentEntities, entityGraph);
 
@@ -128,11 +119,9 @@ async function enrichCurrentSemantics({
   const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
   const unresolved = entitiesNeedingSemantics(semanticEntities).filter((entity) => !actionableControl(entity));
-  const unresolvedIds = new Set(unresolved.map((entity) => entity.id));
-  const learnInputs = learningMode ? learningCandidates(semanticEntities, instances, proposedEntityIds) : [];
   const sourceCandidates = force
     ? semanticEntities.filter((entity) => !actionableControl(entity))
-    : uniqueById([...unresolved, ...learnInputs]).filter((entity) => !actionableControl(entity));
+    : unresolved;
 
   if (!sourceCandidates.length) return { called: false, count: 0, result: { entities: [] } };
 
@@ -144,14 +133,12 @@ async function enrichCurrentSemantics({
     pageId,
     pageContext,
     privacyEntities: currentEntities,
-    learning: learningMode
+    learning: false
   });
   const patched = new Set();
   for (const patch of result.entities) {
-    if (unresolvedIds.has(patch.id) || force) {
-      patched.add(patch.id);
-      if (findEntity(entityGraph, patch.id)) mergeSemanticPatch(entityGraph, patch.id, patch.semantic);
-    }
+    patched.add(patch.id);
+    if (findEntity(entityGraph, patch.id)) mergeSemanticPatch(entityGraph, patch.id, patch.semantic);
   }
 
   for (const entity of unresolved) {
@@ -200,6 +187,37 @@ function displayValue(value) {
   return Array.isArray(value) ? value.join(', ') : String(value ?? '');
 }
 
+async function acquireInputValue({ client, model, userGoal, input, question, privacyEntities }) {
+  if (!learning.enabled) return { value: await askUserValue(question), source: 'user' };
+
+  let proposed = null;
+  try {
+    const result = await resolveLearningValue({ client, model, userGoal, entity: input, question, privacyEntities });
+    proposed = result.answer || null;
+  } catch (error) {
+    console.log('[LeMap-Web] model learning value failed; asking user.');
+    await runLogger.write('learning_value_rejected', { entityId: input.id, reason: 'model_error' });
+  }
+
+  if (proposed !== null) {
+    const proposedValue = resolveEntityAnswer(question, proposed);
+    if (proposedValue !== null) {
+      console.log(`[LeMap-Web] model learning value: ${displayValue(proposedValue)}`);
+      let approved = true;
+      if (learning.step) {
+        const answer = (await rl.question('Apply model value? [Y/n] ')).trim();
+        approved = !/^n(o)?$/i.test(answer);
+      }
+      if (approved) return { value: proposedValue, source: 'model' };
+    } else {
+      console.log('[LeMap-Web] model learning value did not match the current field/options; asking user.');
+      await runLogger.write('learning_value_rejected', { entityId: input.id, reason: 'invalid_proposal' });
+    }
+  }
+
+  return { value: await askUserValue(question), source: 'user' };
+}
+
 function contextTransition(entityGraph, workflowId, triggerId, afterCapture) {
   addMissingStructuralEntities(entityGraph, afterCapture.entities);
   ensureWorkflowEntity(entityGraph, workflowId, findEntity(entityGraph, workflowId)?.structural?.goal || '', afterCapture.pageId);
@@ -220,6 +238,19 @@ function printTokenSummary(summary = {}) {
   console.log('\n[LeMap-Web] model token usage:');
   for (const [purpose, usage] of purposes) console.log(`  ${purpose}: ${usage.calls} calls, ${usage.tokens} tok${usage.cacheHit ? `, cache ${usage.cacheHit}` : ''}`);
   console.log(`  total: ${summary.total.calls} calls, ${summary.total.tokens} tok${summary.total.cacheHit ? `, cache ${summary.total.cacheHit}` : ''}`);
+}
+
+function navigationDispositionRows({ entityGraph, currentEntities, currentPageId, recentPageTrail, blockedEntityIds }) {
+  const topology = resolveNavigationTopology({ entityGraph, currentEntities, currentPageId, recentPageTrail });
+  const patchById = new Map(topology.deterministicPatches.map((patch) => [patch.id, patch]));
+  const modelIds = new Set(topology.modelCandidates.map((entity) => entity.id));
+  return currentEntities.filter(actionableControl).map((entity) => {
+    const patch = patchById.get(entity.id);
+    const role = patch?.semantic?.workflowRole;
+    let disposition = role === 'continue' ? 'learned-forward' : role || (modelIds.has(entity.id) ? 'model-candidate' : 'filtered');
+    if (blockedEntityIds.has(entity.id)) disposition = `blocked-${disposition}`;
+    return { id: entity.id, name: redactModelText(entity.name || '', currentEntities), disposition };
+  });
 }
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -260,7 +291,6 @@ try {
   const appliedInstanceEntityIds = new Set();
   const executedContinuationKeys = new Set();
   const recentPageTrail = [];
-  const learningProposalCache = new Map();
 
   browser = await chromium.connectOverCDP(endpoint);
   const pages = browser.contexts().flatMap((context) => context.pages());
@@ -300,19 +330,9 @@ try {
       currentEntities: capture.entities,
       pageId: capture.pageId,
       workflowId,
-      instances,
-      proposedEntityIds: new Set(learningProposalCache.keys()),
-      learningMode: learning.enabled,
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
-    if (learning.enabled) {
-      for (const item of arr(semanticResult.result?.entities)) {
-        if (item?.learningAnswer !== undefined && item?.learningAnswer !== null && item?.learningAnswer !== '') {
-          learningProposalCache.set(item.id, String(item.learningAnswer));
-        }
-      }
-    }
-    if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved/learning entities`);
+    if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved entities`);
 
     const workflow = findEntity(entityGraph, workflowId);
     if (workflow?.semantic?.complete) {
@@ -353,30 +373,14 @@ try {
       const question = buildEntityQuestion(input, capture.entities);
       printQuestion(question);
 
-      let value = null;
-      let valueSource = 'user';
-      const proposed = learning.enabled
-        ? learningProposalCache.get(input.id) ?? proposalForEntity(semanticResult.result, input.id)
-        : null;
-      if (proposed !== null) {
-        const proposedValue = resolveEntityAnswer(question, proposed);
-        if (proposedValue !== null) {
-          console.log(`[LeMap-Web] model learning value: ${displayValue(proposedValue)}`);
-          let approved = true;
-          if (learning.step) {
-            const answer = (await rl.question('Apply model value? [Y/n] ')).trim();
-            approved = !/^n(o)?$/i.test(answer);
-          }
-          if (approved) {
-            value = proposedValue;
-            valueSource = 'model';
-          }
-        } else {
-          console.log('[LeMap-Web] model learning value did not match the current field/options; asking user.');
-          await runLogger.write('learning_value_rejected', { entityId: input.id, reason: 'invalid_proposal' });
-        }
-      }
-      if (value === null) value = await askUserValue(question);
+      let { value, source: valueSource } = await acquireInputValue({
+        client,
+        model,
+        userGoal,
+        input,
+        question,
+        privacyEntities: capture.entities
+      });
 
       let before = capture;
       let after;
@@ -413,7 +417,6 @@ try {
         value,
         learning.enabled ? { mode: 'learning', source: valueSource } : {}
       );
-      learningProposalCache.delete(input.id);
       await runLogger.write('instance_write', {
         entityId: input.id,
         value: 'provisional',
@@ -460,6 +463,22 @@ try {
       await runLogger.write('navigation_preflight', { captured: capturedNavigationCount, executable: executableNavigationIds.size, filtered: staleNavigationCount });
     }
 
+    const diagnosticRows = navigationDispositionRows({
+      entityGraph,
+      currentEntities: navigationEntities,
+      currentPageId: capture.pageId,
+      recentPageTrail,
+      blockedEntityIds
+    });
+    if (diagnosticRows.length) {
+      console.log('[LeMap-Web] navigation diagnostics:');
+      for (const row of diagnosticRows) console.log(`  ${row.disposition.padEnd(24)} ${row.id}  ${row.name || '(unnamed)'}`);
+      await runLogger.write('navigation_diagnostics', {
+        pageId: capture.pageId,
+        candidates: diagnosticRows.map((row) => ({ id: row.id, disposition: row.disposition, label: row.name }))
+      });
+    }
+
     const pageContext = capture.entities.find((entity) => entity.id === capture.pageId) || findEntity(entityGraph, capture.pageId);
     const navigation = await planNavigation({
       entityGraph,
@@ -469,6 +488,8 @@ try {
       blockedEntityIds,
       choose: ({ candidates }) => chooseNavigationCandidate({ client, model, userGoal, candidates, pageContext, recentPageTrail, privacyEntities: navigationEntities })
     });
+    if (navigation.entity) console.log(`[LeMap-Web] navigation selected: ${navigation.entity.id} ${redactModelText(navigation.entity.name || '', navigationEntities)} [${navigation.source}]`);
+    else console.log('[LeMap-Web] navigation selected: none');
     if (navigation.topologyCount) console.log(`[LeMap-Web] topology filtered/resolved ${navigation.topologyCount} navigation entities without the model`);
     const continuation = navigation.entity;
     if (!continuation) {
