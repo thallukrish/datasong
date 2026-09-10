@@ -336,7 +336,14 @@ try {
     executedContinuationKeys.add(`${capture.pageId}|${continuation.id}`);
     console.log(`[LeMap-Web] continuing via: ${continuation.name}${Number.isFinite(Number(continuation.semantic?.navigationPriority)) ? ` [priority ${continuation.semantic.navigationPriority}]` : ''}`);
     const before = capture;
-    await executeEntityAction(page, continuation);
+    const execution = await executeEntityAction(page, continuation);
+    if (execution?.executed === false && execution.reason === 'locator_miss') {
+      console.log(`[LeMap-Web] continuation locator became stale; skipping ${continuation.name} and trying the next candidate.`);
+      await runLogger.write('continuation_skip', { entityId: continuation.id, reason: execution.reason, pageId: capture.pageId });
+      capture = await captureEntities(page);
+      addMissingStructuralEntities(entityGraph, capture.entities);
+      continue;
+    }
     const after = await captureAfterAction(page, before);
 
     if (after.pageId !== before.pageId) {
