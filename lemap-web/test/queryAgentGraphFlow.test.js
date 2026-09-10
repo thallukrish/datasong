@@ -90,7 +90,7 @@ test('checkbox group question accepts multiple selections using semantic rule', 
   assert.equal(resolveEntityAnswer(question, 'none'), null);
 });
 
-test('zero-or-more checkbox group accepts none explicitly', () => {
+test('zero-or-more structural cardinality maps to anyOf and accepts none explicitly', () => {
   const conditions = {
     id: 'group:conditions',
     name: 'Applicable Conditions',
@@ -100,7 +100,7 @@ test('zero-or-more checkbox group accepts none explicitly', () => {
     links: []
   };
   const question = buildEntityQuestion(conditions, [conditions]);
-  assert.equal(question.selectionRule, 'zeroOrMore');
+  assert.equal(question.selectionRule, 'anyOf');
   assert.deepEqual(resolveEntityAnswer(question, 'none'), []);
 });
 
