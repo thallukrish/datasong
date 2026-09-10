@@ -6,7 +6,7 @@ function normalize(value) { return String(value ?? '').trim().replace(/\s+/g, ' 
 const ACTION_LABEL = /^(continue|proceed|cancel|back|previous|next|submit|save|close|start|start new filing|select status|confirm|ok|okay|finish|done|edit|delete|remove|add|retry)$/i;
 
 function contextFor(field = {}) {
-  return String(field.parentRegionLabel || '').trim();
+  return String(field.localContext || field.parentRegionLabel || '').trim();
 }
 
 function ownerFor(field = {}) {
