@@ -59,6 +59,17 @@ function commonOwner(members = []) {
   return owners.size === 1 && members.every((member) => ownerFor(member) === [...owners][0]) ? [...owners][0] : '';
 }
 
+function labelForGroup(members = [], fields = []) {
+  const context = contextFor(members[0]);
+  const ownerId = commonOwner(members);
+  if (!ownerId) return context || members[0]?.name || 'Choice';
+
+  const owner = fields.find((field) => field.id === ownerId);
+  const ownerContext = contextFor(owner);
+  if (context && normalize(context) !== normalize(ownerContext)) return context;
+  return owner?.label || context || members[0]?.name || 'Choice';
+}
+
 export function discoverGroups(fields = [], entityId = '') {
   const groups = [];
   const buckets = new Map();
@@ -73,7 +84,7 @@ export function discoverGroups(fields = [], entityId = '') {
   for (const [key, members] of buckets) {
     if (!validCandidateSet(members)) continue;
 
-    const label = contextFor(members[0]) || members[0].name || 'Choice';
+    const label = labelForGroup(members, fields);
     const cardinality = cardinalityFor(members);
     const id = `group:${hash(`${entityId}|choice|${key}`)}`;
     groups.push({
