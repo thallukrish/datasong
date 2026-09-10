@@ -4,8 +4,7 @@ import {
   learningCandidates,
   learningConfigFromEnv,
   newValidationMessages,
-  proposalForEntity,
-  selectProposedLearningInput
+  proposalForEntity
 } from '../src/agent/learningMode.js';
 
 const knownInput = {
@@ -38,42 +37,21 @@ test('learning candidates include semantically known unanswered inputs without a
   assert.deepEqual(learningCandidates([knownInput, unansweredGroup, button], instances).map((entity) => entity.id), [unansweredGroup.id]);
 });
 
+test('persisted learning instances are not regenerated because replay owns them in every mode', () => {
+  const instances = [{
+    id: 'instance:choice',
+    type: 'instance',
+    value: 'Alpha',
+    mode: 'learning',
+    source: 'model',
+    links: [{ id: unansweredGroup.id, relationship: 'instanceOf' }]
+  }];
+  assert.deepEqual(learningCandidates([unansweredGroup], instances), []);
+});
+
 test('cached learning proposals are excluded from later semantic batches', () => {
   const cached = new Set([unansweredGroup.id]);
   assert.deepEqual(learningCandidates([knownInput, unansweredGroup], [], cached).map((entity) => entity.id), [knownInput.id]);
-});
-
-test('proposal-backed visible input is consumed before navigation even when semantic classification is incomplete', () => {
-  const incompletelyClassified = {
-    id: 'group:filing-mode',
-    name: 'Online Offline',
-    type: 'group',
-    structural: { cardinality: 'exactlyOne', values: ['Online', 'Offline'], visible: true, disabled: false },
-    semantic: { interaction: 'unknown', relevantToGoal: false, required: false },
-    links: []
-  };
-  const navigation = {
-    id: 'button:menu',
-    name: 'Menu',
-    type: 'ui_control',
-    structural: { controlType: 'button', visible: true, disabled: false },
-    semantic: {},
-    links: []
-  };
-  const proposals = new Map([[incompletelyClassified.id, '1']]);
-
-  const selected = selectProposedLearningInput([navigation, incompletelyClassified], [], proposals);
-  assert.equal(selected?.id, incompletelyClassified.id);
-});
-
-test('proposal-backed learning input ignores hidden, disabled and already-instanced entities', () => {
-  const hidden = { ...unansweredGroup, id: 'group:hidden', structural: { ...unansweredGroup.structural, visible: false } };
-  const disabled = { ...unansweredGroup, id: 'group:disabled', structural: { ...unansweredGroup.structural, disabled: true } };
-  const done = { ...unansweredGroup, id: 'group:done' };
-  const proposals = new Map([[hidden.id, '1'], [disabled.id, '1'], [done.id, '1']]);
-  const instances = [{ id: 'instance:done', type: 'instance', value: 'Alpha', links: [{ id: done.id, relationship: 'instanceOf' }] }];
-
-  assert.equal(selectProposedLearningInput([hidden, disabled, done], instances, proposals), null);
 });
 
 test('learning proposal lookup is keyed by entity id and remains separate from semantic state', () => {
@@ -86,6 +64,6 @@ test('learning proposal lookup is keyed by entity id and remains separate from s
 
 test('new validation messages detect model-value rejection without treating pre-existing messages as failures', () => {
   const before = { explored: { snapshot: { validations: ['Existing warning'] } } };
-  const after = { explored: { snapshot: { validations: ['Existing warning', 'Value is invalid'] } } };
+  const after = { explored: { snapshot: { validations: ['Existing warning', 'Value is invalid'] } };
   assert.deepEqual(newValidationMessages(before, after), ['Value is invalid']);
 });
