@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compactModelResult, createTokenLedger, summarizeUserInteraction } from '../src/agent/runLogger.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { compactModelResult, createRunLogger, createTokenLedger, summarizeUserInteraction } from '../src/agent/runLogger.js';
 import { callJsonModel, setModelCallLogger } from '../src/semantic/modelCall.js';
 
 test('model result logging keeps decisions and token usage compact', () => {
@@ -10,13 +13,14 @@ test('model result logging keeps decisions and token usage compact', () => {
     durationMs: 231,
     usage: { prompt_tokens: 1200, completion_tokens: 84, total_tokens: 1284, prompt_cache_hit_tokens: 900 },
     finishReason: 'stop',
-    parsed: { decision: 'ask_user', questionIds: ['field:year'], confidence: 0.95, reason: 'Assessment year is required.', huge: 'x'.repeat(5000) }
+    parsed: { decision: 'ask_user', questionIds: ['field:year'], confidence: 0.95, reason: 'Free-text reason.', huge: 'x'.repeat(5000) }
   });
   assert.equal(summary.purpose, 'information_need');
   assert.equal(summary.tokens.total, 1284);
   assert.equal(summary.tokens.cacheHit, 900);
   assert.equal(summary.result.decision, 'ask_user');
   assert.deepEqual(summary.result.questionIds, ['field:year']);
+  assert.equal(summary.result.reason, undefined);
   assert.equal(summary.result.huge, undefined);
 });
 
@@ -57,7 +61,23 @@ test('model call logger may receive exact exchange in memory but compact JSONL s
   assert.equal(logged.exchange, undefined);
   assert.equal(JSON.stringify(logged).includes(systemPrompt), false);
   assert.equal(JSON.stringify(logged).includes(userPrompt), false);
-  assert.equal(JSON.stringify(logged).includes(events[0].raw), false);
+});
+
+test('run JSONL omits raw goal, page title and attached URL', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-log-'));
+  const logger = await createRunLogger({ baseDir: dir, goal: 'Private goal value' });
+  await logger.write('attached', {
+    title: 'Welcome Example Private Person',
+    route: 'https://example.test/account?token=private-token',
+    model: 'test-model',
+    workflowId: 'workflow:1'
+  });
+  const content = await fs.readFile(logger.file, 'utf8');
+  assert.equal(content.includes('Private goal value'), false);
+  assert.equal(content.includes('Example Private Person'), false);
+  assert.equal(content.includes('private-token'), false);
+  assert.match(content, /goalProvided/);
+  assert.match(content, /workflow:1/);
 });
 
 test('token ledger aggregates model usage by purpose and total', () => {
