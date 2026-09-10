@@ -18,6 +18,12 @@ import { waitForStructuralCaptureChange } from './agent/captureSettlement.js';
 import { chooseNavigationCandidate } from './agent/navigationDecision.js';
 import { planNavigation } from './agent/navigationPlanner.js';
 import {
+  learningCandidates,
+  learningConfigFromEnv,
+  newValidationMessages,
+  proposalForEntity
+} from './agent/learningMode.js';
+import {
   buildEntityQuestion,
   ignoredSourceEntityIds,
   resolveEntityAnswer,
@@ -37,12 +43,20 @@ const maxSteps = Number.isFinite(Number(process.env.LEMAP_MAX_STEPS)) ? Math.max
 const entityFile = path.resolve(process.env.LEMAP_ENTITY_GRAPH_FILE || path.join('data', 'entity-graph', 'web-map.json'));
 const instanceFile = path.resolve(process.env.LEMAP_INSTANCE_FILE || path.join('data', 'instances', 'default.json'));
 const runLogDir = path.resolve(process.env.LEMAP_RUN_LOG_DIR || path.join('data', 'query-runs'));
+const learning = learningConfigFromEnv(process.env);
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 function hash(value) { return crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 12); }
 function workflowIdForGoal(goal) { return `workflow:${hash(String(goal || '').trim().toLowerCase())}`; }
 function actionableControl(entity = {}) {
   return entity.type === 'ui_control' && ['button', 'link'].includes(String(entity.structural?.controlType || ''));
+}
+function uniqueById(entities = []) {
+  const seen = new Set();
+  return arr(entities).filter((entity) => entity?.id && !seen.has(entity.id) && seen.add(entity.id));
+}
+function executionInstances(instances = []) {
+  return learning.enabled ? instances : arr(instances).filter((instance) => instance?.mode !== 'learning');
 }
 
 async function captureEntities(page) {
@@ -98,18 +112,30 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   return findEntity(entityGraph, workflowId);
 }
 
-async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, force = false }) {
+async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, instances = [], force = false, learningMode = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
 
   const workflow = findEntity(entityGraph, workflowId);
   const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
   const unresolved = entitiesNeedingSemantics(semanticEntities).filter((entity) => !actionableControl(entity));
-  const sourceCandidates = force ? semanticEntities.filter((entity) => !actionableControl(entity)) : unresolved;
+  const learnInputs = learningMode ? learningCandidates(semanticEntities, instances) : [];
+  const sourceCandidates = force
+    ? semanticEntities.filter((entity) => !actionableControl(entity))
+    : uniqueById([...unresolved, ...learnInputs]).filter((entity) => !actionableControl(entity));
 
-  if (!sourceCandidates.length) return { called: false, count: 0 };
+  if (!sourceCandidates.length) return { called: false, count: 0, result: { entities: [] } };
 
-  const result = await resolveEntitySemantics({ client, model, userGoal, entities: sourceCandidates, pageId, pageContext });
+  const result = await resolveEntitySemantics({
+    client,
+    model,
+    userGoal,
+    entities: sourceCandidates,
+    pageId,
+    pageContext,
+    privacyEntities: currentEntities,
+    learning: learningMode
+  });
   const patched = new Set();
   for (const patch of result.entities) {
     patched.add(patch.id);
@@ -125,7 +151,7 @@ async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, cu
   }
 
   applyKnownSemantics(currentEntities, entityGraph);
-  return { called: true, count: sourceCandidates.length };
+  return { called: true, count: sourceCandidates.length, result };
 }
 
 async function ensureInputOptions(page, entity, entityGraph) {
@@ -146,6 +172,20 @@ function printQuestion(question) {
   if (question.instruction) console.log(`[LeMap-Web] ${question.instruction}`);
   if (question.options.length) question.options.forEach((option, index) => console.log(`  ${index + 1}. ${option}`));
   else if (question.examples.length) console.log(`  Examples: ${question.examples.slice(0, 4).join(' • ')}`);
+}
+
+async function askUserValue(question, prompt = 'Your answer: ') {
+  let value = null;
+  while (value === null) {
+    const answer = (await rl.question(prompt)).trim();
+    value = resolveEntityAnswer(question, answer);
+    if (value === null) console.log('[LeMap-Web] Please choose one of the listed values.');
+  }
+  return value;
+}
+
+function displayValue(value) {
+  return Array.isArray(value) ? value.join(', ') : String(value ?? '');
 }
 
 function contextTransition(entityGraph, workflowId, triggerId, afterCapture) {
@@ -217,11 +257,12 @@ try {
   console.log(`[LeMap-Web] goal: ${userGoal}`);
   console.log(`[LeMap-Web] attached: ${await page.title()} :: ${page.url()}`);
   if (loadedEnvFiles.length) console.log(`[LeMap-Web] env: ${loadedEnvFiles.join(', ')}`);
+  console.log(`[LeMap-Web] mode: ${learning.mode}${learning.enabled ? ` (${learning.step ? 'single-step' : 'automatic'} learning values)` : ''}`);
   console.log(`[LeMap-Web] entity graph: ${entityFile}`);
   console.log(`[LeMap-Web] instance graph: ${instanceFile}`);
   console.log('[LeMap-Web] learning state: checkpointed unless the run errors or is interrupted');
   console.log(`[LeMap-Web] run log: ${runLogger.file}`);
-  await runLogger.write('attached', { title: await page.title(), route: page.url(), model, workflowId });
+  await runLogger.write('attached', { title: await page.title(), route: page.url(), model, workflowId, mode: learning.mode });
 
   let capture = await captureEntities(page);
   addMissingStructuralEntities(entityGraph, capture.entities);
@@ -246,9 +287,11 @@ try {
       currentEntities: capture.entities,
       pageId: capture.pageId,
       workflowId,
+      instances,
+      learningMode: learning.enabled,
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
-    if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved entities`);
+    if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved/learning entities`);
 
     const workflow = findEntity(entityGraph, workflowId);
     if (workflow?.semantic?.complete) {
@@ -258,10 +301,11 @@ try {
       break;
     }
 
-    const reusable = selectReusableUserInput(capture.entities, instances, appliedInstanceEntityIds);
+    const activeInstances = executionInstances(instances);
+    const reusable = selectReusableUserInput(capture.entities, activeInstances, appliedInstanceEntityIds);
     if (reusable) {
       console.log(`[LeMap-Web] applying stored instance value for ${reusable.entity.name}`);
-      await runLogger.write('instance_apply', { entityId: reusable.entity.id, source: 'stored' });
+      await runLogger.write('instance_apply', { entityId: reusable.entity.id, source: 'stored', mode: reusable.instance.mode || 'run' });
       const before = capture;
       await applyEntityValue(page, capture.entities, reusable.entity, reusable.instance.value);
       const after = await captureAfterAction(page, before);
@@ -283,24 +327,75 @@ try {
       continue;
     }
 
-    const input = selectNextUserInput(capture.entities, instances);
+    const input = selectNextUserInput(capture.entities, activeInstances);
     if (input) {
       await ensureInputOptions(page, input, entityGraph);
       const question = buildEntityQuestion(input, capture.entities);
       printQuestion(question);
+
       let value = null;
-      while (value === null) {
-        const answer = (await rl.question('Your answer: ')).trim();
-        value = resolveEntityAnswer(question, answer);
-        if (value === null) console.log('[LeMap-Web] Please choose one of the listed values.');
+      let valueSource = 'user';
+      const proposed = learning.enabled ? proposalForEntity(semanticResult.result, input.id) : null;
+      if (proposed !== null) {
+        const proposedValue = resolveEntityAnswer(question, proposed);
+        if (proposedValue !== null) {
+          console.log(`[LeMap-Web] model learning value: ${displayValue(proposedValue)}`);
+          let approved = true;
+          if (learning.step) {
+            const answer = (await rl.question('Apply model value? [Y/n] ')).trim();
+            approved = !/^n(o)?$/i.test(answer);
+          }
+          if (approved) {
+            value = proposedValue;
+            valueSource = 'model';
+          }
+        } else {
+          console.log('[LeMap-Web] model learning value did not match the current field/options; asking user.');
+          await runLogger.write('learning_value_rejected', { entityId: input.id, reason: 'invalid_proposal' });
+        }
+      }
+      if (value === null) value = await askUserValue(question);
+
+      let before = capture;
+      let after;
+      try {
+        await applyEntityValue(page, capture.entities, input, value);
+        after = await captureAfterAction(page, before);
+      } catch (error) {
+        if (!(learning.enabled && valueSource === 'model')) throw error;
+        console.log('[LeMap-Web] model learning value could not be applied; please provide this value.');
+        await runLogger.write('learning_value_rejected', { entityId: input.id, reason: 'apply_error' });
+        value = await askUserValue(question);
+        valueSource = 'user';
+        await applyEntityValue(page, capture.entities, input, value);
+        after = await captureAfterAction(page, before);
       }
 
-      upsertInstanceValue(instances, input.id, value);
-      await runLogger.write('instance_write', { entityId: input.id, value: 'provisional' });
+      const validationFailures = learning.enabled && valueSource === 'model' ? newValidationMessages(before, after) : [];
+      if (validationFailures.length) {
+        console.log('[LeMap-Web] model learning value was rejected by page validation; please provide this value.');
+        await runLogger.write('learning_value_rejected', { entityId: input.id, reason: 'validation', count: validationFailures.length });
+        const currentInput = after.entities.find((entity) => entity.id === input.id) || input;
+        const manualQuestion = buildEntityQuestion(currentInput, after.entities);
+        printQuestion(manualQuestion);
+        value = await askUserValue(manualQuestion);
+        valueSource = 'user';
+        before = after;
+        await applyEntityValue(page, after.entities, currentInput, value);
+        after = await captureAfterAction(page, before);
+      }
 
-      const before = capture;
-      await applyEntityValue(page, capture.entities, input, value);
-      const after = await captureAfterAction(page, before);
+      upsertInstanceValue(
+        instances,
+        input.id,
+        value,
+        learning.enabled ? { mode: 'learning', source: valueSource } : {}
+      );
+      await runLogger.write('instance_write', {
+        entityId: input.id,
+        value: 'provisional',
+        ...(learning.enabled ? { mode: 'learning', source: valueSource } : {})
+      });
 
       if (after.pageId !== before.pageId) {
         appliedInstanceEntityIds.clear();
@@ -335,7 +430,7 @@ try {
       currentPageId: capture.pageId,
       recentPageTrail,
       blockedEntityIds,
-      choose: ({ candidates }) => chooseNavigationCandidate({ client, model, userGoal, candidates, pageContext, recentPageTrail })
+      choose: ({ candidates }) => chooseNavigationCandidate({ client, model, userGoal, candidates, pageContext, recentPageTrail, privacyEntities: capture.entities })
     });
     if (navigation.topologyCount) console.log(`[LeMap-Web] topology filtered/resolved ${navigation.topologyCount} navigation entities without the model`);
     const continuation = navigation.entity;
