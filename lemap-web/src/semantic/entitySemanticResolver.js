@@ -23,7 +23,7 @@ const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
 LeMap-Web already owns the structural entity graph. You receive only unresolved non-navigation entities plus the user's goal and current page context.
 The pageContext object, when present, is reference-only context. Do not return a semantic patch for pageContext unless that same page entity is explicitly included in entities.
 For each supplied entity, return only its id and useful semantic additions. Never repeat structural facts, links, browser mechanics or user values. Never invent entity ids.
-A group entity represents one user-facing choice independent of how its member controls are rendered. Member controls inside a supplied group are structural implementation details and are not separate semantic questions.
+A group entity represents one user-facing choice independent of how its member controls are rendered. Member controls and choice values are local structural data and are not sent for semantic interpretation.
 For every relevant group, you MUST return interaction=user_input, relevantToGoal, required, and a concise question. For groups, structural cardinality describes what the UI permits. Add selectionRule only when useful to express business meaning: exactlyOne, anyOf, allOf, or atLeastOne.
 For relevant user-input entities, return interaction=user_input, relevantToGoal, required, and a concise question; add meaning, semanticType, scope, explanation only when needed, caveats only when needed, examples only when useful, and selectionRule when applicable.
 For page/workflow/information entities, add only minimal useful meaning/description/relevance. complete is primarily for workflow entities.
@@ -34,18 +34,11 @@ function compactEntity(entity = {}, privacyEntities = []) {
   const hint = entity.type === 'workflow'
     ? { goal: structural.goal ? text(structural.goal, 300, privacyEntities) : undefined }
     : entity.type === 'group'
-      ? {
-          cardinality: structural.cardinality || undefined,
-          choices: arr(structural.values).slice(0, 8).map((value) => text(value, 100, privacyEntities)).filter(Boolean)
-        }
+      ? { cardinality: structural.cardinality || undefined }
       : entity.type === 'ui_control'
         ? { controlType: structural.controlType || undefined }
         : {};
-  const structuralHint = Object.fromEntries(Object.entries(hint).filter(([, value]) => {
-    if (value === undefined) return false;
-    if (Array.isArray(value) && !value.length) return false;
-    return true;
-  }));
+  const structuralHint = Object.fromEntries(Object.entries(hint).filter(([, value]) => value !== undefined));
   return {
     id: String(entity.id || ''),
     name: text(entity.name, 360, privacyEntities),
