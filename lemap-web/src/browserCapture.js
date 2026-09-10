@@ -105,7 +105,7 @@ export async function snapshotPage(page) {
         defaultChecked: ['radio', 'checkbox'].includes(type) ? !!el.defaultChecked : null,
         label: labelFor(el),
         disabled: !!el.disabled || el.getAttribute?.('aria-disabled') === 'true',
-        hidden: !visible(el),
+        hidden: false,
         required: !!el.required || el.getAttribute?.('aria-required') === 'true',
         readonly: !!el.readOnly || el.getAttribute?.('aria-readonly') === 'true',
         placeholder: clean(el.getAttribute?.('placeholder') || ''),
@@ -130,12 +130,12 @@ export async function snapshotPage(page) {
       const output = [];
       for (const child of Array.from(el.children || [])) {
         if (isControl(child)) {
-          if (rendered(child)) output.push(control(child));
+          if (visible(child)) output.push(control(child));
           continue;
         }
         const nested = semanticChildren(child, depth + 1);
         const label = regionLabel(child);
-        if (label && rendered(child)) output.push({ tag: child.tagName?.toLowerCase() || 'div', label, hidden: !visible(child), children: nested });
+        if (label && visible(child)) output.push({ tag: child.tagName?.toLowerCase() || 'div', label, hidden: false, children: nested });
         else output.push(...nested);
       }
       return output;
@@ -170,7 +170,7 @@ export async function snapshotPage(page) {
 
     const values = {};
     for (const el of scope.querySelectorAll('input,select,textarea,[role="combobox"],[role="spinbutton"]')) {
-      if ((el.type || '').toLowerCase() === 'hidden' || !rendered(el)) continue;
+      if ((el.type || '').toLowerCase() === 'hidden' || !visible(el)) continue;
       const key = labelFor(el) || clean(el.name || el.id);
       if (!key) continue;
       if (el.type === 'radio') {
@@ -183,7 +183,7 @@ export async function snapshotPage(page) {
     const regions = {};
     for (const el of scope.querySelectorAll('section,fieldset,[role="region"],div')) {
       const label = regionLabel(el);
-      if (label && rendered(el)) regions[label] = { visible: visible(el) };
+      if (label && visible(el)) regions[label] = { visible: true };
     }
 
     const validations = [];
@@ -196,7 +196,7 @@ export async function snapshotPage(page) {
 
     const options = {};
     for (const el of scope.querySelectorAll('select,[role="combobox"]')) {
-      if (!rendered(el)) continue;
+      if (!visible(el)) continue;
       const key = labelFor(el) || clean(el.name || el.id);
       if (!key) continue;
       let valuesForInput = optionsFor(el);
