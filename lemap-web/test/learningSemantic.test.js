@@ -61,3 +61,21 @@ test('learning answers are normalized beside semantics and only for known entiti
   assert.equal(result.entities.find((item) => item.id === textInput.id)?.learningAnswer, '1000');
   assert.equal(result.entities.some((item) => item.id === 'field:invented'), false);
 });
+
+test('a learning answer makes its entity a fillable relevant input even if model semantic fields are incomplete', () => {
+  const result = normalizeEntitySemanticResponse({
+    entities: [
+      {
+        id: group.id,
+        semantic: { interaction: 'unknown', relevantToGoal: false, required: false },
+        learningAnswer: '1'
+      }
+    ]
+  }, [group], { learning: true });
+
+  const item = result.entities[0];
+  assert.equal(item.learningAnswer, '1');
+  assert.equal(item.semantic.interaction, 'user_input');
+  assert.equal(item.semantic.relevantToGoal, true);
+  assert.equal(item.semantic.required, true);
+});
