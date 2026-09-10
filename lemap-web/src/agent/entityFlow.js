@@ -160,14 +160,26 @@ export function ignoredSourceEntityIds(entity = {}) {
   ].filter(Boolean);
 }
 
-export function selectWorkflowContinuation(entities = []) {
-  return arr(entities).find((entity) => {
+function knownVisitedTransition(entity = {}, entityGraph = [], visitedPageIds = new Set()) {
+  const persisted = arr(entityGraph).find((candidate) => candidate.id === entity.id);
+  if (!persisted) return false;
+  return arr(persisted.links)
+    .filter((link) => link.relationship === 'transitionsTo')
+    .some((link) => visitedPageIds.has(link.id));
+}
+
+export function selectWorkflowContinuation(entities = [], { entityGraph = [], visitedPageIds = new Set() } = {}) {
+  const candidates = arr(entities).filter((entity) => {
     const semantic = entity.semantic || {};
     return entity.type === 'ui_control'
       && visibleAndEnabled(entity)
       && semantic.relevantToGoal === true
       && semantic.workflowRole === 'continue'
       && semantic.consequence === 'reversible'
-      && ['navigation', 'action'].includes(semantic.interaction);
-  }) || null;
+      && ['navigation', 'action'].includes(semantic.interaction)
+      && !knownVisitedTransition(entity, entityGraph, visitedPageIds);
+  });
+
+  candidates.sort((a, b) => Number(b.semantic?.required === true) - Number(a.semantic?.required === true));
+  return candidates[0] || null;
 }
