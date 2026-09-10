@@ -84,6 +84,31 @@ test('browser benchmark builds and advances the unified entity graph', async (t)
     await page.close();
   });
 
+  await t.test('ARIA choice hierarchy keeps question text, distinct radio labels and nested checkbox subgroup', async () => {
+    const page = await freshPage(browser, fixture.url);
+    const captured = await capture(page);
+    const radioGroup = captured.entities.find((entity) => entity.type === 'group' && entity.name === 'Are you filing for any of the following reasons?');
+    const taxable = entityByName(captured.entities, 'Taxable income is above the basic exemption limit');
+    const conditional = entityByName(captured.entities, 'Filing because one or more special conditions apply');
+    const others = entityByName(captured.entities, 'Others');
+    const checkboxGroup = captured.entities.find((entity) => entity.type === 'group' && entity.name === 'Additional filing conditions');
+    const deposit = entityByName(captured.entities, 'Large current-account deposits');
+    const travel = entityByName(captured.entities, 'Foreign travel expenditure');
+
+    assert.ok(radioGroup);
+    assert.deepEqual(radioGroup.structural.values, [
+      taxable.name,
+      conditional.name,
+      others.name
+    ]);
+    assert.ok(conditional.links.some((link) => link.id === checkboxGroup?.id && link.relationship === 'contains'));
+    assert.ok(checkboxGroup?.links.some((link) => link.id === conditional.id && link.relationship === 'partOf'));
+    assert.ok(checkboxGroup?.links.some((link) => link.id === deposit.id && link.relationship === 'contains'));
+    assert.ok(checkboxGroup?.links.some((link) => link.id === travel.id && link.relationship === 'contains'));
+    assert.equal(captured.entities.some((entity) => entity.name === 'filing-reason'), false);
+    await page.close();
+  });
+
   await t.test('action execution ignores hidden duplicate label matches', async () => {
     const page = await browser.newPage();
     await page.setContent(`<!doctype html><html><body>
