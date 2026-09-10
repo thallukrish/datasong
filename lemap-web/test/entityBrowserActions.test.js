@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { memberEntityForGroupValue, entityInteractionKind, optionCandidateMatches, executeEntityAction, applyEntityValue } from '../src/agent/entityBrowserActions.js';
+import { memberEntityForGroupValue, entityInteractionKind, optionCandidateMatches, executeEntityAction, entityActionAvailable, applyEntityValue } from '../src/agent/entityBrowserActions.js';
 
 const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online' }, links: [] };
 const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline' }, links: [] };
@@ -53,6 +53,49 @@ test('role-based radio resolves by accessible name before generic shared name', 
 
   assert.ok(calls.some((call) => call[0] === 'role' && call[1] === 'radio' && call[2]?.name === 'Reason B'));
   assert.ok(calls.some((call) => call[0] === 'check'));
+});
+
+test('action preflight excludes a captured action whose locator no longer resolves', async () => {
+  const emptyLocator = {
+    count: async () => 0,
+    nth: () => emptyLocator
+  };
+  const page = {
+    locator: () => emptyLocator,
+    getByRole: () => emptyLocator,
+    getByLabel: () => emptyLocator
+  };
+  const available = await entityActionAvailable(page, {
+    id: 'field:stale',
+    name: 'Menu action',
+    type: 'ui_control',
+    structural: { controlType: 'button', domId: 'old-dom-id' }
+  });
+  assert.equal(available, false);
+});
+
+test('action preflight retains a currently visible executable action without clicking it', async () => {
+  let clicks = 0;
+  const emptyLocator = { count: async () => 0, nth: () => emptyLocator };
+  const visible = {
+    count: async () => 1,
+    nth: () => visible,
+    isVisible: async () => true,
+    click: async () => { clicks += 1; }
+  };
+  const page = {
+    locator: () => emptyLocator,
+    getByRole: (role, options) => role === 'button' && options?.name === 'Continue' ? visible : emptyLocator,
+    getByLabel: () => emptyLocator
+  };
+  const available = await entityActionAvailable(page, {
+    id: 'field:continue',
+    name: 'Continue',
+    type: 'ui_control',
+    structural: { controlType: 'button' }
+  });
+  assert.equal(available, true);
+  assert.equal(clicks, 0);
 });
 
 test('stale action locator is recoverable instead of aborting the run', async () => {
