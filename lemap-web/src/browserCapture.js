@@ -68,14 +68,15 @@ export async function snapshotPage(page) {
       }
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.getAttribute?.('name') || el.id || '');
     };
+    const visibleChoicePeers = (el) => Array.from(el.querySelectorAll?.('input[type="radio"],input[type="checkbox"],button,[role="button"],[role="radio"],[role="checkbox"]') || []).filter(visible);
     const regionLabel = (el) => {
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
       const heading = el.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > [role="heading"], :scope > legend');
       if (heading) return clean(heading.innerText || heading.textContent);
 
-      const buttons = Array.from(el.querySelectorAll?.('button,[role="button"]') || []).filter(visible);
-      if (buttons.length >= 2 && buttons.length <= 8) {
+      const peers = visibleChoicePeers(el);
+      if (peers.length >= 2 && peers.length <= 8) {
         const context = textWithoutControls(el);
         if (context.length >= 3 && context.length <= 600) return context;
       }
