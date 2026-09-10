@@ -64,14 +64,15 @@ test('disabled actions are not semantic candidates until executable', () => {
   assert.deepEqual(entitiesNeedingSemantics([enabled]).map((entity) => entity.id), ['button:later']);
 });
 
-test('required user input remains a candidate until it has a structural value', () => {
+test('semantically complete user input is not re-sent just because its structural value is empty', () => {
   const input = {
     id: 'group:choice', name: 'Choice', type: 'group',
     structural: { cardinality: 'exactlyOne', value: null },
     semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Choose?' },
     links: []
   };
-  assert.deepEqual(entitiesNeedingSemantics([input]).map((entity) => entity.id), ['group:choice']);
+  assert.deepEqual(entitiesNeedingSemantics([input]), []);
+
   const answered = { ...input, structural: { ...input.structural, value: 'A' } };
-  assert.deepEqual(entitiesNeedingSemantics([answered]).map((entity) => entity.id), []);
+  assert.deepEqual(entitiesNeedingSemantics([answered]), []);
 });
