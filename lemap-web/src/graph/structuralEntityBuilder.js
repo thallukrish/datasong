@@ -26,18 +26,12 @@ function controlStructural(field = {}) {
   };
 }
 
-function groupCardinality(groupType = '') {
-  if (groupType === 'radio' || groupType === 'choice') return 'exactlyOne';
-  if (groupType === 'checkbox') return 'zeroOrMore';
-  return 'unknown';
-}
-
-function groupSelectionValue(members = [], flag = 'checked', groupType = '') {
-  if (groupType === 'choice') return null;
-  const selected = arr(members).filter((member) => member?.[flag] === true);
+function groupSelectionValue(members = [], flag = 'checked', cardinality = 'exactlyOne') {
+  const checkable = arr(members).filter((member) => ['radio', 'checkbox'].includes(member?.type));
+  if (!checkable.length) return cardinality === 'zeroOrMore' ? [] : null;
+  const selected = checkable.filter((member) => member?.[flag] === true);
   const labels = selected.map((member) => member.label || member.value).filter(Boolean);
-  if (groupType === 'checkbox') return labels;
-  return labels[0] ?? null;
+  return cardinality === 'zeroOrMore' || cardinality === 'oneOrMore' ? labels : (labels[0] ?? null);
 }
 
 export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
@@ -77,16 +71,16 @@ export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
     const members = arr(group.memberFieldIds)
       .map((id) => controls.find((field) => field.id === id))
       .filter(Boolean);
-    const groupType = group.groupType || '';
+    const cardinality = group.cardinality || 'exactlyOne';
     upsertEntity(graph, {
       id: group.id,
-      name: group.label || groupType || group.id,
+      name: group.label || 'Choice',
       type: 'group',
       structural: {
-        groupType,
-        cardinality: groupCardinality(groupType),
-        defaultValue: groupSelectionValue(members, 'defaultChecked', groupType),
-        value: groupSelectionValue(members, 'checked', groupType),
+        groupType: 'choice',
+        cardinality,
+        defaultValue: groupSelectionValue(members, 'defaultChecked', cardinality),
+        value: groupSelectionValue(members, 'checked', cardinality),
         values: members.map((member) => member.label || member.value).filter(Boolean),
         visible: members.some((member) => member.visible !== false),
         disabled: members.length > 0 && members.every((member) => !!member.disabled),
