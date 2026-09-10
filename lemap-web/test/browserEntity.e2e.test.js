@@ -5,6 +5,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { snapshotPage } from '../src/browserCapture.js';
+import { executeEntityAction } from '../src/agent/entityBrowserActions.js';
 import { buildStructuralEntities } from '../src/graph/structuralEntityBuilder.js';
 import { createEntityGraph, findEntity } from '../src/graph/entityGraph.js';
 import { applyObservedStructuralChange } from '../src/graph/structuralChange.js';
@@ -80,6 +81,25 @@ test('browser benchmark builds and advances the unified entity graph', async (t)
     assert.equal(continueEntities.length, 1);
     assert.equal(continueEntities[0].structural.domId, 'continue');
     assert.equal(captured.entities.some((entity) => entity.structural?.domId === 'hiddenContinue'), false);
+    await page.close();
+  });
+
+  await t.test('action execution ignores hidden duplicate label matches', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><body>
+      <div style="display:none"><button aria-label="Continue" onclick="window.__clicked='hidden'">Continue</button></div>
+      <button aria-label="Continue" onclick="window.__clicked='visible'">Continue</button>
+    </body></html>`);
+    await page.evaluate(() => { window.__clicked = ''; });
+
+    await executeEntityAction(page, {
+      id: 'field:continue',
+      name: 'Continue',
+      type: 'ui_control',
+      structural: { controlType: 'button' }
+    });
+
+    assert.equal(await page.evaluate(() => window.__clicked), 'visible');
     await page.close();
   });
 
