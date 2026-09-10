@@ -53,7 +53,7 @@ test('semantic prompt sends only identity and minimal interpretation hints, not 
 test('only entities without completed semantics are selected for model enrichment', () => {
   const resolvedInput = {
     ...pageEntities[1],
-    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, meaning: 'assessment year' }
+    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which assessment year?', meaning: 'assessment year' }
   };
   const unresolvedAction = {
     ...pageEntities[2],
