@@ -42,12 +42,23 @@ function earlierTrailPageIds(recentPageTrail = [], currentPageId = '') {
   return trail.slice(0, currentIndex);
 }
 
+function transitionTargets(entity = {}) {
+  return [...new Set(arr(entity.links)
+    .filter((link) => link.relationship === 'transitionsTo')
+    .map((link) => String(link.id || ''))
+    .filter(Boolean))];
+}
+
 function learnedEarlierTarget(entity = {}, earlierIds = []) {
   const earlier = new Set(earlierIds);
-  return arr(entity.links)
-    .filter((link) => link.relationship === 'transitionsTo')
-    .map((link) => link.id)
-    .find((id) => earlier.has(id)) || '';
+  return transitionTargets(entity).find((id) => earlier.has(id)) || '';
+}
+
+function learnedForwardTarget(entity = {}, graph = [], currentPageId = '', earlierIds = []) {
+  const earlier = new Set(earlierIds);
+  const targets = transitionTargets(entity)
+    .filter((id) => id !== currentPageId && !earlier.has(id) && pageFor(graph, id));
+  return targets.length === 1 ? targets[0] : '';
 }
 
 function hrefEarlierTarget(entity = {}, graph = [], currentPage = null, earlierIds = []) {
@@ -83,7 +94,7 @@ function repeatedAcrossPages(entity = {}, graph = [], currentPage = null) {
   return false;
 }
 
-function deterministicPatch(id, workflowRole, relevantToGoal) {
+function deterministicPatch(id, workflowRole, relevantToGoal, navigationPriority = 0) {
   return {
     id,
     semantic: {
@@ -91,7 +102,7 @@ function deterministicPatch(id, workflowRole, relevantToGoal) {
       relevantToGoal,
       required: false,
       workflowRole,
-      navigationPriority: 0,
+      navigationPriority,
       consequence: 'reversible'
     }
   };
@@ -121,6 +132,12 @@ export function resolveNavigationTopology({
 
     if (repeatedAcrossPages(entity, entityGraph, currentPage)) {
       deterministicPatches.push(deterministicPatch(entity.id, 'global', false));
+      continue;
+    }
+
+    const forwardTarget = learnedForwardTarget(entity, entityGraph, currentPageId, earlierIds);
+    if (forwardTarget) {
+      deterministicPatches.push(deterministicPatch(entity.id, 'continue', true, 100));
       continue;
     }
 
