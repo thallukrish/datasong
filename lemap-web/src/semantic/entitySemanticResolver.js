@@ -29,10 +29,10 @@ For relevant user-input entities, return interaction=user_input, relevantToGoal,
 For page/workflow/information entities, add only minimal useful meaning/description/relevance. complete is primarily for workflow entities.
 Omit irrelevant entities entirely. Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
 
-function learningInput(entity = {}) {
-  return ['ui_control', 'group'].includes(entity.type)
-    && entity.semantic?.interaction === 'user_input'
-    && entity.semantic?.relevantToGoal === true;
+function learnableInput(entity = {}) {
+  if (entity.type === 'group') return true;
+  if (entity.type !== 'ui_control') return false;
+  return !ACTION_CONTROL_TYPES.has(String(entity.structural?.controlType || ''));
 }
 
 function compactChoices(entity = {}, privacyEntities = []) {
@@ -51,7 +51,7 @@ function compactEntity(entity = {}, privacyEntities = [], learning = false) {
       : entity.type === 'ui_control'
         ? { controlType: structural.controlType || undefined }
         : {};
-  if (learning && learningInput(entity)) {
+  if (learning && learnableInput(entity)) {
     const choices = compactChoices(entity, privacyEntities);
     if (choices.length) hint.choices = choices;
     if (entity.semantic?.question) hint.question = text(entity.semantic.question, 240, privacyEntities);
