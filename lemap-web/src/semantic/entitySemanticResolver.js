@@ -171,7 +171,7 @@ export function buildNavigationSemanticPrompt({ userGoal = '', entities = [], pa
     goal: text(userGoal, 300),
     ...(compactNavigationPageContext(pageContext) ? { page: compactNavigationPageContext(pageContext) } : {}),
     ...(compactPageTrail(recentPageTrail).length ? { recentPageTrail: compactPageTrail(recentPageTrail) } : {}),
-    actions: arr(entities).filter(executableActionableControl).map(compactNavigationEntity)
+    actions: arr(entities).map(compactNavigationEntity)
   };
   return `MODE web-navigation-semantics-v1\n${JSON.stringify(payload)}\n\nTASK:\nFor each action return only {id,semantic:{interaction,relevantToGoal,required,workflowRole,navigationPriority,consequence}}. workflowRole must be continue|back|branch|global|exit|commit|local|unknown. navigationPriority is 0-100. Use continue only for direct forward progress. Use recentPageTrail to identify controls that return to an earlier workflow step.`;
 }
@@ -241,7 +241,7 @@ async function resolveGeneralSemantics({ client, model, userGoal = '', entities 
 }
 
 export async function resolveNavigationSemantics({ client, model, userGoal = '', entities = [], pageContext = null, recentPageTrail = [] } = {}) {
-  const actions = arr(entities).filter(executableActionableControl);
+  const actions = arr(entities).filter(actionableControl);
   if (!actions.length) return { entities: [] };
   const userPrompt = buildNavigationSemanticPrompt({ userGoal, entities: actions, pageContext, recentPageTrail });
   const response = await callJsonModel({ client, model, systemPrompt: NAVIGATION_SYSTEM, userPrompt });
