@@ -2,14 +2,23 @@ function arr(value) { return Array.isArray(value) ? value : []; }
 function quoteAttr(value) { return String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
 function normalize(value) { return String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase(); }
 
-function locatorForEntity(page, entity = {}) {
-  const structural = entity.structural || {};
-  if (structural.domId) return page.locator(`[id="${quoteAttr(structural.domId)}"]`).first();
-  if (structural.name && structural.controlType === 'radio' && structural.value !== null && structural.value !== undefined) {
-    return page.locator(`input[name="${quoteAttr(structural.name)}"][value="${quoteAttr(structural.value)}"]`).first();
+async function firstVisible(locator, entity = {}) {
+  const count = await locator.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index);
+    if (await candidate.isVisible().catch(() => false)) return candidate;
   }
-  if (structural.name) return page.locator(`[name="${quoteAttr(structural.name)}"]`).first();
-  if (entity.name) return page.getByLabel(entity.name, { exact: true }).first();
+  throw new Error(`No visible locator match for ${entity.id || entity.name || 'entity'}`);
+}
+
+async function locatorForEntity(page, entity = {}) {
+  const structural = entity.structural || {};
+  if (structural.domId) return firstVisible(page.locator(`[id="${quoteAttr(structural.domId)}"]`), entity);
+  if (structural.name && structural.controlType === 'radio' && structural.value !== null && structural.value !== undefined) {
+    return firstVisible(page.locator(`input[name="${quoteAttr(structural.name)}"][value="${quoteAttr(structural.value)}"]`), entity);
+  }
+  if (structural.name) return firstVisible(page.locator(`[name="${quoteAttr(structural.name)}"]`), entity);
+  if (entity.name) return firstVisible(page.getByLabel(entity.name, { exact: true }), entity);
   throw new Error(`No locator evidence for ${entity.id || entity.name || 'entity'}`);
 }
 
@@ -65,7 +74,7 @@ async function chooseComboboxOption(page, locator, value) {
 }
 
 async function applyControlValue(page, entity, value) {
-  const locator = locatorForEntity(page, entity);
+  const locator = await locatorForEntity(page, entity);
   const interaction = entityInteractionKind(entity);
   if (interaction === 'combobox') return chooseComboboxOption(page, locator, value);
   if (interaction === 'native_select') {
@@ -118,6 +127,6 @@ export async function executeEntityAction(page, entity = {}) {
     const target = new URL(structural.href, page.url());
     if (target.origin !== current.origin) throw new Error(`Refusing cross-origin navigation to ${target.origin}`);
   }
-  const locator = locatorForEntity(page, entity);
+  const locator = await locatorForEntity(page, entity);
   await locator.click();
 }
