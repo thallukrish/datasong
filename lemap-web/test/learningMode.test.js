@@ -64,6 +64,6 @@ test('learning proposal lookup is keyed by entity id and remains separate from s
 
 test('new validation messages detect model-value rejection without treating pre-existing messages as failures', () => {
   const before = { explored: { snapshot: { validations: ['Existing warning'] } } };
-  const after = { explored: { snapshot: { validations: ['Existing warning', 'Value is invalid'] } };
+  const after = { explored: { snapshot: { validations: ['Existing warning', 'Value is invalid'] } } };
   assert.deepEqual(newValidationMessages(before, after), ['Value is invalid']);
 });
