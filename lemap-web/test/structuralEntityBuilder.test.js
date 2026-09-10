@@ -27,7 +27,7 @@ const snapshot = {
   }
 };
 
-test('browser structure becomes one array of page, group and ui-control entities', () => {
+test('browser structure becomes one array of page, generic choice-group and ui-control entities', () => {
   const { entities, pageId } = buildStructuralEntities(snapshot);
   const page = entities.find((entity) => entity.id === pageId);
   const year = entities.find((entity) => entity.name === 'Assessment Year');
@@ -42,7 +42,7 @@ test('browser structure becomes one array of page, group and ui-control entities
   assert.equal(year.structural.controlType, 'select');
   assert.deepEqual(year.structural.values, ['2026-27', '2025-26']);
   assert.equal(group.type, 'group');
-  assert.equal(group.structural.groupType, 'radio');
+  assert.equal(group.structural.groupType, 'choice');
   assert.equal(group.structural.cardinality, 'exactlyOne');
   assert.deepEqual(group.structural.values, ['Online', 'Offline']);
   assert.equal(button.structural.controlType, 'button');
@@ -56,11 +56,11 @@ test('browser structure becomes one array of page, group and ui-control entities
   assert.ok(group.links.some((item) => item.id === offline.id && item.relationship === 'contains'));
 });
 
-test('checkbox groups carry zero-or-more structural cardinality', () => {
+test('checkbox groups use the same choice type with zero-or-more cardinality', () => {
   const { entities } = buildStructuralEntities(snapshot);
   const group = entities.find((entity) => entity.type === 'group' && entity.name === 'Applicable Conditions');
   assert.ok(group);
-  assert.equal(group.structural.groupType, 'checkbox');
+  assert.equal(group.structural.groupType, 'choice');
   assert.equal(group.structural.cardinality, 'zeroOrMore');
   assert.deepEqual(group.structural.values, ['Condition A', 'Condition B']);
 });
