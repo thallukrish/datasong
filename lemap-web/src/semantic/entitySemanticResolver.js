@@ -207,11 +207,11 @@ export function normalizeNavigationSemanticResponse(raw = {}, knownEntities = []
   };
 }
 
-export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
-  const modelEntities = withWorkflow(entities, knownWorkflow);
-  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities: modelEntities, pageId, pageContext });
+async function resolveGeneralSemantics({ client, model, userGoal = '', entities = [], pageId = '', pageContext = null } = {}) {
+  if (!entities.length) return { entities: [] };
+  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities, pageId, pageContext });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
-  return normalizeEntitySemanticResponse(response.parsed, modelEntities);
+  return normalizeEntitySemanticResponse(response.parsed, entities);
 }
 
 export async function resolveNavigationSemantics({ client, model, userGoal = '', entities = [], pageContext = null } = {}) {
@@ -220,4 +220,19 @@ export async function resolveNavigationSemantics({ client, model, userGoal = '',
   const userPrompt = buildNavigationSemanticPrompt({ userGoal, entities: actions, pageContext });
   const response = await callJsonModel({ client, model, systemPrompt: NAVIGATION_SYSTEM, userPrompt });
   return normalizeNavigationSemanticResponse(response.parsed, actions);
+}
+
+export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
+  const modelEntities = withWorkflow(entities, knownWorkflow);
+  const split = partitionSemanticCandidates(modelEntities);
+  const results = [];
+
+  if (split.entity.length) {
+    results.push(await resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext }));
+  }
+  if (split.navigation.length) {
+    results.push(await resolveNavigationSemantics({ client, model, userGoal, entities: split.navigation, pageContext }));
+  }
+
+  return { entities: results.flatMap((result) => arr(result.entities)) };
 }
