@@ -27,12 +27,13 @@ function controlStructural(field = {}) {
 }
 
 function groupCardinality(groupType = '') {
-  if (groupType === 'radio') return 'exactlyOne';
+  if (groupType === 'radio' || groupType === 'choice') return 'exactlyOne';
   if (groupType === 'checkbox') return 'zeroOrMore';
   return 'unknown';
 }
 
 function groupSelectionValue(members = [], flag = 'checked', groupType = '') {
+  if (groupType === 'choice') return null;
   const selected = arr(members).filter((member) => member?.[flag] === true);
   const labels = selected.map((member) => member.label || member.value).filter(Boolean);
   if (groupType === 'checkbox') return labels;
