@@ -2,70 +2,69 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { entitiesNeedingSemantics, semanticCandidatesForCurrentState } from '../src/semantic/entitySemanticResolver.js';
 
-test('relevant choice group remains unresolved until it has usable user-input semantics', () => {
+test('relevant choice group remains pending until it has usable semantics and a current value', () => {
   const incomplete = {
     id: 'group:mode',
-    name: 'Online (Recommended) Offline',
+    name: 'Mode',
     type: 'group',
-    structural: { cardinality: 'exactlyOne', values: ['Online (Recommended)', 'Offline'] },
+    structural: { cardinality: 'exactlyOne', values: ['A', 'B'], value: null },
     semantic: {
-      meaning: 'Preferred mode of filing the return',
+      meaning: 'Workflow mode',
       selectionRule: 'exactlyOne',
-      relevantToGoal: true,
-      explanation: 'Online filing is recommended.'
+      relevantToGoal: true
     },
     links: []
   };
 
   assert.deepEqual(entitiesNeedingSemantics([incomplete]).map((entity) => entity.id), ['group:mode']);
 
-  const complete = {
+  const semanticallyComplete = {
     ...incomplete,
     semantic: {
       ...incomplete.semantic,
       interaction: 'user_input',
       required: true,
-      question: 'How do you want to file your return?'
+      question: 'Which mode?'
     }
   };
 
-  assert.deepEqual(entitiesNeedingSemantics([complete]), []);
+  assert.deepEqual(entitiesNeedingSemantics([semanticallyComplete]).map((entity) => entity.id), ['group:mode']);
+
+  const answered = {
+    ...semanticallyComplete,
+    structural: { ...semanticallyComplete.structural, value: 'A' }
+  };
+  assert.deepEqual(entitiesNeedingSemantics([answered]), []);
 });
 
-test('current executable navigation is reranked even when it already has complete semantics', () => {
-  const stalePriorStep = {
-    id: 'link:status', name: 'Select Status', type: 'ui_control',
+test('current executable actions remain candidates for current-state navigation selection', () => {
+  const first = {
+    id: 'link:a', name: 'Candidate A', type: 'ui_control',
     structural: { controlType: 'link', visible: true, disabled: false },
-    semantic: {
-      interaction: 'navigation', relevantToGoal: true, required: true,
-      workflowRole: 'continue', navigationPriority: 90, consequence: 'reversible'
-    },
-    links: []
+    semantic: {}, links: []
   };
-  const newlyEnabledContinue = {
-    id: 'button:continue', name: 'Continue', type: 'ui_control',
+  const second = {
+    id: 'button:b', name: 'Candidate B', type: 'ui_control',
     structural: { controlType: 'button', visible: true, disabled: false },
     semantic: {}, links: []
   };
   const resolvedInput = {
-    id: 'group:status', name: 'Residential Status', type: 'group',
-    structural: { cardinality: 'exactlyOne', values: ['Resident', 'Non Resident'] },
-    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'What is your residential status?' },
+    id: 'group:status', name: 'Status', type: 'group',
+    structural: { cardinality: 'exactlyOne', values: ['A', 'B'], value: 'A' },
+    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which status?' },
     links: []
   };
 
   assert.deepEqual(
-    semanticCandidatesForCurrentState([stalePriorStep, newlyEnabledContinue, resolvedInput]).map((entity) => entity.id),
-    ['link:status', 'button:continue']
+    semanticCandidatesForCurrentState([first, second, resolvedInput]).map((entity) => entity.id),
+    ['link:a', 'button:b']
   );
 });
 
-test('disabled or hidden navigation is not reranked until executable', () => {
+test('disabled or hidden actions are not navigation candidates until executable', () => {
   const disabled = {
-    id: 'button:later', name: 'Continue', type: 'ui_control',
-    structural: { controlType: 'button', visible: true, disabled: true },
-    semantic: { interaction: 'navigation', relevantToGoal: true, required: true, workflowRole: 'continue', navigationPriority: 90, consequence: 'reversible' },
-    links: []
+    id: 'button:later', name: 'Candidate', type: 'ui_control',
+    structural: { controlType: 'button', visible: true, disabled: true }, semantic: {}, links: []
   };
   assert.deepEqual(semanticCandidatesForCurrentState([disabled]), []);
 });
