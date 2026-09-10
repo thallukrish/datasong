@@ -20,7 +20,7 @@ test('model result logging keeps decisions and token usage compact', () => {
   assert.equal(summary.result.huge, undefined);
 });
 
-test('model call logger receives the exact request and response payloads', async () => {
+test('model call logger receives and persists the exact request and response payloads', async () => {
   const events = [];
   const apiCalls = [];
   const client = {
@@ -52,13 +52,17 @@ test('model call logger receives the exact request and response payloads', async
     { role: 'user', content: userPrompt }
   ]);
 
-  assert.equal(events[0].phase, 'request');
+  assert.equal(events.length, 1);
   assert.equal(events[0].systemPrompt, systemPrompt);
   assert.equal(events[0].userPrompt, userPrompt);
+  assert.equal(events[0].raw, '{"entities":[{"id":"field:year","semantic":{"required":true}}]}');
+  assert.deepEqual(events[0].parsed, { entities: [{ id: 'field:year', semantic: { required: true } }] });
 
-  assert.equal(events[1].phase, 'response');
-  assert.equal(events[1].raw, '{"entities":[{"id":"field:year","semantic":{"required":true}}]}');
-  assert.deepEqual(events[1].parsed, { entities: [{ id: 'field:year', semantic: { required: true } }] });
+  const logged = compactModelResult(events[0]);
+  assert.equal(logged.exchange.systemPrompt, systemPrompt);
+  assert.equal(logged.exchange.userPrompt, userPrompt);
+  assert.equal(logged.exchange.rawResponse, events[0].raw);
+  assert.deepEqual(logged.exchange.parsedResponse, events[0].parsed);
 });
 
 test('token ledger aggregates model usage by purpose and total', () => {
