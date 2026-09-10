@@ -13,6 +13,26 @@ function stableChoiceIdentity(node = {}, normalizedType = '') {
   return String(node.value ?? '');
 }
 
+function controlIdentityBasis({ entityId = '', parent = null, domId = '', node = {}, label = '', tag = '', normalizedType = '' } = {}) {
+  const name = String(node.name || '');
+  const choice = stableChoiceIdentity(node, normalizedType);
+
+  if (domId) return ['domId', entityId, domId, normalizedType].join('|');
+  if (name) return ['name', entityId, name, choice, normalizedType].join('|');
+
+  return [
+    'fallback',
+    entityId,
+    parent?.label || '',
+    label,
+    choice,
+    tag,
+    node.type || '',
+    node.role || '',
+    node.href || ''
+  ].join('|');
+}
+
 export function discoverInputs(root = {}, entityId = '') {
   const inputs = [];
   function walk(node, ancestry = []) {
@@ -26,18 +46,7 @@ export function discoverInputs(root = {}, entityId = '') {
       if (normalizedType !== 'technical_hidden') {
         const parent = [...ancestry].reverse().find((x) => x.label) || null;
         const domId = String(node.domId || node.id || '');
-        const identityBasis = [
-          entityId,
-          parent?.label || '',
-          domId,
-          node.name || '',
-          label,
-          stableChoiceIdentity(node, normalizedType),
-          tag,
-          node.type || '',
-          node.role || '',
-          node.href || ''
-        ].join('|');
+        const identityBasis = controlIdentityBasis({ entityId, parent, domId, node, label, tag, normalizedType });
         inputs.push({
           id: `field:${hash(identityBasis)}`,
           entityId,
