@@ -191,28 +191,36 @@ test('navigation semantics preserve page-relative role and clamp priority', () =
   assert.equal(result.entities[1].semantic.navigationPriority, 0);
 });
 
-test('semantic prompt asks model to rank page navigation relative to active workflow', () => {
-  const prompt = buildEntitySemanticPrompt({ userGoal: 'Complete setup', entities: pageEntities, pageId: 'page:1', knownWorkflow: workflow });
+test('navigation prompt asks model to rank actions relative to active workflow', () => {
+  const prompt = buildNavigationSemanticPrompt({ userGoal: 'Complete setup', entities: [pageEntities[2]], pageContext: pageEntities[0] });
   assert.match(prompt, /navigationPriority/i);
   assert.match(prompt, /continue\|back\|branch\|global\|exit/i);
-  assert.match(prompt, /current page/i);
+  assert.match(prompt, /web-navigation-semantics-v1/i);
 });
 
-test('semantic resolver injects known workflow into the same model entity set', async () => {
-  let sentPrompt = '';
+test('semantic resolver dispatches general and navigation entities to separate model calls', async () => {
+  const sentPrompts = [];
   const client = { chat: { completions: { create: async ({ messages }) => {
-    sentPrompt = messages[1].content;
+    const prompt = messages[1].content;
+    sentPrompts.push(prompt);
+    const navigation = /MODE web-navigation-semantics-v1/.test(prompt);
     return {
-      choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ entities: [
-        { id: 'workflow:1', semantic: { description: 'Move through setup.', complete: false, relevantToGoal: true } },
-        { id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'continue', navigationPriority: 95, consequence: 'reversible', relevantToGoal: true } }
-      ] }) } }],
+      choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(navigation
+        ? { entities: [{ id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'continue', navigationPriority: 95, consequence: 'reversible', relevantToGoal: true } }] }
+        : { entities: [{ id: 'workflow:1', semantic: { description: 'Move through setup.', complete: false, relevantToGoal: true } }] }
+      ) } }],
       usage: { total_tokens: 10 }
     };
   } } } };
 
-  const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities: pageEntities, pageId: 'page:1', knownWorkflow: workflow });
-  assert.match(sentPrompt, /workflow:1/);
+  const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities: pageEntities, pageId: 'page:1', knownWorkflow: workflow, pageContext: pageEntities[0] });
+  assert.equal(sentPrompts.length, 2);
+  assert.match(sentPrompts[0], /MODE web-entity-semantics-v1/);
+  assert.match(sentPrompts[0], /workflow:1/);
+  assert.doesNotMatch(sentPrompts[0], /button:continue/);
+  assert.match(sentPrompts[1], /MODE web-navigation-semantics-v1/);
+  assert.match(sentPrompts[1], /button:continue/);
+  assert.doesNotMatch(sentPrompts[1], /field:year/);
   assert.equal(result.entities.find((item) => item.id === 'workflow:1').semantic.complete, false);
   assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.consequence, 'reversible');
   assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.navigationPriority, 95);
