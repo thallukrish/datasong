@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compactModelResult, createTokenLedger, summarizeUserInteraction } from '../src/agent/runLogger.js';
+import { callJsonModel, setModelCallLogger } from '../src/semantic/modelCall.js';
 
 test('model result logging keeps decisions and token usage compact', () => {
   const summary = compactModelResult({
@@ -17,6 +18,47 @@ test('model result logging keeps decisions and token usage compact', () => {
   assert.equal(summary.result.decision, 'ask_user');
   assert.deepEqual(summary.result.questionIds, ['field:year']);
   assert.equal(summary.result.huge, undefined);
+});
+
+test('model call logger receives the exact request and response payloads', async () => {
+  const events = [];
+  const apiCalls = [];
+  const client = {
+    chat: {
+      completions: {
+        create: async (request) => {
+          apiCalls.push(request);
+          return {
+            choices: [{ message: { content: '{"entities":[{"id":"field:year","semantic":{"required":true}}]}' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 }
+          };
+        }
+      }
+    }
+  };
+
+  const systemPrompt = 'SYSTEM exact prompt';
+  const userPrompt = 'MODE web-entity-semantics-v1\nUSER exact prompt';
+  setModelCallLogger(async (event) => events.push(structuredClone(event)));
+  try {
+    await callJsonModel({ client, model: 'deepseek-chat', systemPrompt, userPrompt });
+  } finally {
+    setModelCallLogger(null);
+  }
+
+  assert.equal(apiCalls.length, 1);
+  assert.deepEqual(apiCalls[0].messages, [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt }
+  ]);
+
+  assert.equal(events[0].phase, 'request');
+  assert.equal(events[0].systemPrompt, systemPrompt);
+  assert.equal(events[0].userPrompt, userPrompt);
+
+  assert.equal(events[1].phase, 'response');
+  assert.equal(events[1].raw, '{"entities":[{"id":"field:year","semantic":{"required":true}}]}');
+  assert.deepEqual(events[1].parsed, { entities: [{ id: 'field:year', semantic: { required: true } }] });
 });
 
 test('token ledger aggregates model usage by purpose and total', () => {
