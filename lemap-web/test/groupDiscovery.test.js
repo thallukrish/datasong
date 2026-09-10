@@ -38,6 +38,23 @@ test('checkbox peers become one zero-or-more choice group', () => {
   assert.equal(groups[0].cardinality, 'zeroOrMore');
 });
 
+test('nested checkbox peers keep their common owning radio control', () => {
+  const fields = [
+    field('r1', 'radio', 'Reason A', 'Why are you filing?', { name: 'reason', value: 'a' }),
+    field('r2', 'radio', 'Reason B', 'Why are you filing?', { name: 'reason', value: 'b' }),
+    field('c1', 'checkbox', 'Condition 1', 'Additional conditions', { ownerFieldId: 'r2' }),
+    field('c2', 'checkbox', 'Condition 2', 'Additional conditions', { ownerFieldId: 'r2' })
+  ];
+
+  const groups = discoverGroups(fields, 'entity:page');
+  const radioGroup = groups.find((group) => group.cardinality === 'exactlyOne');
+  const checkboxGroup = groups.find((group) => group.cardinality === 'zeroOrMore');
+
+  assert.ok(radioGroup);
+  assert.ok(checkboxGroup);
+  assert.equal(checkboxGroup.ownerFieldId, 'r2');
+});
+
 test('yes/no answer buttons become one exactly-one choice group', () => {
   const fields = [
     field('b1', 'button', 'Yes', 'Are you a director?'),
