@@ -17,17 +17,24 @@ const INTERACTIONS = new Set(['user_input', 'information', 'action', 'navigation
 const WORKFLOW_ROLES = new Set(['continue', 'back', 'branch', 'global', 'exit', 'commit', 'local', 'unknown']);
 const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive', 'security', 'unknown']);
 const SELECTION_RULES = new Set(['exactlyOne', 'anyOf', 'allOf', 'atLeastOne']);
+const ACTION_CONTROL_TYPES = new Set(['button', 'link']);
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
-LeMap-Web already owns the complete structural entity graph. You receive only entities that still need semantic interpretation plus the user's goal and current page context.
-The pageContext object, when present, is reference-only context for interpreting the supplied entities. Do not return semantic patches for pageContext unless that same page entity is also explicitly included in entities.
-For each supplied entity, return only its id and semantic additions. Never repeat structural facts, option lists, links, browser mechanics or user values. Never invent entity ids.
+LeMap-Web already owns the structural entity graph. You receive only unresolved non-navigation entities plus the user's goal and current page context.
+The pageContext object, when present, is reference-only context. Do not return a semantic patch for pageContext unless that same page entity is explicitly included in entities.
+For each supplied entity, return only its id and useful semantic additions. Never repeat structural facts, links, browser mechanics or user values. Never invent entity ids.
 A group entity represents one user-facing choice independent of how its member controls are rendered. Member controls inside a supplied group are structural implementation details and are not separate semantic questions.
-For group entities, structural cardinality describes what the UI permits. Add selectionRule only when useful to express the business meaning: exactlyOne, anyOf, allOf, or atLeastOne. Do not infer the grouping from widget type; LeMap-Web has already done that structurally.
-For every relevant actionable control on the current page, classify its significance relative to the active workflow. Use workflowRole=continue only for the best direct forward actions that advance the current goal; back for navigation to an earlier workflow step; branch for a goal-relevant alternate path; global for top-level/site-wide navigation; exit for leaving or abandoning the active workflow; commit for a final/consequential action; local for relevant non-navigation local actions; unknown when uncertain. Add navigationPriority from 0 to 100 for action/navigation controls, where higher means more appropriate as the next action from the current page for this goal. Rank direct forward workflow controls above breadcrumbs, help, alternate paths, skip/bypass links, global navigation and exits.
-Omit irrelevant entities entirely. For relevant entities, add only useful semantic fields such as meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation), relevantToGoal, required, question, explanation, caveats, examples, selectionRule(exactlyOne|anyOf|allOf|atLeastOne), workflowRole(continue|back|branch|global|exit|commit|local), navigationPriority(0-100), consequence(reversible|commit|financial|destructive|security), description, complete.
-complete is primarily for workflow entities. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions. Mark final/committing actions as workflowRole=commit and consequence=commit or a more specific consequential category.
-Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
+For groups, structural cardinality describes what the UI permits. Add selectionRule only when useful to express business meaning: exactlyOne, anyOf, allOf, or atLeastOne.
+For user-input entities, add only fields that help understand or ask for the value: meaning, semanticType, scope, interaction=user_input, relevantToGoal, required, question, explanation only when needed, caveats only when needed, examples only when useful, selectionRule when applicable.
+For page/workflow/information entities, add only minimal useful meaning/description/relevance. complete is primarily for workflow entities.
+Omit irrelevant entities entirely. Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
+
+const NAVIGATION_SYSTEM = `You are DataSong LeMap-Web's page navigation classifier.
+Given the active workflow goal, current page context, and only the visible actionable controls that still need navigation semantics, rank each control relative to this workflow.
+Return only: interaction(action|navigation), relevantToGoal, required, workflowRole(continue|back|branch|global|exit|commit|local|unknown), navigationPriority(0-100), consequence(reversible|commit|financial|destructive|security|unknown).
+Use continue only for direct forward progress toward the goal. back returns to an earlier workflow step. branch is a relevant alternate route. global is site-wide/top navigation. exit leaves or abandons the workflow. commit is final or consequential. local is a relevant action that does not navigate the workflow.
+Rank the best direct forward action highest. Breadcrumbs, help, skip/bypass, alternate routes, global navigation and exits must not outrank the direct forward action.
+Do not return explanations, descriptions, caveats, questions, structural data, links, browser mechanics, or user values. Never invent ids. Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
 
 function compactEntity(entity = {}) {
   const structural = entity.structural || {};
@@ -54,6 +61,14 @@ function compactEntity(entity = {}) {
   };
 }
 
+function compactNavigationEntity(entity = {}) {
+  return {
+    id: String(entity.id || ''),
+    name: text(entity.name, 220),
+    controlType: String(entity.structural?.controlType || '')
+  };
+}
+
 function compactPageContext(page = null) {
   if (!page?.id) return undefined;
   return {
@@ -62,6 +77,15 @@ function compactPageContext(page = null) {
     type: String(page.type || 'page'),
     ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 360) } : {}),
     ...(page.semantic?.description ? { description: text(page.semantic.description, 500) } : {})
+  };
+}
+
+function compactNavigationPageContext(page = null) {
+  if (!page?.id) return undefined;
+  return {
+    id: String(page.id),
+    name: text(page.name, 260),
+    ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 260) } : {})
   };
 }
 
@@ -77,6 +101,20 @@ function groupedChoiceMember(entity = {}, byId = new Map()) {
     .filter((link) => link.relationship === 'partOf')
     .map((link) => byId.get(link.id))
     .some((group) => group?.type === 'group');
+}
+
+function actionableControl(entity = {}) {
+  return entity.type === 'ui_control' && ACTION_CONTROL_TYPES.has(String(entity.structural?.controlType || ''));
+}
+
+export function partitionSemanticCandidates(entities = []) {
+  const navigation = [];
+  const entity = [];
+  for (const candidate of arr(entities)) {
+    if (actionableControl(candidate)) navigation.push(candidate);
+    else entity.push(candidate);
+  }
+  return { navigation, entity };
 }
 
 export function entitiesNeedingSemantics(entities = []) {
@@ -100,7 +138,16 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
     ...(compactPageContext(pageContext) ? { pageContext: compactPageContext(pageContext) } : {}),
     entities: modelEntities.map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. Interpret action/navigation controls relative to the active workflow and current page: classify workflowRole as continue|back|branch|global|exit|commit|local and assign navigationPriority 0-100. Use continue only for direct forward progress toward the user's goal. A group is one semantic interaction; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, values or relationships.`;
+  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. A group is one semantic interaction; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, links, browser mechanics or user values.`;
+}
+
+export function buildNavigationSemanticPrompt({ userGoal = '', entities = [], pageContext = null } = {}) {
+  const payload = {
+    goal: text(userGoal, 300),
+    ...(compactNavigationPageContext(pageContext) ? { page: compactNavigationPageContext(pageContext) } : {}),
+    actions: arr(entities).map(compactNavigationEntity)
+  };
+  return `MODE web-navigation-semantics-v1\n${JSON.stringify(payload)}\n\nTASK:\nFor each action return only {id,semantic:{interaction,relevantToGoal,required,workflowRole,navigationPriority,consequence}}. workflowRole must be continue|back|branch|global|exit|commit|local|unknown. navigationPriority is 0-100. Use continue only for direct forward progress.`;
 }
 
 function normalizeSemantic(raw = {}) {
@@ -130,6 +177,18 @@ function normalizeSemantic(raw = {}) {
   }));
 }
 
+function normalizeNavigationSemantic(raw = {}) {
+  const interaction = ['action', 'navigation'].includes(raw.interaction) ? raw.interaction : 'navigation';
+  return {
+    interaction,
+    relevantToGoal: bool(raw.relevantToGoal, false),
+    required: bool(raw.required, false),
+    workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown',
+    navigationPriority: priority(raw.navigationPriority) ?? 0,
+    consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown'
+  };
+}
+
 export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   const known = new Set(arr(knownEntities).map((entity) => entity.id));
   return {
@@ -139,9 +198,26 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   };
 }
 
+export function normalizeNavigationSemanticResponse(raw = {}, knownEntities = []) {
+  const known = new Set(arr(knownEntities).map((entity) => entity.id));
+  return {
+    entities: arr(raw.entities)
+      .filter((item) => known.has(String(item?.id || '')))
+      .map((item) => ({ id: String(item.id), semantic: normalizeNavigationSemantic(item.semantic || {}) }))
+  };
+}
+
 export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
   const modelEntities = withWorkflow(entities, knownWorkflow);
   const userPrompt = buildEntitySemanticPrompt({ userGoal, entities: modelEntities, pageId, pageContext });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
   return normalizeEntitySemanticResponse(response.parsed, modelEntities);
+}
+
+export async function resolveNavigationSemantics({ client, model, userGoal = '', entities = [], pageContext = null } = {}) {
+  const actions = arr(entities).filter(actionableControl);
+  if (!actions.length) return { entities: [] };
+  const userPrompt = buildNavigationSemanticPrompt({ userGoal, entities: actions, pageContext });
+  const response = await callJsonModel({ client, model, systemPrompt: NAVIGATION_SYSTEM, userPrompt });
+  return normalizeNavigationSemanticResponse(response.parsed, actions);
 }
