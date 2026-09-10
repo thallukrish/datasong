@@ -16,12 +16,13 @@ test('run transaction deep-clones canonical entity and instance graphs', () => {
   assert.equal(tx.instanceGraph[0].value, 'B');
 });
 
-test('only clean terminal outcomes promote learned state', () => {
+test('useful partial workflow progress persists while failed/interrupted runs do not', () => {
   assert.equal(shouldPromoteRun('workflow_complete'), true);
   assert.equal(shouldPromoteRun('consequential_action'), true);
-  assert.equal(shouldPromoteRun('no_executable_entity'), false);
-  assert.equal(shouldPromoteRun('continuation_no_structural_change'), false);
-  assert.equal(shouldPromoteRun('max_steps'), false);
+  assert.equal(shouldPromoteRun('no_executable_entity'), true);
+  assert.equal(shouldPromoteRun('continuation_no_structural_change'), true);
+  assert.equal(shouldPromoteRun('max_steps'), true);
   assert.equal(shouldPromoteRun('error'), false);
   assert.equal(shouldPromoteRun('interrupted'), false);
+  assert.equal(shouldPromoteRun(''), false);
 });
