@@ -97,7 +97,7 @@ export async function snapshotPage(page) {
         type,
         role: clean(el.getAttribute?.('role') || ''),
         domId: clean(el.id || ''),
-        name: clean(el.name || el.id || ''),
+        name: clean(el.getAttribute?.('name') || ''),
         href: clean(el.getAttribute?.('href') || ''),
         value: 'value' in el ? el.value : el.getAttribute?.('aria-valuenow') ?? null,
         defaultValue: defaultValueFor(el),
@@ -171,7 +171,7 @@ export async function snapshotPage(page) {
     const values = {};
     for (const el of scope.querySelectorAll('input,select,textarea,[role="combobox"],[role="spinbutton"]')) {
       if ((el.type || '').toLowerCase() === 'hidden' || !visible(el)) continue;
-      const key = labelFor(el) || clean(el.name || el.id);
+      const key = labelFor(el) || clean(el.getAttribute?.('name') || el.id);
       if (!key) continue;
       if (el.type === 'radio') {
         if (el.checked) values[key] = el.value;
@@ -197,7 +197,7 @@ export async function snapshotPage(page) {
     const options = {};
     for (const el of scope.querySelectorAll('select,[role="combobox"]')) {
       if (!visible(el)) continue;
-      const key = labelFor(el) || clean(el.name || el.id);
+      const key = labelFor(el) || clean(el.getAttribute?.('name') || el.id);
       if (!key) continue;
       let valuesForInput = optionsFor(el);
       const controlledId = el.getAttribute?.('aria-controls');
@@ -258,7 +258,7 @@ export async function installUserEventProbe(page) {
         type: event.type,
         tag: el?.tagName || '',
         label: labelFor(el),
-        name: el?.name || el?.id || '',
+        name: el?.getAttribute?.('name') || '',
         value: 'value' in (el || {}) ? el.value : null,
         at: Date.now()
       });
