@@ -8,6 +8,7 @@ function visibleAndEnabled(entity = {}) {
 }
 
 function semanticInput(entity = {}) {
+  if (!['ui_control', 'group'].includes(entity.type)) return false;
   const semantic = entity.semantic || {};
   return semantic.interaction === 'user_input'
     && semantic.relevantToGoal === true
