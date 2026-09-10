@@ -103,6 +103,23 @@ test('browser benchmark builds and advances the unified entity graph', async (t)
     await page.close();
   });
 
+  await t.test('action execution falls back when captured DOM id becomes stale after rerender', async () => {
+    const page = await freshPage(browser, fixture.url);
+    const captured = await capture(page);
+    const continueEntity = entityByName(captured.entities, 'Continue');
+    await page.evaluate(() => {
+      window.__continueClickCount = 0;
+      const button = document.getElementById('continue');
+      button.addEventListener('click', () => { window.__continueClickCount += 1; });
+      button.id = 'rerenderedContinue';
+    });
+
+    await executeEntityAction(page, continueEntity);
+
+    assert.equal(await page.evaluate(() => window.__continueClickCount), 1);
+    await page.close();
+  });
+
   await t.test('controls that become hidden disappear from the current capture', async () => {
     const page = await freshPage(browser, fixture.url);
     const before = await capture(page);
