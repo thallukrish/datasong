@@ -53,6 +53,7 @@ function learnedEarlierTarget(entity = {}, earlierIds = []) {
 function hrefEarlierTarget(entity = {}, graph = [], currentPage = null, earlierIds = []) {
   const route = targetRouteForControl(entity, currentPage);
   if (!route) return '';
+  if (route === String(currentPage?.structural?.route || '')) return '';
   const matches = earlierIds.filter((id) => pageFor(graph, id)?.structural?.route === route);
   return matches.length === 1 ? matches[0] : '';
 }
