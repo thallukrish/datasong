@@ -176,7 +176,8 @@ try {
   const instances = await loadInstanceGraph(instanceFile);
   const workflowId = workflowIdForGoal(userGoal);
   const appliedInstanceEntityIds = new Set();
-  const visitedPageIds = new Set();
+  const pageVisitOrder = new Map();
+  let nextPageOrder = 0;
 
   browser = await chromium.connectOverCDP(endpoint);
   const pages = browser.contexts().flatMap((context) => context.pages());
@@ -197,7 +198,7 @@ try {
   await saveEntityGraph(entityFile, entityGraph);
 
   for (let step = 1; step <= maxSteps; step += 1) {
-    visitedPageIds.add(capture.pageId);
+    if (!pageVisitOrder.has(capture.pageId)) pageVisitOrder.set(capture.pageId, nextPageOrder++);
     console.log(`\n[LeMap-Web] --- step ${step} ---`);
     applyKnownSemantics(capture.entities, entityGraph);
     console.log(`[LeMap-Web] page entity: ${findEntity(entityGraph, capture.pageId)?.name || capture.pageId}`);
@@ -294,7 +295,11 @@ try {
       continue;
     }
 
-    const continuation = selectWorkflowContinuation(capture.entities, { entityGraph, visitedPageIds });
+    const continuation = selectWorkflowContinuation(capture.entities, {
+      entityGraph,
+      currentPageId: capture.pageId,
+      pageVisitOrder
+    });
     if (!continuation) {
       const blockedCommit = capture.entities.find((entity) => entity.semantic?.workflowRole === 'commit' && entity.structural?.visible !== false);
       if (blockedCommit) console.log(`[LeMap-Web] reached consequential action "${blockedCommit.name}"; not executing automatically.`);
