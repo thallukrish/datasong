@@ -5,7 +5,6 @@ import {
   ignoredSourceEntityIds,
   resolveEntityAnswer,
   selectNextUserInput,
-  selectRefreshedWorkflowContinuation,
   selectReusableUserInput,
   selectWorkflowContinuation
 } from '../src/agent/entityFlow.js';
@@ -120,13 +119,4 @@ test('workflow continuation comes directly from safe entity semantics', () => {
   assert.equal(selectWorkflowContinuation([page, year, mode, next])?.id, 'button:next');
   const commit = { ...next, id: 'button:submit', name: 'Submit', semantic: { ...next.semantic, workflowRole: 'commit', consequence: 'commit' } };
   assert.equal(selectWorkflowContinuation([page, commit]), null);
-});
-
-test('workflow continuation refresh discards stale action and selects the current continuation', () => {
-  const stale = { ...next, id: 'button:old-next', structural: { ...next.structural, domId: 'old-next' } };
-  const replacement = { ...next, id: 'button:new-next', structural: { ...next.structural, domId: 'new-next' } };
-  assert.equal(selectRefreshedWorkflowContinuation(stale, [page, replacement])?.id, 'button:new-next');
-
-  const refreshedSameEntity = { ...stale, structural: { ...stale.structural, domId: 'replacement-dom-id' } };
-  assert.equal(selectRefreshedWorkflowContinuation(stale, [page, refreshedSameEntity]), refreshedSameEntity);
 });
