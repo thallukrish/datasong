@@ -9,6 +9,10 @@ function contextFor(field = {}) {
   return String(field.parentRegionLabel || '').trim();
 }
 
+function ownerFor(field = {}) {
+  return String(field.ownerFieldId || '').trim();
+}
+
 function candidateKind(field = {}) {
   if (field.type === 'radio') return 'single';
   if (field.type === 'checkbox') return 'multi';
@@ -18,12 +22,13 @@ function candidateKind(field = {}) {
 
 function bucketKey(field = {}) {
   const context = contextFor(field);
+  const owner = ownerFor(field);
   const kind = candidateKind(field);
   if (!kind) return '';
 
-  if (field.type === 'radio' && field.name) return `single|name:${field.name}`;
+  if (field.type === 'radio' && field.name) return `${owner ? `owner:${owner}|` : ''}single|name:${field.name}`;
   if (!context) return '';
-  return `${kind}|context:${context}`;
+  return `${owner ? `owner:${owner}|` : ''}${kind}|context:${context}`;
 }
 
 function isAnswerLikeButtonSet(members = []) {
@@ -49,6 +54,11 @@ function cardinalityFor(members = []) {
   return members[0]?.type === 'checkbox' ? 'zeroOrMore' : 'exactlyOne';
 }
 
+function commonOwner(members = []) {
+  const owners = new Set(members.map(ownerFor).filter(Boolean));
+  return owners.size === 1 && members.every((member) => ownerFor(member) === [...owners][0]) ? [...owners][0] : '';
+}
+
 export function discoverGroups(fields = [], entityId = '') {
   const groups = [];
   const buckets = new Map();
@@ -72,6 +82,7 @@ export function discoverGroups(fields = [], entityId = '') {
       label,
       groupType: 'choice',
       cardinality,
+      ownerFieldId: commonOwner(members),
       memberFieldIds: members.map((field) => field.id)
     });
     for (const member of members) member.parentGroupId = id;
