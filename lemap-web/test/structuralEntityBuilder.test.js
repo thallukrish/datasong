@@ -27,6 +27,27 @@ const snapshot = {
   }
 };
 
+const nestedSnapshot = {
+  page: 'Questionnaire',
+  title: 'Questionnaire',
+  url: 'https://example.test/questionnaire',
+  overlay: { active: false },
+  dom: {
+    tag: 'body', label: 'Questionnaire', hidden: false, children: [
+      { tag: 'section', label: 'Why are you filing?', hidden: false, children: [
+        { control: true, tag: 'div', domId: 'reason-a', name: 'reason', label: 'Reason A', type: '', role: 'radio', value: 'a', hidden: false, disabled: false, options: [] },
+        { control: true, tag: 'div', domId: 'reason-b', name: 'reason', label: 'Reason B', type: '', role: 'radio', value: 'b', hidden: false, disabled: false, options: [], children: [
+          { tag: 'div', label: 'Additional conditions', hidden: false, children: [
+            { control: true, tag: 'div', domId: 'condition-1', name: '', label: 'Condition 1', type: '', role: 'checkbox', value: null, hidden: false, disabled: false, options: [] },
+            { control: true, tag: 'div', domId: 'condition-2', name: '', label: 'Condition 2', type: '', role: 'checkbox', value: null, hidden: false, disabled: false, options: [] }
+          ]}
+        ]},
+        { control: true, tag: 'div', domId: 'reason-c', name: 'reason', label: 'Others', type: '', role: 'radio', value: 'c', hidden: false, disabled: false, options: [] }
+      ]}
+    ]
+  }
+};
+
 test('browser structure becomes one array of page, generic choice-group and ui-control entities', () => {
   const { entities, pageId } = buildStructuralEntities(snapshot);
   const page = entities.find((entity) => entity.id === pageId);
@@ -63,6 +84,23 @@ test('checkbox groups use the same choice type with zero-or-more cardinality', (
   assert.equal(group.structural.groupType, 'choice');
   assert.equal(group.structural.cardinality, 'zeroOrMore');
   assert.deepEqual(group.structural.values, ['Condition A', 'Condition B']);
+});
+
+test('nested group links are placed beneath the owning choice control', () => {
+  const { entities } = buildStructuralEntities(nestedSnapshot);
+  const parentGroup = entities.find((entity) => entity.type === 'group' && entity.name === 'Why are you filing?');
+  const reasonB = entities.find((entity) => entity.name === 'Reason B');
+  const childGroup = entities.find((entity) => entity.type === 'group' && entity.name === 'Additional conditions');
+  const condition1 = entities.find((entity) => entity.name === 'Condition 1');
+
+  assert.ok(parentGroup);
+  assert.ok(reasonB);
+  assert.ok(childGroup);
+  assert.ok(condition1);
+  assert.ok(parentGroup.links.some((link) => link.id === reasonB.id && link.relationship === 'contains'));
+  assert.ok(reasonB.links.some((link) => link.id === childGroup.id && link.relationship === 'contains'));
+  assert.ok(childGroup.links.some((link) => link.id === reasonB.id && link.relationship === 'partOf'));
+  assert.ok(childGroup.links.some((link) => link.id === condition1.id && link.relationship === 'contains'));
 });
 
 test('entity structure keeps deterministic default value separate from current value', () => {
