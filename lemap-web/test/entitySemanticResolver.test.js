@@ -57,6 +57,7 @@ test('only entities without completed semantics are selected for model enrichmen
   };
   const unresolvedAction = {
     ...pageEntities[2],
+    structural: { ...pageEntities[2].structural, disabled: false },
     semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue' }
   };
   const resolvedWorkflow = {
@@ -213,7 +214,10 @@ test('semantic resolver dispatches general and navigation entities to separate m
     };
   } } } };
 
-  const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities: pageEntities, pageId: 'page:1', knownWorkflow: workflow, pageContext: pageEntities[0] });
+  const executableEntities = pageEntities.map((entity) => entity.id === 'button:continue'
+    ? { ...entity, structural: { ...entity.structural, disabled: false } }
+    : entity);
+  const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities: executableEntities, pageId: 'page:1', knownWorkflow: workflow, pageContext: pageEntities[0] });
   assert.equal(sentPrompts.length, 2);
   assert.match(sentPrompts[0], /MODE web-entity-semantics-v1/);
   assert.match(sentPrompts[0], /workflow:1/);
