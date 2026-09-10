@@ -120,3 +120,25 @@ test('workflow continuation comes directly from safe entity semantics', () => {
   const commit = { ...next, id: 'button:submit', name: 'Submit', semantic: { ...next.semantic, workflowRole: 'commit', consequence: 'commit' } };
   assert.equal(selectWorkflowContinuation([page, commit]), null);
 });
+
+test('workflow continuation prefers a required forward action and avoids a known visited back-edge', () => {
+  const selectStatus = {
+    id: 'button:status', name: 'Select Status', type: 'ui_control',
+    structural: { controlType: 'button', visible: true, disabled: false },
+    semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' },
+    links: []
+  };
+  const fileItr3 = {
+    id: 'button:itr3', name: 'ITR - 3', type: 'ui_control',
+    structural: { controlType: 'button', visible: true, disabled: false },
+    semantic: { interaction: 'action', relevantToGoal: true, required: true, workflowRole: 'continue', consequence: 'reversible' },
+    links: []
+  };
+  const graph = [
+    { ...selectStatus, links: [{ id: 'page:status', relationship: 'transitionsTo' }] },
+    fileItr3,
+    { id: 'page:status', type: 'page', links: [] }
+  ];
+  const selected = selectWorkflowContinuation([selectStatus, fileItr3], { entityGraph: graph, visitedPageIds: new Set(['page:status']) });
+  assert.equal(selected?.id, 'button:itr3');
+});
