@@ -125,40 +125,36 @@ test('workflow continuation prefers required action controls over optional navig
   const breadcrumb = {
     id: 'link:breadcrumb', name: 'Previous filing step', type: 'ui_control',
     structural: { controlType: 'link', visible: true, disabled: false },
-    semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' }, links: []
+    semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible', navigationPriority: 20 }, links: []
   };
   const forward = {
     id: 'button:forward', name: 'Start filing', type: 'ui_control',
     structural: { controlType: 'button', visible: true, disabled: false },
-    semantic: { interaction: 'action', relevantToGoal: true, required: true, workflowRole: 'continue', consequence: 'reversible' }, links: []
+    semantic: { interaction: 'action', relevantToGoal: true, required: true, workflowRole: 'continue', consequence: 'reversible', navigationPriority: 90 }, links: []
   };
   assert.equal(selectWorkflowContinuation([breadcrumb, forward])?.id, 'button:forward');
 });
 
-test('known transition is blocked only when it points to an earlier page in learned order', () => {
-  const action = {
+test('a continuation already executed on the current page is blocked for the rest of the run', () => {
+  const route = {
     id: 'button:route', name: 'Route', type: 'ui_control',
     structural: { controlType: 'button', visible: true, disabled: false },
-    semantic: { interaction: 'action', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible' }, links: []
+    semantic: { interaction: 'action', relevantToGoal: true, workflowRole: 'continue', consequence: 'reversible', navigationPriority: 95 }, links: []
   };
-  const graph = [{ ...action, links: [{ id: 'page:target', relationship: 'transitionsTo' }] }];
-  const order = new Map([['page:old', 1], ['page:current', 3], ['page:target', 2]]);
-  assert.equal(selectWorkflowContinuation([action], { entityGraph: graph, currentPageId: 'page:current', pageVisitOrder: order }), null);
-
-  const forwardOrder = new Map([['page:current', 1], ['page:target', 2]]);
-  assert.equal(selectWorkflowContinuation([action], { entityGraph: graph, currentPageId: 'page:current', pageVisitOrder: forwardOrder })?.id, action.id);
+  assert.equal(selectWorkflowContinuation([route])?.id, route.id);
+  assert.equal(selectWorkflowContinuation([route], { blockedEntityIds: new Set([route.id]) }), null);
 });
 
-test('optional caveated bypass is lower priority than an ordinary forward action', () => {
+test('semantic navigation priority outranks descriptive caveats', () => {
   const bypass = {
     id: 'button:bypass', name: 'Bypass', type: 'ui_control',
     structural: { controlType: 'button', visible: true, disabled: false },
-    semantic: { interaction: 'action', relevantToGoal: true, required: false, workflowRole: 'continue', consequence: 'reversible', caveats: ['May skip useful steps'] }, links: []
+    semantic: { interaction: 'action', relevantToGoal: true, required: false, workflowRole: 'continue', consequence: 'reversible', navigationPriority: 15, caveats: ['May skip useful steps'] }, links: []
   };
   const forward = {
     id: 'button:forward', name: 'Continue', type: 'ui_control',
     structural: { controlType: 'button', visible: true, disabled: false },
-    semantic: { interaction: 'action', relevantToGoal: true, required: false, workflowRole: 'continue', consequence: 'reversible' }, links: []
+    semantic: { interaction: 'action', relevantToGoal: true, required: false, workflowRole: 'continue', consequence: 'reversible', navigationPriority: 85 }, links: []
   };
   assert.equal(selectWorkflowContinuation([bypass, forward])?.id, 'button:forward');
 });
