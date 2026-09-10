@@ -27,6 +27,14 @@ async function locatorForEntity(page, entity = {}) {
     locator = await firstVisible(page.locator(`[name="${quoteAttr(structural.name)}"]`));
     if (locator) return locator;
   }
+  if (entity.name && structural.controlType === 'button') {
+    locator = await firstVisible(page.getByRole('button', { name: entity.name, exact: true }));
+    if (locator) return locator;
+  }
+  if (entity.name && structural.controlType === 'link') {
+    locator = await firstVisible(page.getByRole('link', { name: entity.name, exact: true }));
+    if (locator) return locator;
+  }
   if (entity.name) {
     locator = await firstVisible(page.getByLabel(entity.name, { exact: true }));
     if (locator) return locator;
