@@ -23,6 +23,10 @@ async function locatorForEntity(page, entity = {}) {
     locator = await firstVisible(page.locator(`input[name="${quoteAttr(structural.name)}"][value="${quoteAttr(structural.value)}"]`));
     if (locator) return locator;
   }
+  if (entity.name && ['radio', 'checkbox'].includes(structural.controlType)) {
+    locator = await firstVisible(page.getByRole(structural.controlType, { name: entity.name, exact: true }));
+    if (locator) return locator;
+  }
   if (structural.name) {
     locator = await firstVisible(page.locator(`[name="${quoteAttr(structural.name)}"]`));
     if (locator) return locator;
