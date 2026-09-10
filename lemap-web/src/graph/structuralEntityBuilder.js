@@ -13,6 +13,7 @@ function controlStructural(field = {}) {
     name: field.name || '',
     rawType: field.rawType || '',
     href: field.href || '',
+    siteChrome: !!field.siteChrome,
     ownerFieldId: field.ownerFieldId || '',
     defaultValue: field.defaultValue ?? null,
     value: field.value ?? null,
