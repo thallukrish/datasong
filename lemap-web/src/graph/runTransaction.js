@@ -47,5 +47,6 @@ export function mergeObservedStructure(canonicalGraph = [], workingGraph = []) {
 }
 
 export function shouldPromoteRun(reason = '') {
-  return reason === 'workflow_complete' || reason === 'consequential_action';
+  if (!reason) return false;
+  return !['error', 'interrupted'].includes(String(reason));
 }
