@@ -6,19 +6,25 @@ function text(value, max = 600) {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 function bool(value, fallback = false) { return value === undefined ? fallback : !!value; }
+function priority(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
 
 const SCOPES = new Set(['local', 'global']);
 const INTERACTIONS = new Set(['user_input', 'information', 'action', 'navigation', 'unknown']);
-const WORKFLOW_ROLES = new Set(['continue', 'back', 'commit', 'global', 'local', 'unknown']);
+const WORKFLOW_ROLES = new Set(['continue', 'back', 'branch', 'global', 'exit', 'commit', 'local', 'unknown']);
 const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive', 'security', 'unknown']);
 const SELECTION_RULES = new Set(['exactlyOne', 'anyOf', 'allOf', 'atLeastOne']);
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
-LeMap-Web already owns the complete structural entity graph. You receive only entities that still need semantic interpretation plus the user's goal.
+LeMap-Web already owns the complete structural entity graph. You receive only entities that still need semantic interpretation plus the user's goal and current page.
 For each supplied entity, return only its id and semantic additions. Never repeat structural facts, option lists, links, browser mechanics or user values. Never invent entity ids.
 A group entity represents one user-facing choice independent of how its member controls are rendered. Member controls inside a supplied group are structural implementation details and are not separate semantic questions.
 For group entities, structural cardinality describes what the UI permits. Add selectionRule only when useful to express the business meaning: exactlyOne, anyOf, allOf, or atLeastOne. Do not infer the grouping from widget type; LeMap-Web has already done that structurally.
-Omit irrelevant entities entirely. For relevant entities, add only useful semantic fields such as meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation), relevantToGoal, required, question, explanation, caveats, examples, selectionRule(exactlyOne|anyOf|allOf|atLeastOne), workflowRole(continue|back|commit|global|local), consequence(reversible|commit|financial|destructive|security), description, complete.
+For every relevant actionable control on the current page, classify its significance relative to the active workflow. Use workflowRole=continue only for the best direct forward actions that advance the current goal; back for navigation to an earlier workflow step; branch for a goal-relevant alternate path; global for top-level/site-wide navigation; exit for leaving or abandoning the active workflow; commit for a final/consequential action; local for relevant non-navigation local actions; unknown when uncertain. Add navigationPriority from 0 to 100 for action/navigation controls, where higher means more appropriate as the next action from the current page for this goal. Rank direct forward workflow controls above breadcrumbs, help, alternate paths, skip/bypass links, global navigation and exits.
+Omit irrelevant entities entirely. For relevant entities, add only useful semantic fields such as meaning, semanticType, scope(local|global), interaction(user_input|information|action|navigation), relevantToGoal, required, question, explanation, caveats, examples, selectionRule(exactlyOne|anyOf|allOf|atLeastOne), workflowRole(continue|back|branch|global|exit|commit|local), navigationPriority(0-100), consequence(reversible|commit|financial|destructive|security), description, complete.
 complete is primarily for workflow entities. For actions/navigation, classify consequence. Use reversible only for safe intermediate actions. Mark final/committing actions as workflowRole=commit and consequence=commit or a more specific consequential category.
 Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
 
@@ -69,7 +75,7 @@ export function entitiesNeedingSemantics(entities = []) {
     const semantic = entity?.semantic || {};
     if (!Object.keys(semantic).length) return true;
     if (entity?.type === 'workflow' && semantic.complete === undefined) return true;
-    if (['action', 'navigation'].includes(semantic.interaction) && !semantic.consequence) return true;
+    if (['action', 'navigation'].includes(semantic.interaction) && (!semantic.consequence || semantic.navigationPriority === undefined || !semantic.workflowRole)) return true;
     return false;
   });
 }
@@ -81,7 +87,7 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
     pageId: String(pageId || ''),
     entities: modelEntities.map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. A group is one semantic interaction; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, values or relationships.`;
+  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. Interpret action/navigation controls relative to the active workflow and current page: classify workflowRole as continue|back|branch|global|exit|commit|local and assign navigationPriority 0-100. Use continue only for direct forward progress toward the user's goal. A group is one semantic interaction; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, values or relationships.`;
 }
 
 function normalizeSemantic(raw = {}) {
@@ -98,6 +104,7 @@ function normalizeSemantic(raw = {}) {
     examples: arr(raw.examples).slice(0, 8).map((item) => text(item, 180)).filter(Boolean),
     selectionRule: SELECTION_RULES.has(raw.selectionRule) ? raw.selectionRule : undefined,
     workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown',
+    navigationPriority: priority(raw.navigationPriority),
     consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown',
     description: text(raw.description, 700)
   };
