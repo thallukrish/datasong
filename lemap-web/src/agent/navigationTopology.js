@@ -123,6 +123,11 @@ export function resolveNavigationTopology({
   for (const entity of arr(currentEntities)) {
     if (!actionable(entity)) continue;
 
+    if (entity.structural?.siteChrome === true) {
+      deterministicPatches.push(deterministicPatch(entity.id, 'global', false));
+      continue;
+    }
+
     const learnedBackTarget = learnedEarlierTarget(entity, earlierIds);
     const hrefBackTarget = learnedBackTarget ? '' : hrefEarlierTarget(entity, entityGraph, currentPage, earlierIds);
     if (learnedBackTarget || hrefBackTarget) {
