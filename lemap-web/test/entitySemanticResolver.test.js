@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildEntitySemanticPrompt,
+  buildNavigationSemanticPrompt,
   entitiesNeedingSemantics,
   normalizeEntitySemanticResponse,
+  normalizeNavigationSemanticResponse,
+  partitionSemanticCandidates,
   resolveEntitySemantics
 } from '../src/semantic/entitySemanticResolver.js';
 
@@ -63,6 +66,51 @@ test('only entities without completed semantics are selected for model enrichmen
 
   const selected = entitiesNeedingSemantics([resolvedWorkflow, resolvedInput, unresolvedAction]);
   assert.deepEqual(selected.map((entity) => entity.id), ['button:continue']);
+});
+
+test('semantic candidates split actionable navigation from user-input interpretation', () => {
+  const group = { id: 'group:mode', name: 'Mode', type: 'group', structural: { cardinality: 'exactlyOne', values: ['A', 'B'] }, semantic: {}, links: [] };
+  const textInput = { id: 'field:name', name: 'Name', type: 'ui_control', structural: { controlType: 'text' }, semantic: {}, links: [] };
+  const link = { id: 'link:help', name: 'Help', type: 'ui_control', structural: { controlType: 'link' }, semantic: {}, links: [] };
+  const button = { id: 'button:next', name: 'Continue', type: 'ui_control', structural: { controlType: 'button' }, semantic: {}, links: [] };
+  const split = partitionSemanticCandidates([workflow, pageEntities[0], group, textInput, link, button]);
+  assert.deepEqual(split.navigation.map((entity) => entity.id), ['link:help', 'button:next']);
+  assert.deepEqual(split.entity.map((entity) => entity.id), ['workflow:1', 'page:1', 'group:mode', 'field:name']);
+});
+
+test('navigation semantic prompt contains only compact action identity plus page and goal context', () => {
+  const prompt = buildNavigationSemanticPrompt({
+    userGoal: 'Complete setup',
+    pageContext: pageEntities[0],
+    entities: [pageEntities[2], { id: 'link:help', name: 'Help', type: 'ui_control', structural: { controlType: 'link', visible: true }, links: [{ id: 'page:1', relationship: 'childOf' }] }]
+  });
+  assert.match(prompt, /MODE web-navigation-semantics-v1/);
+  assert.match(prompt, /"name":"Setup"/);
+  assert.match(prompt, /"name":"Continue"/);
+  assert.match(prompt, /"name":"Help"/);
+  assert.match(prompt, /workflowRole/);
+  assert.match(prompt, /navigationPriority/);
+  assert.doesNotMatch(prompt, /links|visible|question|explanation|caveats|selectionRule/);
+});
+
+test('navigation response keeps only navigation fields', () => {
+  const result = normalizeNavigationSemanticResponse({
+    entities: [{
+      id: 'button:continue',
+      semantic: {
+        interaction: 'navigation', relevantToGoal: true, required: true,
+        workflowRole: 'continue', navigationPriority: 93, consequence: 'reversible',
+        explanation: 'unwanted verbosity', question: 'also unwanted', caveats: ['unwanted']
+      }
+    }]
+  }, [pageEntities[2]]);
+  assert.deepEqual(result.entities[0], {
+    id: 'button:continue',
+    semantic: {
+      interaction: 'navigation', relevantToGoal: true, required: true,
+      workflowRole: 'continue', navigationPriority: 93, consequence: 'reversible'
+    }
+  });
 });
 
 test('grouped radio members are structural choices, not separate semantic entities', () => {
