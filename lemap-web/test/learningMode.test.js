@@ -37,6 +37,11 @@ test('learning candidates include semantically known unanswered inputs without a
   assert.deepEqual(learningCandidates([knownInput, unansweredGroup, button], instances).map((entity) => entity.id), [unansweredGroup.id]);
 });
 
+test('cached learning proposals are excluded from later semantic batches', () => {
+  const cached = new Set([unansweredGroup.id]);
+  assert.deepEqual(learningCandidates([knownInput, unansweredGroup], [], cached).map((entity) => entity.id), [knownInput.id]);
+});
+
 test('learning proposal lookup is keyed by entity id and remains separate from semantic state', () => {
   const result = {
     entities: [{ id: unansweredGroup.id, semantic: { interaction: 'user_input' }, learningAnswer: '2' }]
