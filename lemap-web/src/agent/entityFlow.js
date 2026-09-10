@@ -160,15 +160,35 @@ export function ignoredSourceEntityIds(entity = {}) {
   ].filter(Boolean);
 }
 
-function knownVisitedTransition(entity = {}, entityGraph = [], visitedPageIds = new Set()) {
+function learnedTarget(entity = {}, entityGraph = []) {
   const persisted = arr(entityGraph).find((candidate) => candidate.id === entity.id);
-  if (!persisted) return false;
-  return arr(persisted.links)
+  return arr(persisted?.links)
     .filter((link) => link.relationship === 'transitionsTo')
-    .some((link) => visitedPageIds.has(link.id));
+    .map((link) => link.id)[0] || '';
 }
 
-export function selectWorkflowContinuation(entities = [], { entityGraph = [], visitedPageIds = new Set() } = {}) {
+function pointsBackward(entity = {}, { entityGraph = [], currentPageId = '', pageVisitOrder = new Map() } = {}) {
+  const target = learnedTarget(entity, entityGraph);
+  if (!target || !currentPageId) return false;
+  const currentOrder = pageVisitOrder.get(currentPageId);
+  const targetOrder = pageVisitOrder.get(target);
+  return Number.isFinite(currentOrder) && Number.isFinite(targetOrder) && targetOrder < currentOrder;
+}
+
+function continuationScore(entity = {}) {
+  const semantic = entity.semantic || {};
+  const structural = entity.structural || {};
+  let score = 0;
+  if (semantic.required === true) score += 100;
+  if (structural.controlType === 'button') score += 30;
+  if (semantic.interaction === 'action') score += 20;
+  if (semantic.scope === 'local') score += 10;
+  if (arr(semantic.caveats).length && semantic.required !== true) score -= 40;
+  if (structural.controlType === 'link') score -= 10;
+  return score;
+}
+
+export function selectWorkflowContinuation(entities = [], context = {}) {
   const candidates = arr(entities).filter((entity) => {
     const semantic = entity.semantic || {};
     return entity.type === 'ui_control'
@@ -177,9 +197,9 @@ export function selectWorkflowContinuation(entities = [], { entityGraph = [], vi
       && semantic.workflowRole === 'continue'
       && semantic.consequence === 'reversible'
       && ['navigation', 'action'].includes(semantic.interaction)
-      && !knownVisitedTransition(entity, entityGraph, visitedPageIds);
+      && !pointsBackward(entity, context);
   });
 
-  candidates.sort((a, b) => Number(b.semantic?.required === true) - Number(a.semantic?.required === true));
+  candidates.sort((a, b) => continuationScore(b) - continuationScore(a));
   return candidates[0] || null;
 }
