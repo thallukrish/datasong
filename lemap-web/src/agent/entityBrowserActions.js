@@ -119,25 +119,38 @@ async function applyControlValue(page, entity, value) {
   if (entity.structural?.controlType === 'autocomplete') await locator.press('Tab');
 }
 
+function groupMembers(entities = [], group = {}) {
+  const byId = new Map(arr(entities).map((entity) => [entity.id, entity]));
+  return arr(group.links)
+    .filter((link) => link.relationship === 'contains')
+    .map((link) => byId.get(link.id))
+    .filter(Boolean);
+}
+
+async function applySingleChoice(page, entities, group, value) {
+  const member = memberEntityForGroupValue(entities, group, value);
+  if (!member) throw new Error(`Could not map group value "${value}" for ${group.name}`);
+  return applyControlValue(page, member, true);
+}
+
+async function applyMultipleChoice(page, entities, group, value) {
+  const wanted = new Set(arr(value).map(normalize));
+  for (const member of groupMembers(entities, group)) {
+    const selected = wanted.has(normalize(member.name)) || wanted.has(normalize(member.structural?.value));
+    if (member.structural?.controlType === 'checkbox') {
+      await applyControlValue(page, member, selected);
+      continue;
+    }
+    if (selected) await applyControlValue(page, member, true);
+  }
+}
+
 export async function applyEntityValue(page, entities = [], entity = {}, value = null) {
   if (entity.type !== 'group') return applyControlValue(page, entity, value);
-  const groupType = entity.structural?.groupType;
-  if (groupType === 'radio' || groupType === 'choice') {
-    const member = memberEntityForGroupValue(entities, entity, value);
-    if (!member) throw new Error(`Could not map group value "${value}" for ${entity.name}`);
-    return applyControlValue(page, member, true);
-  }
-  if (groupType === 'checkbox') {
-    const wanted = new Set(arr(value).map(normalize));
-    for (const link of arr(entity.links).filter((item) => item.relationship === 'contains')) {
-      const member = arr(entities).find((candidate) => candidate.id === link.id);
-      if (!member) continue;
-      const selected = wanted.has(normalize(member.name)) || wanted.has(normalize(member.structural?.value));
-      await applyControlValue(page, member, selected);
-    }
-    return;
-  }
-  throw new Error(`Unsupported group type ${groupType || 'unknown'}`);
+  const cardinality = entity.structural?.cardinality || 'exactlyOne';
+  if (cardinality === 'exactlyOne') return applySingleChoice(page, entities, entity, value);
+  if (['zeroOrMore', 'oneOrMore'].includes(cardinality)) return applyMultipleChoice(page, entities, entity, value);
+  throw new Error(`Unsupported group cardinality ${cardinality}`);
 }
 
 export async function executeEntityAction(page, entity = {}) {
