@@ -38,6 +38,14 @@ test('back branch global exit and commit roles are never automatic forward progr
   assert.equal(selectWorkflowContinuation(entities)?.id, 'forward');
 });
 
+test('plain intermediate progress controls survive mistaken commit consequence classification', () => {
+  const continueButton = control('continue', 'Continue', 'continue', 100, { consequence: 'commit', required: true });
+  const submitButton = control('submit', 'Submit Return', 'continue', 100, { consequence: 'commit', required: true });
+
+  assert.equal(selectWorkflowContinuation([continueButton, submitButton])?.id, 'continue');
+  assert.equal(selectWorkflowContinuation([submitButton]), null);
+});
+
 test('missing navigation priority does not outrank explicit semantic ranking', () => {
   const oldSemantic = control('old', 'Old Continue', 'continue', undefined, { required: true });
   delete oldSemantic.semantic.navigationPriority;
