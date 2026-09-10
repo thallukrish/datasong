@@ -55,9 +55,6 @@ function uniqueById(entities = []) {
   const seen = new Set();
   return arr(entities).filter((entity) => entity?.id && !seen.has(entity.id) && seen.add(entity.id));
 }
-function executionInstances(instances = []) {
-  return learning.enabled ? instances : arr(instances).filter((instance) => instance?.mode !== 'learning');
-}
 
 async function captureEntities(page) {
   const explored = await exploreReadOnlyEntity(page);
@@ -131,6 +128,7 @@ async function enrichCurrentSemantics({
   const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
   const unresolved = entitiesNeedingSemantics(semanticEntities).filter((entity) => !actionableControl(entity));
+  const unresolvedIds = new Set(unresolved.map((entity) => entity.id));
   const learnInputs = learningMode ? learningCandidates(semanticEntities, instances, proposedEntityIds) : [];
   const sourceCandidates = force
     ? semanticEntities.filter((entity) => !actionableControl(entity))
@@ -150,8 +148,10 @@ async function enrichCurrentSemantics({
   });
   const patched = new Set();
   for (const patch of result.entities) {
-    patched.add(patch.id);
-    if (findEntity(entityGraph, patch.id)) mergeSemanticPatch(entityGraph, patch.id, patch.semantic);
+    if (unresolvedIds.has(patch.id) || force) {
+      patched.add(patch.id);
+      if (findEntity(entityGraph, patch.id)) mergeSemanticPatch(entityGraph, patch.id, patch.semantic);
+    }
   }
 
   for (const entity of unresolved) {
@@ -322,8 +322,7 @@ try {
       break;
     }
 
-    const activeInstances = executionInstances(instances);
-    const reusable = selectReusableUserInput(capture.entities, activeInstances, appliedInstanceEntityIds);
+    const reusable = selectReusableUserInput(capture.entities, instances, appliedInstanceEntityIds);
     if (reusable) {
       console.log(`[LeMap-Web] applying stored instance value for ${reusable.entity.name}`);
       await runLogger.write('instance_apply', { entityId: reusable.entity.id, source: 'stored', mode: reusable.instance.mode || 'run' });
@@ -348,7 +347,7 @@ try {
       continue;
     }
 
-    const input = selectNextUserInput(capture.entities, activeInstances);
+    const input = selectNextUserInput(capture.entities, instances);
     if (input) {
       await ensureInputOptions(page, input, entityGraph);
       const question = buildEntityQuestion(input, capture.entities);
