@@ -1,5 +1,6 @@
 import { preprocessEntity } from './entityPreprocessor.js';
 import { createEntityGraph, findEntity, linkEntities, upsertEntity } from './entityGraph.js';
+import { registerSensitiveValuesFromEntities } from '../semantic/modelPrivacy.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 
@@ -99,6 +100,7 @@ export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
     for (const member of members) linkEntities(graph, group.id, member.id, 'contains', 'partOf');
   }
 
+  registerSensitiveValuesFromEntities(graph);
   return { entities: graph, pageId };
 }
 
