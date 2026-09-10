@@ -48,6 +48,14 @@ function bucketKey(field = {}) {
   return `${owner ? `owner:${owner}|` : ''}${kind}|context:${context}`;
 }
 
+function binaryAnswerMembers(members = []) {
+  if (!members.length || members[0]?.type !== 'button') return members;
+  const yes = members.filter((field) => normalize(field.label) === 'yes');
+  const no = members.filter((field) => normalize(field.label) === 'no');
+  if (yes.length === 1 && no.length === 1 && members.length > 2) return [no[0], yes[0]];
+  return members;
+}
+
 function isAnswerLikeButtonSet(members = []) {
   if (members.length < 2 || members.length > 8) return false;
   const labels = members.map((field) => normalize(field.label)).filter(Boolean);
@@ -99,7 +107,8 @@ export function discoverGroups(fields = [], entityId = '') {
     buckets.get(key).push(field);
   }
 
-  for (const [key, members] of buckets) {
+  for (const [key, bucketMembers] of buckets) {
+    const members = binaryAnswerMembers(bucketMembers);
     if (!validCandidateSet(members)) continue;
 
     const label = labelForGroup(members, fields);
