@@ -13,6 +13,7 @@ const coreFiles = [
   'src/graph/structuralChange.js',
   'src/agent/entityFlow.js',
   'src/agent/entityBrowserActions.js',
+  'src/agent/navigationTopology.js',
   'src/semantic/entitySemanticResolver.js'
 ];
 
