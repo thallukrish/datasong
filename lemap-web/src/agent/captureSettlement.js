@@ -32,7 +32,7 @@ export async function waitForStructuralCaptureChange({
   capture,
   wait,
   now = () => Date.now(),
-  timeoutMs = 3000,
+  timeoutMs = 10000,
   pollMs = 150
 } = {}) {
   const baseline = captureSignature(before);
@@ -41,10 +41,11 @@ export async function waitForStructuralCaptureChange({
 
   while (now() - startedAt <= timeoutMs) {
     latest = await capture();
-    if (captureSignature(latest) !== baseline) return { capture: latest, changed: true };
-    if (now() - startedAt >= timeoutMs) break;
-    await wait(pollMs);
+    const waitedMs = Math.max(0, now() - startedAt);
+    if (captureSignature(latest) !== baseline) return { capture: latest, changed: true, waitedMs };
+    if (waitedMs >= timeoutMs) break;
+    await wait(Math.min(pollMs, timeoutMs - waitedMs));
   }
 
-  return { capture: latest, changed: false };
+  return { capture: latest, changed: false, waitedMs: Math.max(0, now() - startedAt) };
 }
