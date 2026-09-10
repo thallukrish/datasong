@@ -12,7 +12,7 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-export function compactModelResult({ purpose = '', model = '', durationMs = 0, usage = null, finishReason = '', parsed = {} } = {}) {
+export function compactModelResult({ purpose = '', model = '', durationMs = 0, usage = null, finishReason = '', systemPrompt = '', userPrompt = '', raw = '', parsed = {} } = {}) {
   const normalizedPurpose = clean(purpose, 80);
   const tokens = {
     prompt: numberOrNull(usage?.prompt_tokens),
@@ -48,7 +48,13 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
     durationMs: Math.max(0, Math.round(Number(durationMs) || 0)),
     tokens,
     finishReason: clean(finishReason, 80),
-    result
+    result,
+    exchange: {
+      systemPrompt: String(systemPrompt || ''),
+      userPrompt: String(userPrompt || ''),
+      rawResponse: String(raw || ''),
+      parsedResponse: parsed && typeof parsed === 'object' ? structuredClone(parsed) : parsed
+    }
   };
 }
 
