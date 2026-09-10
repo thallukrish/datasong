@@ -82,12 +82,13 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
 async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, force = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
   const workflow = findEntity(entityGraph, workflowId);
+  const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
   const unresolved = entitiesNeedingSemantics(semanticEntities.map((entity) => findEntity(entityGraph, entity.id) || entity));
   const candidates = force ? semanticEntities : unresolved;
   if (!candidates.length) return { called: false, count: 0 };
 
-  const result = await resolveEntitySemantics({ client, model, userGoal, entities: candidates, pageId });
+  const result = await resolveEntitySemantics({ client, model, userGoal, entities: candidates, pageId, pageContext });
   const patched = new Set();
   for (const patch of result.entities) {
     patched.add(patch.id);
