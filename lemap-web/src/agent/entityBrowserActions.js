@@ -122,7 +122,7 @@ async function applyControlValue(page, entity, value) {
 export async function applyEntityValue(page, entities = [], entity = {}, value = null) {
   if (entity.type !== 'group') return applyControlValue(page, entity, value);
   const groupType = entity.structural?.groupType;
-  if (groupType === 'radio') {
+  if (groupType === 'radio' || groupType === 'choice') {
     const member = memberEntityForGroupValue(entities, entity, value);
     if (!member) throw new Error(`Could not map group value "${value}" for ${entity.name}`);
     return applyControlValue(page, member, true);
