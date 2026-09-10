@@ -19,8 +19,11 @@ export function learningConfigFromEnv(env = {}) {
   return { mode, enabled, step };
 }
 
-export function learningCandidates(entities = [], instances = []) {
-  return arr(entities).filter((entity) => semanticInput(entity) && !instanceForEntity(instances, entity.id));
+export function learningCandidates(entities = [], instances = [], proposedEntityIds = new Set()) {
+  const proposed = proposedEntityIds instanceof Set ? proposedEntityIds : new Set(arr(proposedEntityIds).map(String));
+  return arr(entities).filter((entity) => semanticInput(entity)
+    && !proposed.has(entity.id)
+    && !instanceForEntity(instances, entity.id));
 }
 
 export function proposalForEntity(result = {}, entityId = '') {
