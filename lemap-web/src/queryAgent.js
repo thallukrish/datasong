@@ -13,7 +13,7 @@ import { loadEntityGraph, loadInstanceGraph, saveEntityGraph, saveInstanceGraph 
 import { createRunTransaction, shouldPromoteRun } from './graph/runTransaction.js';
 import { entitiesNeedingSemantics, resolveEntitySemantics } from './semantic/entitySemanticResolver.js';
 import { setModelCallLogger } from './semantic/modelCall.js';
-import { applyEntityValue, executeEntityAction } from './agent/entityBrowserActions.js';
+import { applyEntityValue, entityActionAvailable, executeEntityAction } from './agent/entityBrowserActions.js';
 import { waitForStructuralCaptureChange } from './agent/captureSettlement.js';
 import { chooseNavigationCandidate } from './agent/navigationDecision.js';
 import { planNavigation } from './agent/navigationPlanner.js';
@@ -447,14 +447,28 @@ try {
         .filter((entity) => executedContinuationKeys.has(`${capture.pageId}|${entity.id}`))
         .map((entity) => entity.id)
     );
+    const executableNavigationIds = new Set();
+    let capturedNavigationCount = 0;
+    for (const entity of capture.entities) {
+      if (!actionableControl(entity)) continue;
+      capturedNavigationCount += 1;
+      if (await entityActionAvailable(page, entity)) executableNavigationIds.add(entity.id);
+    }
+    const navigationEntities = capture.entities.filter((entity) => !actionableControl(entity) || executableNavigationIds.has(entity.id));
+    const staleNavigationCount = capturedNavigationCount - executableNavigationIds.size;
+    if (staleNavigationCount) {
+      console.log(`[LeMap-Web] filtered ${staleNavigationCount} captured navigation ${staleNavigationCount === 1 ? 'entity' : 'entities'} with no current executable locator`);
+      await runLogger.write('navigation_preflight', { captured: capturedNavigationCount, executable: executableNavigationIds.size, filtered: staleNavigationCount });
+    }
+
     const pageContext = capture.entities.find((entity) => entity.id === capture.pageId) || findEntity(entityGraph, capture.pageId);
     const navigation = await planNavigation({
       entityGraph,
-      currentEntities: capture.entities,
+      currentEntities: navigationEntities,
       currentPageId: capture.pageId,
       recentPageTrail,
       blockedEntityIds,
-      choose: ({ candidates }) => chooseNavigationCandidate({ client, model, userGoal, candidates, pageContext, recentPageTrail, privacyEntities: capture.entities })
+      choose: ({ candidates }) => chooseNavigationCandidate({ client, model, userGoal, candidates, pageContext, recentPageTrail, privacyEntities: navigationEntities })
     });
     if (navigation.topologyCount) console.log(`[LeMap-Web] topology filtered/resolved ${navigation.topologyCount} navigation entities without the model`);
     const continuation = navigation.entity;
