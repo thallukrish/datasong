@@ -136,6 +136,7 @@ export async function snapshotPage(page) {
         domId: clean(el.id || ''),
         name: clean(el.getAttribute?.('name') || ''),
         href: clean(el.getAttribute?.('href') || ''),
+        siteChrome: !!el.closest?.('header,nav,[role="navigation"]'),
         value: 'value' in el ? el.value : el.getAttribute?.('data-value') ?? el.getAttribute?.('aria-valuenow') ?? null,
         defaultValue: defaultValueFor(el),
         checked,
