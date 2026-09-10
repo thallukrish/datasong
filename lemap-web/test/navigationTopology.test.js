@@ -6,12 +6,12 @@ function page(id, name, route, url = `https://example.test${route}`) {
   return { id, name, type: 'page', structural: { route, url }, semantic: {}, links: [] };
 }
 
-function control(id, pageId, name, { href = '', controlType = 'link', transitionsTo = '' } = {}) {
+function control(id, pageId, name, { href = '', controlType = 'link', transitionsTo = '', siteChrome = false } = {}) {
   return {
     id,
     name,
     type: 'ui_control',
-    structural: { controlType, href, visible: true, disabled: false },
+    structural: { controlType, href, visible: true, disabled: false, siteChrome },
     semantic: {},
     links: [
       { id: pageId, relationship: 'childOf' },
@@ -108,6 +108,24 @@ test('same stable link target repeated on distinct pages is deterministic global
   assert.equal(result.deterministicPatches[0]?.semantic.workflowRole, 'global');
   assert.equal(result.deterministicPatches[0]?.semantic.relevantToGoal, false);
   assert.deepEqual(result.modelCandidates, []);
+});
+
+test('controls structurally inside site chrome are filtered before model selection', () => {
+  const p1 = page('page:one', 'One', '/one');
+  const privateChrome = control('field:profile', p1.id, 'Example Private Person', { controlType: 'button', siteChrome: true });
+  const workflowAction = control('field:action', p1.id, 'Workflow action', { controlType: 'button' });
+
+  const result = resolveNavigationTopology({
+    entityGraph: [p1, privateChrome, workflowAction],
+    currentEntities: [p1, privateChrome, workflowAction],
+    currentPageId: p1.id,
+    recentPageTrail: [{ id: p1.id, name: p1.name }]
+  });
+
+  const chromePatch = result.deterministicPatches.find((patch) => patch.id === privateChrome.id);
+  assert.equal(chromePatch?.semantic.workflowRole, 'global');
+  assert.equal(chromePatch?.semantic.relevantToGoal, false);
+  assert.deepEqual(result.modelCandidates.map((entity) => entity.id), [workflowAction.id]);
 });
 
 test('repeated buttons without a stable href are not guessed to be global', () => {
