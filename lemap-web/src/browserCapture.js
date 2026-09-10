@@ -29,6 +29,7 @@ export async function snapshotPage(page) {
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
     const interactiveRoles = new Set(['button', 'radio', 'checkbox', 'textbox', 'combobox', 'spinbutton', 'listbox', 'link']);
     const controlSelector = 'input,select,textarea,button,a,[role="button"],[role="link"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"]';
+    const choiceSelector = 'input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]';
     const rendered = (el) => {
       const style = getComputedStyle(el);
       return style.display !== 'none'
@@ -53,6 +54,20 @@ export async function snapshotPage(page) {
       if (!labelledBy) return '';
       return clean(labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.innerText || document.getElementById(id)?.textContent || '').join(' '));
     };
+    const nearestChoiceWrapperText = (el) => {
+      const type = clean(el?.type || '').toLowerCase();
+      const role = clean(el?.getAttribute?.('role') || '').toLowerCase();
+      if (!['radio', 'checkbox'].includes(type) && !['radio', 'checkbox'].includes(role)) return '';
+      let ancestor = el.parentElement;
+      for (let depth = 0; ancestor && depth < 5 && ancestor !== document.body; depth += 1, ancestor = ancestor.parentElement) {
+        const visibleChoices = Array.from(ancestor.querySelectorAll?.(choiceSelector) || []).filter(visible);
+        if (visibleChoices.length > 1) break;
+        if (visibleChoices.length !== 1 || visibleChoices[0] !== el) continue;
+        const candidate = textWithoutControls(ancestor);
+        if (candidate) return candidate.length <= 600 ? candidate : candidate.slice(0, 600);
+      }
+      return '';
+    };
     const labelFor = (el) => {
       const associated = el.labels?.length ? Array.from(el.labels) : [];
       const closest = el.closest?.('label');
@@ -73,6 +88,8 @@ export async function snapshotPage(page) {
         const controlText = textWithoutControls(el) || clean(el.innerText || el.textContent);
         if (controlText) return controlText;
       }
+      const wrapperText = nearestChoiceWrapperText(el);
+      if (wrapperText) return wrapperText;
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.getAttribute?.('name') || el.id || '');
     };
     const visibleChoicePeers = (el) => Array.from(el.querySelectorAll?.('input[type="radio"],input[type="checkbox"],button,[role="button"],[role="radio"],[role="checkbox"]') || []).filter(visible);
@@ -272,11 +289,32 @@ export async function installUserEventProbe(page) {
   await page.evaluate(() => {
     window.__lemapWebEvents = [];
     const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const choiceSelector = 'input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]';
+    const visible = (el) => {
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || el.hasAttribute('hidden') || el.getAttribute?.('aria-hidden') === 'true') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
     const textWithoutControls = (el) => {
       if (!el) return '';
       const clone = el.cloneNode(true);
       clone.querySelectorAll?.('input,select,textarea,button,a,[role="button"],[role="link"],[role="radio"],[role="checkbox"],[role="textbox"],[role="combobox"],[role="spinbutton"],[role="listbox"],option').forEach((node) => node.remove());
       return clean(clone.textContent || '');
+    };
+    const nearestChoiceWrapperText = (el) => {
+      const type = clean(el?.type || '').toLowerCase();
+      const role = clean(el?.getAttribute?.('role') || '').toLowerCase();
+      if (!['radio', 'checkbox'].includes(type) && !['radio', 'checkbox'].includes(role)) return '';
+      let ancestor = el.parentElement;
+      for (let depth = 0; ancestor && depth < 5 && ancestor !== document.body; depth += 1, ancestor = ancestor.parentElement) {
+        const visibleChoices = Array.from(ancestor.querySelectorAll?.(choiceSelector) || []).filter(visible);
+        if (visibleChoices.length > 1) break;
+        if (visibleChoices.length !== 1 || visibleChoices[0] !== el) continue;
+        const candidate = textWithoutControls(ancestor);
+        if (candidate) return candidate.length <= 600 ? candidate : candidate.slice(0, 600);
+      }
+      return '';
     };
     const labelFor = (el) => {
       if (!el) return '';
@@ -302,6 +340,8 @@ export async function installUserEventProbe(page) {
         const controlText = textWithoutControls(el) || clean(el.innerText || el.textContent);
         if (controlText) return controlText;
       }
+      const wrapperText = nearestChoiceWrapperText(el);
+      if (wrapperText) return wrapperText;
       return clean(el.getAttribute?.('placeholder') || el.getAttribute?.('title') || el.name || el.id || '');
     };
     const handler = (event) => {
