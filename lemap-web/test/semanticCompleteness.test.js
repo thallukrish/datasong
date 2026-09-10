@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { entitiesNeedingSemantics, semanticCandidatesForCurrentState } from '../src/semantic/entitySemanticResolver.js';
 
-test('relevant choice group remains pending until it has usable semantics and a current value', () => {
+test('relevant choice group remains pending only until it has usable semantics', () => {
   const incomplete = {
     id: 'group:mode',
     name: 'Mode',
@@ -28,7 +28,7 @@ test('relevant choice group remains pending until it has usable semantics and a 
     }
   };
 
-  assert.deepEqual(entitiesNeedingSemantics([semanticallyComplete]).map((entity) => entity.id), ['group:mode']);
+  assert.deepEqual(entitiesNeedingSemantics([semanticallyComplete]), []);
 
   const answered = {
     ...semanticallyComplete,
