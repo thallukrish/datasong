@@ -55,6 +55,23 @@ test('href that uniquely resolves to an earlier page route is back before the li
   assert.deepEqual(result.modelCandidates, []);
 });
 
+test('same-route SPA states stay semantic unless a learned transition identifies the target page', () => {
+  const route = '/app#/wizard';
+  const p1 = page('page:state-one', 'Wizard State One', route, 'https://example.test/app#/wizard');
+  const p2 = page('page:state-two', 'Wizard State Two', route, 'https://example.test/app#/wizard');
+  const ambiguous = control('field:ambiguous', p2.id, 'Edit earlier state', { href: '#/wizard' });
+
+  const result = resolveNavigationTopology({
+    entityGraph: [p1, p2, ambiguous],
+    currentEntities: [p2, ambiguous],
+    currentPageId: p2.id,
+    recentPageTrail: [{ id: p1.id, name: p1.name }, { id: p2.id, name: p2.name }]
+  });
+
+  assert.deepEqual(result.deterministicPatches, []);
+  assert.deepEqual(result.modelCandidates.map((entity) => entity.id), [ambiguous.id]);
+});
+
 test('same stable link target repeated on distinct pages is deterministic global navigation', () => {
   const p1 = page('page:one', 'One', '/one');
   const p2 = page('page:two', 'Two', '/two');
