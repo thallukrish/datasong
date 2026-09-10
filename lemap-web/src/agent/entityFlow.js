@@ -160,44 +160,25 @@ export function ignoredSourceEntityIds(entity = {}) {
   ].filter(Boolean);
 }
 
-function learnedTarget(entity = {}, entityGraph = []) {
-  const persisted = arr(entityGraph).find((candidate) => candidate.id === entity.id);
-  return arr(persisted?.links)
-    .filter((link) => link.relationship === 'transitionsTo')
-    .map((link) => link.id)[0] || '';
-}
-
-function pointsBackward(entity = {}, { entityGraph = [], currentPageId = '', pageVisitOrder = new Map() } = {}) {
-  const target = learnedTarget(entity, entityGraph);
-  if (!target || !currentPageId) return false;
-  const currentOrder = pageVisitOrder.get(currentPageId);
-  const targetOrder = pageVisitOrder.get(target);
-  return Number.isFinite(currentOrder) && Number.isFinite(targetOrder) && targetOrder < currentOrder;
-}
-
 function continuationScore(entity = {}) {
   const semantic = entity.semantic || {};
-  const structural = entity.structural || {};
-  let score = 0;
-  if (semantic.required === true) score += 100;
-  if (structural.controlType === 'button') score += 30;
-  if (semantic.interaction === 'action') score += 20;
-  if (semantic.scope === 'local') score += 10;
-  if (arr(semantic.caveats).length && semantic.required !== true) score -= 40;
-  if (structural.controlType === 'link') score -= 10;
-  return score;
+  const explicitPriority = Number(semantic.navigationPriority);
+  const priority = Number.isFinite(explicitPriority) ? explicitPriority : -1;
+  const required = semantic.required === true ? 1 : 0;
+  return (priority * 1000) + required;
 }
 
-export function selectWorkflowContinuation(entities = [], context = {}) {
+export function selectWorkflowContinuation(entities = [], { blockedEntityIds = new Set() } = {}) {
+  const blocked = blockedEntityIds instanceof Set ? blockedEntityIds : new Set(arr(blockedEntityIds));
   const candidates = arr(entities).filter((entity) => {
     const semantic = entity.semantic || {};
     return entity.type === 'ui_control'
+      && !blocked.has(entity.id)
       && visibleAndEnabled(entity)
       && semantic.relevantToGoal === true
       && semantic.workflowRole === 'continue'
       && semantic.consequence === 'reversible'
-      && ['navigation', 'action'].includes(semantic.interaction)
-      && !pointsBackward(entity, context);
+      && ['navigation', 'action'].includes(semantic.interaction);
   });
 
   candidates.sort((a, b) => continuationScore(b) - continuationScore(a));
