@@ -61,7 +61,7 @@ test('browser benchmark builds and advances the unified entity graph', async (t)
   const browser = await launchChrome();
   t.after(async () => { await browser.close(); await fixture.close(); });
 
-  await t.test('live DOM becomes page, group and control entities', async () => {
+  await t.test('live DOM becomes page, group and visible control entities only', async () => {
     const page = await freshPage(browser, fixture.url);
     const captured = await capture(page);
     const pageEntity = findEntity(captured.entities, captured.pageId);
@@ -69,6 +69,7 @@ test('browser benchmark builds and advances the unified entity graph', async (t)
     const reasonB = entityByName(captured.entities, 'Reason B');
     const filingDate = entityByName(captured.entities, 'Filing date');
     const city = entityByName(captured.entities, 'City');
+    const continueEntities = captured.entities.filter((entity) => entity.name === 'Continue');
 
     assert.equal(pageEntity.type, 'page');
     assert.ok(reasonGroup);
@@ -76,16 +77,18 @@ test('browser benchmark builds and advances the unified entity graph', async (t)
     assert.equal(filingDate.structural.controlType, 'date');
     assert.equal(city.structural.controlType, 'autocomplete');
     assert.ok(reasonB.links.some((link) => link.id === reasonGroup.id && link.relationship === 'partOf'));
+    assert.equal(continueEntities.length, 1);
+    assert.equal(continueEntities[0].structural.domId, 'continue');
+    assert.equal(captured.entities.some((entity) => entity.structural?.domId === 'hiddenContinue'), false);
     await page.close();
   });
 
-  await t.test('real UI change creates causal state-version entities', async () => {
+  await t.test('controls that become hidden disappear from the current capture', async () => {
     const page = await freshPage(browser, fixture.url);
     const before = await capture(page);
     const persistent = createEntityGraph(before.entities);
     const reasonB = entityByName(before.entities, 'Reason B');
     const condition1Before = entityByName(before.entities, 'Condition 1');
-    const continueBefore = entityByName(before.entities, 'Continue');
 
     await page.locator('input[name="reason"][value="B"]').check();
     const after = await capture(page);
@@ -98,12 +101,11 @@ test('browser benchmark builds and advances the unified entity graph', async (t)
 
     assert.ok(change.versionEntityIds.length >= 2);
     const conditionVersion = change.versionEntityIds.map((id) => findEntity(persistent, id)).find((entity) => entity.links.some((link) => link.id === condition1Before.id && link.relationship === 'copyOf'));
-    const continueVersion = change.versionEntityIds.map((id) => findEntity(persistent, id)).find((entity) => entity.links.some((link) => link.id === continueBefore.id && link.relationship === 'copyOf'));
     assert.ok(conditionVersion);
     assert.equal(conditionVersion.structural.disabled, false);
     assert.ok(conditionVersion.links.some((link) => link.id === reasonB.id && link.relationship === 'onModificationOf'));
-    assert.ok(continueVersion);
-    assert.equal(continueVersion.structural.visible, false);
+    assert.equal(after.entities.some((entity) => entity.name === 'Continue'), false);
+    assert.equal(after.entities.some((entity) => entity.structural?.domId === 'hiddenContinue'), false);
     await page.close();
   });
 });
