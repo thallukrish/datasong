@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { buildEntitySemanticPrompt } from '../src/semantic/entitySemanticResolver.js';
 import { buildNavigationChoicePrompt } from '../src/agent/navigationDecision.js';
 import { compactModelResult } from '../src/agent/runLogger.js';
+import { callJsonModel } from '../src/semantic/modelCall.js';
+import { clearRegisteredSensitiveValues, registerSensitiveValuesFromEntities } from '../src/semantic/modelPrivacy.js';
 
 const personalValue = 'ZXCVB1234Q';
 const personalName = 'Example Private Person';
@@ -12,7 +14,7 @@ function field(id, label, value) {
     id,
     name: label,
     type: 'ui_control',
-    structural: { controlType: 'text', visible: true, disabled: false, value, defaultValue: null },
+    structural: { controlType: 'text', visible: true, disabled: false, value, defaultValue: null, values: [] },
     semantic: {},
     links: []
   };
@@ -61,6 +63,32 @@ test('navigation prompts redact live values from page, trail and candidate label
   assert.equal(prompt.includes(personalName), false);
   assert.equal(prompt.includes(personalValue), false);
   assert.match(prompt, /\[redacted\]/i);
+});
+
+test('final model-call boundary redacts registered live values even if a caller forgets to sanitize', async () => {
+  clearRegisteredSensitiveValues();
+  registerSensitiveValuesFromEntities([field('field:name', 'Name', personalName), field('field:id', 'Identifier', personalValue)]);
+  const requests = [];
+  const client = { chat: { completions: { create: async (request) => {
+    requests.push(request);
+    return { choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage: { total_tokens: 1 } };
+  } } } };
+
+  try {
+    await callJsonModel({
+      client,
+      model: 'test-model',
+      systemPrompt: `System mentions ${personalName}`,
+      userPrompt: `Prompt mentions ${personalName} and ${personalValue}`
+    });
+  } finally {
+    clearRegisteredSensitiveValues();
+  }
+
+  const serialized = JSON.stringify(requests);
+  assert.equal(serialized.includes(personalName), false);
+  assert.equal(serialized.includes(personalValue), false);
+  assert.match(serialized, /\[redacted\]/i);
 });
 
 test('compact model logging never persists exact prompts or raw responses', () => {
