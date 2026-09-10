@@ -14,6 +14,7 @@ import { createRunTransaction, shouldPromoteRun } from './graph/runTransaction.j
 import { entitiesNeedingSemantics, resolveEntitySemantics } from './semantic/entitySemanticResolver.js';
 import { setModelCallLogger } from './semantic/modelCall.js';
 import { applyEntityValue, executeEntityAction } from './agent/entityBrowserActions.js';
+import { waitForStructuralCaptureChange } from './agent/captureSettlement.js';
 import {
   buildEntityQuestion,
   ignoredSourceEntityIds,
@@ -29,6 +30,8 @@ import { compactModelResult, createRunLogger } from './agent/runLogger.js';
 const loadedEnvFiles = await loadDotEnv({ cwd: process.cwd(), env: process.env });
 const endpoint = process.env.LEMAP_CDP || 'http://127.0.0.1:9222';
 const settleMs = Number.isFinite(Number(process.env.LEMAP_SETTLE_MS)) ? Math.max(0, Number(process.env.LEMAP_SETTLE_MS)) : 500;
+const structuralSettleMs = Number.isFinite(Number(process.env.LEMAP_STRUCTURAL_SETTLE_MS)) ? Math.max(0, Number(process.env.LEMAP_STRUCTURAL_SETTLE_MS)) : 3000;
+const structuralPollMs = Number.isFinite(Number(process.env.LEMAP_STRUCTURAL_POLL_MS)) ? Math.max(25, Number(process.env.LEMAP_STRUCTURAL_POLL_MS)) : 150;
 const maxSteps = Number.isFinite(Number(process.env.LEMAP_MAX_STEPS)) ? Math.max(1, Number(process.env.LEMAP_MAX_STEPS)) : 30;
 const entityFile = path.resolve(process.env.LEMAP_ENTITY_GRAPH_FILE || path.join('data', 'entity-graph', 'web-map.json'));
 const instanceFile = path.resolve(process.env.LEMAP_INSTANCE_FILE || path.join('data', 'instances', 'default.json'));
@@ -42,6 +45,18 @@ async function captureEntities(page) {
   const explored = await exploreReadOnlyEntity(page);
   const built = buildStructuralEntitiesFromPreprocessed(explored.graph);
   return { ...built, explored };
+}
+
+async function captureAfterAction(page, before) {
+  if (settleMs) await page.waitForTimeout(settleMs);
+  const settled = await waitForStructuralCaptureChange({
+    before,
+    capture: () => captureEntities(page),
+    wait: (ms) => page.waitForTimeout(ms),
+    timeoutMs: structuralSettleMs,
+    pollMs: structuralPollMs
+  });
+  return settled.capture;
 }
 
 function addMissingStructuralEntities(entityGraph, currentEntities) {
@@ -237,8 +252,7 @@ try {
       await runLogger.write('instance_apply', { entityId: reusable.entity.id, source: 'stored' });
       const before = capture;
       await applyEntityValue(page, capture.entities, reusable.entity, reusable.instance.value);
-      if (settleMs) await page.waitForTimeout(settleMs);
-      const after = await captureEntities(page);
+      const after = await captureAfterAction(page, before);
 
       if (after.pageId !== before.pageId) {
         appliedInstanceEntityIds.clear();
@@ -274,8 +288,7 @@ try {
 
       const before = capture;
       await applyEntityValue(page, capture.entities, input, value);
-      if (settleMs) await page.waitForTimeout(settleMs);
-      const after = await captureEntities(page);
+      const after = await captureAfterAction(page, before);
 
       if (after.pageId !== before.pageId) {
         appliedInstanceEntityIds.clear();
@@ -317,8 +330,7 @@ try {
     console.log(`[LeMap-Web] continuing via: ${continuation.name}${Number.isFinite(Number(continuation.semantic?.navigationPriority)) ? ` [priority ${continuation.semantic.navigationPriority}]` : ''}`);
     const before = capture;
     await executeEntityAction(page, continuation);
-    if (settleMs) await page.waitForTimeout(settleMs);
-    const after = await captureEntities(page);
+    const after = await captureAfterAction(page, before);
 
     if (after.pageId !== before.pageId) {
       appliedInstanceEntityIds.clear();
