@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { memberEntityForGroupValue, entityInteractionKind, optionCandidateMatches } from '../src/agent/entityBrowserActions.js';
+import { memberEntityForGroupValue, entityInteractionKind, optionCandidateMatches, executeEntityAction } from '../src/agent/entityBrowserActions.js';
 
 const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online' }, links: [] };
 const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline' }, links: [] };
@@ -23,4 +23,24 @@ test('combobox option matching uses the same visible/value evidence captured dur
   assert.equal(optionCandidateMatches({ ariaLabel: 'Assessment year', dataValue: '2026-27 (Current A.Y.)' }, '2026-27 (Current A.Y.)'), true);
   assert.equal(optionCandidateMatches({ value: '2026-27' }, '2026-27'), true);
   assert.equal(optionCandidateMatches({ text: '2025-26' }, '2026-27 (Current A.Y.)'), false);
+});
+
+test('stale action locator is recoverable instead of aborting the run', async () => {
+  const emptyLocator = {
+    count: async () => 0,
+    nth: () => emptyLocator
+  };
+  const page = {
+    url: () => 'https://example.test/workflow',
+    locator: () => emptyLocator,
+    getByRole: () => emptyLocator,
+    getByLabel: () => emptyLocator
+  };
+  const result = await executeEntityAction(page, {
+    id: 'field:stale',
+    name: 'Proceed',
+    type: 'ui_control',
+    structural: { controlType: 'button', domId: 'old-dom-id' }
+  });
+  assert.deepEqual(result, { executed: false, reason: 'locator_miss' });
 });
