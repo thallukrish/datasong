@@ -94,16 +94,16 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   return findEntity(entityGraph, workflowId);
 }
 
-async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, force = false }) {
+async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, recentPageTrail = [], force = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
   const workflow = findEntity(entityGraph, workflowId);
   const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
-  const unresolved = entitiesNeedingSemantics(semanticEntities.map((entity) => findEntity(entityGraph, entity.id) || entity));
+  const unresolved = entitiesNeedingSemantics(semanticEntities);
   const candidates = force ? semanticEntities : unresolved;
   if (!candidates.length) return { called: false, count: 0 };
 
-  const result = await resolveEntitySemantics({ client, model, userGoal, entities: candidates, pageId, pageContext });
+  const result = await resolveEntitySemantics({ client, model, userGoal, entities: candidates, pageId, pageContext, recentPageTrail });
   const patched = new Set();
   for (const patch of result.entities) {
     patched.add(patch.id);
@@ -201,6 +201,7 @@ try {
   const workflowId = workflowIdForGoal(userGoal);
   const appliedInstanceEntityIds = new Set();
   const executedContinuationKeys = new Set();
+  const recentPageTrail = [];
 
   browser = await chromium.connectOverCDP(endpoint);
   const pages = browser.contexts().flatMap((context) => context.pages());
@@ -223,7 +224,12 @@ try {
   for (let step = 1; step <= maxSteps; step += 1) {
     console.log(`\n[LeMap-Web] --- step ${step} ---`);
     applyKnownSemantics(capture.entities, entityGraph);
-    console.log(`[LeMap-Web] page entity: ${findEntity(entityGraph, capture.pageId)?.name || capture.pageId}`);
+    const currentPageEntity = capture.entities.find((entity) => entity.id === capture.pageId) || findEntity(entityGraph, capture.pageId);
+    if (recentPageTrail.at(-1)?.id !== capture.pageId) {
+      recentPageTrail.push({ id: capture.pageId, name: currentPageEntity?.name || capture.pageId });
+      if (recentPageTrail.length > 8) recentPageTrail.shift();
+    }
+    console.log(`[LeMap-Web] page entity: ${currentPageEntity?.name || capture.pageId}`);
     await runLogger.write('step', { step, pageId: capture.pageId, entityCount: capture.entities.length });
 
     const semanticResult = await enrichCurrentSemantics({
@@ -234,6 +240,7 @@ try {
       currentEntities: capture.entities,
       pageId: capture.pageId,
       workflowId,
+      recentPageTrail,
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
     if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved entities`);
