@@ -35,20 +35,23 @@ function controlIdentityBasis({ entityId = '', parent = null, domId = '', node =
 
 export function discoverInputs(root = {}, entityId = '') {
   const inputs = [];
-  function walk(node, ancestry = []) {
+  function walk(node, ancestry = [], ownerFieldId = '') {
     if (!node || typeof node !== 'object') return;
     const tag = String(node.tag || '').toLowerCase();
     const label = String(node.label || '').trim();
     const controlNode = isControlNode(node);
-    const nextAncestry = label && !controlNode ? [...ancestry, { tag, label }] : ancestry;
+    const nextAncestry = label && !controlNode ? [...ancestry, { tag, role: String(node.role || ''), label }] : ancestry;
+    let nestedOwnerFieldId = ownerFieldId;
+
     if (controlNode) {
       const normalizedType = classifyInput(node);
       if (normalizedType !== 'technical_hidden') {
         const parent = [...ancestry].reverse().find((x) => x.label) || null;
         const domId = String(node.domId || node.id || '');
         const identityBasis = controlIdentityBasis({ entityId, parent, domId, node, label, tag, normalizedType });
+        const id = `field:${hash(identityBasis)}`;
         inputs.push({
-          id: `field:${hash(identityBasis)}`,
+          id,
           entityId,
           domId,
           name: String(node.name || ''),
@@ -60,7 +63,9 @@ export function discoverInputs(root = {}, entityId = '') {
           href: String(node.href || ''),
           parentRegionLabel: parent?.label || '',
           parentRegionTag: parent?.tag || '',
+          parentRegionRole: parent?.role || '',
           regionPath: ancestry.map((x) => x.label),
+          ownerFieldId: ownerFieldId || '',
           parentGroupId: null,
           required: !!node.required,
           disabled: !!node.disabled,
@@ -81,9 +86,10 @@ export function discoverInputs(root = {}, entityId = '') {
             autocomplete: node.autocomplete ?? null
           }
         });
+        nestedOwnerFieldId = id;
       }
     }
-    for (const child of Array.isArray(node.children) ? node.children : []) walk(child, nextAncestry);
+    for (const child of Array.isArray(node.children) ? node.children : []) walk(child, nextAncestry, nestedOwnerFieldId);
   }
   walk(root, []);
   return inputs;
