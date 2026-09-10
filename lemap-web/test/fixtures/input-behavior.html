@@ -20,6 +20,21 @@
     </div>
   </fieldset>
 
+  <section id="nested-choice-card" aria-labelledby="filing-reason-question">
+    <p id="filing-reason-question">Are you filing for any of the following reasons?</p>
+    <div role="radiogroup" aria-labelledby="filing-reason-question">
+      <div id="reason-taxable" role="radio" name="filing-reason" aria-checked="true" tabindex="0">Taxable income is above the basic exemption limit</div>
+      <div id="reason-conditions" role="radio" name="filing-reason" aria-checked="false" tabindex="0">
+        <span>Filing because one or more special conditions apply</span>
+        <div role="group" aria-label="Additional filing conditions">
+          <div id="large-deposit" role="checkbox" aria-checked="false" tabindex="0">Large current-account deposits</div>
+          <div id="foreign-travel" role="checkbox" aria-checked="false" tabindex="0">Foreign travel expenditure</div>
+        </div>
+      </div>
+      <div id="reason-other" role="radio" name="filing-reason" aria-checked="false" tabindex="0">Others</div>
+    </div>
+  </section>
+
   <section aria-label="Details">
     <label>Filing date <input id="filingDate" placeholder="DD/MM/YYYY" pattern="\\d{2}/\\d{2}/\\d{4}"></label>
     <div id="dateError" role="alert" hidden>Use DD/MM/YYYY</div>
