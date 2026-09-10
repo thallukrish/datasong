@@ -61,6 +61,24 @@ test('navigation prompt includes compact ordered workflow trail so prior-step li
   assert.match(prompt, /earlier workflow step/i);
 });
 
+test('navigation prompt tells model that account profile and menu chrome are not workflow continuation by default', () => {
+  const prompt = buildNavigationSemanticPrompt({
+    userGoal: 'Complete a filing workflow',
+    pageContext: page,
+    entities: [{
+      id: 'button:profile',
+      name: 'expand_more Individual',
+      type: 'ui_control',
+      structural: { controlType: 'button', visible: true, disabled: false },
+      semantic: {},
+      links: []
+    }]
+  });
+  assert.match(prompt, /account|profile/i);
+  assert.match(prompt, /menu|site chrome/i);
+  assert.match(prompt, /not.*continue|never.*continue/i);
+});
+
 test('disabled navigation controls wait for semantics until they become executable', () => {
   const disabled = {
     id: 'button:later', name: 'Continue', type: 'ui_control',
