@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/browserCapture.test.js test/domainNeutralCore.test.js test/entityBrowserActions.test.js test/entitySemanticResolver.test.js test/graphStore.test.js test/queryAgentGraphFlow.test.js test/runLogger.test.js test/structuralChange.test.js test/structuralEntityBuilder.test.js test/unifiedGraph.test.js",
+    "test": "node --test test/browserCapture.test.js test/domainNeutralCore.test.js test/entityBrowserActions.test.js test/entitySemanticResolver.test.js test/graphStore.test.js test/inputDiscovery.test.js test/queryAgentGraphFlow.test.js test/runLogger.test.js test/structuralChange.test.js test/structuralEntityBuilder.test.js test/unifiedGraph.test.js",
     "test:browser": "node --test test/browserEntity.e2e.test.js test/readOnlyExplorer.e2e.test.js test/blockingOverlay.e2e.test.js",
     "test:all": "npm test && npm run test:browser",
     "attach": "node src/capture.js",
