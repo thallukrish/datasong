@@ -20,35 +20,33 @@ function control(id, name, role, priority, options = {}) {
   };
 }
 
-test('navigation priority is authoritative among forward continuations', () => {
-  const breadcrumbLookingButton = control('a', 'Filing Returns', 'continue', 15, { required: true });
-  const plainLink = control('b', 'Open next filing step', 'continue', 95, { controlType: 'link' });
-  assert.equal(selectWorkflowContinuation([breadcrumbLookingButton, plainLink])?.id, 'b');
+test('selected forward continuation is chosen by semantic priority', () => {
+  const lower = control('a', 'Candidate A', 'continue', 15, { required: true });
+  const higher = control('b', 'Candidate B', 'continue', 100, { controlType: 'link' });
+  assert.equal(selectWorkflowContinuation([lower, higher])?.id, 'b');
 });
 
-test('back branch global exit and commit roles are never automatic forward progress', () => {
+test('non-forward or non-reversible actions are never automatic continuations', () => {
   const entities = [
-    control('back', 'Back', 'back', 100),
-    control('branch', 'Alternate route', 'branch', 100),
-    control('global', 'Dashboard', 'global', 100),
-    control('exit', 'Exit', 'exit', 100),
-    control('commit', 'Submit', 'commit', 100, { consequence: 'commit' }),
-    control('forward', 'Continue', 'continue', 60)
+    control('back', 'Candidate A', 'back', 100),
+    control('branch', 'Candidate B', 'branch', 100),
+    control('global', 'Candidate C', 'global', 100),
+    control('exit', 'Candidate D', 'exit', 100),
+    control('commit', 'Candidate E', 'commit', 100, { consequence: 'commit' }),
+    control('unsafe-forward', 'Candidate F', 'continue', 100, { consequence: 'commit' }),
+    control('forward', 'Candidate G', 'continue', 60)
   ];
   assert.equal(selectWorkflowContinuation(entities)?.id, 'forward');
 });
 
-test('plain intermediate progress controls survive mistaken commit consequence classification', () => {
-  const continueButton = control('continue', 'Continue', 'continue', 100, { consequence: 'commit', required: true });
-  const submitButton = control('submit', 'Submit Return', 'continue', 100, { consequence: 'commit', required: true });
-
-  assert.equal(selectWorkflowContinuation([continueButton, submitButton])?.id, 'continue');
-  assert.equal(selectWorkflowContinuation([submitButton]), null);
+test('labels do not override navigation semantics', () => {
+  const misleading = control('misleading', 'Arbitrary label', 'continue', 100, { consequence: 'commit' });
+  assert.equal(selectWorkflowContinuation([misleading]), null);
 });
 
 test('missing navigation priority does not outrank explicit semantic ranking', () => {
-  const oldSemantic = control('old', 'Old Continue', 'continue', undefined, { required: true });
-  delete oldSemantic.semantic.navigationPriority;
-  const ranked = control('ranked', 'Ranked Continue', 'continue', 70);
-  assert.equal(selectWorkflowContinuation([oldSemantic, ranked])?.id, 'ranked');
+  const unranked = control('old', 'Candidate A', 'continue', undefined, { required: true });
+  delete unranked.semantic.navigationPriority;
+  const ranked = control('ranked', 'Candidate B', 'continue', 70);
+  assert.equal(selectWorkflowContinuation([unranked, ranked])?.id, 'ranked');
 });
