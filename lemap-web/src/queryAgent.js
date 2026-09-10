@@ -15,6 +15,7 @@ import { entitiesNeedingSemantics, resolveEntitySemantics } from './semantic/ent
 import { setModelCallLogger } from './semantic/modelCall.js';
 import { applyEntityValue, executeEntityAction } from './agent/entityBrowserActions.js';
 import { waitForStructuralCaptureChange } from './agent/captureSettlement.js';
+import { resolveNavigationTopology } from './agent/navigationTopology.js';
 import {
   buildEntityQuestion,
   ignoredSourceEntityIds,
@@ -77,6 +78,16 @@ function applyKnownSemantics(currentEntities, entityGraph) {
   return currentEntities;
 }
 
+function applyEphemeralSemanticPatches(currentEntities, patches = []) {
+  const byId = new Map(arr(currentEntities).map((entity) => [entity.id, entity]));
+  for (const patch of arr(patches)) {
+    const current = byId.get(patch.id);
+    if (!current) continue;
+    current.semantic = { ...current.semantic, ...structuredClone(patch.semantic || {}) };
+  }
+  return currentEntities;
+}
+
 function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   if (!findEntity(entityGraph, workflowId)) {
     upsertEntity(entityGraph, {
@@ -96,12 +107,26 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
 
 async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, recentPageTrail = [], force = false }) {
   applyKnownSemantics(currentEntities, entityGraph);
+
+  const topology = resolveNavigationTopology({
+    entityGraph,
+    currentEntities,
+    currentPageId: pageId,
+    recentPageTrail
+  });
+  const topologyIds = new Set(topology.deterministicPatches.map((patch) => patch.id));
+
   const workflow = findEntity(entityGraph, workflowId);
   const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
-  const unresolved = entitiesNeedingSemantics(semanticEntities);
-  const candidates = force ? semanticEntities : unresolved;
-  if (!candidates.length) return { called: false, count: 0 };
+  const unresolved = entitiesNeedingSemantics(semanticEntities).filter((entity) => !topologyIds.has(entity.id));
+  const sourceCandidates = force ? semanticEntities : unresolved;
+  const candidates = sourceCandidates.filter((entity) => !topologyIds.has(entity.id));
+
+  if (!candidates.length) {
+    applyEphemeralSemanticPatches(currentEntities, topology.deterministicPatches);
+    return { called: false, count: 0, topologyCount: topology.deterministicPatches.length };
+  }
 
   const result = await resolveEntitySemantics({ client, model, userGoal, entities: candidates, pageId, pageContext, recentPageTrail });
   const patched = new Set();
@@ -114,12 +139,13 @@ async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, cu
     if (patched.has(entity.id)) continue;
     const fallback = entity.type === 'workflow'
       ? { relevantToGoal: true, complete: false }
-      : { interaction: 'unknown', relevantToGoal: false, required: false, workflowRole: 'unknown', consequence: 'unknown' };
+      : { interaction: 'unknown', relevantToGoal: false, required: false, workflowRole: 'unknown', navigationPriority: 0, consequence: 'unknown' };
     mergeSemanticPatch(entityGraph, entity.id, fallback);
   }
 
   applyKnownSemantics(currentEntities, entityGraph);
-  return { called: true, count: candidates.length };
+  applyEphemeralSemanticPatches(currentEntities, topology.deterministicPatches);
+  return { called: true, count: candidates.length, topologyCount: topology.deterministicPatches.length };
 }
 
 async function ensureInputOptions(page, entity, entityGraph) {
@@ -243,6 +269,7 @@ try {
       recentPageTrail,
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
+    if (semanticResult.topologyCount) console.log(`[LeMap-Web] topology resolved ${semanticResult.topologyCount} navigation entities without the model`);
     if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved entities`);
 
     const workflow = findEntity(entityGraph, workflowId);
