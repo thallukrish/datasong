@@ -12,7 +12,7 @@ function control(id, pageId, name, { href = '', controlType = 'link', transition
     name,
     type: 'ui_control',
     structural: { controlType, href, visible: true, disabled: false },
-    semantic: { interaction: 'navigation', relevantToGoal: true, workflowRole: 'continue', navigationPriority: 90, consequence: 'reversible' },
+    semantic: {},
     links: [
       { id: pageId, relationship: 'childOf' },
       ...(transitionsTo ? [{ id: transitionsTo, relationship: 'transitionsTo' }] : [])
@@ -20,11 +20,11 @@ function control(id, pageId, name, { href = '', controlType = 'link', transition
   };
 }
 
-test('known transition to an earlier workflow page is deterministically back and excluded from model ranking', () => {
+test('known transition to an earlier workflow page is deterministically back and excluded from model selection', () => {
   const p1 = page('page:one', 'One', '/one');
   const p2 = page('page:two', 'Two', '/two');
   const back = control('field:back', p2.id, 'Edit one', { transitionsTo: p1.id });
-  const forward = control('field:forward', p2.id, 'Continue', { controlType: 'button' });
+  const forward = control('field:forward', p2.id, 'Candidate', { controlType: 'button' });
   const graph = [p1, p2, back, forward];
 
   const result = resolveNavigationTopology({
@@ -38,10 +38,30 @@ test('known transition to an earlier workflow page is deterministically back and
   assert.deepEqual(result.modelCandidates.map((entity) => entity.id), [forward.id]);
 });
 
+test('known unique transition to a page outside the past trail is deterministic forward progress', () => {
+  const p1 = page('page:one', 'One', '/one');
+  const p2 = page('page:two', 'Two', '/two');
+  const p3 = page('page:three', 'Three', '/three');
+  const learnedForward = control('field:forward', p2.id, 'Arbitrary label', { controlType: 'button', transitionsTo: p3.id });
+  const unresolved = control('field:other', p2.id, 'Other candidate', { controlType: 'button' });
+
+  const result = resolveNavigationTopology({
+    entityGraph: [p1, p2, p3, learnedForward, unresolved],
+    currentEntities: [p2, learnedForward, unresolved],
+    currentPageId: p2.id,
+    recentPageTrail: [{ id: p1.id, name: p1.name }, { id: p2.id, name: p2.name }]
+  });
+
+  const patch = result.deterministicPatches.find((item) => item.id === learnedForward.id);
+  assert.equal(patch?.semantic.workflowRole, 'continue');
+  assert.equal(patch?.semantic.navigationPriority, 100);
+  assert.deepEqual(result.modelCandidates.map((entity) => entity.id), [unresolved.id]);
+});
+
 test('href that uniquely resolves to an earlier page route is back before the link has been executed', () => {
   const p1 = page('page:status', 'Status', '/app#/status', 'https://example.test/app#/status');
   const p2 = page('page:form', 'Form', '/app#/form', 'https://example.test/app#/form');
-  const status = control('field:status', p2.id, 'Select Status', { href: '#/status' });
+  const status = control('field:status', p2.id, 'Earlier step', { href: '#/status' });
 
   const result = resolveNavigationTopology({
     entityGraph: [p1, p2, status],
@@ -55,11 +75,11 @@ test('href that uniquely resolves to an earlier page route is back before the li
   assert.deepEqual(result.modelCandidates, []);
 });
 
-test('same-route SPA states stay semantic unless a learned transition identifies the target page', () => {
+test('same-route SPA states stay unresolved unless a learned transition identifies the target page', () => {
   const route = '/app#/wizard';
   const p1 = page('page:state-one', 'Wizard State One', route, 'https://example.test/app#/wizard');
   const p2 = page('page:state-two', 'Wizard State Two', route, 'https://example.test/app#/wizard');
-  const ambiguous = control('field:ambiguous', p2.id, 'Edit earlier state', { href: '#/wizard' });
+  const ambiguous = control('field:ambiguous', p2.id, 'Earlier state', { href: '#/wizard' });
 
   const result = resolveNavigationTopology({
     entityGraph: [p1, p2, ambiguous],
@@ -75,12 +95,12 @@ test('same-route SPA states stay semantic unless a learned transition identifies
 test('same stable link target repeated on distinct pages is deterministic global navigation', () => {
   const p1 = page('page:one', 'One', '/one');
   const p2 = page('page:two', 'Two', '/two');
-  const dashboard1 = control('field:dash1', p1.id, 'Dashboard', { href: '/dashboard' });
-  const dashboard2 = control('field:dash2', p2.id, 'Dashboard', { href: '/dashboard' });
+  const global1 = control('field:g1', p1.id, 'Shared destination', { href: '/shared' });
+  const global2 = control('field:g2', p2.id, 'Shared destination', { href: '/shared' });
 
   const result = resolveNavigationTopology({
-    entityGraph: [p1, p2, dashboard1, dashboard2],
-    currentEntities: [p2, dashboard2],
+    entityGraph: [p1, p2, global1, global2],
+    currentEntities: [p2, global2],
     currentPageId: p2.id,
     recentPageTrail: [{ id: p1.id, name: p1.name }, { id: p2.id, name: p2.name }]
   });
@@ -93,16 +113,16 @@ test('same stable link target repeated on distinct pages is deterministic global
 test('repeated buttons without a stable href are not guessed to be global', () => {
   const p1 = page('page:one', 'One', '/one');
   const p2 = page('page:two', 'Two', '/two');
-  const next1 = control('field:next1', p1.id, 'Continue', { controlType: 'button' });
-  const next2 = control('field:next2', p2.id, 'Continue', { controlType: 'button' });
+  const action1 = control('field:a1', p1.id, 'Same label', { controlType: 'button' });
+  const action2 = control('field:a2', p2.id, 'Same label', { controlType: 'button' });
 
   const result = resolveNavigationTopology({
-    entityGraph: [p1, p2, next1, next2],
-    currentEntities: [p2, next2],
+    entityGraph: [p1, p2, action1, action2],
+    currentEntities: [p2, action2],
     currentPageId: p2.id,
     recentPageTrail: [{ id: p1.id, name: p1.name }, { id: p2.id, name: p2.name }]
   });
 
   assert.deepEqual(result.deterministicPatches, []);
-  assert.deepEqual(result.modelCandidates.map((entity) => entity.id), [next2.id]);
+  assert.deepEqual(result.modelCandidates.map((entity) => entity.id), [action2.id]);
 });
