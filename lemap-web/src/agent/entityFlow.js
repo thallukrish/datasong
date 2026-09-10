@@ -17,7 +17,6 @@ function semanticInput(entity = {}) {
 
 function groupedChoiceMember(entity, byId) {
   if (entity.type !== 'ui_control') return false;
-  if (!['radio', 'checkbox'].includes(entity.structural?.controlType)) return false;
   return arr(entity.links)
     .filter((link) => link.relationship === 'partOf')
     .map((link) => byId.get(link.id))
@@ -35,6 +34,7 @@ function currentValueMatches(entity = {}, value) {
     const wanted = normalizedSet(value);
     return current.size === wanted.size && [...current].every((item) => wanted.has(item));
   }
+  if (entity.type === 'group' && structural.groupType === 'choice') return false;
   if (entity.type === 'group') return normalize(structural.value) === normalize(value);
   if (structural.controlType === 'checkbox') return !!structural.checked === !!value;
   if (structural.controlType === 'radio') return structural.checked === true;
@@ -73,7 +73,7 @@ function selectionRuleFor(entity = {}) {
   if (entity.type !== 'group') return 'exactlyOne';
   if (entity.semantic?.selectionRule) return entity.semantic.selectionRule;
   if (entity.structural?.cardinality) return entity.structural.cardinality;
-  if (entity.structural?.groupType === 'radio') return 'exactlyOne';
+  if (entity.structural?.groupType === 'radio' || entity.structural?.groupType === 'choice') return 'exactlyOne';
   if (entity.structural?.groupType === 'checkbox') return 'zeroOrMore';
   return 'exactlyOne';
 }
@@ -102,7 +102,7 @@ export function buildEntityQuestion(entity = {}, entities = []) {
   const multiple = entity.type === 'group' && selectionRule !== 'exactlyOne';
   return {
     entityId: entity.id,
-    label: semantic.question || `Provide ${entity.name || 'value'}`,
+    label: semantic.question || entity.name || `Provide ${entity.name || 'value'}`,
     information: semantic.explanation || '',
     caveats: [...arr(semantic.caveats)],
     examples: [...arr(semantic.examples)],
@@ -160,7 +160,8 @@ export function ignoredSourceEntityIds(entity = {}) {
 export function selectWorkflowContinuation(entities = []) {
   return arr(entities).find((entity) => {
     const semantic = entity.semantic || {};
-    return visibleAndEnabled(entity)
+    return entity.type === 'ui_control'
+      && visibleAndEnabled(entity)
       && semantic.relevantToGoal === true
       && semantic.workflowRole === 'continue'
       && semantic.consequence === 'reversible'
