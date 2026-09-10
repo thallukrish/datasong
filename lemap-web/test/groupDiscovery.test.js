@@ -55,6 +55,19 @@ test('nested checkbox peers keep their common owning radio control', () => {
   assert.equal(checkboxGroup.ownerFieldId, 'r2');
 });
 
+test('nested subgroup falls back to owning choice label when it has no more-specific region label', () => {
+  const fields = [
+    field('r1', 'radio', 'Reason A', 'Why are you filing?', { name: 'reason', value: 'a' }),
+    field('r2', 'radio', 'Reason B with additional conditions', 'Why are you filing?', { name: 'reason', value: 'b' }),
+    field('c1', 'checkbox', 'Condition 1', 'Why are you filing?', { ownerFieldId: 'r2' }),
+    field('c2', 'checkbox', 'Condition 2', 'Why are you filing?', { ownerFieldId: 'r2' })
+  ];
+
+  const groups = discoverGroups(fields, 'entity:page');
+  const checkboxGroup = groups.find((group) => group.cardinality === 'zeroOrMore');
+  assert.equal(checkboxGroup?.label, 'Reason B with additional conditions');
+});
+
 test('yes/no answer buttons become one exactly-one choice group', () => {
   const fields = [
     field('b1', 'button', 'Yes', 'Are you a director?'),
