@@ -20,7 +20,7 @@ test('model result logging keeps decisions and token usage compact', () => {
   assert.equal(summary.result.huge, undefined);
 });
 
-test('model call logger receives and persists the exact request and response payloads', async () => {
+test('model call logger may receive exact exchange in memory but compact JSONL summary omits it', async () => {
   const events = [];
   const apiCalls = [];
   const client = {
@@ -53,16 +53,11 @@ test('model call logger receives and persists the exact request and response pay
   ]);
 
   assert.equal(events.length, 1);
-  assert.equal(events[0].systemPrompt, systemPrompt);
-  assert.equal(events[0].userPrompt, userPrompt);
-  assert.equal(events[0].raw, '{"entities":[{"id":"field:year","semantic":{"required":true}}]}');
-  assert.deepEqual(events[0].parsed, { entities: [{ id: 'field:year', semantic: { required: true } }] });
-
   const logged = compactModelResult(events[0]);
-  assert.equal(logged.exchange.systemPrompt, systemPrompt);
-  assert.equal(logged.exchange.userPrompt, userPrompt);
-  assert.equal(logged.exchange.rawResponse, events[0].raw);
-  assert.deepEqual(logged.exchange.parsedResponse, events[0].parsed);
+  assert.equal(logged.exchange, undefined);
+  assert.equal(JSON.stringify(logged).includes(systemPrompt), false);
+  assert.equal(JSON.stringify(logged).includes(userPrompt), false);
+  assert.equal(JSON.stringify(logged).includes(events[0].raw), false);
 });
 
 test('token ledger aggregates model usage by purpose and total', () => {
@@ -81,23 +76,23 @@ test('token ledger aggregates model usage by purpose and total', () => {
 
 test('user interaction logging does not persist free-text values and records local handling', () => {
   const valueAnswer = summarizeUserInteraction({
-    question: { questionId: 'field:pan', answerKind: 'value', label: 'PAN', inputType: 'text' },
-    interpretation: { value: 'ABCDE1234F', confidence: 1, reason: 'value accepted locally', local: true }
+    question: { questionId: 'field:identifier', answerKind: 'value', label: 'Identifier', inputType: 'text' },
+    interpretation: { value: 'ZXCVB1234Q', confidence: 1, reason: 'value accepted locally', local: true }
   });
   assert.equal(valueAnswer.answer, 'value provided');
   assert.equal(valueAnswer.interpretation, 'value interpreted');
   assert.equal(valueAnswer.mode, 'local');
-  assert.equal(JSON.stringify(valueAnswer).includes('ABCDE1234F'), false);
+  assert.equal(JSON.stringify(valueAnswer).includes('ZXCVB1234Q'), false);
 
   const modelAnswer = compactModelResult({
     purpose: 'user_choice',
     model: 'deepseek-chat',
     parsed: { selectedFieldIds: ['online'], confidence: 0.99, reason: 'Mapped choice.' }
   });
-  assert.equal(JSON.stringify(modelAnswer).includes('ABCDE1234F'), false);
+  assert.equal(JSON.stringify(modelAnswer).includes('ZXCVB1234Q'), false);
 
   const choiceAnswer = summarizeUserInteraction({
-    question: { questionId: 'group:mode', answerKind: 'choice', label: 'ITR Mode', options: [{ fieldId: 'online', label: 'Online' }] },
+    question: { questionId: 'group:mode', answerKind: 'choice', label: 'Mode', options: [{ fieldId: 'online', label: 'Online' }] },
     interpretation: { selectedFieldIds: ['online'], confidence: 1, reason: 'Selected Online.', local: false }
   });
   assert.equal(choiceAnswer.mode, 'model');
