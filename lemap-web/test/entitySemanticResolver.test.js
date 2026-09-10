@@ -2,10 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildEntitySemanticPrompt,
-  buildNavigationSemanticPrompt,
   entitiesNeedingSemantics,
   normalizeEntitySemanticResponse,
-  normalizeNavigationSemanticResponse,
   partitionSemanticCandidates,
   resolveEntitySemantics
 } from '../src/semantic/entitySemanticResolver.js';
@@ -41,38 +39,14 @@ test('grouped members are structural choices rather than separate semantic quest
   assert.deepEqual(entitiesNeedingSemantics([group, memberA, memberB]).map((entity) => entity.id), ['group:mode']);
 });
 
-test('required input remains unresolved until its current structural value is present', () => {
+test('semantic completeness is independent of whether the current DOM value is populated', () => {
   const knownInput = {
     ...input,
     semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which value?' }
   };
-  assert.deepEqual(entitiesNeedingSemantics([knownInput]).map((entity) => entity.id), ['field:value']);
+  assert.deepEqual(entitiesNeedingSemantics([knownInput]), []);
   const answered = { ...knownInput, structural: { ...knownInput.structural, value: 'A' } };
-  assert.deepEqual(entitiesNeedingSemantics([answered]).map((entity) => entity.id), []);
-});
-
-test('navigation prompt is only a candidate-selection request', () => {
-  const prompt = buildNavigationSemanticPrompt({
-    userGoal: 'Complete setup',
-    pageContext: page,
-    recentPageTrail: [{ id: 'page:0', name: 'Earlier page' }, { id: page.id, name: page.name }],
-    entities: [action, { ...action, id: 'button:b', name: 'Alternate action' }]
-  });
-  assert.match(prompt, /web-navigation-choice-v1/);
-  assert.match(prompt, /selectedEntityId/);
-  assert.match(prompt, /Earlier page/);
-  assert.match(prompt, /Primary action/);
-  assert.doesNotMatch(prompt, /workflowRole|navigationPriority|consequence|financial|destructive|security/i);
-});
-
-test('navigation compatibility normalization turns only the selected id into a continuation patch', () => {
-  const result = normalizeNavigationSemanticResponse({ selectedEntityId: action.id }, [action]);
-  assert.equal(result.entities.length, 1);
-  assert.equal(result.entities[0].id, action.id);
-  assert.equal(result.entities[0].semantic.workflowRole, 'continue');
-  assert.equal(result.entities[0].semantic.consequence, 'reversible');
-
-  assert.deepEqual(normalizeNavigationSemanticResponse({ selectedEntityId: 'made-up' }, [action]), { entities: [] });
+  assert.deepEqual(entitiesNeedingSemantics([answered]), []);
 });
 
 test('general semantic normalization accepts input and workflow meaning without navigation classification', () => {
@@ -86,7 +60,7 @@ test('general semantic normalization accepts input and workflow meaning without 
   assert.equal(result.entities.find((item) => item.id === input.id).semantic.question, 'Which value?');
 });
 
-test('resolver does not ask navigation model while a required input is still unanswered', async () => {
+test('entity semantic resolver never performs navigation selection', async () => {
   const prompts = [];
   const client = { chat: { completions: { create: async ({ messages }) => {
     const promptText = messages[1].content;
@@ -102,27 +76,6 @@ test('resolver does not ask navigation model while a required input is still una
   const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities: [input, action], pageId: page.id, pageContext: page });
   assert.equal(prompts.length, 1);
   assert.match(prompts[0], /web-entity-semantics-v1/);
+  assert.equal(prompts.some((item) => /web-navigation-choice-v1/.test(item)), false);
   assert.equal(result.entities.some((item) => item.id === action.id), false);
-});
-
-test('resolver asks navigation model to select one action after required inputs are satisfied', async () => {
-  const prompts = [];
-  const answeredInput = {
-    ...input,
-    structural: { ...input.structural, value: 'A' },
-    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Which value?' }
-  };
-  const secondAction = { ...action, id: 'button:b', name: 'Alternate action' };
-  const client = { chat: { completions: { create: async ({ messages }) => {
-    const promptText = messages[1].content;
-    prompts.push(promptText);
-    if (/web-navigation-choice-v1/.test(promptText)) {
-      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ selectedEntityId: secondAction.id }) } }], usage: { total_tokens: 10 } };
-    }
-    return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ entities: [] }) } }], usage: { total_tokens: 10 } };
-  } } } };
-
-  const result = await resolveEntitySemantics({ client, model: 'test-model', userGoal: 'Complete setup', entities: [answeredInput, action, secondAction], pageId: page.id, pageContext: page, recentPageTrail: [{ id: page.id, name: page.name }] });
-  assert.ok(prompts.some((item) => /web-navigation-choice-v1/.test(item)));
-  assert.equal(result.entities.find((item) => item.id === secondAction.id)?.semantic.workflowRole, 'continue');
 });
