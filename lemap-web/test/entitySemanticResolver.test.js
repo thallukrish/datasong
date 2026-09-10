@@ -130,6 +130,26 @@ test('semantic response accepts workflow completion as a normal semantic patch',
   assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.consequence, 'reversible');
 });
 
+test('navigation semantics preserve page-relative role and clamp priority', () => {
+  const result = normalizeEntitySemanticResponse({
+    entities: [
+      { id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'branch', navigationPriority: 117, consequence: 'reversible', relevantToGoal: true } },
+      { id: 'field:year', semantic: { interaction: 'navigation', workflowRole: 'exit', navigationPriority: -8, consequence: 'reversible', relevantToGoal: false } }
+    ]
+  }, entities);
+  assert.equal(result.entities[0].semantic.workflowRole, 'branch');
+  assert.equal(result.entities[0].semantic.navigationPriority, 100);
+  assert.equal(result.entities[1].semantic.workflowRole, 'exit');
+  assert.equal(result.entities[1].semantic.navigationPriority, 0);
+});
+
+test('semantic prompt asks model to rank page navigation relative to active workflow', () => {
+  const prompt = buildEntitySemanticPrompt({ userGoal: 'Complete setup', entities: pageEntities, pageId: 'page:1', knownWorkflow: workflow });
+  assert.match(prompt, /navigationPriority/i);
+  assert.match(prompt, /continue\|back\|branch\|global\|exit/i);
+  assert.match(prompt, /current page/i);
+});
+
 test('semantic resolver injects known workflow into the same model entity set', async () => {
   let sentPrompt = '';
   const client = { chat: { completions: { create: async ({ messages }) => {
@@ -137,7 +157,7 @@ test('semantic resolver injects known workflow into the same model entity set', 
     return {
       choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ entities: [
         { id: 'workflow:1', semantic: { description: 'Move through setup.', complete: false, relevantToGoal: true } },
-        { id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'continue', consequence: 'reversible', relevantToGoal: true } }
+        { id: 'button:continue', semantic: { interaction: 'navigation', workflowRole: 'continue', navigationPriority: 95, consequence: 'reversible', relevantToGoal: true } }
       ] }) } }],
       usage: { total_tokens: 10 }
     };
@@ -147,4 +167,5 @@ test('semantic resolver injects known workflow into the same model entity set', 
   assert.match(sentPrompt, /workflow:1/);
   assert.equal(result.entities.find((item) => item.id === 'workflow:1').semantic.complete, false);
   assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.consequence, 'reversible');
+  assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.navigationPriority, 95);
 });
