@@ -62,7 +62,7 @@ test('learning answers are normalized beside semantics and only for known entiti
   assert.equal(result.entities.some((item) => item.id === 'field:invented'), false);
 });
 
-test('a learning answer makes its entity a fillable relevant input even if model semantic fields are incomplete', () => {
+test('learning answer does not override semantic classification used by the shared traversal', () => {
   const result = normalizeEntitySemanticResponse({
     entities: [
       {
@@ -75,7 +75,7 @@ test('a learning answer makes its entity a fillable relevant input even if model
 
   const item = result.entities[0];
   assert.equal(item.learningAnswer, '1');
-  assert.equal(item.semantic.interaction, 'user_input');
-  assert.equal(item.semantic.relevantToGoal, true);
-  assert.equal(item.semantic.required, true);
+  assert.equal(item.semantic.interaction, 'unknown');
+  assert.equal(item.semantic.relevantToGoal, false);
+  assert.equal(item.semantic.required, false);
 });
