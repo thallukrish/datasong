@@ -97,14 +97,24 @@ export async function snapshotPage(page) {
       const parts = [];
       for (const child of Array.from(el.children || [])) {
         const childIsControl = child.matches?.(controlSelector);
-        const containsControl = childIsControl || !!child.querySelector?.(controlSelector);
-        if (containsControl) break;
-        const value = clean(child.innerText || child.textContent);
+        const nestedControls = childIsControl ? [child] : Array.from(child.querySelectorAll?.(controlSelector) || []).filter(visible);
+        if (childIsControl || nestedControls.length >= 2) break;
+        const value = nestedControls.length ? textWithoutControls(child) : clean(child.innerText || child.textContent);
         if (value) parts.push(value);
         if (parts.join(' ').length > 600) break;
       }
       const value = clean(parts.join(' '));
       return value.length <= 600 ? value : value.slice(0, 600);
+    };
+    const localContextFor = (el) => {
+      let ancestor = el.parentElement;
+      for (let depth = 0; ancestor && depth < 6 && ancestor !== document.body; depth += 1, ancestor = ancestor.parentElement) {
+        const controls = Array.from(ancestor.querySelectorAll?.(controlSelector) || []).filter(visible);
+        if (controls.length < 2 || controls.length > 8 || !controls.includes(el)) continue;
+        const context = leadingContextText(ancestor) || textWithoutControls(ancestor);
+        if (context && context.length >= 3) return context.length <= 600 ? context : context.slice(0, 600);
+      }
+      return '';
     };
     const regionLabel = (el) => {
       const aria = el.getAttribute?.('aria-label');
@@ -154,6 +164,7 @@ export async function snapshotPage(page) {
         name: clean(el.getAttribute?.('name') || ''),
         href: clean(el.getAttribute?.('href') || ''),
         siteChrome: !!el.closest?.('header,nav,[role="navigation"]'),
+        localContext: localContextFor(el),
         value: 'value' in el ? el.value : el.getAttribute?.('data-value') ?? el.getAttribute?.('aria-valuenow') ?? null,
         defaultValue: defaultValueFor(el),
         checked,
