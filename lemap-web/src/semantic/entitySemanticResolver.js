@@ -6,6 +6,7 @@ function text(value, max = 600) {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 function bool(value, fallback = false) { return value === undefined ? fallback : !!value; }
+function optionalBool(value) { return value === undefined ? undefined : !!value; }
 function priority(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return undefined;
@@ -24,8 +25,8 @@ LeMap-Web already owns the structural entity graph. You receive only unresolved 
 The pageContext object, when present, is reference-only context. Do not return a semantic patch for pageContext unless that same page entity is explicitly included in entities.
 For each supplied entity, return only its id and useful semantic additions. Never repeat structural facts, links, browser mechanics or user values. Never invent entity ids.
 A group entity represents one user-facing choice independent of how its member controls are rendered. Member controls inside a supplied group are structural implementation details and are not separate semantic questions.
-For groups, structural cardinality describes what the UI permits. Add selectionRule only when useful to express business meaning: exactlyOne, anyOf, allOf, or atLeastOne.
-For user-input entities, add only fields that help understand or ask for the value: meaning, semanticType, scope, interaction=user_input, relevantToGoal, required, question, explanation only when needed, caveats only when needed, examples only when useful, selectionRule when applicable.
+For every relevant group, you MUST return interaction=user_input, relevantToGoal, required, and a concise question. For groups, structural cardinality describes what the UI permits. Add selectionRule only when useful to express business meaning: exactlyOne, anyOf, allOf, or atLeastOne.
+For relevant user-input entities, return interaction=user_input, relevantToGoal, required, and a concise question; add meaning, semanticType, scope, explanation only when needed, caveats only when needed, examples only when useful, and selectionRule when applicable.
 For page/workflow/information entities, add only minimal useful meaning/description/relevance. complete is primarily for workflow entities.
 Omit irrelevant entities entirely. Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
 
@@ -125,6 +126,15 @@ export function entitiesNeedingSemantics(entities = []) {
     const semantic = entity?.semantic || {};
     if (!Object.keys(semantic).length) return true;
     if (entity?.type === 'workflow' && semantic.complete === undefined) return true;
+    if (entity?.type === 'group' && semantic.relevantToGoal !== false) {
+      if (semantic.interaction !== 'user_input') return true;
+      if (semantic.required === undefined) return true;
+      if (semantic.required === true && !semantic.question) return true;
+    }
+    if (entity?.type === 'ui_control' && semantic.interaction === 'user_input' && semantic.relevantToGoal === true) {
+      if (semantic.required === undefined) return true;
+      if (semantic.required === true && !semantic.question) return true;
+    }
     if (['action', 'navigation'].includes(semantic.interaction) && (!semantic.consequence || semantic.navigationPriority === undefined || !semantic.workflowRole)) return true;
     return false;
   });
@@ -138,7 +148,7 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
     ...(compactPageContext(pageContext) ? { pageContext: compactPageContext(pageContext) } : {}),
     entities: modelEntities.map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. A group is one semantic interaction; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, links, browser mechanics or user values.`;
+  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. A relevant group is one user_input interaction and must include required plus a concise question; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, links, browser mechanics or user values.`;
 }
 
 export function buildNavigationSemanticPrompt({ userGoal = '', entities = [], pageContext = null } = {}) {
@@ -158,7 +168,7 @@ function normalizeSemantic(raw = {}) {
     scope: SCOPES.has(raw.scope) ? raw.scope : undefined,
     interaction,
     relevantToGoal: bool(raw.relevantToGoal, false),
-    required: bool(raw.required, false),
+    required: optionalBool(raw.required),
     question: text(raw.question, 360),
     explanation: text(raw.explanation, 700),
     caveats: arr(raw.caveats).slice(0, 8).map((item) => text(item, 260)).filter(Boolean),
