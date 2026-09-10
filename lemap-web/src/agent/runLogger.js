@@ -12,7 +12,7 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-export function compactModelResult({ purpose = '', model = '', durationMs = 0, usage = null, finishReason = '', systemPrompt = '', userPrompt = '', raw = '', parsed = {} } = {}) {
+export function compactModelResult({ purpose = '', model = '', durationMs = 0, usage = null, finishReason = '', parsed = {} } = {}) {
   const normalizedPurpose = clean(purpose, 80);
   const tokens = {
     prompt: numberOrNull(usage?.prompt_tokens),
@@ -22,7 +22,7 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
   };
   const result = {};
   const legacyAnswerInterpreter = normalizedPurpose.includes('user_answer');
-  for (const key of ['semanticName', 'decision', 'confidence', 'reason', 'localCompletion']) {
+  for (const key of ['semanticName', 'decision', 'confidence', 'reason', 'localCompletion', 'selectedEntityId']) {
     if (parsed?.[key] === undefined || parsed?.[key] === null || parsed?.[key] === '') continue;
     if (legacyAnswerInterpreter && key === 'reason') {
       result.reason = 'answer interpreted';
@@ -48,13 +48,7 @@ export function compactModelResult({ purpose = '', model = '', durationMs = 0, u
     durationMs: Math.max(0, Math.round(Number(durationMs) || 0)),
     tokens,
     finishReason: clean(finishReason, 80),
-    result,
-    exchange: {
-      systemPrompt: String(systemPrompt || ''),
-      userPrompt: String(userPrompt || ''),
-      rawResponse: String(raw || ''),
-      parsedResponse: parsed && typeof parsed === 'object' ? structuredClone(parsed) : parsed
-    }
+    result
   };
 }
 
