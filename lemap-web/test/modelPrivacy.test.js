@@ -43,6 +43,31 @@ test('entity semantic prompts redact live values wherever they appear in visible
   assert.match(prompt, /\[redacted\]/i);
 });
 
+test('choice option values remain local and are not included in semantic model prompts', () => {
+  const group = {
+    id: 'group:account',
+    name: 'Choose an account',
+    type: 'group',
+    structural: {
+      cardinality: 'exactlyOne',
+      values: ['Personal Account 1234567890', 'Personal Account 9876543210'],
+      value: null,
+      defaultValue: null
+    },
+    semantic: {},
+    links: []
+  };
+  const prompt = buildEntitySemanticPrompt({
+    userGoal: 'Complete the workflow',
+    entities: [group],
+    pageId: 'page:1'
+  });
+
+  assert.equal(prompt.includes('1234567890'), false);
+  assert.equal(prompt.includes('9876543210'), false);
+  assert.match(prompt, /"cardinality":"exactlyOne"/);
+});
+
 test('navigation prompts redact live values from page, trail and candidate labels', () => {
   const privacyEntities = [field('field:name', 'Name', personalName), field('field:id', 'Identifier', personalValue)];
   const prompt = buildNavigationChoicePrompt({
