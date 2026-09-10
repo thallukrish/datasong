@@ -13,6 +13,15 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function sanitizeValue(value) {
+  if (typeof value === 'string') return redactRegisteredModelText(value);
+  if (Array.isArray(value)) return value.map(sanitizeValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeValue(item)]));
+  }
+  return value;
+}
+
 export function compactModelResult({ purpose = '', model = '', durationMs = 0, usage = null, finishReason = '', parsed = {} } = {}) {
   const normalizedPurpose = clean(purpose, 80);
   const tokens = {
@@ -97,7 +106,7 @@ function sanitizeEventData(type, data = {}) {
       workflowId: clean(data.workflowId, 160)
     };
   }
-  return data;
+  return sanitizeValue(data);
 }
 
 export async function createRunLogger({ baseDir = path.join('data', 'query-runs'), goal = '' } = {}) {
