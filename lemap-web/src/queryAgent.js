@@ -112,14 +112,26 @@ function ensureWorkflowEntity(entityGraph, workflowId, goal, pageId) {
   return findEntity(entityGraph, workflowId);
 }
 
-async function enrichCurrentSemantics({ client, model, userGoal, entityGraph, currentEntities, pageId, workflowId, instances = [], force = false, learningMode = false }) {
+async function enrichCurrentSemantics({
+  client,
+  model,
+  userGoal,
+  entityGraph,
+  currentEntities,
+  pageId,
+  workflowId,
+  instances = [],
+  proposedEntityIds = new Set(),
+  force = false,
+  learningMode = false
+}) {
   applyKnownSemantics(currentEntities, entityGraph);
 
   const workflow = findEntity(entityGraph, workflowId);
   const pageContext = findEntity(entityGraph, pageId);
   const semanticEntities = [workflow, ...currentEntities].filter(Boolean);
   const unresolved = entitiesNeedingSemantics(semanticEntities).filter((entity) => !actionableControl(entity));
-  const learnInputs = learningMode ? learningCandidates(semanticEntities, instances) : [];
+  const learnInputs = learningMode ? learningCandidates(semanticEntities, instances, proposedEntityIds) : [];
   const sourceCandidates = force
     ? semanticEntities.filter((entity) => !actionableControl(entity))
     : uniqueById([...unresolved, ...learnInputs]).filter((entity) => !actionableControl(entity));
@@ -248,6 +260,7 @@ try {
   const appliedInstanceEntityIds = new Set();
   const executedContinuationKeys = new Set();
   const recentPageTrail = [];
+  const learningProposalCache = new Map();
 
   browser = await chromium.connectOverCDP(endpoint);
   const pages = browser.contexts().flatMap((context) => context.pages());
@@ -288,9 +301,17 @@ try {
       pageId: capture.pageId,
       workflowId,
       instances,
+      proposedEntityIds: new Set(learningProposalCache.keys()),
       learningMode: learning.enabled,
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
+    if (learning.enabled) {
+      for (const item of arr(semanticResult.result?.entities)) {
+        if (item?.learningAnswer !== undefined && item?.learningAnswer !== null && item?.learningAnswer !== '') {
+          learningProposalCache.set(item.id, String(item.learningAnswer));
+        }
+      }
+    }
     if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved/learning entities`);
 
     const workflow = findEntity(entityGraph, workflowId);
@@ -335,7 +356,9 @@ try {
 
       let value = null;
       let valueSource = 'user';
-      const proposed = learning.enabled ? proposalForEntity(semanticResult.result, input.id) : null;
+      const proposed = learning.enabled
+        ? learningProposalCache.get(input.id) ?? proposalForEntity(semanticResult.result, input.id)
+        : null;
       if (proposed !== null) {
         const proposedValue = resolveEntityAnswer(question, proposed);
         if (proposedValue !== null) {
@@ -391,6 +414,7 @@ try {
         value,
         learning.enabled ? { mode: 'learning', source: valueSource } : {}
       );
+      learningProposalCache.delete(input.id);
       await runLogger.write('instance_write', {
         entityId: input.id,
         value: 'provisional',
