@@ -70,7 +70,8 @@ export async function enumerateEntityValueDomain(page, entityOrField = {}) {
   try {
     await locator.click({ timeout: 750 });
   } catch {
-    await locator.evaluate((element) => element.click());
+    const alreadyOpened = (await visibleOptionLabels(page).catch(() => [])).length > 0;
+    if (!alreadyOpened) await locator.evaluate((element) => element.click());
   }
 
   await page.waitForTimeout(50);
