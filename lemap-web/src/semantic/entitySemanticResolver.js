@@ -1,4 +1,5 @@
 import { callJsonModel } from './modelCall.js';
+import { redactModelText } from './modelPrivacy.js';
 import {
   buildNavigationChoicePrompt,
   chooseNavigationCandidate,
@@ -6,8 +7,8 @@ import {
 } from '../agent/navigationDecision.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
-function text(value, max = 600) {
-  const s = String(value ?? '').trim().replace(/\s+/g, ' ');
+function text(value, max = 600, privacyEntities = []) {
+  const s = redactModelText(value, privacyEntities).trim().replace(/\s+/g, ' ');
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 function bool(value, fallback = false) { return value === undefined ? fallback : !!value; }
@@ -28,14 +29,14 @@ For relevant user-input entities, return interaction=user_input, relevantToGoal,
 For page/workflow/information entities, add only minimal useful meaning/description/relevance. complete is primarily for workflow entities.
 Omit irrelevant entities entirely. Return strict JSON only as {entities:[{id,semantic:{...}}]}.`;
 
-function compactEntity(entity = {}) {
+function compactEntity(entity = {}, privacyEntities = []) {
   const structural = entity.structural || {};
   const hint = entity.type === 'workflow'
-    ? { goal: structural.goal || undefined }
+    ? { goal: structural.goal ? text(structural.goal, 300, privacyEntities) : undefined }
     : entity.type === 'group'
       ? {
           cardinality: structural.cardinality || undefined,
-          choices: arr(structural.values).slice(0, 8).map((value) => text(value, 100)).filter(Boolean)
+          choices: arr(structural.values).slice(0, 8).map((value) => text(value, 100, privacyEntities)).filter(Boolean)
         }
       : entity.type === 'ui_control'
         ? { controlType: structural.controlType || undefined }
@@ -47,20 +48,20 @@ function compactEntity(entity = {}) {
   }));
   return {
     id: String(entity.id || ''),
-    name: text(entity.name, 360),
+    name: text(entity.name, 360, privacyEntities),
     type: String(entity.type || 'unknown'),
     ...(Object.keys(structuralHint).length ? { structural: structuralHint } : {})
   };
 }
 
-function compactPageContext(page = null) {
+function compactPageContext(page = null, privacyEntities = []) {
   if (!page?.id) return undefined;
   return {
     id: String(page.id),
-    name: text(page.name, 360),
+    name: text(page.name, 360, privacyEntities),
     type: String(page.type || 'page'),
-    ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 360) } : {}),
-    ...(page.semantic?.description ? { description: text(page.semantic.description, 500) } : {})
+    ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 360, privacyEntities) } : {}),
+    ...(page.semantic?.description ? { description: text(page.semantic.description, 500, privacyEntities) } : {})
   };
 }
 
@@ -125,13 +126,15 @@ export function semanticCandidatesForCurrentState(entities = []) {
   return entitiesNeedingSemantics(entities);
 }
 
-export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
+export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null, privacyEntities = [] } = {}) {
   const modelEntities = withWorkflow(entities, knownWorkflow);
+  const privacy = arr(privacyEntities).length ? privacyEntities : [...modelEntities, pageContext].filter(Boolean);
+  const compactPage = compactPageContext(pageContext, privacy);
   const payload = {
-    goal: text(userGoal, 300),
+    goal: text(userGoal, 300, privacy),
     pageId: String(pageId || ''),
-    ...(compactPageContext(pageContext) ? { pageContext: compactPageContext(pageContext) } : {}),
-    entities: modelEntities.map(compactEntity)
+    ...(compactPage ? { pageContext: compactPage } : {}),
+    entities: modelEntities.map((entity) => compactEntity(entity, privacy))
   };
   return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. A relevant group is one user_input interaction and must include required plus a concise question; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, links, browser mechanics or user values.`;
 }
@@ -141,25 +144,26 @@ export function buildNavigationSemanticPrompt(args = {}) {
     userGoal: args.userGoal,
     candidates: args.entities,
     pageContext: args.pageContext,
-    recentPageTrail: args.recentPageTrail
+    recentPageTrail: args.recentPageTrail,
+    privacyEntities: args.privacyEntities
   });
 }
 
 function normalizeSemantic(raw = {}) {
   const interaction = INTERACTIONS.has(raw.interaction) ? raw.interaction : 'unknown';
   const semantic = {
-    meaning: text(raw.meaning, 240),
-    semanticType: text(raw.semanticType, 160),
+    meaning: String(raw.meaning ?? '').trim().replace(/\s+/g, ' ').slice(0, 240),
+    semanticType: String(raw.semanticType ?? '').trim().replace(/\s+/g, ' ').slice(0, 160),
     scope: SCOPES.has(raw.scope) ? raw.scope : undefined,
     interaction,
     relevantToGoal: bool(raw.relevantToGoal, false),
     required: optionalBool(raw.required),
-    question: text(raw.question, 360),
-    explanation: text(raw.explanation, 700),
-    caveats: arr(raw.caveats).slice(0, 8).map((item) => text(item, 260)).filter(Boolean),
-    examples: arr(raw.examples).slice(0, 8).map((item) => text(item, 180)).filter(Boolean),
+    question: String(raw.question ?? '').trim().replace(/\s+/g, ' ').slice(0, 360),
+    explanation: String(raw.explanation ?? '').trim().replace(/\s+/g, ' ').slice(0, 700),
+    caveats: arr(raw.caveats).slice(0, 8).map((item) => String(item ?? '').trim().replace(/\s+/g, ' ').slice(0, 260)).filter(Boolean),
+    examples: arr(raw.examples).slice(0, 8).map((item) => String(item ?? '').trim().replace(/\s+/g, ' ').slice(0, 180)).filter(Boolean),
     selectionRule: SELECTION_RULES.has(raw.selectionRule) ? raw.selectionRule : undefined,
-    description: text(raw.description, 700)
+    description: String(raw.description ?? '').trim().replace(/\s+/g, ' ').slice(0, 700)
   };
   if (raw.complete !== undefined) semantic.complete = !!raw.complete;
   return Object.fromEntries(Object.entries(semantic).filter(([, value]) => {
@@ -196,16 +200,16 @@ export function normalizeNavigationSemanticResponse(raw = {}, knownEntities = []
   };
 }
 
-async function resolveGeneralSemantics({ client, model, userGoal = '', entities = [], pageId = '', pageContext = null } = {}) {
+async function resolveGeneralSemantics({ client, model, userGoal = '', entities = [], pageId = '', pageContext = null, privacyEntities = [] } = {}) {
   if (!entities.length) return { entities: [] };
-  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities, pageId, pageContext });
+  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities, pageId, pageContext, privacyEntities });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
   return normalizeEntitySemanticResponse(response.parsed, entities);
 }
 
-export async function resolveNavigationSemantics({ client, model, userGoal = '', entities = [], pageContext = null, recentPageTrail = [] } = {}) {
+export async function resolveNavigationSemantics({ client, model, userGoal = '', entities = [], pageContext = null, recentPageTrail = [], privacyEntities = [] } = {}) {
   const actions = arr(entities).filter(executableActionableControl);
-  const selected = await chooseNavigationCandidate({ client, model, userGoal, candidates: actions, pageContext, recentPageTrail });
+  const selected = await chooseNavigationCandidate({ client, model, userGoal, candidates: actions, pageContext, recentPageTrail, privacyEntities });
   if (!selected) return { entities: [] };
   return {
     entities: [{
@@ -222,9 +226,9 @@ export async function resolveNavigationSemantics({ client, model, userGoal = '',
   };
 }
 
-export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
+export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null, privacyEntities = [] } = {}) {
   const modelEntities = withWorkflow(entities, knownWorkflow);
   const split = partitionSemanticCandidates(modelEntities);
   if (!split.entity.length) return { entities: [] };
-  return resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext });
+  return resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext, privacyEntities });
 }
