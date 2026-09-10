@@ -71,8 +71,14 @@ export async function snapshotPage(page) {
     const regionLabel = (el) => {
       const aria = el.getAttribute?.('aria-label');
       if (aria) return clean(aria);
-      const heading = el.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > legend');
+      const heading = el.querySelector?.(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > [role="heading"], :scope > legend');
       if (heading) return clean(heading.innerText || heading.textContent);
+
+      const buttons = Array.from(el.querySelectorAll?.('button,[role="button"]') || []).filter(visible);
+      if (buttons.length >= 2 && buttons.length <= 8) {
+        const context = textWithoutControls(el);
+        if (context.length >= 3 && context.length <= 600) return context;
+      }
       return '';
     };
     const optionsFor = (el) => {
