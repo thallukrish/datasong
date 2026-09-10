@@ -10,6 +10,7 @@ import { applyObservedStructuralChange } from './graph/structuralChange.js';
 import { findEntity, linkEntities, mergeSemanticPatch, upsertEntity } from './graph/entityGraph.js';
 import { upsertInstanceValue } from './graph/instanceGraph.js';
 import { loadEntityGraph, loadInstanceGraph, saveEntityGraph, saveInstanceGraph } from './graph/graphStore.js';
+import { createRunTransaction, shouldPromoteRun } from './graph/runTransaction.js';
 import { entitiesNeedingSemantics, resolveEntitySemantics } from './semantic/entitySemanticResolver.js';
 import { setModelCallLogger } from './semantic/modelCall.js';
 import { applyEntityValue, executeEntityAction } from './agent/entityBrowserActions.js';
@@ -151,6 +152,9 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 let browser;
 let runLogger = null;
 let tokenSummaryWritten = false;
+let stopReason = 'max_steps';
+let entityGraph = [];
+let instances = [];
 
 try {
   let userGoal = process.argv.slice(2).join(' ').trim();
@@ -172,12 +176,15 @@ try {
     await runLogger.recordModel(summary);
   });
 
-  const entityGraph = await loadEntityGraph(entityFile);
-  const instances = await loadInstanceGraph(instanceFile);
+  const canonicalEntityGraph = await loadEntityGraph(entityFile);
+  const canonicalInstances = await loadInstanceGraph(instanceFile);
+  const transaction = createRunTransaction(canonicalEntityGraph, canonicalInstances);
+  entityGraph = transaction.entityGraph;
+  instances = transaction.instanceGraph;
+
   const workflowId = workflowIdForGoal(userGoal);
   const appliedInstanceEntityIds = new Set();
-  const pageVisitOrder = new Map();
-  let nextPageOrder = 0;
+  const executedContinuationKeys = new Set();
 
   browser = await chromium.connectOverCDP(endpoint);
   const pages = browser.contexts().flatMap((context) => context.pages());
@@ -189,16 +196,15 @@ try {
   if (loadedEnvFiles.length) console.log(`[LeMap-Web] env: ${loadedEnvFiles.join(', ')}`);
   console.log(`[LeMap-Web] entity graph: ${entityFile}`);
   console.log(`[LeMap-Web] instance graph: ${instanceFile}`);
+  console.log('[LeMap-Web] learning state: provisional until a clean terminal state');
   console.log(`[LeMap-Web] run log: ${runLogger.file}`);
   await runLogger.write('attached', { title: await page.title(), route: page.url(), model, workflowId });
 
   let capture = await captureEntities(page);
   addMissingStructuralEntities(entityGraph, capture.entities);
   ensureWorkflowEntity(entityGraph, workflowId, userGoal, capture.pageId);
-  await saveEntityGraph(entityFile, entityGraph);
 
   for (let step = 1; step <= maxSteps; step += 1) {
-    if (!pageVisitOrder.has(capture.pageId)) pageVisitOrder.set(capture.pageId, nextPageOrder++);
     console.log(`\n[LeMap-Web] --- step ${step} ---`);
     applyKnownSemantics(capture.entities, entityGraph);
     console.log(`[LeMap-Web] page entity: ${findEntity(entityGraph, capture.pageId)?.name || capture.pageId}`);
@@ -214,13 +220,13 @@ try {
       workflowId,
       force: process.env.LEMAP_REFRESH_KNOWN === '1'
     });
-    await saveEntityGraph(entityFile, entityGraph);
     if (semanticResult.called) console.log(`[LeMap-Web] semantic additions merged for ${semanticResult.count} unresolved entities`);
 
     const workflow = findEntity(entityGraph, workflowId);
     if (workflow?.semantic?.complete) {
+      stopReason = 'workflow_complete';
       console.log('[LeMap-Web] workflow complete according to semantic entity state.');
-      await runLogger.write('stop', { reason: 'workflow_complete' });
+      await runLogger.write('stop', { reason: stopReason });
       break;
     }
 
@@ -246,7 +252,6 @@ try {
         });
       }
       addMissingStructuralEntities(entityGraph, after.entities);
-      await saveEntityGraph(entityFile, entityGraph);
       capture = after;
       continue;
     }
@@ -254,7 +259,6 @@ try {
     const input = selectNextUserInput(capture.entities, instances);
     if (input) {
       await ensureInputOptions(page, input, entityGraph);
-      await saveEntityGraph(entityFile, entityGraph);
       const question = buildEntityQuestion(input, capture.entities);
       printQuestion(question);
       let value = null;
@@ -265,8 +269,7 @@ try {
       }
 
       upsertInstanceValue(instances, input.id, value);
-      await saveInstanceGraph(instanceFile, instances);
-      await runLogger.write('instance_write', { entityId: input.id, value: 'stored' });
+      await runLogger.write('instance_write', { entityId: input.id, value: 'provisional' });
 
       const before = capture;
       await applyEntityValue(page, capture.entities, input, value);
@@ -290,25 +293,27 @@ try {
         }
       }
       addMissingStructuralEntities(entityGraph, after.entities);
-      await saveEntityGraph(entityFile, entityGraph);
       capture = after;
       continue;
     }
 
-    const continuation = selectWorkflowContinuation(capture.entities, {
-      entityGraph,
-      currentPageId: capture.pageId,
-      pageVisitOrder
-    });
+    const blockedEntityIds = new Set(
+      capture.entities
+        .filter((entity) => executedContinuationKeys.has(`${capture.pageId}|${entity.id}`))
+        .map((entity) => entity.id)
+    );
+    const continuation = selectWorkflowContinuation(capture.entities, { blockedEntityIds });
     if (!continuation) {
       const blockedCommit = capture.entities.find((entity) => entity.semantic?.workflowRole === 'commit' && entity.structural?.visible !== false);
+      stopReason = blockedCommit ? 'consequential_action' : 'no_executable_entity';
       if (blockedCommit) console.log(`[LeMap-Web] reached consequential action "${blockedCommit.name}"; not executing automatically.`);
       else console.log('[LeMap-Web] no goal-relevant executable user input or reversible workflow continuation is currently known.');
-      await runLogger.write('stop', { reason: blockedCommit ? 'consequential_action' : 'no_executable_entity', entityId: blockedCommit?.id || '' });
+      await runLogger.write('stop', { reason: stopReason, entityId: blockedCommit?.id || '' });
       break;
     }
 
-    console.log(`[LeMap-Web] continuing via: ${continuation.name}`);
+    executedContinuationKeys.add(`${capture.pageId}|${continuation.id}`);
+    console.log(`[LeMap-Web] continuing via: ${continuation.name}${Number.isFinite(Number(continuation.semantic?.navigationPriority)) ? ` [priority ${continuation.semantic.navigationPriority}]` : ''}`);
     const before = capture;
     await executeEntityAction(page, continuation);
     if (settleMs) await page.waitForTimeout(settleMs);
@@ -327,26 +332,38 @@ try {
         ignoredEntityIds: [continuation.id]
       });
       if (!change.addedEntityIds.length && !change.versionEntityIds.length) {
+        stopReason = 'continuation_no_structural_change';
         console.log('[LeMap-Web] continuation produced no new structural state; stopping to avoid a loop.');
-        await runLogger.write('stop', { reason: 'continuation_no_structural_change' });
+        await runLogger.write('stop', { reason: stopReason });
         break;
       }
       await runLogger.write('structural_change', change);
     }
 
     addMissingStructuralEntities(entityGraph, after.entities);
-    await saveEntityGraph(entityFile, entityGraph);
     capture = after;
   }
+
+  const promoted = shouldPromoteRun(stopReason);
+  if (promoted) {
+    await saveEntityGraph(entityFile, entityGraph);
+    await saveInstanceGraph(instanceFile, instances);
+    console.log(`[LeMap-Web] run learning promoted to canonical graph (${stopReason}).`);
+  } else {
+    console.log(`[LeMap-Web] run learning discarded; canonical graph unchanged (${stopReason}).`);
+  }
+  await runLogger.write('run_state', { state: promoted ? 'promoted' : 'discarded', reason: stopReason });
 
   const tokenSummary = runLogger.tokenSummary();
   printTokenSummary(tokenSummary);
   await runLogger.write('token_summary', tokenSummary);
   tokenSummaryWritten = true;
-  await runLogger.write('run_end', { status: 'completed_or_stopped' });
+  await runLogger.write('run_end', { status: promoted ? 'promoted' : 'discarded', reason: stopReason });
 } catch (error) {
+  stopReason = 'error';
   console.error(`[LeMap-Web] query agent failed: ${error.stack || error.message}`);
   await runLogger?.write('error', { message: String(error.message || error).slice(0, 600), stack: String(error.stack || '').split('\n').slice(0, 5).join('\n') });
+  await runLogger?.write('run_state', { state: 'discarded', reason: stopReason });
   if (runLogger && !tokenSummaryWritten) {
     const tokenSummary = runLogger.tokenSummary();
     printTokenSummary(tokenSummary);
