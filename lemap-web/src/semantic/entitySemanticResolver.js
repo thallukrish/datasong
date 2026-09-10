@@ -19,7 +19,8 @@ const CONSEQUENCES = new Set(['reversible', 'commit', 'financial', 'destructive'
 const SELECTION_RULES = new Set(['exactlyOne', 'anyOf', 'allOf', 'atLeastOne']);
 
 const SYSTEM = `You are DataSong LeMap-Web's entity semantic interpreter.
-LeMap-Web already owns the complete structural entity graph. You receive only entities that still need semantic interpretation plus the user's goal and current page.
+LeMap-Web already owns the complete structural entity graph. You receive only entities that still need semantic interpretation plus the user's goal and current page context.
+The pageContext object, when present, is reference-only context for interpreting the supplied entities. Do not return semantic patches for pageContext unless that same page entity is also explicitly included in entities.
 For each supplied entity, return only its id and semantic additions. Never repeat structural facts, option lists, links, browser mechanics or user values. Never invent entity ids.
 A group entity represents one user-facing choice independent of how its member controls are rendered. Member controls inside a supplied group are structural implementation details and are not separate semantic questions.
 For group entities, structural cardinality describes what the UI permits. Add selectionRule only when useful to express the business meaning: exactlyOne, anyOf, allOf, or atLeastOne. Do not infer the grouping from widget type; LeMap-Web has already done that structurally.
@@ -53,6 +54,17 @@ function compactEntity(entity = {}) {
   };
 }
 
+function compactPageContext(page = null) {
+  if (!page?.id) return undefined;
+  return {
+    id: String(page.id),
+    name: text(page.name, 360),
+    type: String(page.type || 'page'),
+    ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 360) } : {}),
+    ...(page.semantic?.description ? { description: text(page.semantic.description, 500) } : {})
+  };
+}
+
 function withWorkflow(entities = [], knownWorkflow = null) {
   const all = arr(entities);
   if (!knownWorkflow?.id || all.some((entity) => entity.id === knownWorkflow.id)) return all;
@@ -80,22 +92,24 @@ export function entitiesNeedingSemantics(entities = []) {
   });
 }
 
-export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
+export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
   const modelEntities = withWorkflow(entities, knownWorkflow);
   const payload = {
     goal: text(userGoal, 300),
     pageId: String(pageId || ''),
+    ...(compactPageContext(pageContext) ? { pageContext: compactPageContext(pageContext) } : {}),
     entities: modelEntities.map(compactEntity)
   };
-  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. Interpret action/navigation controls relative to the active workflow and current page: classify workflowRole as continue|back|branch|global|exit|commit|local and assign navigationPriority 0-100. Use continue only for direct forward progress toward the user's goal. A group is one semantic interaction; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, values or relationships.`;
+  return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. Interpret action/navigation controls relative to the active workflow and current page: classify workflowRole as continue|back|branch|global|exit|commit|local and assign navigationPriority 0-100. Use continue only for direct forward progress toward the user's goal. A group is one semantic interaction; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, values or relationships.`;
 }
 
 function normalizeSemantic(raw = {}) {
+  const interaction = INTERACTIONS.has(raw.interaction) ? raw.interaction : 'unknown';
   const semantic = {
     meaning: text(raw.meaning, 240),
     semanticType: text(raw.semanticType, 160),
     scope: SCOPES.has(raw.scope) ? raw.scope : undefined,
-    interaction: INTERACTIONS.has(raw.interaction) ? raw.interaction : 'unknown',
+    interaction,
     relevantToGoal: bool(raw.relevantToGoal, false),
     required: bool(raw.required, false),
     question: text(raw.question, 360),
@@ -104,7 +118,7 @@ function normalizeSemantic(raw = {}) {
     examples: arr(raw.examples).slice(0, 8).map((item) => text(item, 180)).filter(Boolean),
     selectionRule: SELECTION_RULES.has(raw.selectionRule) ? raw.selectionRule : undefined,
     workflowRole: WORKFLOW_ROLES.has(raw.workflowRole) ? raw.workflowRole : 'unknown',
-    navigationPriority: priority(raw.navigationPriority),
+    navigationPriority: priority(raw.navigationPriority) ?? (['action', 'navigation'].includes(interaction) ? 0 : undefined),
     consequence: CONSEQUENCES.has(raw.consequence) ? raw.consequence : 'unknown',
     description: text(raw.description, 700)
   };
@@ -125,9 +139,9 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   };
 }
 
-export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null } = {}) {
+export async function resolveEntitySemantics({ client, model, userGoal = '', entities = [], pageId = '', knownWorkflow = null, pageContext = null } = {}) {
   const modelEntities = withWorkflow(entities, knownWorkflow);
-  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities: modelEntities, pageId });
+  const userPrompt = buildEntitySemanticPrompt({ userGoal, entities: modelEntities, pageId, pageContext });
   const response = await callJsonModel({ client, model, systemPrompt: SYSTEM, userPrompt });
   return normalizeEntitySemanticResponse(response.parsed, modelEntities);
 }
