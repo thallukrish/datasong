@@ -62,6 +62,7 @@ export function discoverInputs(root = {}, entityId = '') {
           tag,
           href: String(node.href || ''),
           siteChrome: !!node.siteChrome,
+          localContext: String(node.localContext || '').trim(),
           parentRegionLabel: parent?.label || '',
           parentRegionTag: parent?.tag || '',
           parentRegionRole: parent?.role || '',
