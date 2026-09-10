@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEntitySemanticPrompt, normalizeEntitySemanticResponse } from '../src/semantic/entitySemanticResolver.js';
+import {
+  buildEntitySemanticPrompt,
+  buildNavigationSemanticPrompt,
+  entitiesNeedingSemantics,
+  normalizeEntitySemanticResponse
+} from '../src/semantic/entitySemanticResolver.js';
 
 const page = {
   id: 'page:itr3',
@@ -14,7 +19,7 @@ const action = {
   id: 'button:start',
   name: "Let's Get Started",
   type: 'ui_control',
-  structural: { controlType: 'button' },
+  structural: { controlType: 'button', visible: true, disabled: false },
   semantic: {},
   links: []
 };
@@ -30,6 +35,40 @@ test('semantic prompt includes known current page as read-only context', () => {
   assert.match(prompt, /ITR 3 - Income Tax Return 3/);
   assert.match(prompt, /ITR-3 return preparation page/);
   assert.match(prompt, /reference only/i);
+});
+
+test('navigation prompt includes compact ordered workflow trail so prior-step links can be classified as back', () => {
+  const prompt = buildNavigationSemanticPrompt({
+    userGoal: 'File ITR-3',
+    pageContext: { id: 'page:returns', name: 'Income Tax Returns', type: 'page', semantic: {} },
+    recentPageTrail: [
+      { id: 'page:file', name: 'File Income Tax Return' },
+      { id: 'page:status', name: 'Please select the status applicable to you to proceed further' },
+      { id: 'page:returns', name: 'Income Tax Returns' }
+    ],
+    entities: [{
+      id: 'link:status',
+      name: 'Select Status',
+      type: 'ui_control',
+      structural: { controlType: 'link', visible: true, disabled: false },
+      semantic: {},
+      links: []
+    }]
+  });
+  assert.match(prompt, /recentPageTrail/);
+  assert.match(prompt, /page:status/);
+  assert.match(prompt, /Select Status/);
+  assert.match(prompt, /earlier workflow step/i);
+});
+
+test('disabled navigation controls wait for semantics until they become executable', () => {
+  const disabled = {
+    id: 'button:later', name: 'Continue', type: 'ui_control',
+    structural: { controlType: 'button', visible: true, disabled: true }, semantic: {}, links: []
+  };
+  const enabled = { ...disabled, structural: { ...disabled.structural, disabled: false } };
+  assert.deepEqual(entitiesNeedingSemantics([disabled]).map((entity) => entity.id), []);
+  assert.deepEqual(entitiesNeedingSemantics([enabled]).map((entity) => entity.id), ['button:later']);
 });
 
 test('action/navigation semantics default missing priority to zero instead of remaining unresolved forever', () => {
