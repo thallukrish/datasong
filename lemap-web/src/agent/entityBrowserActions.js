@@ -160,6 +160,15 @@ export async function executeEntityAction(page, entity = {}) {
     const target = new URL(structural.href, page.url());
     if (target.origin !== current.origin) throw new Error(`Refusing cross-origin navigation to ${target.origin}`);
   }
-  const locator = await locatorForEntity(page, entity);
+  let locator;
+  try {
+    locator = await locatorForEntity(page, entity);
+  } catch (error) {
+    if (/^No visible locator match for /.test(String(error?.message || ''))) {
+      return { executed: false, reason: 'locator_miss' };
+    }
+    throw error;
+  }
   await locator.click();
+  return { executed: true };
 }
