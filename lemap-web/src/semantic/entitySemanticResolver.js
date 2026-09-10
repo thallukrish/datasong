@@ -33,6 +33,7 @@ Omit irrelevant entities entirely. Return strict JSON only as {entities:[{id,sem
 const NAVIGATION_SYSTEM = `You are DataSong LeMap-Web's page navigation classifier.
 Given the active workflow goal, current page context, ordered recentPageTrail, and only the visible enabled actionable controls that still need navigation semantics, rank each control relative to this workflow.
 recentPageTrail is the ordered sequence of workflow pages already traversed in this run, ending at the current page. Use it to recognize links that return to an earlier workflow step. A control whose label refers to an earlier step should normally be workflowRole=back, not continue, unless the current page context clearly shows that it advances the workflow.
+Account/profile/avatar controls, language/theme controls, help/contact controls, generic site menus and other site chrome are not workflow continuation by default. Classify them as global or local unless the user's goal explicitly concerns that account/profile/menu function. Never rank site chrome above a page-specific workflow action such as Continue, Proceed, Next, Save, or a direct goal-specific choice.
 Return only: interaction(action|navigation), relevantToGoal, required, workflowRole(continue|back|branch|global|exit|commit|local|unknown), navigationPriority(0-100), consequence(reversible|commit|financial|destructive|security|unknown).
 Use continue only for direct forward progress toward the goal. back returns to an earlier workflow step. branch is a relevant alternate route. global is site-wide/top navigation. exit leaves or abandons the workflow. commit is final or consequential. local is a relevant action that does not navigate the workflow.
 Rank the best direct forward action highest. Breadcrumbs, prior-step links, help, skip/bypass, alternate routes, global navigation and exits must not outrank the direct forward action.
@@ -173,7 +174,7 @@ export function buildNavigationSemanticPrompt({ userGoal = '', entities = [], pa
     ...(compactPageTrail(recentPageTrail).length ? { recentPageTrail: compactPageTrail(recentPageTrail) } : {}),
     actions: arr(entities).map(compactNavigationEntity)
   };
-  return `MODE web-navigation-semantics-v1\n${JSON.stringify(payload)}\n\nTASK:\nFor each action return only {id,semantic:{interaction,relevantToGoal,required,workflowRole,navigationPriority,consequence}}. workflowRole must be continue|back|branch|global|exit|commit|local|unknown. navigationPriority is 0-100. Use continue only for direct forward progress. Use recentPageTrail to identify controls that return to an earlier workflow step.`;
+  return `MODE web-navigation-semantics-v1\n${JSON.stringify(payload)}\n\nTASK:\nFor each action return only {id,semantic:{interaction,relevantToGoal,required,workflowRole,navigationPriority,consequence}}. workflowRole must be continue|back|branch|global|exit|commit|local|unknown. navigationPriority is 0-100. Use continue only for direct forward progress. Use recentPageTrail to identify controls that return to an earlier workflow step. Account/profile/menu/site chrome is not continue unless the goal explicitly concerns it.`;
 }
 
 function normalizeSemantic(raw = {}) {
