@@ -5,8 +5,17 @@ function normalize(value) { return String(value ?? '').trim().replace(/\s+/g, ' 
 
 const ACTION_LABEL = /^(continue|proceed|cancel|back|previous|next|submit|save|close|start|start new filing|select status|confirm|ok|okay|finish|done|edit|delete|remove|add|retry)$/i;
 
+function regionContextFor(field = {}) {
+  return String(field.parentRegionLabel || '').trim();
+}
+
+function localContextFor(field = {}) {
+  return String(field.localContext || '').trim();
+}
+
 function contextFor(field = {}) {
-  return String(field.localContext || field.parentRegionLabel || '').trim();
+  if (field.type === 'button') return localContextFor(field) || regionContextFor(field);
+  return regionContextFor(field) || localContextFor(field);
 }
 
 function ownerFor(field = {}) {
@@ -27,6 +36,14 @@ function bucketKey(field = {}) {
   if (!kind) return '';
 
   if (field.type === 'radio' && field.name) return `${owner ? `owner:${owner}|` : ''}single|name:${field.name}`;
+
+  if (field.type === 'button') {
+    const local = localContextFor(field);
+    const region = regionContextFor(field);
+    if (!local && !region) return '';
+    return `${owner ? `owner:${owner}|` : ''}single|local:${local}|region:${region}`;
+  }
+
   if (!context) return '';
   return `${owner ? `owner:${owner}|` : ''}${kind}|context:${context}`;
 }
@@ -60,14 +77,15 @@ function commonOwner(members = []) {
 }
 
 function labelForGroup(members = [], fields = []) {
-  const context = contextFor(members[0]);
+  const first = members[0] || {};
+  const context = contextFor(first);
   const ownerId = commonOwner(members);
-  if (!ownerId) return context || members[0]?.name || 'Choice';
+  if (!ownerId) return context || first.name || 'Choice';
 
   const owner = fields.find((field) => field.id === ownerId);
   const ownerContext = contextFor(owner);
   if (context && normalize(context) !== normalize(ownerContext)) return context;
-  return owner?.label || context || members[0]?.name || 'Choice';
+  return owner?.label || context || first.name || 'Choice';
 }
 
 export function discoverGroups(fields = [], entityId = '') {
