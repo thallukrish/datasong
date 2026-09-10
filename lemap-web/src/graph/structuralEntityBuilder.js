@@ -1,5 +1,5 @@
 import { preprocessEntity } from './entityPreprocessor.js';
-import { createEntityGraph, linkEntities, upsertEntity } from './entityGraph.js';
+import { createEntityGraph, findEntity, linkEntities, upsertEntity } from './entityGraph.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 
@@ -12,6 +12,7 @@ function controlStructural(field = {}) {
     name: field.name || '',
     rawType: field.rawType || '',
     href: field.href || '',
+    ownerFieldId: field.ownerFieldId || '',
     defaultValue: field.defaultValue ?? null,
     value: field.value ?? null,
     values: [...arr(field.valueDomain)],
@@ -79,6 +80,7 @@ export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
       structural: {
         groupType: 'choice',
         cardinality,
+        ownerFieldId: group.ownerFieldId || '',
         defaultValue: groupSelectionValue(members, 'defaultChecked', cardinality),
         value: groupSelectionValue(members, 'checked', cardinality),
         values: members.map((member) => member.label || member.value).filter(Boolean),
@@ -89,7 +91,11 @@ export function buildStructuralEntitiesFromPreprocessed(parsed = {}) {
       semantic: {},
       links: []
     });
-    linkEntities(graph, pageId, group.id, 'contains', 'childOf');
+
+    const owner = group.ownerFieldId && findEntity(graph, group.ownerFieldId);
+    if (owner) linkEntities(graph, owner.id, group.id, 'contains', 'partOf');
+    else linkEntities(graph, pageId, group.id, 'contains', 'childOf');
+
     for (const member of members) linkEntities(graph, group.id, member.id, 'contains', 'partOf');
   }
 
