@@ -88,28 +88,6 @@ function executableActionableControl(entity = {}) {
     && entity.structural?.disabled !== true;
 }
 
-function hasCurrentValue(entity = {}) {
-  const structural = entity.structural || {};
-  if (entity.type === 'group') {
-    if (Array.isArray(structural.value)) return structural.value.length > 0;
-    return structural.value !== undefined && structural.value !== null && structural.value !== '';
-  }
-  if (structural.controlType === 'checkbox' || structural.controlType === 'radio') return structural.checked === true;
-  return structural.value !== undefined && structural.value !== null && structural.value !== '';
-}
-
-function semanticForEntity(entity = {}, patches = new Map()) {
-  return patches.get(entity.id) || entity.semantic || {};
-}
-
-function pendingRequiredInput(entity = {}, semantic = {}) {
-  return ['ui_control', 'group'].includes(entity.type)
-    && semantic.interaction === 'user_input'
-    && semantic.relevantToGoal === true
-    && semantic.required === true
-    && !hasCurrentValue(entity);
-}
-
 export function partitionSemanticCandidates(entities = []) {
   const navigation = [];
   const entity = [];
@@ -130,7 +108,6 @@ export function entitiesNeedingSemantics(entities = []) {
     const semantic = entity?.semantic || {};
     if (!Object.keys(semantic).length) return true;
     if (entity?.type === 'workflow' && semantic.complete === undefined) return true;
-    if (pendingRequiredInput(entity, semantic)) return true;
     if (entity?.type === 'group' && semantic.relevantToGoal !== false) {
       if (semantic.interaction !== 'user_input') return true;
       if (semantic.required === undefined) return true;
@@ -159,7 +136,6 @@ export function buildEntitySemanticPrompt({ userGoal = '', entities = [], pageId
   return `MODE web-entity-semantics-v1\nUNRESOLVED ENTITIES:\n${JSON.stringify(payload)}\n\nTASK:\nReturn semantic additions only as {entities:[{id,semantic:{...}}]}. Omit irrelevant entities. pageContext is reference only unless the page itself also appears in entities. A relevant group is one user_input interaction and must include required plus a concise question; do not split its choices into separate questions. Use structural cardinality as the UI constraint and add selectionRule only for the business rule. Do not echo structure, links, browser mechanics or user values.`;
 }
 
-// Compatibility export: navigation is now a choice problem, not per-action semantic classification.
 export function buildNavigationSemanticPrompt(args = {}) {
   return buildNavigationChoicePrompt({
     userGoal: args.userGoal,
@@ -202,7 +178,6 @@ export function normalizeEntitySemanticResponse(raw = {}, knownEntities = []) {
   };
 }
 
-// Compatibility export for tests/callers migrating from the old navigation classifier.
 export function normalizeNavigationSemanticResponse(raw = {}, knownEntities = []) {
   const normalized = normalizeNavigationChoiceResponse(raw, knownEntities);
   if (!normalized.selectedEntityId) return { entities: [] };
@@ -251,17 +226,11 @@ export async function resolveEntitySemantics({ client, model, userGoal = '', ent
   const modelEntities = withWorkflow(entities, knownWorkflow);
   const split = partitionSemanticCandidates(modelEntities);
   const results = [];
-  let general = { entities: [] };
 
   if (split.entity.length) {
-    general = await resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext });
-    results.push(general);
+    results.push(await resolveGeneralSemantics({ client, model, userGoal, entities: split.entity, pageId, pageContext }));
   }
-
-  const patchById = new Map(general.entities.map((item) => [item.id, item.semantic]));
-  const hasPendingInput = split.entity.some((entity) => pendingRequiredInput(entity, semanticForEntity(entity, patchById)));
-
-  if (!hasPendingInput && split.navigation.length) {
+  if (split.navigation.length) {
     results.push(await resolveNavigationSemantics({ client, model, userGoal, entities: split.navigation, pageContext, recentPageTrail }));
   }
 
