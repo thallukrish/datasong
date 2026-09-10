@@ -1,3 +1,5 @@
+import { activeContext, createContextStack, reconcileContextStack } from './contextStack.js';
+
 function arr(value) { return Array.isArray(value) ? value : []; }
 
 function stableValue(value) {
@@ -6,6 +8,26 @@ function stableValue(value) {
     return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stableValue(item)]));
   }
   return value;
+}
+
+const STACK = Symbol.for('lemap.web.contextStack');
+
+function stackFor(before) {
+  return before?.[STACK] || createContextStack(before);
+}
+
+function attachStack(capture, stack) {
+  if (!capture || typeof capture !== 'object') return capture;
+  Object.defineProperty(capture, STACK, { value: stack, enumerable: false, configurable: true });
+  return capture;
+}
+
+function settleContext(before, latest) {
+  const stack = stackFor(before);
+  const contextChange = reconcileContextStack(stack, latest);
+  const active = activeContext(stack);
+  attachStack(active.capture, stack);
+  return { capture: active.capture, contextChange, contextDepth: stack.frames.length };
 }
 
 export function captureSignature(capture = {}) {
@@ -42,10 +64,13 @@ export async function waitForStructuralCaptureChange({
   while (now() - startedAt <= timeoutMs) {
     latest = await capture();
     const waitedMs = Math.max(0, now() - startedAt);
-    if (captureSignature(latest) !== baseline) return { capture: latest, changed: true, waitedMs };
+    if (captureSignature(latest) !== baseline) {
+      return { ...settleContext(before, latest), changed: true, waitedMs };
+    }
     if (waitedMs >= timeoutMs) break;
     await wait(Math.min(pollMs, timeoutMs - waitedMs));
   }
 
-  return { capture: latest, changed: false, waitedMs: Math.max(0, now() - startedAt) };
+  const settled = settleContext(before, latest);
+  return { ...settled, changed: false, waitedMs: Math.max(0, now() - startedAt) };
 }
