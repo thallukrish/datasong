@@ -168,6 +168,19 @@ function continuationScore(entity = {}) {
   return (priority * 1000) + required;
 }
 
+function plainIntermediateProgress(entity = {}) {
+  const label = normalize(entity.name).replace(/[>›→»]+$/g, '').trim();
+  return ['continue', 'next', 'proceed', 'save and continue'].includes(label);
+}
+
+function safeContinuationConsequence(entity = {}) {
+  const semantic = entity.semantic || {};
+  if (semantic.consequence === 'reversible') return true;
+  return semantic.consequence === 'commit'
+    && semantic.workflowRole === 'continue'
+    && plainIntermediateProgress(entity);
+}
+
 export function selectWorkflowContinuation(entities = [], { blockedEntityIds = new Set() } = {}) {
   const blocked = blockedEntityIds instanceof Set ? blockedEntityIds : new Set(arr(blockedEntityIds));
   const candidates = arr(entities).filter((entity) => {
@@ -177,7 +190,7 @@ export function selectWorkflowContinuation(entities = [], { blockedEntityIds = n
       && visibleAndEnabled(entity)
       && semantic.relevantToGoal === true
       && semantic.workflowRole === 'continue'
-      && semantic.consequence === 'reversible'
+      && safeContinuationConsequence(entity)
       && ['navigation', 'action'].includes(semantic.interaction);
   });
 
