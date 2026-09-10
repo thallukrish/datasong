@@ -40,6 +40,24 @@ test('waits through an early unchanged capture and returns the later structural 
   assert.equal(reads, 3);
 });
 
+test('default settlement window tolerates a slow SPA render beyond three seconds', async () => {
+  const changed = capture('page:questionnaire', [
+    { id: 'page:questionnaire', type: 'page', structural: {} },
+    { id: 'group:reasons', type: 'group', structural: { visible: true, cardinality: 'exactlyOne', values: ['A', 'B', 'Other'] } }
+  ]);
+  let now = 0;
+  const result = await waitForStructuralCaptureChange({
+    before,
+    capture: async () => now >= 4500 ? changed : before,
+    wait: async (ms) => { now += ms; },
+    now: () => now,
+    pollMs: 500
+  });
+  assert.equal(result.changed, true);
+  assert.equal(result.capture, changed);
+  assert.ok(result.waitedMs >= 4500);
+});
+
 test('returns the latest capture after timeout when nothing structurally changes', async () => {
   let now = 0;
   const result = await waitForStructuralCaptureChange({
