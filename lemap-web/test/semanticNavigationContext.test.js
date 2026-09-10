@@ -3,21 +3,20 @@ import assert from 'node:assert/strict';
 import {
   buildEntitySemanticPrompt,
   buildNavigationSemanticPrompt,
-  entitiesNeedingSemantics,
-  normalizeEntitySemanticResponse
+  entitiesNeedingSemantics
 } from '../src/semantic/entitySemanticResolver.js';
 
 const page = {
-  id: 'page:itr3',
-  name: 'ITR 3 - Income Tax Return 3',
+  id: 'page:3',
+  name: 'Current workflow page',
   type: 'page',
-  structural: { route: '/itr3' },
-  semantic: { meaning: 'ITR-3 return preparation page' },
+  structural: { route: '/current' },
+  semantic: { meaning: 'Current step' },
   links: []
 };
 const action = {
   id: 'button:start',
-  name: "Let's Get Started",
+  name: 'Primary action',
   type: 'ui_control',
   structural: { controlType: 'button', visible: true, disabled: false },
   semantic: {},
@@ -26,62 +25,38 @@ const action = {
 
 test('semantic prompt includes known current page as read-only context', () => {
   const prompt = buildEntitySemanticPrompt({
-    userGoal: 'File ITR-3',
+    userGoal: 'Complete workflow',
     entities: [action],
     pageId: page.id,
     pageContext: page
   });
   assert.match(prompt, /pageContext/);
-  assert.match(prompt, /ITR 3 - Income Tax Return 3/);
-  assert.match(prompt, /ITR-3 return preparation page/);
+  assert.match(prompt, /Current workflow page/);
+  assert.match(prompt, /Current step/);
   assert.match(prompt, /reference only/i);
 });
 
-test('navigation prompt includes compact ordered workflow trail so prior-step links can be classified as back', () => {
+test('navigation choice prompt includes ordered workflow trail and remaining candidate labels', () => {
   const prompt = buildNavigationSemanticPrompt({
-    userGoal: 'File ITR-3',
-    pageContext: { id: 'page:returns', name: 'Income Tax Returns', type: 'page', semantic: {} },
-    recentPageTrail: [
-      { id: 'page:file', name: 'File Income Tax Return' },
-      { id: 'page:status', name: 'Please select the status applicable to you to proceed further' },
-      { id: 'page:returns', name: 'Income Tax Returns' }
-    ],
-    entities: [{
-      id: 'link:status',
-      name: 'Select Status',
-      type: 'ui_control',
-      structural: { controlType: 'link', visible: true, disabled: false },
-      semantic: {},
-      links: []
-    }]
-  });
-  assert.match(prompt, /recentPageTrail/);
-  assert.match(prompt, /page:status/);
-  assert.match(prompt, /Select Status/);
-  assert.match(prompt, /earlier workflow step/i);
-});
-
-test('navigation prompt tells model that account profile and menu chrome are not workflow continuation by default', () => {
-  const prompt = buildNavigationSemanticPrompt({
-    userGoal: 'Complete a filing workflow',
+    userGoal: 'Complete workflow',
     pageContext: page,
-    entities: [{
-      id: 'button:profile',
-      name: 'expand_more Individual',
-      type: 'ui_control',
-      structural: { controlType: 'button', visible: true, disabled: false },
-      semantic: {},
-      links: []
-    }]
+    recentPageTrail: [
+      { id: 'page:1', name: 'First page' },
+      { id: 'page:2', name: 'Second page' },
+      { id: 'page:3', name: 'Current workflow page' }
+    ],
+    entities: [action]
   });
-  assert.match(prompt, /account|profile/i);
-  assert.match(prompt, /menu|site chrome/i);
-  assert.match(prompt, /not.*continue|never.*continue/i);
+  assert.match(prompt, /workflowPages/);
+  assert.match(prompt, /page:1/);
+  assert.match(prompt, /Primary action/);
+  assert.match(prompt, /selectedEntityId/);
+  assert.doesNotMatch(prompt, /workflowRole|navigationPriority|consequence/i);
 });
 
-test('disabled navigation controls wait for semantics until they become executable', () => {
+test('disabled actions are not semantic candidates until executable', () => {
   const disabled = {
-    id: 'button:later', name: 'Continue', type: 'ui_control',
+    id: 'button:later', name: 'Candidate', type: 'ui_control',
     structural: { controlType: 'button', visible: true, disabled: true }, semantic: {}, links: []
   };
   const enabled = { ...disabled, structural: { ...disabled.structural, disabled: false } };
@@ -89,9 +64,14 @@ test('disabled navigation controls wait for semantics until they become executab
   assert.deepEqual(entitiesNeedingSemantics([enabled]).map((entity) => entity.id), ['button:later']);
 });
 
-test('action/navigation semantics default missing priority to zero instead of remaining unresolved forever', () => {
-  const result = normalizeEntitySemanticResponse({
-    entities: [{ id: action.id, semantic: { interaction: 'navigation', workflowRole: 'continue', consequence: 'reversible', relevantToGoal: true } }]
-  }, [action]);
-  assert.equal(result.entities[0].semantic.navigationPriority, 0);
+test('required user input remains a candidate until it has a structural value', () => {
+  const input = {
+    id: 'group:choice', name: 'Choice', type: 'group',
+    structural: { cardinality: 'exactlyOne', value: null },
+    semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Choose?' },
+    links: []
+  };
+  assert.deepEqual(entitiesNeedingSemantics([input]).map((entity) => entity.id), ['group:choice']);
+  const answered = { ...input, structural: { ...input.structural, value: 'A' } };
+  assert.deepEqual(entitiesNeedingSemantics([answered]).map((entity) => entity.id), []);
 });
