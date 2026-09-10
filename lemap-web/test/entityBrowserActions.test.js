@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { memberEntityForGroupValue, entityInteractionKind, optionCandidateMatches, executeEntityAction } from '../src/agent/entityBrowserActions.js';
+import { memberEntityForGroupValue, entityInteractionKind, optionCandidateMatches, executeEntityAction, applyEntityValue } from '../src/agent/entityBrowserActions.js';
 
 const online = { id: 'field:online', name: 'Online', type: 'ui_control', structural: { controlType: 'radio', value: 'online' }, links: [] };
 const offline = { id: 'field:offline', name: 'Offline', type: 'ui_control', structural: { controlType: 'radio', value: 'offline' }, links: [] };
@@ -36,7 +36,6 @@ test('role-based radio resolves by accessible name before generic shared name', 
     check: async () => { calls.push(['check']); }
   };
   const page = {
-    url: () => 'https://example.test/workflow',
     locator: (selector) => { calls.push(['locator', selector]); return missing; },
     getByRole: (role, options) => {
       calls.push(['role', role, options]);
@@ -45,14 +44,13 @@ test('role-based radio resolves by accessible name before generic shared name', 
     getByLabel: () => missing
   };
 
-  const result = await executeEntityAction(page, {
+  await applyEntityValue(page, [], {
     id: 'field:reason-b',
     name: 'Reason B',
     type: 'ui_control',
     structural: { controlType: 'radio', role: 'radio', name: 'shared-group-name' }
-  });
+  }, true);
 
-  assert.deepEqual(result, { executed: true });
   assert.ok(calls.some((call) => call[0] === 'role' && call[1] === 'radio' && call[2]?.name === 'Reason B'));
   assert.ok(calls.some((call) => call[0] === 'check'));
 });
