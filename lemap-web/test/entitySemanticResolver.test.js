@@ -91,6 +91,7 @@ test('navigation semantic prompt contains only compact action identity plus page
   assert.match(prompt, /"name":"Help"/);
   assert.match(prompt, /workflowRole/);
   assert.match(prompt, /navigationPriority/);
+  assert.match(prompt, /Continue.*reversible/i);
   assert.doesNotMatch(prompt, /links|visible|question|explanation|caveats|selectionRule/);
 });
 
@@ -112,6 +113,19 @@ test('navigation response keeps only navigation fields', () => {
       workflowRole: 'continue', navigationPriority: 93, consequence: 'reversible'
     }
   });
+});
+
+test('generic intermediate continue is not treated as a commit when model over-classifies it', () => {
+  const submit = { id: 'button:submit', name: 'Submit Return', type: 'ui_control', structural: { controlType: 'button', disabled: false }, semantic: {}, links: [] };
+  const result = normalizeNavigationSemanticResponse({
+    entities: [
+      { id: 'button:continue', semantic: { interaction: 'navigation', relevantToGoal: true, required: true, workflowRole: 'continue', navigationPriority: 100, consequence: 'commit' } },
+      { id: 'button:submit', semantic: { interaction: 'action', relevantToGoal: true, required: true, workflowRole: 'commit', navigationPriority: 100, consequence: 'commit' } }
+    ]
+  }, [{ ...pageEntities[2], structural: { ...pageEntities[2].structural, disabled: false } }, submit]);
+
+  assert.equal(result.entities.find((item) => item.id === 'button:continue').semantic.consequence, 'reversible');
+  assert.equal(result.entities.find((item) => item.id === 'button:submit').semantic.consequence, 'commit');
 });
 
 test('grouped radio members are structural choices, not separate semantic entities', () => {
