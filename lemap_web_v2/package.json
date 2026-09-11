@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/domScanner.test.js test/adapters.test.js test/canonicalEntity.test.js test/pageOrchestrator.test.js"
+    "test": "node --test test/domScanner.test.js test/adapters.test.js test/canonicalEntity.test.js test/pageOrchestrator.test.js test/pageHierarchy.test.js"
   }
 }
