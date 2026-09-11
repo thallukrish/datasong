@@ -1,65 +1,59 @@
 import { findEntity, mergeSemanticPatch } from '../graph/entityGraph.js';
+import {
+  selectSemanticCandidates,
+  buildSemanticRequest,
+  normalizeSemanticResponse,
+  buildNavigationRequest,
+  normalizeNavigationResponse
+} from './semanticProtocol.js';
 
 function uniqueIds(values = []) {
   if (!Array.isArray(values)) throw new Error('entityIds must be an array.');
-  return [...new Set(values.filter(Boolean).map((value) => String(value)))];
-}
-
-function validateRequestedEntities(graph, entityIds) {
-  for (const entityId of entityIds) {
-    if (!findEntity(graph, entityId)) {
-      throw new Error(`Unknown entity requested for semantic enrichment: ${entityId}`);
-    }
-  }
-}
-
-function validateResponse(response, requestedIds) {
-  if (!response || !Array.isArray(response.patches)) {
-    throw new Error('Semantic model response must contain patches.');
-  }
-
-  const requested = new Set(requestedIds);
-  for (const patch of response.patches) {
-    if (!patch?.entityId || !requested.has(String(patch.entityId))) {
-      throw new Error(`Semantic patch is outside the requested scope: ${patch?.entityId || '(missing)'}`);
-    }
-    if (!patch.semantic || typeof patch.semantic !== 'object' || Array.isArray(patch.semantic)) {
-      throw new Error('Each semantic patch must contain a semantic object.');
-    }
-  }
+  return [...new Set(values.filter(Boolean).map(String))];
 }
 
 export async function enrichEntitySemantics({
   graph,
   gateway,
-  entityIds = []
+  entityIds = [],
+  query = '',
+  workflowPages = [],
+  currentPage = null
 } = {}) {
-  if (!graph || !Array.isArray(graph.entities)) {
-    throw new Error('A graph with entities is required.');
-  }
-  if (!gateway || typeof gateway.run !== 'function') {
-    throw new Error('A semantic model gateway with run() is required.');
-  }
+  if (!graph || !Array.isArray(graph.entities)) throw new Error('A graph with entities is required.');
+  if (!gateway || typeof gateway.run !== 'function') throw new Error('A semantic model gateway with run() is required.');
 
   const requestedIds = uniqueIds(entityIds);
-  validateRequestedEntities(graph, requestedIds);
+  for (const id of requestedIds) if (!findEntity(graph, id)) throw new Error(`Unknown entity requested for semantic enrichment: ${id}`);
 
-  const response = await gateway.run({
-    entityGraph: graph,
-    operation: 'enrich_entities',
-    entityIds: requestedIds
-  });
+  const requested = requestedIds.length
+    ? requestedIds.map((id) => findEntity(graph, id)).filter(Boolean)
+    : graph.entities;
+  const candidates = selectSemanticCandidates(requested);
+  if (!candidates.length) return { graph, updatedEntityIds: [], called: false };
 
-  validateResponse(response, requestedIds);
+  const payload = buildSemanticRequest({ query, workflowPages, currentPage, entities: candidates });
+  const response = await gateway.run({ operation: 'enrich_entities', payload });
+  const patches = normalizeSemanticResponse(response, candidates.map((entity) => entity.id));
 
-  const updatedEntityIds = [];
-  for (const patch of response.patches) {
-    mergeSemanticPatch(graph, String(patch.entityId), patch.semantic);
-    updatedEntityIds.push(String(patch.entityId));
-  }
+  for (const patch of patches) mergeSemanticPatch(graph, patch.entityId, patch.semantic);
+  return { graph, updatedEntityIds: patches.map((patch) => patch.entityId), called: true };
+}
 
-  return {
-    graph,
-    updatedEntityIds: [...new Set(updatedEntityIds)]
-  };
+export async function chooseNavigationCandidate({
+  gateway,
+  query = '',
+  workflowPages = [],
+  currentPage = null,
+  candidates = []
+} = {}) {
+  if (!gateway || typeof gateway.run !== 'function') throw new Error('A semantic model gateway with run() is required.');
+  const options = candidates.filter((entity) => entity?.id && entity.type === 'ui_control' && ['button', 'link'].includes(String(entity.structural?.controlType || '')) && entity.structural?.disabled !== true);
+  if (!options.length) return null;
+  if (options.length === 1) return options[0];
+
+  const payload = buildNavigationRequest({ query, workflowPages, currentPage, candidates: options });
+  const response = await gateway.run({ operation: 'choose_navigation', payload });
+  const selectedId = normalizeNavigationResponse(response, options.map((entity) => entity.id));
+  return options.find((entity) => entity.id === selectedId) || null;
 }
