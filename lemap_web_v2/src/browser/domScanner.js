@@ -8,6 +8,8 @@ const SAFE_ATTRIBUTES = new Set([
   'for',
   'title',
   'placeholder',
+  'required',
+  'disabled',
   'aria-label',
   'aria-labelledby',
   'aria-describedby',
