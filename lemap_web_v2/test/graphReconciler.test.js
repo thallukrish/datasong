@@ -112,6 +112,46 @@ test('reconciling the same revealed state twice does not duplicate entities or c
   );
 });
 
+test('reconcileVisibleState remaps a path-shifted entity to a unique existing structural anchor', () => {
+  const page = entity('page:1', { type: 'page' });
+  const oldControl = entity('entity:old', {
+    type: 'ui_control',
+    name: 'Continue',
+    structural: {
+      domId: 'continue-button',
+      controlType: 'button',
+      label: 'Continue',
+      path: [2]
+    },
+    links: [{ id: 'page:1', relationship: 'partOf' }]
+  });
+  const graph = createEntityGraph({ entities: [page, oldControl] });
+
+  const shiftedControl = entity('entity:new-path', {
+    type: 'ui_control',
+    name: 'Continue',
+    structural: {
+      domId: 'continue-button',
+      controlType: 'button',
+      label: 'Continue',
+      path: [3]
+    },
+    links: [{ id: 'page:1', relationship: 'partOf' }]
+  });
+
+  const result = reconcileVisibleState({
+    graph,
+    currentEntities: [page, shiftedControl],
+    previousVisibleEntityIds: ['page:1', 'entity:old']
+  });
+
+  assert.deepEqual(result.addedEntityIds, []);
+  assert.deepEqual(result.visibleEntityIds, ['page:1', 'entity:old']);
+  assert.deepEqual(result.remappedEntityIds, { 'entity:new-path': 'entity:old' });
+  assert.equal(findEntity(graph, 'entity:old').structural.path[0], 3);
+  assert.equal(findEntity(graph, 'entity:new-path'), null);
+});
+
 test('reconcileVisibleState rejects an unknown trigger entity', () => {
   const page = entity('page:1', { type: 'page' });
   const graph = createEntityGraph({ entities: [page] });
