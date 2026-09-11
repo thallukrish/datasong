@@ -1,32 +1,17 @@
-import { assertModelSafe, buildModelPayload } from './privacyBoundary.js';
-
-function uniqueIds(entityIds = []) {
-  if (!Array.isArray(entityIds)) throw new Error('entityIds must be an array.');
-  return [...new Set(entityIds.filter(Boolean).map((id) => String(id)))];
-}
+import { assertModelSafe } from './privacyBoundary.js';
 
 export function createModelGateway({ invoke } = {}) {
-  if (typeof invoke !== 'function') {
-    throw new Error('A model invoke function is required.');
-  }
+  if (typeof invoke !== 'function') throw new Error('A model invoke function is required.');
 
   return {
-    async run({
-      entityGraph,
-      instanceGraph,
-      operation,
-      entityIds = []
-    } = {}) {
+    async run({ operation, payload = {} } = {}) {
       const normalizedOperation = String(operation ?? '').trim();
       if (!normalizedOperation) throw new Error('operation is required.');
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error('payload must be an object.');
+      }
 
-      const safeGraphPayload = buildModelPayload({ entityGraph, instanceGraph });
-      const request = {
-        operation: normalizedOperation,
-        entityIds: uniqueIds(entityIds),
-        graph: safeGraphPayload.graph
-      };
-
+      const request = { operation: normalizedOperation, payload };
       assertModelSafe(request);
       return invoke(request);
     }
