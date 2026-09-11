@@ -1,0 +1,8 @@
+{
+  "name": "lemap_web_v2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test"
+  }
+}
