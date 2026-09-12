@@ -123,6 +123,11 @@ test('selectNavigationCandidates returns only visible enabled goal-relevant navi
   assert.deepEqual(selectNavigationCandidates(entities).map((entity) => entity.id), ['next']);
 });
 
+test('selectNavigationCandidates excludes actions already applied in the active frame', () => {
+  const next = control('next', { controlType: 'button', semantic: { interaction: 'navigation', relevantToGoal: true } });
+  assert.deepEqual(selectNavigationCandidates([next], { appliedEntityIds: ['next'] }), []);
+});
+
 test('workflowComplete is false while required input or relevant navigation remains and true otherwise', () => {
   const emptyInstances = createInstanceGraph();
   const filledInstances = createInstanceGraph();
