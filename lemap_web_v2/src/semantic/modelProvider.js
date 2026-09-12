@@ -11,13 +11,23 @@ function systemInstruction(operation) {
   return 'Add semantic understanding only for supplied target entities. Never invent entity ids, browser structure, links, selectors, or user values. Return JSON only with shape {"patches":[{"entityId":"id","semantic":{...}}]}.';
 }
 
+function providerError(code, { statusCode = null, retryable = false } = {}) {
+  const error = new Error(code);
+  error.code = code;
+  if (Number.isInteger(statusCode)) error.statusCode = statusCode;
+  error.retryable = retryable === true;
+  return error;
+}
+
 function parseModelContent(payload) {
   const content = payload?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) throw new Error('Model response did not contain JSON content.');
+  if (typeof content !== 'string' || !content.trim()) {
+    throw providerError('MODEL_EMPTY_RESPONSE');
+  }
   try {
     return JSON.parse(content);
   } catch {
-    throw new Error('Model response content was not valid JSON.');
+    throw providerError('MODEL_RESPONSE_JSON_ERROR');
   }
 }
 
@@ -39,23 +49,39 @@ export function createProviderInvoke({ config = {}, fetchImpl = globalThis.fetch
     const normalizedOperation = String(operation || '').trim();
     if (!normalizedOperation) throw new Error('Model operation is required.');
 
-    const response = await fetchImpl(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemInstruction(normalizedOperation) },
-          { role: 'user', content: JSON.stringify({ operation: normalizedOperation, ...payload }) }
-        ]
-      })
-    });
+    let response;
+    try {
+      response = await fetchImpl(endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemInstruction(normalizedOperation) },
+            { role: 'user', content: JSON.stringify({ operation: normalizedOperation, ...payload }) }
+          ]
+        })
+      });
+    } catch {
+      throw providerError('MODEL_TRANSPORT_ERROR', { retryable: true });
+    }
 
-    if (!response?.ok) throw new Error(`Model request failed with HTTP ${response?.status || 'unknown'}.`);
-    return parseModelContent(await response.json());
+    if (!response?.ok) {
+      const statusCode = Number.isInteger(response?.status) ? response.status : null;
+      const retryable = statusCode === 429 || (statusCode !== null && statusCode >= 500);
+      throw providerError('MODEL_HTTP_ERROR', { statusCode, retryable });
+    }
+
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      throw providerError('MODEL_RESPONSE_BODY_ERROR');
+    }
+    return parseModelContent(body);
   };
 }
