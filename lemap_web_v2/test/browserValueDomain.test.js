@@ -37,6 +37,7 @@ test('delegates Angular Material value-domain opening to the framework adapter',
   let hostClicked = false;
   let triggerClicked = false;
   let escaped = false;
+  let probe = null;
   const roleOptions = [
     { isVisible: async () => triggerClicked, innerText: async () => '2026-27' },
     { isVisible: async () => triggerClicked, innerText: async () => '2025-26' }
@@ -75,8 +76,14 @@ test('delegates Angular Material value-domain opening to the framework adapter',
     links: []
   };
 
-  assert.deepEqual(await enumerateEntityValueDomain(page, entity), ['2026-27', '2025-26']);
+  assert.deepEqual(await enumerateEntityValueDomain(page, entity, { onProbe: async (event) => { probe = event; } }), ['2026-27', '2025-26']);
   assert.equal(hostClicked, false);
   assert.equal(triggerClicked, true);
   assert.equal(escaped, true);
+  assert.equal(probe.sourceAdapter, 'angular-material');
+  assert.equal(probe.adapterResolved, true);
+  assert.equal(probe.adapterName, 'angular-material');
+  assert.equal(probe.adapterOpenAttempted, true);
+  assert.equal(probe.triggerFound, true);
+  assert.equal(probe.triggerClickSucceeded, true);
 });
