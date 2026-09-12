@@ -116,21 +116,36 @@ test('Angular Material owns mat-select selection mechanics inside the adapter', 
   const host = {
     click: async () => calls.push(['host-click'])
   };
-  const option = {
-    first: () => option,
-    click: async () => calls.push(['option-click', '2026-27'])
-  };
+  const optionRows = [
+    {
+      isVisible: async () => true,
+      evaluate: async () => ({
+        text: '2025-26',
+        ariaLabel: 'Previous assessment year',
+        dataValue: '',
+        value: ''
+      }),
+      click: async () => calls.push(['option-click', '2025-26'])
+    },
+    {
+      isVisible: async () => true,
+      evaluate: async () => ({
+        text: '2026-27 (Current A.Y.)',
+        ariaLabel: 'Current assessment year',
+        dataValue: '',
+        value: ''
+      }),
+      click: async () => calls.push(['option-click', '2026-27 (Current A.Y.)'])
+    }
+  ];
   const page = {
     locator: (selector) => {
-      assert.equal(selector, '[role="option"]');
+      if (selector === '[role="option"]') return { count: async () => 0 };
+      assert.equal(selector, '[role="option"],mat-option');
       return {
-        count: async () => 0
+        count: async () => optionRows.length,
+        nth: (index) => optionRows[index]
       };
-    },
-    getByRole: (role, options) => {
-      assert.equal(role, 'option');
-      assert.deepEqual(options, { name: '2026-27', exact: true });
-      return option;
     }
   };
   const entity = {
@@ -147,12 +162,12 @@ test('Angular Material owns mat-select selection mechanics inside the adapter', 
     page,
     entity,
     locator: host,
-    action: { type: 'select', value: '2026-27' }
+    action: { type: 'select', value: '2026-27 (Current A.Y.)' }
   });
 
   assert.equal(handled, true);
   assert.deepEqual(calls, [
     ['host-click'],
-    ['option-click', '2026-27']
+    ['option-click', '2026-27 (Current A.Y.)']
   ]);
 });
