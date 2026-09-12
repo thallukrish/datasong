@@ -1,14 +1,17 @@
 import { captureVisibleDom } from '../browser/domScanner.js';
 import { createPageEntity } from '../entity/canonicalEntity.js';
 import { activeContext } from '../orchestrator/contextStack.js';
-import { ingestPageVisit, refreshCurrentPage } from '../orchestrator/runCoordinator.js';
+import {
+  ingestPageVisit,
+  refreshCurrentPage,
+  completeActiveFrame
+} from '../orchestrator/runCoordinator.js';
 import { enrichEntitySemantics, chooseNavigationCandidate } from '../semantic/semanticResolver.js';
 import {
   selectReusableInput,
   selectNextRequiredInput,
   buildInputQuestion,
-  selectNavigationCandidates,
-  workflowComplete
+  selectNavigationCandidates
 } from '../agent/agentDecision.js';
 import {
   applyInputValue,
@@ -29,13 +32,13 @@ const DEFAULT_DEPS = {
   captureVisibleDom,
   ingestPageVisit,
   refreshCurrentPage,
+  completeActiveFrame,
   enrichEntitySemantics,
   chooseNavigationCandidate,
   selectReusableInput,
   selectNextRequiredInput,
   buildInputQuestion,
   selectNavigationCandidates,
-  workflowComplete,
   applyInputValue,
   applyReusableInput,
   executeContinuation,
@@ -108,6 +111,36 @@ function appliedEntityIds(state) {
   return frame?.appliedEntityIds || [];
 }
 
+function currentPageEntity(state, frame) {
+  return state.entityGraph.entities.find((entity) => entity.id === frame.pageEntityId) || null;
+}
+
+function isRootPageFrame(state, frame) {
+  return state.contextStack?.frames?.length === 1 && frame?.kind === 'page';
+}
+
+function workflowVisitedPageIds(workflow) {
+  return new Set((workflow?.steps || []).map((step) => step?.pageEntityId).filter(Boolean));
+}
+
+export function filterWorkflowNavigationCandidates(candidates = [], state) {
+  const visited = workflowVisitedPageIds(state?.workflow);
+  return candidates.filter((entity) => {
+    if (entity?.structural?.siteChrome === true) return false;
+
+    const role = String(entity?.semantic?.workflowRole || '').trim().toLowerCase();
+    if (['global', 'back', 'informational'].includes(role)) return false;
+
+    const destinations = (entity?.links || [])
+      .filter((link) => link.relationship === 'transitionsTo')
+      .map((link) => link.id)
+      .filter(Boolean);
+    if (destinations.length && destinations.every((id) => visited.has(id))) return false;
+
+    return true;
+  });
+}
+
 async function observeAfterAction({
   state,
   page,
@@ -131,6 +164,71 @@ async function observeAfterAction({
 
 async function checkpoint(checkpointFn, state) {
   if (typeof checkpointFn === 'function') await checkpointFn(state);
+}
+
+async function enrichActiveFrame({ state, gateway, query, deps }) {
+  let entities = visibleEntities(state);
+  const frame = activeContext(state.contextStack);
+
+  await deps.enrichEntitySemantics({
+    graph: state.entityGraph,
+    gateway,
+    entityIds: entities.map((entity) => entity.id),
+    query,
+    workflowPages: state.workflow.steps,
+    currentPage: currentPageEntity(state, frame)
+  });
+
+  return visibleEntities(state);
+}
+
+async function resolveOneInput({
+  state,
+  page,
+  entities,
+  requestInput,
+  checkpointFn,
+  deps
+}) {
+  const frame = activeContext(state.contextStack);
+  const reusable = deps.selectReusableInput({
+    entities,
+    instanceGraph: state.instanceGraph,
+    appliedEntityIds: appliedEntityIds(state),
+    visibleEntityIds: frame.visibleEntityIds
+  });
+  if (reusable) {
+    await deps.applyReusableInput({ state, page, reusable });
+    await observeAfterAction({ state, page, triggerEntityId: reusable.entity.id, deps });
+    await checkpoint(checkpointFn, state);
+    return true;
+  }
+
+  const required = deps.selectNextRequiredInput({
+    entities,
+    instanceGraph: state.instanceGraph,
+    visibleEntityIds: frame.visibleEntityIds
+  });
+  if (!required) return false;
+  if (typeof requestInput !== 'function') {
+    throw new Error('requestInput is required when a user value is needed.');
+  }
+
+  const question = deps.buildInputQuestion(required, entities);
+  const value = await requestInput(question);
+  await deps.applyInputValue({ state, page, entity: required, value });
+  await observeAfterAction({ state, page, triggerEntityId: required.id, deps });
+  await checkpoint(checkpointFn, state);
+  return true;
+}
+
+async function continuationCandidates({ state, entities, deps }) {
+  const frame = activeContext(state.contextStack);
+  const candidates = deps.selectNavigationCandidates(entities, {
+    visibleEntityIds: frame.visibleEntityIds,
+    appliedEntityIds: appliedEntityIds(state)
+  });
+  return filterWorkflowNavigationCandidates(candidates, state);
 }
 
 export async function runApplication({
@@ -157,82 +255,75 @@ export async function runApplication({
     await checkpoint(checkpointFn, state);
   }
 
-  for (let step = 1; step <= maxSteps; step += 1) {
-    let entities = visibleEntities(state);
+  let workflowSteps = 0;
+
+  while (workflowSteps < maxSteps) {
+    const frameBefore = activeContext(state.contextStack);
+    const entities = await enrichActiveFrame({ state, gateway, query, deps });
+
+    if (await resolveOneInput({
+      state,
+      page,
+      entities,
+      requestInput,
+      checkpointFn,
+      deps
+    })) {
+      continue;
+    }
+
     const frame = activeContext(state.contextStack);
+    const candidates = await continuationCandidates({ state, entities: visibleEntities(state), deps });
 
-    await deps.enrichEntitySemantics({
-      graph: state.entityGraph,
-      gateway,
-      entityIds: entities.map((entity) => entity.id),
-      query,
-      workflowPages: state.workflow.steps,
-      currentPage: state.entityGraph.entities.find((entity) => entity.id === frame.pageEntityId) || null
-    });
-
-    entities = visibleEntities(state);
-
-    const reusable = deps.selectReusableInput({
-      entities,
-      instanceGraph: state.instanceGraph,
-      appliedEntityIds: appliedEntityIds(state),
-      visibleEntityIds: frame.visibleEntityIds
-    });
-    if (reusable) {
-      await deps.applyReusableInput({ state, page, reusable });
-      await observeAfterAction({ state, page, triggerEntityId: reusable.entity.id, deps });
-      await checkpoint(checkpointFn, state);
-      continue;
-    }
-
-    const required = deps.selectNextRequiredInput({
-      entities,
-      instanceGraph: state.instanceGraph,
-      visibleEntityIds: frame.visibleEntityIds
-    });
-    if (required) {
-      if (typeof requestInput !== 'function') {
-        throw new Error('requestInput is required when a user value is needed.');
+    if (!isRootPageFrame(state, frame)) {
+      if (candidates.length) {
+        const selected = await deps.chooseNavigationCandidate({
+          gateway,
+          query,
+          workflowPages: state.workflow.steps,
+          currentPage: currentPageEntity(state, frame),
+          candidates
+        });
+        if (selected) {
+          const pageIdBefore = frame.pageEntityId;
+          await deps.executeContinuation({ state, page, entity: selected });
+          await observeAfterAction({ state, page, triggerEntityId: selected.id, deps });
+          await checkpoint(checkpointFn, state);
+          if (activeContext(state.contextStack).pageEntityId !== pageIdBefore) workflowSteps += 1;
+          continue;
+        }
+        await checkpoint(checkpointFn, state);
+        return { reason: 'blocked', steps: workflowSteps, state };
       }
-      const question = deps.buildInputQuestion(required, entities);
-      const value = await requestInput(question);
-      await deps.applyInputValue({ state, page, entity: required, value });
-      await observeAfterAction({ state, page, triggerEntityId: required.id, deps });
+
+      deps.completeActiveFrame(state);
       await checkpoint(checkpointFn, state);
       continue;
     }
 
-    const navigationCandidates = deps.selectNavigationCandidates(entities, {
-      visibleEntityIds: frame.visibleEntityIds
-    });
-    if (navigationCandidates.length) {
+    if (candidates.length) {
       const selected = await deps.chooseNavigationCandidate({
         gateway,
         query,
         workflowPages: state.workflow.steps,
-        currentPage: state.entityGraph.entities.find((entity) => entity.id === frame.pageEntityId) || null,
-        candidates: navigationCandidates
+        currentPage: currentPageEntity(state, frameBefore),
+        candidates
       });
-      if (selected) {
-        await deps.executeContinuation({ state, page, entity: selected });
-        await observeAfterAction({ state, page, triggerEntityId: selected.id, deps });
+      if (!selected) {
         await checkpoint(checkpointFn, state);
-        continue;
+        return { reason: 'blocked', steps: workflowSteps, state };
       }
-    }
 
-    if (deps.workflowComplete({
-      entities,
-      instanceGraph: state.instanceGraph,
-      visibleEntityIds: frame.visibleEntityIds
-    })) {
+      await deps.executeContinuation({ state, page, entity: selected });
+      await observeAfterAction({ state, page, triggerEntityId: selected.id, deps });
+      workflowSteps += 1;
       await checkpoint(checkpointFn, state);
-      return { reason: 'completed', steps: step - 1, state };
+      continue;
     }
 
     await checkpoint(checkpointFn, state);
-    return { reason: 'blocked', steps: step - 1, state };
+    return { reason: 'completed', steps: workflowSteps, state };
   }
 
-  return { reason: 'max_steps', steps: maxSteps, state };
+  return { reason: 'max_steps', steps: workflowSteps, state };
 }
