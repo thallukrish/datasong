@@ -112,15 +112,17 @@ test('selectReusableInput returns a visible required input whose stored instance
   assert.equal(selectReusableInput({ entities, instanceGraph, appliedEntityIds: ['field:a'] }), null);
 });
 
-test('selectNavigationCandidates returns only visible enabled goal-relevant navigation controls', () => {
+test('selectNavigationCandidates keeps unresolved buttons for later navigation choice but filters known irrelevant controls', () => {
   const entities = [
     control('next', { controlType: 'button', semantic: { interaction: 'navigation', relevantToGoal: true } }),
+    control('unknown', { controlType: 'button' }),
     control('cancel', { controlType: 'button', semantic: { interaction: 'navigation', relevantToGoal: false } }),
+    control('input-button', { controlType: 'button', semantic: { interaction: 'user_input', relevantToGoal: true } }),
     control('hidden-next', { controlType: 'link', semantic: { interaction: 'navigation', relevantToGoal: true }, visible: false }),
     control('field', { semantic: requiredInput })
   ];
 
-  assert.deepEqual(selectNavigationCandidates(entities).map((entity) => entity.id), ['next']);
+  assert.deepEqual(selectNavigationCandidates(entities).map((entity) => entity.id), ['next', 'unknown']);
 });
 
 test('selectNavigationCandidates excludes actions already applied in the active frame', () => {
