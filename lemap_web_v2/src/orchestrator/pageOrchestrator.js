@@ -1,16 +1,7 @@
-import { createAdapterRegistry } from '../adapters/adapterRegistry.js';
-import { angularMaterialAdapter } from '../adapters/angularMaterialAdapter.js';
-import { nativeControlAdapter } from '../adapters/nativeControlAdapter.js';
-import { ariaControlAdapter } from '../adapters/ariaControlAdapter.js';
+import { createDefaultAdapterRegistry } from '../adapters/adapterRegistry.js';
 import { createPageEntity, createStructuralEntity } from '../entity/canonicalEntity.js';
 
-export function createDefaultAdapterRegistry() {
-  return createAdapterRegistry([
-    angularMaterialAdapter,
-    nativeControlAdapter,
-    ariaControlAdapter
-  ]);
-}
+export { createDefaultAdapterRegistry } from '../adapters/adapterRegistry.js';
 
 export function orchestratePage(snapshot = {}, { registry = createDefaultAdapterRegistry() } = {}) {
   if (!snapshot?.root?.tag) throw new Error('Snapshot root is required.');
