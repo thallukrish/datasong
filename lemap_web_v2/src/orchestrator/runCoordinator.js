@@ -37,6 +37,7 @@ function containedIds(graph, rootIds = [], visibleEntityIds = []) {
   const byId = new Map(graph.entities.map((entity) => [entity.id, entity]));
   const found = new Set();
   const queue = [...rootIds].filter((id) => visible.has(id));
+  const scopedRelationships = new Set(['contains', 'hasGroup', 'hasMember']);
 
   while (queue.length) {
     const id = queue.shift();
@@ -44,7 +45,7 @@ function containedIds(graph, rootIds = [], visibleEntityIds = []) {
     found.add(id);
     const entity = byId.get(id);
     for (const link of entity?.links || []) {
-      if (link.relationship === 'contains' && visible.has(link.id) && !found.has(link.id)) {
+      if (scopedRelationships.has(link.relationship) && visible.has(link.id) && !found.has(link.id)) {
         queue.push(link.id);
       }
     }
