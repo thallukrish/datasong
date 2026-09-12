@@ -24,11 +24,13 @@ test('suppresses choice members when their ui_group represents the user decision
   assert.deepEqual(selectSemanticCandidates([group, online, offline]).map((e) => e.id), ['group:mode']);
 });
 
-test('semantic request is compact and omits runtime state', () => {
+test('semantic request is compact, canonical and omits runtime state', () => {
   const field = control('a', 'Filing status', {}, { controlType: 'radio', values: ['Individual', 'Company'], value: 'Individual', domId: 'radio-2' });
   field.links = [{ id: 'page:1', relationship: 'partOf' }];
   const request = buildSemanticRequest({ query: 'File return', workflowPages: [{ id: 'page:0', name: 'Login' }], currentPage: { id: 'page:1', name: 'Return' }, entities: [field] });
   assert.deepEqual(request.entities, [{ id: 'a', name: 'Filing status', type: 'ui_control', controlType: 'radio', choices: ['Individual', 'Company'] }]);
+  assert.deepEqual(request.semanticContract.relevantInputsRequire, ['interaction', 'relevantToGoal', 'required', 'question']);
+  assert.equal(request.semanticContract.interactionValue, 'user_input');
   const serialized = JSON.stringify(request);
   assert.equal(serialized.includes('radio-2'), false);
   assert.equal(serialized.includes('partOf'), false);
@@ -38,6 +40,11 @@ test('semantic request is compact and omits runtime state', () => {
 test('semantic response is whitelisted', () => {
   const normalized = normalizeSemanticResponse({ entities: [{ id: 'a', structural: { label: 'Other' }, semantic: { meaning: 'Filing status', interaction: 'user_input', relevantToGoal: true, required: true, question: 'What is your filing status?', examples: ['Individual'], extra: 'drop' } }] }, ['a']);
   assert.deepEqual(normalized, [{ entityId: 'a', semantic: { meaning: 'Filing status', interaction: 'user_input', relevantToGoal: true, required: true, question: 'What is your filing status?', examples: ['Individual'] } }]);
+});
+
+test('semantic response accepts provider patch envelope and normalizes it to canonical entity patches', () => {
+  const normalized = normalizeSemanticResponse({ patches: [{ entityId: 'a', semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Assessment year?' } }] }, ['a']);
+  assert.deepEqual(normalized, [{ entityId: 'a', semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: 'Assessment year?' } }]);
 });
 
 test('navigation request is compact', () => {
