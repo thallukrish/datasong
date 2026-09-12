@@ -50,9 +50,16 @@ test('runConfiguredApplication composes browser, persistence, logger, gateway an
   assert.equal(closed, true);
 });
 
-test('runConfiguredApplication always closes its CDP connection when the runner fails', async () => {
+test('runConfiguredApplication always closes its CDP connection and logs safe model failure metadata', async () => {
   let closed = false;
   const logged = [];
+  const failure = new Error('provider response body must not reach runtime logs');
+  failure.code = 'MODEL_HTTP_ERROR';
+  failure.statusCode = 503;
+  failure.retryable = true;
+  failure.lemapStage = 'model_gateway';
+  failure.lemapOperation = 'enrich_entities';
+
   await assert.rejects(() => runConfiguredApplication({
     config: {
       browser: { cdpUrl: 'http://127.0.0.1:9222' },
@@ -69,10 +76,18 @@ test('runConfiguredApplication always closes its CDP connection when the runner 
       createModelGateway: () => ({ run: async () => ({}) }),
       loadPersistentRunState: async () => ({ entityGraph: { entities: [] }, instanceGraph: { instances: [] }, workflow: { id: 'wf:1', steps: [] }, contextStack: null }),
       checkpointRunState: async () => {},
-      runApplication: async () => { throw new Error('boom'); }
+      runApplication: async () => { throw failure; }
     }
-  }), /boom/);
+  }), /provider response body/);
+
   assert.equal(closed, true);
-  assert.equal(logged[0][0], 'run.start');
-  assert.equal(logged.at(-1)[0], 'run.error');
+  assert.deepEqual(logged.at(-1), ['run.error', {
+    workflowId: 'wf:1',
+    errorCode: 'MODEL_HTTP_ERROR',
+    stage: 'model_gateway',
+    operation: 'enrich_entities',
+    statusCode: 503,
+    retryable: true
+  }]);
+  assert.equal(JSON.stringify(logged).includes('provider response body'), false);
 });
