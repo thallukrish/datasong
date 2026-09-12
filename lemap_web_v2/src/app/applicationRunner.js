@@ -164,7 +164,13 @@ async function enrichActiveFrame({ state, gateway, query, deps, logger }) {
 async function learnFiniteChoices({ state, page, entity, checkpointFn, deps, logger, frame }) {
   if (entity?.type !== 'ui_control') return;
   if (Array.isArray(entity.structural?.values) && entity.structural.values.length) return;
-  const values = await deps.enumerateEntityValueDomain(page, entity);
+  const values = await deps.enumerateEntityValueDomain(page, entity, {
+    onProbe: (probe) => logEvent(logger, 'input.choices_probe', {
+      pageEntityId: frame.pageEntityId,
+      frameId: frame.id,
+      ...probe
+    })
+  });
   if (!Array.isArray(values) || !values.length) return;
   entity.structural = { ...(entity.structural || {}), values: [...values] };
   const persisted = state.entityGraph.entities.find((candidate) => candidate.id === entity.id);
