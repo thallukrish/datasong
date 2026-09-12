@@ -52,6 +52,7 @@ export function buildSemanticRequest({ query = '', workflowPages = [], currentPa
     semanticContract: {
       relevantInputsRequire: ['interaction', 'relevantToGoal', 'required', 'question'],
       interactionValue: 'user_input',
+      doNotUse: ['role', 'purpose'],
       omitIrrelevant: true,
       responseShape: 'entities:id+semantic'
     },
