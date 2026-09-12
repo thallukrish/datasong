@@ -6,6 +6,10 @@ const MATERIAL_TYPES = new Map([
   ['mat-select', 'select']
 ]);
 
+function normalize(value) {
+  return String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 function classifyHostClickError(error) {
   const text = String(error?.message || '').toLowerCase();
   if (text.includes('intercepts pointer events') || text.includes('intercepted')) return 'POINTER_INTERCEPTED';
@@ -61,23 +65,41 @@ async function openMaterialSelect(page, locator, probe = null) {
   return false;
 }
 
-function first(locator) {
-  if (locator && typeof locator.first === 'function') return locator.first();
-  return locator;
+function optionCandidateMatches(candidate = {}, value = '') {
+  const wanted = normalize(value);
+  return [candidate.text, candidate.ariaLabel, candidate.dataValue, candidate.value]
+    .some((item) => normalize(item) === wanted);
 }
 
 async function selectMaterialOption(page, value) {
-  if (typeof page?.getByRole !== 'function') {
-    throw new Error('Angular Material option selection requires role-capable browser access.');
+  if (typeof page?.locator !== 'function') {
+    throw new Error('Angular Material option selection requires locator-capable browser access.');
   }
-  const option = first(page.getByRole('option', {
-    name: String(value ?? ''),
-    exact: true
-  }));
-  if (!option || typeof option.click !== 'function') {
-    throw new Error('Angular Material option is not actionable.');
+
+  const wanted = String(value ?? '').trim();
+  const options = page.locator('[role="option"],mat-option');
+  const count = typeof options?.count === 'function' ? await options.count() : 0;
+
+  for (let index = 0; index < count; index += 1) {
+    const option = options.nth(index);
+    if (!option) continue;
+    if (typeof option.isVisible === 'function' && !await option.isVisible().catch(() => false)) continue;
+    if (typeof option.evaluate !== 'function') continue;
+
+    const candidate = await option.evaluate((element) => ({
+      text: element.innerText || element.textContent || '',
+      ariaLabel: element.getAttribute?.('aria-label') || '',
+      dataValue: element.getAttribute?.('data-value') || '',
+      value: element.getAttribute?.('value') || ''
+    })).catch(() => ({}));
+
+    if (!optionCandidateMatches(candidate, wanted)) continue;
+    if (typeof option.click !== 'function') break;
+    await option.click();
+    return;
   }
-  await option.click();
+
+  throw new Error(`Could not find Angular Material option matching "${wanted}"`);
 }
 
 function isMaterialSelect(entity = {}) {
