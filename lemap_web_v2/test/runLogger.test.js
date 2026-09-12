@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createRunLogger } from '../src/diagnostics/runLogger.js';
+import { createCompactRunLogger } from '../src/diagnostics/compactRunLogger.js';
 
 test('run logger writes layer-prefixed JSONL events immediately', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-run-log-'));
-  const logger = await createRunLogger({
+  const logger = await createCompactRunLogger({
     directory: dir,
     workflowId: 'workflow:abc',
     layer: 'layer27',
@@ -31,7 +31,7 @@ test('run logger writes layer-prefixed JSONL events immediately', async () => {
 
 test('run logger rejects sensitive runtime fields', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-run-log-'));
-  const logger = await createRunLogger({ directory: dir, workflowId: 'wf', layer: 'layer27' });
+  const logger = await createCompactRunLogger({ directory: dir, workflowId: 'wf', layer: 'layer27' });
 
   await assert.rejects(
     () => logger.log('input_applied', { entityId: 'field:1', value: 'PRIVATE' }),
@@ -41,7 +41,7 @@ test('run logger rejects sensitive runtime fields', async () => {
 
 test('run logger keeps model I/O compact while preserving decision-relevant detail', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-run-log-'));
-  const logger = await createRunLogger({ directory: dir, workflowId: 'wf', layer: 'layer27' });
+  const logger = await createCompactRunLogger({ directory: dir, workflowId: 'wf', layer: 'layer27' });
   const candidates = Array.from({ length: 35 }, (_, index) => ({
     id: `control:${index}`,
     label: `Candidate ${index} ${'x'.repeat(400)}`,
@@ -55,11 +55,11 @@ test('run logger keeps model I/O compact while preserving decision-relevant deta
 
   const lines = (await fs.readFile(logger.path, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
   assert.equal(lines[0].type, 'layer27.model.input');
-  assert.equal(lines[0].operation, 'choose_navigation');
-  assert.equal(lines[0].payload.candidates.length, 20);
-  assert.equal(lines[0].payload.candidatesTruncated, 15);
-  assert.ok(lines[0].payload.query.length <= 240);
-  assert.ok(lines[0].payload.candidates[0].label.length <= 240);
+  assert.equal(lines[0].request.operation, 'choose_navigation');
+  assert.equal(lines[0].request.payload.candidates.length, 20);
+  assert.equal(lines[0].request.payload.candidatesTruncated, 15);
+  assert.ok(lines[0].request.payload.query.length <= 240);
+  assert.ok(lines[0].request.payload.candidates[0].label.length <= 240);
 
   assert.equal(lines[1].type, 'layer27.model.output');
   assert.equal(lines[1].operation, 'choose_navigation');
@@ -69,7 +69,7 @@ test('run logger keeps model I/O compact while preserving decision-relevant deta
 
 test('run logger suppresses consecutive duplicate runtime events', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-run-log-'));
-  const logger = await createRunLogger({ directory: dir, workflowId: 'wf', layer: 'layer27' });
+  const logger = await createCompactRunLogger({ directory: dir, workflowId: 'wf', layer: 'layer27' });
 
   await logger.log('navigation.candidates', { pageEntityId: 'page:1', entityCount: 3 });
   await logger.log('navigation.candidates', { pageEntityId: 'page:1', entityCount: 3 });
