@@ -6,6 +6,8 @@ LeMap Web shall use a small number of clean layers with explicit responsibilitie
 
 The architecture shall avoid parallel representations, hidden heuristic pipelines, and cross-layer logic that duplicates responsibility.
 
+The core architecture shall remain domain-neutral. The same LeMap Web implementation shall be capable of learning and traversing an income-tax filing site, a travel-booking site, a banking site, an insurance site, or another web application without introducing domain-specific entity classes into the core.
+
 ## 1. Browser / DOM Layer
 
 - The browser layer shall observe the current visible DOM state from headless Chrome.
@@ -22,17 +24,32 @@ The architecture shall avoid parallel representations, hidden heuristic pipeline
 - Adapters shall return a canonical entity when they understand the element.
 - Adapters shall return empty when they do not understand the element.
 - Framework-specific representations such as native radio, Angular Material radio, native select, `mat-select`, ARIA controls, buttons, and links shall map into common canonical control types.
-- Adapter logic shall not know about workflows, graph traversal, user goals, or LLM semantics.
+- Adapter logic shall not know about workflows, graph traversal, user goals, domains, or LLM semantics.
 - Adapter failure shall never silently produce misleading labels or identities.
 - Unsupported or partially understood controls shall be logged with enough structural context to implement a new adapter later.
 
 ## 3. Canonical Structural Entity Layer
 
-- Every discovered page element shall be normalized into a common canonical entity structure.
-- An entity shall have a stable identity, type, structural representation, semantic representation, and graph relationships.
-- Canonical structural properties shall include observable facts such as label, name, value, role, tag, URI, visibility, enabled state, and hierarchy.
-- Canonical entity types shall include at least page, container, UI control, logical group, modal, link, and workflow.
+- Every discovered page element shall be normalized into the same generic node/entity structure.
+- An entity shall have a stable identity, type discriminator, structural representation, semantic representation, and graph relationships.
+- Pages, containers, UI controls, logical groups, modal roots, links/navigation controls, workflow entities, and meaningful informational elements shall all use this same node shape rather than separate domain-specific object models.
+- Canonical structural properties shall include observable facts such as label, name, role, tag, URI, visibility, enabled state, hierarchy, control type, and finite option-domain metadata where structurally discoverable.
+- Current user/browser-filled values shall not be canonical structural properties; concrete values belong only in runtime/instance state.
 - Structural representation shall remain independent of framework-specific DOM implementation.
+- Core entities shall never become ITR-specific, travel-specific, banking-specific, or otherwise domain-specific classes. Domain meaning shall be learned as semantic properties on generic entities.
+
+The common entity shape is conceptually:
+
+```js
+{
+  id,
+  type,
+  name,
+  structural: {},
+  semantic: {},
+  links: []
+}
+```
 
 ## 4. Orchestrator Layer
 
@@ -56,18 +73,20 @@ The architecture shall avoid parallel representations, hidden heuristic pipeline
 ## 6. Logical UI Groups
 
 - The orchestrator shall infer logical groups of related UI controls.
-- A logical group shall itself be represented as an entity.
-- Group entities shall relate their member controls using contains/partOf relationships.
-- Group selection rules shall support concepts such as exactly-one, any-of, all-of, and at-least-one.
+- A logical group shall itself be represented using the same generic entity/node structure as every other entity.
+- Group entities shall link their member entities explicitly rather than creating a separate parallel representation.
+- Group relationships/rules shall support concepts such as `AND`, `OR`, exactly-one, any-of, all-of, zero-or-more, and at-least-one as appropriate to the discovered UI structure.
+- A radio group is therefore simply a group entity with an exactly-one rule linked to its member controls; a checkbox group may use zero-or-more or another applicable rule.
+- Groups may also represent related fields that jointly form one logical question or alternative paths that satisfy one requirement.
 - Group inference shall use control structure, hierarchy, shared names, accessibility relationships, and other structural evidence.
 - Individual adapters shall parse controls while the orchestrator shall infer relationships between controls.
 
 ## 7. Entity Graph
 
 - The entity graph shall be the persistent shared map of discovered application structure and semantics.
-- Pages, containers, controls, groups, modals, links, and workflows shall all be entities in the graph.
+- Pages, containers, controls, groups, modals, links, workflows, and other meaningful discovered nodes shall all be entities in the graph.
 - Structural and semantic information shall coexist on the same entity rather than in separate parallel representations.
-- Entity relationships shall include contains, partOf, transitionsTo, and dynamic-child relationships.
+- Entity relationships shall include contains, partOf, membership/group relationships, transitionsTo, and dynamic-child relationships.
 - The graph shall accumulate knowledge across multiple user queries and exploration runs.
 - A user query shall traverse the shared graph rather than own a private copy of the page structure.
 - Revisiting an existing page shall reuse the existing page graph and enrich it with newly uncovered entities.
@@ -122,8 +141,8 @@ The architecture shall avoid parallel representations, hidden heuristic pipeline
 - A workflow shall reference the pages and entities traversed while accomplishing that goal.
 - Workflow traversal order shall be stored separately from shared page structure.
 - A page may participate in multiple workflows at different positions.
-- Page ordering shall therefore be associated with the workflow-page relationship rather than the page entity itself.
-- Each workflow-page relationship shall carry a sequence number.
+- Page ordering shall therefore be associated with workflow traversal rather than the page entity itself.
+- Ordered workflow steps shall carry sequence numbers.
 - Workflow sequence numbers shall represent the discovered order of pages for that specific user goal.
 
 ## 13. Workflow-Relative Navigation
@@ -175,13 +194,15 @@ The architecture shall avoid parallel representations, hidden heuristic pipeline
 - The LLM shall not be used to rediscover facts already deterministically available from structure or graph history.
 - Existing semantic knowledge shall be reused across workflows where appropriate.
 - Query-specific semantic context may reference the active workflow without changing globally shared structural facts.
+- Model requests shall be compact, scoped to unresolved or decision-relevant entities, and shall not send the whole graph merely because it exists.
 
 ## 18. Failure and Diagnostics
 
 - Unsupported UI structures shall be explicitly logged.
 - Invalid adapter output shall be rejected rather than silently accepted.
 - Missing labels, unresolved controls, and unknown navigation structures shall remain visible implementation gaps.
-- Diagnostics shall capture enough DOM/framework context to create a new adapter or parser test.
+- Diagnostics shall capture only explicitly safe structural/runtime metadata sufficient to create a new adapter or parser regression test.
+- Diagnostics shall not log raw DOM values, prompts, instance values, or arbitrary error payloads that could contain private data.
 - The system shall prefer an explicit unknown state over an incorrect inferred structural representation.
 - Every newly supported UI pattern shall have a regression test.
 
@@ -203,7 +224,7 @@ The architecture shall avoid parallel representations, hidden heuristic pipeline
 - Stored instance values shall never be transmitted to the LLM.
 - Values read from filled browser fields shall never be transmitted to the LLM.
 - Sensitive values such as passwords, tax identifiers, account numbers, addresses, income values, and other personal data shall remain local.
-- Model requests shall contain only structural entities, sanitized labels, semantic context, and information explicitly safe for model use.
+- Model requests shall contain only structural entities, sanitized labels, semantic context, finite choice metadata when safe, and information explicitly safe for model use.
 - The semantic layer shall operate on entity meaning and structure without requiring concrete user values.
 - Learn mode may ask the model to propose a value only from safe structural/context information and shall not expose existing private values as context.
 - User values shall never be written to query logs, model logs, debug logs, or diagnostic output.
@@ -212,7 +233,7 @@ The architecture shall avoid parallel representations, hidden heuristic pipeline
 - Logs may record that a value was supplied, reused, or applied but shall represent the value as redacted rather than recording its contents.
 - DOM diagnostics for unsupported controls shall redact current field values before being written.
 - Browser snapshots retained for diagnostics shall exclude or redact input values.
-- Model-call logging shall record safe metadata such as purpose, token usage, duration, and errors without recording private user values.
+- Model-call logging shall record safe metadata such as purpose, token usage, duration, and stable error codes without recording private user values.
 - Privacy filtering shall happen before data crosses the model boundary rather than relying on the model to ignore sensitive values.
 - When a value cannot safely be separated from structural context, that content shall not be sent to the model.
 - Runtime/user value transmission to external model services shall be deny-by-default.
@@ -248,11 +269,11 @@ Headless Chrome / Visible DOM
         ↓
 UI Adapter Layer
         ↓
-Canonical Structural Entities
+Generic Canonical Nodes / Entities
         ↓
 Orchestrator
   ├─ page hierarchy
-  ├─ logical groups
+  ├─ logical group entities + AND/OR/cardinality rules
   ├─ dynamic-child discovery
   ├─ context stack
   ├─ graph reconciliation
@@ -269,6 +290,312 @@ Execution Layer
 Headless Chrome
 ```
 
+## Implemented v2 Layer Map
+
+The v2 implementation was built incrementally. The implementation-layer numbering below describes the construction sequence; it refines the architectural responsibilities above rather than creating 26 unrelated architectural concepts.
+
+1. **Browser / DOM** — captures the visible hierarchy and safe structural attributes without browser-entered values.
+2. **Adapters** — maps native, Angular Material, and ARIA controls into common control representations; framework vocabulary stops here.
+3. **Canonical Entity** — produces stable generic entities using the common `{id,type,name,structural,semantic,links}` shape.
+4. **Orchestrator** — walks the captured hierarchy and canonicalizes relevant nodes through adapters.
+5. **Page Hierarchy** — materializes persistent `contains` / `partOf` structure without flattening meaningful nesting.
+6. **Logical Groups** — creates group entities and links member controls using cardinality/logical rules such as exactly-one, AND, or OR.
+7. **Entity Graph** — persists shared application structure and semantic enrichment on the same entities.
+8. **Dynamic Reconciliation** — compares post-action visibility with previous state, retains hidden learned nodes, and records newly revealed branches.
+9. **Context Stack** — maintains page/modal/dynamic runtime frames with push/pop semantics and active visibility/actionability.
+10. **Navigation** — represents navigation controls as entities and learns `transitionsTo` relationships when destinations become known.
+11. **Workflow Traversal** — records ordered query-specific page traversal separately from shared application structure.
+12. **Instance Graph** — stores concrete local values/references as a sparse mirror keyed to structural entity IDs.
+13. **Interaction Execution** — resolves canonical control entities into concrete browser actions such as fill/select/check/click.
+14. **Privacy Boundary** — removes runtime/user-value fields before any model boundary and rejects unsafe model payloads.
+15. **Model Gateway** — provides a narrow transport interface that accepts only approved compact operations/payloads.
+16. **Configuration** — centralizes browser, model, storage, runtime, and privacy-safe defaults through validated configuration.
+17. **Diagnostics attempt deferred** — an early permissive logger design was rejected rather than carried forward.
+18. **Page Reuse** — reuses known page/entity identities across revisits and incrementally adds newly discovered branches.
+19. **Run Coordinator** — composes capture materialization, hierarchy/groups, page reuse, reconciliation, workflow, and frame updates.
+20. **Semantic Resolver / Compact Model Protocol** — selects only unresolved scoped entities, builds compact semantic/navigation requests, and merges whitelisted semantic patches.
+21. **Agent Decision** — chooses the next required input, reusable known input, relevant navigation candidate, or completion state.
+22. **Decision Execution** — converts logical decisions (including group choices) back into concrete control execution and local instance updates.
+23. **Safe Diagnostics** — records only allowlisted event metadata such as IDs, counts, durations, steps, and stable error codes.
+24. **Persistence** — loads/saves entity graph, instance graph, and workflow state with explicit validation and safe checkpointing.
+25. **Application Runner** — runs the observe → understand → decide → act → recapture → reconcile → checkpoint loop.
+26. **Browser Bootstrap / Entrypoint** — connects to Chrome via CDP, selects a page, loads configuration/state/model transport, invokes the runner, and closes only the LeMap connection.
+
+The implementation flow can therefore be summarized as:
+
+```text
+SEE
+↓
+STRUCTURE
+↓
+UNDERSTAND
+↓
+DECIDE
+↓
+ACT
+↓
+SEE AGAIN
+```
+
+## End-to-End Example: First Page of an ITR-3 Flow
+
+This example is illustrative only. **Nothing in the LeMap Web core is specific to ITR-3.** The exact same node model and processing layers must work unchanged for a flight-booking page, hotel-booking page, banking workflow, insurance form, or another application.
+
+Assume the first visible page conceptually contains:
+
+```text
+Filing Status
+  Are you filing under a particular provision?
+    ○ Yes
+    ○ No
+
+Next
+```
+
+### 1. Observe the DOM
+
+The browser layer captures a neutral hierarchy such as:
+
+```text
+body
+  section
+    radio-group
+      radio "Yes"
+      radio "No"
+  button "Next"
+```
+
+The browser layer does not decide that this is a tax field and does not capture a current user answer as graph structure.
+
+### 2. Adapt Framework Controls
+
+If the page uses Angular Material, the adapter may recognize `mat-radio-group` / `mat-radio-button`; another site may use native inputs or ARIA widgets. All are converted into generic controls:
+
+```text
+radio "Yes"
+radio "No"
+button "Next"
+```
+
+Framework-specific vocabulary ends at the adapter boundary.
+
+### 3. Build Generic Entities
+
+Canonicalization creates generic nodes. Their IDs are stable structural identities; names below are explanatory labels, not domain-specific classes:
+
+```text
+node A  type=page
+node B  type=container
+node C  type=ui_control   name="Yes"
+node D  type=ui_control   name="No"
+node E  type=ui_group
+node F  type=ui_control   name="Next"
+```
+
+All use the same entity shape:
+
+```js
+{
+  id,
+  type,
+  name,
+  structural: {},
+  semantic: {},
+  links: []
+}
+```
+
+### 4. Infer Hierarchy and Group Relationships
+
+The entity graph can represent:
+
+```text
+A contains B
+B contains E
+E hasMember C
+E hasMember D
+A contains F
+```
+
+The radio group is not a special tax object. It is a generic group entity whose structural/logical rule says that exactly one member may be selected:
+
+```text
+E
+  type = ui_group
+  rule = exactly-one
+  members = [C, D]
+```
+
+Other applications can use the same group entity mechanism for `AND`, `OR`, any-of, all-of, or other cardinality rules. For example, a travel site may group `From + To + Departure Date` using an AND relationship, while alternate identity methods may form an OR relationship.
+
+### 5. Persist Shared Application Structure
+
+The entity graph stores the learned page, container, group, controls, hierarchy, and later semantics. At this point it still need not know that the group means "filing status".
+
+### 6. Learn Semantic Meaning Compactly
+
+The semantic resolver selects only unresolved relevant entities and sends compact safe context to the model. A request may conceptually contain:
+
+```js
+{
+  query: "File my return",
+  currentPage: { id: "...", name: "..." },
+  entities: [
+    {
+      id: "...",
+      type: "ui_group",
+      name: "Are you filing under a particular provision?",
+      cardinality: "exactlyOne",
+      choices: ["Yes", "No"]
+    }
+  ]
+}
+```
+
+It does **not** send the entire entity graph, the instance graph, current browser-filled values, selectors, framework classes, PAN/income/account data, or other private runtime values.
+
+The model may return semantic enrichment such as:
+
+```js
+{
+  interaction: "user_input",
+  relevantToGoal: true,
+  required: true,
+  question: "Are you filing under this provision?",
+  meaning: "Determines the applicable filing path.",
+  selectionRule: "exactlyOne"
+}
+```
+
+That semantic information is merged onto the same group entity. No parallel semantic object is created.
+
+### 7. Decide What to Do Next
+
+The decision layer asks whether there is a visible, enabled, required, goal-relevant input that has no local instance value. If the group is unresolved, it becomes the next logical question.
+
+The user may answer:
+
+```text
+No
+```
+
+### 8. Execute the Logical Decision
+
+The decision-execution bridge resolves logical choice `No` from the group entity to the concrete member control entity and invokes browser execution.
+
+The browser action is against the concrete control, but the local instance graph stores the logical value against the group entity:
+
+```js
+{
+  entityId: "<group entity id>",
+  value: "No"
+}
+```
+
+The selected value remains local and is not added to persistent application structure or sent to the model.
+
+### 9. Recapture and Learn Dynamic State
+
+Suppose selecting `No` reveals another section:
+
+```text
+Reason for filing
+  ○ Income above threshold
+  ○ Foreign assets
+  ○ Other
+```
+
+The application runner captures the page again. Because page identity has not changed, dynamic reconciliation compares the new visible hierarchy with the prior one.
+
+The new section and controls become new generic entities attached to the same page graph. LeMap retains both normal containment and causal knowledge such as:
+
+```text
+triggering control/value
+        ↓ dynamicChild / revealedBy
+newly revealed section/group
+```
+
+The base page is not duplicated for each dynamic state.
+
+### 10. Continue or Navigate
+
+Once required goal-relevant inputs on the active page are satisfied, the decision layer evaluates navigation controls. `Next` is simply another generic `ui_control` entity with navigation semantics.
+
+Execution clicks it, the browser is recaptured, and if canonical page identity changes the coordinator ingests a new page visit rather than treating it as an inline reveal.
+
+The workflow traversal can then record:
+
+```text
+Step 1: first page
+Step 2: second page, entered via the Next entity
+```
+
+while the shared entity graph learns:
+
+```text
+NextEntity transitionsTo SecondPageEntity
+```
+
+The workflow sequence is query-specific; the page entities remain shared reusable application knowledge.
+
+### 11. Separation of the Three Core Graph/Traversal Concerns
+
+At this point LeMap maintains three deliberately separate concerns:
+
+```text
+ENTITY GRAPH
+What the application is
+(structure + learned semantics)
+
+WORKFLOW TRAVERSAL
+How this particular goal moved through the application
+(ordered page/entity traversal)
+
+INSTANCE GRAPH
+What concrete values this run/user supplied
+(local runtime values/references)
+```
+
+This separation is what allows a later run to reuse the learned application map without exposing or mixing prior user values.
+
+### 12. Same Engine on a Travel-Booking Website
+
+A travel site might expose:
+
+```text
+Search Form
+  From
+  To
+  Departure Date
+  Return Date
+  Travellers
+  Search
+
+Fare Type
+  Regular
+  Student
+  Senior Citizen
+```
+
+LeMap Web must process it with the exact same primitives:
+
+```text
+page node
+container nodes
+ui_control nodes
+group nodes
+contains / partOf / hasMember relationships
+AND / OR / cardinality rules
+semantic enrichment
+workflow traversal
+instance values
+navigation transitions
+```
+
+There shall be no core `FlightSearchEntity`, `AirportEntity`, `TaxFilingEntity`, or similar domain-specific class. Concepts such as "departure airport", "fare type", or "filing status" are learned semantic meaning attached to generic entities.
+
 ## Governing Principle
 
 LeMap Web shall remain simple by keeping framework-specific parsing in adapters, cross-element reasoning in the orchestrator, persistent structural and semantic knowledge in the entity graph, concrete private values in the local instance graph, query-specific order in workflows, temporary state in stack frames, model reasoning in the semantic layer, and browser actions in the execution layer.
+
+The core understands **generic nodes, relationships, groups, state, and traversal**. The semantic layer learns what those nodes mean in a particular business domain.
