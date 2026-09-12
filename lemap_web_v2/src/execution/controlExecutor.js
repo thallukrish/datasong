@@ -1,4 +1,7 @@
+import { createDefaultAdapterRegistry } from '../adapters/adapterRegistry.js';
 import { resolveEntityLocator, createPageLocator } from './entityLocator.js';
+
+const DEFAULT_ADAPTER_REGISTRY = createDefaultAdapterRegistry();
 
 function isVisibleInFrame(activeFrame, entityId) {
   const visible = Array.isArray(activeFrame?.visibleEntityIds)
@@ -11,11 +14,19 @@ function instancePatch(entityId, value) {
   return value === undefined ? null : { entityId, value };
 }
 
+async function executeAdapterAction({ adapterRegistry, page, entity, locator, action }) {
+  if (!adapterRegistry || typeof adapterRegistry.forSource !== 'function') return false;
+  const adapter = adapterRegistry.forSource(entity.structural?.sourceAdapter);
+  if (!adapter || typeof adapter.executeControlAction !== 'function') return false;
+  return adapter.executeControlAction({ page, entity, locator, action });
+}
+
 export async function executeControlAction({
   page,
   entity,
   activeFrame,
-  action = {}
+  action = {},
+  adapterRegistry = DEFAULT_ADAPTER_REGISTRY
 } = {}) {
   if (entity?.type !== 'ui_control') {
     throw new Error('executeControlAction requires a ui_control entity.');
@@ -31,6 +42,10 @@ export async function executeControlAction({
   const locatorSpec = resolveEntityLocator(entity);
   const locator = createPageLocator(page, locatorSpec);
   const type = String(action?.type || '');
+
+  if (await executeAdapterAction({ adapterRegistry, page, entity, locator, action })) {
+    return { instancePatch: instancePatch(entity.id, action.value) };
+  }
 
   switch (type) {
     case 'click':
