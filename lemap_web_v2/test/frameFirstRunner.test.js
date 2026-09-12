@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityGraph } from '../src/graph/entityGraph.js';
 import { createInstanceGraph } from '../src/graph/instanceGraph.js';
-import { createWorkflow } from '../src/workflow/workflowTraversal.js';
+import { createWorkflow, appendWorkflowStep } from '../src/workflow/workflowTraversal.js';
 import { createFrame, createContextStack, activeContext, pushContext, popContext } from '../src/orchestrator/contextStack.js';
-import { runApplication } from '../src/app/applicationRunner.js';
+import { runApplication, filterWorkflowNavigationCandidates } from '../src/app/applicationRunner.js';
 
 function input(id) {
   return { id, type: 'ui_control', name: id, structural: { controlType: 'text' }, semantic: { interaction: 'user_input', relevantToGoal: true, required: true, question: id }, links: [] };
@@ -107,4 +107,27 @@ test('a revealed child frame is resolved before returning to parent navigation',
   assert.equal(result.reason, 'max_steps');
   assert.deepEqual(order, ['input:field:parent', 'input:field:child', 'navigate:next']);
   assert.equal(activeContext(current.contextStack).kind, 'page');
+});
+
+test('workflow navigation removes global links, explicit back links and known destinations already visited', () => {
+  const next = button('next');
+  next.links.push({ id: 'page:new', relationship: 'transitionsTo' });
+
+  const previous = button('previous');
+  previous.links.push({ id: 'page:old', relationship: 'transitionsTo' });
+
+  const back = button('back');
+  back.semantic.workflowRole = 'back';
+
+  const global = button('home');
+  global.structural.siteChrome = true;
+
+  const current = state([next, previous, back, global]);
+  appendWorkflowStep(current.workflow, { pageEntityId: 'page:old' });
+  appendWorkflowStep(current.workflow, { pageEntityId: 'page:a' });
+
+  assert.deepEqual(
+    filterWorkflowNavigationCandidates([next, previous, back, global], current).map((entity) => entity.id),
+    ['next']
+  );
 });
