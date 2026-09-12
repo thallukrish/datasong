@@ -6,15 +6,17 @@ const MATERIAL_TYPES = new Map([
   ['mat-select', 'select']
 ]);
 
-async function openMaterialSelect(locator) {
+async function openMaterialSelect(locator, probe = null) {
   if (!locator) return false;
 
   if (typeof locator.locator === 'function') {
     const trigger = locator.locator('.mat-select-trigger, .mat-mdc-select-trigger');
     const first = typeof trigger?.first === 'function' ? trigger.first() : trigger;
+    if (probe) probe.triggerFound = !!first;
     if (first && typeof first.click === 'function') {
       try {
         await first.click({ timeout: 1000 });
+        if (probe) probe.triggerClickSucceeded = true;
         return true;
       } catch {}
     }
@@ -41,10 +43,10 @@ export const angularMaterialAdapter = {
     if (!label) return null;
     return canonicalControl(node, { controlType, label, sourceAdapter: 'angular-material' });
   },
-  async openValueDomain({ entity, locator } = {}) {
+  async openValueDomain({ entity, locator, probe = null } = {}) {
     if (entity?.type !== 'ui_control') return false;
     if (String(entity.structural?.controlType || '').toLowerCase() !== 'select') return false;
     if (String(entity.structural?.tag || '').toLowerCase() !== 'mat-select') return false;
-    return openMaterialSelect(locator);
+    return openMaterialSelect(locator, probe);
   }
 };
