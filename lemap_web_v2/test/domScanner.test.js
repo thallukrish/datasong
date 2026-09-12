@@ -36,6 +36,10 @@ function attachDocument(root) {
   return root;
 }
 
+function serializedFunction(fn) {
+  return (0, eval)(`(${fn.toString()})`);
+}
+
 test('scanDomTree preserves visible hierarchy and direct text without inventing semantics', () => {
   const input = element('input', { attrs: { id: 'income', name: 'income', type: 'text', value: 'PRIVATE-1234' } });
   const section = element('section', { attrs: { id: 'income-section' }, text: ['Income details'], children: [input] });
@@ -65,9 +69,22 @@ test('scanDomTree excludes non-visible and non-content DOM branches', () => {
   assert.deepEqual(result.children.map((child) => child.directText), ['Shown']);
 });
 
+test('scanDomTree is self-contained when serialized into the browser context', () => {
+  const input = element('input', { attrs: { id: 'income', value: 'PRIVATE-1234' } });
+  const script = element('script', { text: ['private-script'] });
+  const root = attachDocument(element('body', { children: [input, script] }));
+  const browserScan = serializedFunction(scanDomTree);
+
+  const result = browserScan(root);
+
+  assert.equal(result.children.length, 1);
+  assert.equal(result.children[0].attributes.id, 'income');
+  assert.equal(Object.hasOwn(result.children[0].attributes, 'value'), false);
+});
+
 test('captureVisibleDom returns page metadata plus the local structural tree', async () => {
   const root = attachDocument(element('body', { children: [element('div', { text: ['Hello'] })] }));
-  const handle = { evaluate: async (fn) => fn(root) };
+  const handle = { evaluate: async (fn) => serializedFunction(fn)(root) };
   const page = {
     url: () => 'https://example.test/form?session=secret',
     title: async () => 'Example form',
