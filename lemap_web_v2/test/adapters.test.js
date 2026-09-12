@@ -104,3 +104,55 @@ test('registry uses the first adapter that successfully parses a node', () => {
   assert.deepEqual(localRegistry.parse(node('div')), { ok: true });
   assert.deepEqual(calls, ['first', 'second']);
 });
+
+test('registry resolves runtime behavior by canonical sourceAdapter name', () => {
+  assert.equal(registry.forSource('angular-material'), angularMaterialAdapter);
+  assert.equal(registry.forSource('native-control'), nativeControlAdapter);
+  assert.equal(registry.forSource('missing-adapter'), null);
+});
+
+test('Angular Material owns mat-select selection mechanics inside the adapter', async () => {
+  const calls = [];
+  const host = {
+    click: async () => calls.push(['host-click'])
+  };
+  const option = {
+    first: () => option,
+    click: async () => calls.push(['option-click', '2026-27'])
+  };
+  const page = {
+    locator: (selector) => {
+      assert.equal(selector, '[role="option"]');
+      return {
+        count: async () => 0
+      };
+    },
+    getByRole: (role, options) => {
+      assert.equal(role, 'option');
+      assert.deepEqual(options, { name: '2026-27', exact: true });
+      return option;
+    }
+  };
+  const entity = {
+    id: 'year',
+    type: 'ui_control',
+    structural: {
+      controlType: 'select',
+      tag: 'mat-select',
+      sourceAdapter: 'angular-material'
+    }
+  };
+
+  const handled = await angularMaterialAdapter.executeControlAction({
+    page,
+    entity,
+    locator: host,
+    action: { type: 'select', value: '2026-27' }
+  });
+
+  assert.equal(handled, true);
+  assert.deepEqual(calls, [
+    ['host-click'],
+    ['option-click', '2026-27']
+  ]);
+});
