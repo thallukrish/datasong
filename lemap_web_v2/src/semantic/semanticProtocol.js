@@ -49,13 +49,22 @@ export function buildSemanticRequest({ query = '', workflowPages = [], currentPa
     query: text(query, 300),
     workflowPages: arr(workflowPages).map(compactPage).filter(Boolean),
     ...(compactPage(currentPage) ? { currentPage: compactPage(currentPage) } : {}),
+    semanticContract: {
+      relevantInputsRequire: ['interaction', 'relevantToGoal', 'required', 'question'],
+      interactionValue: 'user_input',
+      omitIrrelevant: true,
+      responseShape: 'entities:id+semantic'
+    },
     entities: arr(entities).map(compactEntity).filter((entity) => entity.id)
   };
 }
 
 export function normalizeSemanticResponse(raw = {}, allowedEntityIds = []) {
   const allowed = new Set(arr(allowedEntityIds).map(String));
-  return arr(raw.entities).flatMap((item) => {
+  const rows = arr(raw.entities).length
+    ? arr(raw.entities)
+    : arr(raw.patches).map((item) => ({ id: item?.entityId, semantic: item?.semantic }));
+  return rows.flatMap((item) => {
     const id = String(item?.id || '');
     if (!allowed.has(id) || !item?.semantic || typeof item.semantic !== 'object' || Array.isArray(item.semantic)) return [];
     const semantic = {};
