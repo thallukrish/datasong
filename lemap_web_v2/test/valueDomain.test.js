@@ -52,8 +52,8 @@ test('enumerateEntityValueDomain opens a combobox overlay and reads visible role
   };
   const page = {
     getByLabel: () => controlLocator,
-    locator: (selector) => {
-      assert.equal(selector, '[role="option"]');
+    getByRole: (role) => {
+      assert.equal(role, 'option');
       return roleOptions;
     },
     waitForTimeout: async () => {},
@@ -71,6 +71,54 @@ test('enumerateEntityValueDomain opens a combobox overlay and reads visible role
   assert.deepEqual(await enumerateEntityValueDomain(page, entity), ['2026-27', '2025-26']);
   assert.equal(opened, true);
   assert.equal(escaped, true);
+});
+
+test('enumerateEntityValueDomain reports compact locator diagnostics without option text', async () => {
+  const probes = [];
+  const page = {
+    getByLabel: () => ({
+      locator: () => ({ allTextContents: async () => [] }),
+      click: async () => { throw new Error('not clickable'); }
+    }),
+    getByRole: () => ({ count: async () => 0, nth: () => null })
+  };
+  const entity = {
+    id: 'year',
+    type: 'ui_control',
+    name: 'Assessment year',
+    structural: {
+      controlType: 'select',
+      tag: 'mat-select',
+      role: 'combobox',
+      domId: '',
+      name: '',
+      label: 'Assessment year'
+    },
+    semantic: {},
+    links: []
+  };
+
+  const values = await enumerateEntityValueDomain(page, entity, {
+    onProbe: async (probe) => probes.push(probe)
+  });
+
+  assert.deepEqual(values, []);
+  assert.equal(probes.length, 1);
+  assert.deepEqual(probes[0], {
+    entityId: 'year',
+    controlType: 'select',
+    tag: 'mat-select',
+    role: 'combobox',
+    hasDomId: false,
+    hasName: false,
+    hasLabel: true,
+    locatorStrategy: 'label',
+    locatorResolved: true,
+    nativeOptionCount: 0,
+    opened: false,
+    visibleOptionCount: 0
+  });
+  assert.equal(JSON.stringify(probes).includes('2026-27'), false);
 });
 
 test('runner learns missing finite choices before asking the user', async () => {
