@@ -38,12 +38,16 @@ test('supports safe ids, counts, booleans and stable error codes', () => {
     workflowId: 'workflow:1',
     visibleEntityIds: ['control:a', 'control:b', 'control:a'],
     retryable: true,
+    instanceExists: true,
+    appliedInFrame: false,
     errorCode: 'LOCATOR_NOT_FOUND',
     errorMessage: 'sensitive free text'
   });
 
   assert.deepEqual(event.visibleEntityIds, ['control:a', 'control:b']);
   assert.equal(event.retryable, true);
+  assert.equal(event.instanceExists, true);
+  assert.equal(event.appliedInFrame, false);
   assert.equal(event.errorCode, 'LOCATOR_NOT_FOUND');
   assert.equal('errorMessage' in event, false);
 });
