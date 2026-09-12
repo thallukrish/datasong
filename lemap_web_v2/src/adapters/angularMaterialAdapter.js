@@ -61,6 +61,31 @@ async function openMaterialSelect(page, locator, probe = null) {
   return false;
 }
 
+function first(locator) {
+  if (locator && typeof locator.first === 'function') return locator.first();
+  return locator;
+}
+
+async function selectMaterialOption(page, value) {
+  if (typeof page?.getByRole !== 'function') {
+    throw new Error('Angular Material option selection requires role-capable browser access.');
+  }
+  const option = first(page.getByRole('option', {
+    name: String(value ?? ''),
+    exact: true
+  }));
+  if (!option || typeof option.click !== 'function') {
+    throw new Error('Angular Material option is not actionable.');
+  }
+  await option.click();
+}
+
+function isMaterialSelect(entity = {}) {
+  return entity?.type === 'ui_control'
+    && String(entity.structural?.controlType || '').toLowerCase() === 'select'
+    && String(entity.structural?.tag || '').toLowerCase() === 'mat-select';
+}
+
 export const angularMaterialAdapter = {
   name: 'angular-material',
   parse(node = {}) {
@@ -73,9 +98,16 @@ export const angularMaterialAdapter = {
     return canonicalControl(node, { controlType, label, sourceAdapter: 'angular-material' });
   },
   async openValueDomain({ page, entity, locator, probe = null } = {}) {
-    if (entity?.type !== 'ui_control') return false;
-    if (String(entity.structural?.controlType || '').toLowerCase() !== 'select') return false;
-    if (String(entity.structural?.tag || '').toLowerCase() !== 'mat-select') return false;
+    if (!isMaterialSelect(entity)) return false;
     return openMaterialSelect(page, locator, probe);
+  },
+  async executeControlAction({ page, entity, locator, action = {} } = {}) {
+    if (!isMaterialSelect(entity)) return false;
+    if (String(action?.type || '') !== 'select') return false;
+
+    const opened = await openMaterialSelect(page, locator);
+    if (!opened) throw new Error('Could not open Angular Material select control.');
+    await selectMaterialOption(page, action.value);
+    return true;
   }
 };
