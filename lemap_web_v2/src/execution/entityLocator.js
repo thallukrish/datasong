@@ -10,6 +10,11 @@ function escapeCssId(value) {
   return clean(value).replace(/([#.;:[\],>+~*'"\\])/g, '\\$1');
 }
 
+function firstMatch(locator) {
+  if (locator && typeof locator.first === 'function') return locator.first();
+  return locator;
+}
+
 export function resolveEntityLocator(entity = {}) {
   if (entity?.type !== 'ui_control') {
     throw new Error('resolveEntityLocator requires a ui_control entity.');
@@ -49,15 +54,15 @@ export function createPageLocator(page, locatorSpec) {
 
   if (locatorSpec.strategy === 'css') {
     if (typeof page.locator !== 'function') throw new Error('page.locator() is required.');
-    return page.locator(locatorSpec.selector);
+    return firstMatch(page.locator(locatorSpec.selector));
   }
 
   if (locatorSpec.strategy === 'label') {
     if (typeof page.getByLabel === 'function') {
-      return page.getByLabel(locatorSpec.label);
+      return firstMatch(page.getByLabel(locatorSpec.label));
     }
     if (typeof page.locator === 'function') {
-      return page.locator(`[aria-label="${escapeCssAttribute(locatorSpec.label)}"]`);
+      return firstMatch(page.locator(`[aria-label="${escapeCssAttribute(locatorSpec.label)}"]`));
     }
     throw new Error('A label-capable page locator is required.');
   }
