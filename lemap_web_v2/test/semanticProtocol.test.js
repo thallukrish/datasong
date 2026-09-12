@@ -2,17 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selectSemanticCandidates, buildSemanticRequest, normalizeSemanticResponse, buildNavigationRequest, normalizeNavigationResponse } from '../src/semantic/semanticProtocol.js';
 
-function control(id, name, semantic = {}, structural = {}) {
-  return { id, type: 'ui_control', name, structural: { controlType: 'text', label: name, ...structural }, semantic, links: [] };
+function control(id, name, semantic = {}, structural = {}, links = []) {
+  return { id, type: 'ui_control', name, structural: { controlType: 'text', label: name, ...structural }, semantic, links };
 }
 
-test('selects only unresolved non-navigation entities', () => {
+test('selects only unresolved non-navigation semantic targets', () => {
   const entities = [
     control('a', 'Income'),
     control('b', 'Address', { meaning: 'Postal address', interaction: 'user_input', relevantToGoal: true, required: true, question: 'Address?' }),
-    control('c', 'Continue', {}, { controlType: 'button' })
+    control('c', 'Continue', {}, { controlType: 'button' }),
+    { id: 'container:1', type: 'container', name: 'div', structural: {}, semantic: {}, links: [] },
+    { id: 'page:1', type: 'page', name: 'Return', structural: {}, semantic: {}, links: [] }
   ];
-  assert.deepEqual(selectSemanticCandidates(entities).map((e) => e.id), ['a']);
+  assert.deepEqual(selectSemanticCandidates(entities).map((e) => e.id), ['a', 'page:1']);
+});
+
+test('suppresses choice members when their ui_group represents the user decision', () => {
+  const group = { id: 'group:mode', type: 'ui_group', name: 'Mode of Filing', structural: { cardinality: 'exactlyOne', memberIds: ['online', 'offline'] }, semantic: {}, links: [] };
+  const online = control('online', 'Online', {}, { controlType: 'radio' }, [{ id: group.id, relationship: 'memberOf' }]);
+  const offline = control('offline', 'Offline', {}, { controlType: 'radio' }, [{ id: group.id, relationship: 'memberOf' }]);
+  assert.deepEqual(selectSemanticCandidates([group, online, offline]).map((e) => e.id), ['group:mode']);
 });
 
 test('semantic request is compact and omits runtime state', () => {
