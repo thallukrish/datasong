@@ -6,10 +6,6 @@ function escapeCssAttribute(value) {
   return clean(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function escapeCssId(value) {
-  return clean(value).replace(/([#.;:[\],>+~*'"\\])/g, '\\$1');
-}
-
 function firstMatch(locator) {
   if (locator && typeof locator.first === 'function') return locator.first();
   return locator;
@@ -25,7 +21,7 @@ export function resolveEntityLocator(entity = {}) {
   if (domId) {
     return {
       strategy: 'css',
-      selector: `#${escapeCssId(domId)}`
+      selector: `[id="${escapeCssAttribute(domId)}"]`
     };
   }
 
