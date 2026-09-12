@@ -45,6 +45,7 @@ test('delegates Angular Material value-domain opening to the framework adapter',
   const host = {
     click: async () => { hostClicked = true; throw new Error('host is not the interactive trigger'); },
     locator: (selector) => {
+      if (selector === 'option') return { allTextContents: async () => [] };
       assert.match(selector, /mat-select-trigger|mat-mdc-select-trigger/);
       return { first: () => ({ click: async () => { triggerClicked = true; } }) };
     }
