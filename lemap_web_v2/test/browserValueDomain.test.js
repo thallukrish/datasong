@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { enumerateEntityValueDomain } from '../src/browser/valueDomain.js';
 
+const ASSESSMENT_YEAR_SELECTOR = '[id="assessmentYear"]';
+
 test('returns native select option labels without duplication', async () => {
   const page = {
     getByLabel: () => ({
@@ -42,6 +44,7 @@ test('Angular Material opens the canonical mat-select host instead of depending 
     { isVisible: async () => hostClicked, innerText: async () => '2025-26' }
   ];
   const host = {
+    first: () => host,
     click: async () => { hostClicked = true; },
     locator: (selector) => {
       if (selector === 'option') return { allTextContents: async () => [] };
@@ -50,7 +53,7 @@ test('Angular Material opens the canonical mat-select host instead of depending 
   };
   const page = {
     locator: (selector) => {
-      if (selector === '#assessmentYear') return host;
+      if (selector === ASSESSMENT_YEAR_SELECTOR) return host;
       if (selector === '[role="option"]') {
         return { count: async () => roleOptions.length, nth: (index) => roleOptions[index] };
       }
@@ -90,6 +93,7 @@ test('Angular Material falls back to DOM click on the host when Playwright click
   let domClicked = false;
   let probe = null;
   const host = {
+    first: () => host,
     click: async () => { throw new Error('locator.click: Timeout 1000ms exceeded because another element intercepts pointer events'); },
     evaluate: async (fn) => {
       domClicked = true;
@@ -103,7 +107,7 @@ test('Angular Material falls back to DOM click on the host when Playwright click
   const option = { isVisible: async () => domClicked, innerText: async () => '2026-27' };
   const page = {
     locator: (selector) => {
-      if (selector === '#assessmentYear') return host;
+      if (selector === ASSESSMENT_YEAR_SELECTOR) return host;
       if (selector === '[role="option"]') return { count: async () => 1, nth: () => option };
       throw new Error(`unexpected selector: ${selector}`);
     },
@@ -155,7 +159,7 @@ test('value-domain probe records selector and matched element structure', async 
   const option = { isVisible: async () => opened, innerText: async () => '2026-27' };
   const page = {
     locator: (selector) => {
-      if (selector === '#assessmentYear') return hostCollection;
+      if (selector === ASSESSMENT_YEAR_SELECTOR) return hostCollection;
       if (selector === '[role="option"]') return { count: async () => 1, nth: () => option };
       throw new Error(`unexpected selector: ${selector}`);
     },
@@ -176,7 +180,7 @@ test('value-domain probe records selector and matched element structure', async 
   };
 
   await enumerateEntityValueDomain(page, entity, { onProbe: async (event) => { probe = event; } });
-  assert.equal(probe.locatorSelector, '#assessmentYear');
+  assert.equal(probe.locatorSelector, ASSESSMENT_YEAR_SELECTOR);
   assert.equal(probe.locatorMatchCount, 2);
   assert.equal(probe.matchedTag, 'mat-select');
   assert.equal(probe.matchedRole, 'combobox');
