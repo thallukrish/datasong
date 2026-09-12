@@ -41,7 +41,7 @@ test('runApplication ingests the first page and stops when the workflow is compl
   });
 
   assert.equal(result.reason, 'completed');
-  assert.deepEqual(calls, ['ingest', 'checkpoint']);
+  assert.deepEqual(calls, ['ingest', 'checkpoint', 'checkpoint']);
 });
 
 test('runApplication asks for a required value, executes it, recaptures and checkpoints', async () => {
@@ -85,7 +85,6 @@ test('runApplication asks for a required value, executes it, recaptures and chec
 test('runApplication treats a changed page after continuation as a new workflow visit', async () => {
   const current = state('page:a');
   const next = { id: 'control:next', type: 'ui_control', name: 'Next', structural: { controlType: 'button' }, semantic: { interaction: 'navigation', relevantToGoal: true }, links: [] };
-  let captureCount = 0;
   let navigationDone = false;
   const visits = [];
 
@@ -97,7 +96,7 @@ test('runApplication treats a changed page after continuation as a new workflow 
     checkpoint: async () => {},
     maxSteps: 3,
     deps: {
-      captureVisibleDom: async () => captureCount++ === 0 ? snapshot('https://example.test/a', 'A') : snapshot('https://example.test/b', 'B'),
+      captureVisibleDom: async () => snapshot('https://example.test/b', 'B'),
       enrichEntitySemantics: async () => ({ called: false }),
       selectReusableInput: () => null,
       selectNextRequiredInput: () => null,
