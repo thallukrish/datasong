@@ -120,9 +120,12 @@ export function selectNavigationCandidates(entities = [], {
     if (applied.has(String(entity.id || ''))) return false;
     if (!['button', 'link'].includes(String(entity.structural?.controlType || ''))) return false;
     if (!visibleAndEnabled(entity, visibleEntityIds)) return false;
+
     const semantic = entity.semantic || {};
-    return semantic.relevantToGoal === true
-      && ['navigation', 'action'].includes(String(semantic.interaction || ''));
+    if (semantic.relevantToGoal === false) return false;
+    const interaction = String(semantic.interaction || '');
+    if (interaction && !['navigation', 'action'].includes(interaction)) return false;
+    return true;
   });
 }
 
