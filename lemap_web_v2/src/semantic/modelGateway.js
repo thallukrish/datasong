@@ -17,7 +17,21 @@ export function createModelGateway({ invoke, logger = null } = {}) {
       const request = { operation: normalizedOperation, payload };
       assertModelSafe(request);
       if (logger) await logger.logModelInput(request);
-      const response = await invoke(request);
+
+      let response;
+      try {
+        response = await invoke(request);
+      } catch (error) {
+        if (error && typeof error === 'object') {
+          error.lemapStage = 'model_gateway';
+          error.lemapOperation = normalizedOperation;
+        }
+        if (logger && typeof logger.logModelError === 'function') {
+          await logger.logModelError(normalizedOperation, error);
+        }
+        throw error;
+      }
+
       if (logger) await logger.logModelOutput(normalizedOperation, response);
       return response;
     }
