@@ -2,16 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runConfiguredApplication } from '../src/app/bootstrap.js';
 
-test('runConfiguredApplication composes browser, persistence, gateway and runner', async () => {
+test('runConfiguredApplication composes browser, persistence, logger, gateway and runner', async () => {
   const calls = [];
   const config = {
     browser: { cdpUrl: 'http://127.0.0.1:9222' },
-    model: { provider: 'openai-compatible', name: 'model-x', endpoint: 'https://model.test/v1', apiKey: 'secret' },
+    model: { provider: 'openai-compatible', name: 'model-x', endpoint: 'https://model.test/v1', apiKey: 'k' },
     storage: { entityGraphPath: 'e.json', instanceGraphPath: 'i.json', workflowLogPath: 'wf' },
     runtime: { maxSteps: 7 }
   };
   const page = { id: 'page-object' };
   const state = { entityGraph: { entities: [] }, instanceGraph: { instances: [] }, workflow: { id: 'wf:1', steps: [] }, contextStack: null };
+  const logger = { path: 'data/logs/layer27-run.jsonl', log: async (type, data) => calls.push(['log', type, data]) };
   let closed = false;
 
   const result = await runConfiguredApplication({
@@ -21,29 +22,37 @@ test('runConfiguredApplication composes browser, persistence, gateway and runner
     requestInput: async () => 'x',
     deps: {
       connectBrowserSession: async () => ({ page, close: async () => { closed = true; } }),
+      createRunLogger: async () => logger,
       createProviderInvoke: () => async () => ({ patches: [] }),
-      createModelGateway: ({ invoke }) => ({ run: invoke }),
+      createModelGateway: ({ invoke, logger: receivedLogger }) => {
+        assert.equal(receivedLogger, logger);
+        return { run: invoke };
+      },
       loadPersistentRunState: async (args) => { calls.push(['load', args.workflowId]); return state; },
       checkpointRunState: async () => calls.push(['checkpoint']),
       runApplication: async (args) => {
-        calls.push(['run', args.page, args.maxSteps, typeof args.gateway.run]);
+        calls.push(['run', args.page, args.maxSteps, typeof args.gateway.run, args.logger === logger]);
         await args.checkpoint(state);
-        return { reason: 'completed', state };
+        return { reason: 'completed', steps: 0, state };
       }
     }
   });
 
   assert.equal(result.reason, 'completed');
+  assert.equal(result.logPath, 'data/logs/layer27-run.jsonl');
   assert.deepEqual(calls, [
+    ['log', 'run.start', { workflowId: 'wf:1' }],
     ['load', 'wf:1'],
-    ['run', page, 7, 'function'],
-    ['checkpoint']
+    ['run', page, 7, 'function', true],
+    ['checkpoint'],
+    ['log', 'run.stop', { workflowId: 'wf:1', completed: true, stage: 'completed', step: 0 }]
   ]);
   assert.equal(closed, true);
 });
 
 test('runConfiguredApplication always closes its CDP connection when the runner fails', async () => {
   let closed = false;
+  const logged = [];
   await assert.rejects(() => runConfiguredApplication({
     config: {
       browser: { cdpUrl: 'http://127.0.0.1:9222' },
@@ -55,6 +64,7 @@ test('runConfiguredApplication always closes its CDP connection when the runner 
     query: 'q',
     deps: {
       connectBrowserSession: async () => ({ page: {}, close: async () => { closed = true; } }),
+      createRunLogger: async () => ({ path: 'x.jsonl', log: async (type, data) => logged.push([type, data]) }),
       createProviderInvoke: () => async () => ({}),
       createModelGateway: () => ({ run: async () => ({}) }),
       loadPersistentRunState: async () => ({ entityGraph: { entities: [] }, instanceGraph: { instances: [] }, workflow: { id: 'wf:1', steps: [] }, contextStack: null }),
@@ -63,4 +73,6 @@ test('runConfiguredApplication always closes its CDP connection when the runner 
     }
   }), /boom/);
   assert.equal(closed, true);
+  assert.equal(logged[0][0], 'run.start');
+  assert.equal(logged.at(-1)[0], 'run.error');
 });
