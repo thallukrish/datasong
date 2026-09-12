@@ -39,6 +39,7 @@ export async function runConfiguredApplication({
     workflowId,
     layer: 'layer27'
   });
+  console.log(`[LeMap-Web] log: ${logger.path}`);
   await logger.log('run.start', { workflowId });
 
   const session = await deps.connectBrowserSession({ config, chromium });
