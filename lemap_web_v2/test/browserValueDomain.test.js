@@ -33,27 +33,19 @@ test('reuses known structural values without browser access', async () => {
   assert.deepEqual(await enumerateEntityValueDomain({}, entity), ['Online', 'Offline']);
 });
 
-test('delegates Angular Material value-domain opening to the framework adapter', async () => {
+test('Angular Material opens the canonical mat-select host instead of depending on internal trigger classes', async () => {
   let hostClicked = false;
-  let triggerClicked = false;
   let escaped = false;
   let probe = null;
   const roleOptions = [
-    { isVisible: async () => triggerClicked, innerText: async () => '2026-27' },
-    { isVisible: async () => triggerClicked, innerText: async () => '2025-26' }
+    { isVisible: async () => hostClicked, innerText: async () => '2026-27' },
+    { isVisible: async () => hostClicked, innerText: async () => '2025-26' }
   ];
-  const trigger = {
-    count: async () => 1,
-    isVisible: async () => true,
-    isEnabled: async () => true,
-    click: async () => { triggerClicked = true; }
-  };
   const host = {
-    click: async () => { hostClicked = true; throw new Error('host is not the interactive trigger'); },
+    click: async () => { hostClicked = true; },
     locator: (selector) => {
       if (selector === 'option') return { allTextContents: async () => [] };
-      assert.match(selector, /mat-select-trigger|mat-mdc-select-trigger/);
-      return { first: () => trigger, count: async () => 1 };
+      throw new Error(`internal Angular selector should not be used: ${selector}`);
     }
   };
   const page = {
@@ -84,44 +76,39 @@ test('delegates Angular Material value-domain opening to the framework adapter',
   };
 
   assert.deepEqual(await enumerateEntityValueDomain(page, entity, { onProbe: async (event) => { probe = event; } }), ['2026-27', '2025-26']);
-  assert.equal(hostClicked, false);
-  assert.equal(triggerClicked, true);
+  assert.equal(hostClicked, true);
   assert.equal(escaped, true);
   assert.equal(probe.sourceAdapter, 'angular-material');
   assert.equal(probe.adapterResolved, true);
   assert.equal(probe.adapterName, 'angular-material');
   assert.equal(probe.adapterOpenAttempted, true);
-  assert.equal(probe.triggerFound, true);
-  assert.equal(probe.triggerCount, 1);
-  assert.equal(probe.triggerVisible, true);
-  assert.equal(probe.triggerEnabled, true);
-  assert.equal(probe.triggerAttached, true);
-  assert.equal(probe.triggerClickSucceeded, true);
-  assert.equal(probe.triggerClickErrorCode, '');
+  assert.equal(probe.hostClickSucceeded, true);
+  assert.equal(probe.hostDomClickSucceeded, false);
 });
 
-test('Angular Material probe classifies a failed trigger click without logging raw error text', async () => {
+test('Angular Material falls back to DOM click on the host when Playwright click cannot open it', async () => {
+  let domClicked = false;
   let probe = null;
-  const trigger = {
-    count: async () => 1,
-    isVisible: async () => true,
-    isEnabled: async () => true,
-    click: async () => { throw new Error('locator.click: Timeout 1000ms exceeded because another element intercepts pointer events'); }
-  };
   const host = {
-    click: async () => { throw new Error('host click also failed'); },
+    click: async () => { throw new Error('locator.click: Timeout 1000ms exceeded because another element intercepts pointer events'); },
+    evaluate: async (fn) => {
+      domClicked = true;
+      fn({ click() {} });
+    },
     locator: (selector) => {
       if (selector === 'option') return { allTextContents: async () => [] };
-      return { first: () => trigger, count: async () => 1 };
+      throw new Error(`internal Angular selector should not be used: ${selector}`);
     }
   };
+  const option = { isVisible: async () => domClicked, innerText: async () => '2026-27' };
   const page = {
     locator: (selector) => {
       if (selector === '#assessmentYear') return host;
-      if (selector === '[role="option"]') return { count: async () => 0, nth: () => null };
+      if (selector === '[role="option"]') return { count: async () => 1, nth: () => option };
       throw new Error(`unexpected selector: ${selector}`);
     },
-    waitForTimeout: async () => {}
+    waitForTimeout: async () => {},
+    keyboard: { press: async () => {} }
   };
   const entity = {
     id: 'year',
@@ -135,12 +122,10 @@ test('Angular Material probe classifies a failed trigger click without logging r
     }
   };
 
-  assert.deepEqual(await enumerateEntityValueDomain(page, entity, { onProbe: async (event) => { probe = event; } }), []);
-  assert.equal(probe.triggerCount, 1);
-  assert.equal(probe.triggerVisible, true);
-  assert.equal(probe.triggerEnabled, true);
-  assert.equal(probe.triggerAttached, true);
-  assert.equal(probe.triggerClickSucceeded, false);
-  assert.equal(probe.triggerClickErrorCode, 'POINTER_INTERCEPTED');
+  assert.deepEqual(await enumerateEntityValueDomain(page, entity, { onProbe: async (event) => { probe = event; } }), ['2026-27']);
+  assert.equal(domClicked, true);
+  assert.equal(probe.hostClickSucceeded, false);
+  assert.equal(probe.hostClickErrorCode, 'POINTER_INTERCEPTED');
+  assert.equal(probe.hostDomClickSucceeded, true);
   assert.equal(JSON.stringify(probe).includes('another element intercepts pointer events'), false);
 });
