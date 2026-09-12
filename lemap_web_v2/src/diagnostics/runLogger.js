@@ -43,6 +43,17 @@ function assertRuntimeSafe(value, pathParts = []) {
   }
 }
 
+function modelErrorData(operation, error) {
+  const out = {
+    operation: String(operation ?? ''),
+    errorCode: String(error?.code || 'MODEL_ERROR'),
+    errorType: String(error?.name || 'Error'),
+    retryable: error?.retryable === true
+  };
+  if (Number.isInteger(error?.statusCode)) out.statusCode = error.statusCode;
+  return out;
+}
+
 export async function createRunLogger({
   directory = 'data/logs',
   workflowId = '',
@@ -101,6 +112,17 @@ export async function createRunLogger({
         type: `${normalizedLayer}.model.output`,
         operation: String(operation ?? ''),
         response: structuredClone(response)
+      };
+      await write(event);
+      return event;
+    },
+
+    async logModelError(operation, error) {
+      const event = {
+        sequence: sequence += 1,
+        timestamp: now().toISOString(),
+        type: `${normalizedLayer}.model.error`,
+        ...modelErrorData(operation, error)
       };
       await write(event);
       return event;
