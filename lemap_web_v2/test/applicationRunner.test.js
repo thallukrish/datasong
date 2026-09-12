@@ -146,6 +146,34 @@ test('runApplication stops at maxSteps when work keeps continuing', async () => 
   assert.equal(clicks, 2);
 });
 
+test('runApplication logs semantic and navigation decisions without runtime values', async () => {
+  const current = state('page:a');
+  const next = { id: 'control:next', type: 'ui_control', name: 'Next', structural: { controlType: 'button' }, semantic: {}, links: [] };
+  const events = [];
+  const logger = { log: async (type, data) => events.push([type, data]) };
+
+  const result = await runApplication({
+    state: current,
+    page: {},
+    query: 'q',
+    gateway: {},
+    logger,
+    deps: {
+      enrichEntitySemantics: async () => ({ called: true, updatedEntityIds: [] }),
+      selectReusableInput: () => null,
+      selectNextRequiredInput: () => null,
+      selectNavigationCandidates: () => [next],
+      chooseNavigationCandidate: async () => null
+    }
+  });
+
+  assert.equal(result.reason, 'blocked');
+  assert.equal(events.some(([type]) => type === 'semantic.enrichment'), true);
+  assert.equal(events.some(([type]) => type === 'navigation.candidates'), true);
+  assert.equal(events.some(([type]) => type === 'navigation.blocked'), true);
+  assert.equal(JSON.stringify(events).includes('value'), false);
+});
+
 test('persistent run state loads graphs/workflow and checkpoints all three stores', async () => {
   const loaded = { entityGraph: createEntityGraph(), instanceGraph: createInstanceGraph(), workflow: createWorkflow({ id: 'wf:x', originalQuestion: 'q' }) };
   const loads = [];
