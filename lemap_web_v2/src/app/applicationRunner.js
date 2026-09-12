@@ -45,6 +45,10 @@ const DEFAULT_DEPS = {
   pageIdForSnapshot: (snapshot) => createPageEntity(snapshot).id
 };
 
+async function logEvent(logger, type, data = {}) {
+  if (logger?.log) await logger.log(type, data);
+}
+
 function requireStorageConfig(config) {
   const storage = config?.storage;
   if (!storage?.entityGraphPath || !storage?.instanceGraphPath || !storage?.workflowLogPath) {
@@ -145,11 +149,17 @@ async function observeAfterAction({
   state,
   page,
   triggerEntityId,
-  deps
+  deps,
+  logger
 }) {
   const snapshot = await deps.captureVisibleDom(page);
   const frame = activeContext(state.contextStack);
   const nextPageId = deps.pageIdForSnapshot(snapshot);
+
+  await logEvent(logger, 'capture', {
+    pageEntityId: nextPageId,
+    entityId: triggerEntityId || ''
+  });
 
   if (nextPageId === frame.pageEntityId) {
     return deps.refreshCurrentPage(state, snapshot, {
@@ -166,17 +176,24 @@ async function checkpoint(checkpointFn, state) {
   if (typeof checkpointFn === 'function') await checkpointFn(state);
 }
 
-async function enrichActiveFrame({ state, gateway, query, deps }) {
+async function enrichActiveFrame({ state, gateway, query, deps, logger }) {
   let entities = visibleEntities(state);
   const frame = activeContext(state.contextStack);
 
-  await deps.enrichEntitySemantics({
+  const result = await deps.enrichEntitySemantics({
     graph: state.entityGraph,
     gateway,
     entityIds: entities.map((entity) => entity.id),
     query,
     workflowPages: state.workflow.steps,
     currentPage: currentPageEntity(state, frame)
+  });
+
+  await logEvent(logger, 'semantic.enrichment', {
+    pageEntityId: frame.pageEntityId,
+    frameId: frame.id,
+    entityCount: entities.length,
+    selectedEntityIds: result?.updatedEntityIds || []
   });
 
   return visibleEntities(state);
@@ -188,7 +205,8 @@ async function resolveOneInput({
   entities,
   requestInput,
   checkpointFn,
-  deps
+  deps,
+  logger
 }) {
   const frame = activeContext(state.contextStack);
   const reusable = deps.selectReusableInput({
@@ -198,8 +216,9 @@ async function resolveOneInput({
     visibleEntityIds: frame.visibleEntityIds
   });
   if (reusable) {
+    await logEvent(logger, 'input.reuse', { pageEntityId: frame.pageEntityId, frameId: frame.id, entityId: reusable.entity.id });
     await deps.applyReusableInput({ state, page, reusable });
-    await observeAfterAction({ state, page, triggerEntityId: reusable.entity.id, deps });
+    await observeAfterAction({ state, page, triggerEntityId: reusable.entity.id, deps, logger });
     await checkpoint(checkpointFn, state);
     return true;
   }
@@ -214,10 +233,12 @@ async function resolveOneInput({
     throw new Error('requestInput is required when a user value is needed.');
   }
 
+  await logEvent(logger, 'input.required', { pageEntityId: frame.pageEntityId, frameId: frame.id, entityId: required.id });
   const question = deps.buildInputQuestion(required, entities);
   const value = await requestInput(question);
   await deps.applyInputValue({ state, page, entity: required, value });
-  await observeAfterAction({ state, page, triggerEntityId: required.id, deps });
+  await logEvent(logger, 'input.applied', { pageEntityId: frame.pageEntityId, frameId: frame.id, entityId: required.id });
+  await observeAfterAction({ state, page, triggerEntityId: required.id, deps, logger });
   await checkpoint(checkpointFn, state);
   return true;
 }
@@ -239,6 +260,7 @@ export async function runApplication({
   requestInput,
   checkpoint: checkpointFn = null,
   maxSteps = 100,
+  logger = null,
   deps: overrides = {}
 } = {}) {
   if (!state?.entityGraph || !state?.instanceGraph || !state?.workflow) {
@@ -251,6 +273,8 @@ export async function runApplication({
 
   if (!state.contextStack) {
     const firstSnapshot = await deps.captureVisibleDom(page);
+    const pageId = deps.pageIdForSnapshot(firstSnapshot);
+    await logEvent(logger, 'capture', { pageEntityId: pageId });
     deps.ingestPageVisit(state, firstSnapshot);
     await checkpoint(checkpointFn, state);
   }
@@ -259,7 +283,7 @@ export async function runApplication({
 
   while (workflowSteps < maxSteps) {
     const frameBefore = activeContext(state.contextStack);
-    const entities = await enrichActiveFrame({ state, gateway, query, deps });
+    const entities = await enrichActiveFrame({ state, gateway, query, deps, logger });
 
     if (await resolveOneInput({
       state,
@@ -267,13 +291,21 @@ export async function runApplication({
       entities,
       requestInput,
       checkpointFn,
-      deps
+      deps,
+      logger
     })) {
       continue;
     }
 
     const frame = activeContext(state.contextStack);
     const candidates = await continuationCandidates({ state, entities: visibleEntities(state), deps });
+    await logEvent(logger, 'navigation.candidates', {
+      pageEntityId: frame.pageEntityId,
+      frameId: frame.id,
+      selectedEntityIds: candidates.map((candidate) => candidate.id),
+      entityCount: candidates.length,
+      step: workflowSteps
+    });
 
     if (!isRootPageFrame(state, frame)) {
       if (candidates.length) {
@@ -285,18 +317,21 @@ export async function runApplication({
           candidates
         });
         if (selected) {
+          await logEvent(logger, 'navigation.selected', { pageEntityId: frame.pageEntityId, frameId: frame.id, entityId: selected.id, step: workflowSteps });
           const pageIdBefore = frame.pageEntityId;
           await deps.executeContinuation({ state, page, entity: selected });
-          await observeAfterAction({ state, page, triggerEntityId: selected.id, deps });
+          await observeAfterAction({ state, page, triggerEntityId: selected.id, deps, logger });
           await checkpoint(checkpointFn, state);
           if (activeContext(state.contextStack).pageEntityId !== pageIdBefore) workflowSteps += 1;
           continue;
         }
+        await logEvent(logger, 'navigation.blocked', { pageEntityId: frame.pageEntityId, frameId: frame.id, step: workflowSteps });
         await checkpoint(checkpointFn, state);
         return { reason: 'blocked', steps: workflowSteps, state };
       }
 
       deps.completeActiveFrame(state);
+      await logEvent(logger, 'frame.pop', { pageEntityId: frame.pageEntityId, frameId: frame.id, step: workflowSteps });
       await checkpoint(checkpointFn, state);
       continue;
     }
@@ -310,20 +345,24 @@ export async function runApplication({
         candidates
       });
       if (!selected) {
+        await logEvent(logger, 'navigation.blocked', { pageEntityId: frame.pageEntityId, frameId: frame.id, step: workflowSteps });
         await checkpoint(checkpointFn, state);
         return { reason: 'blocked', steps: workflowSteps, state };
       }
 
+      await logEvent(logger, 'navigation.selected', { pageEntityId: frame.pageEntityId, frameId: frame.id, entityId: selected.id, step: workflowSteps });
       await deps.executeContinuation({ state, page, entity: selected });
-      await observeAfterAction({ state, page, triggerEntityId: selected.id, deps });
+      await observeAfterAction({ state, page, triggerEntityId: selected.id, deps, logger });
       workflowSteps += 1;
       await checkpoint(checkpointFn, state);
       continue;
     }
 
+    await logEvent(logger, 'workflow.completed', { pageEntityId: frame.pageEntityId, frameId: frame.id, completed: true, step: workflowSteps });
     await checkpoint(checkpointFn, state);
     return { reason: 'completed', steps: workflowSteps, state };
   }
 
+  await logEvent(logger, 'workflow.max_steps', { step: workflowSteps });
   return { reason: 'max_steps', steps: workflowSteps, state };
 }
