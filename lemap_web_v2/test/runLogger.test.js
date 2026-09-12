@@ -27,3 +27,22 @@ test('run logger preserves compact model request and response envelopes', async 
   assert.deepEqual(lines[0].request, request);
   assert.deepEqual(lines[1].response, response);
 });
+
+test('run logger records only safe model failure metadata', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-run-log-'));
+  const logger = await createRunLogger({ directory: dir, workflowId: 'wf', layer: 'layer27' });
+  const error = new Error('provider diagnostic detail');
+  error.code = 'MODEL_HTTP_ERROR';
+  error.statusCode = 503;
+  error.retryable = true;
+
+  await logger.logModelError('enrich_entities', error);
+
+  const lines = (await fs.readFile(logger.path, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(lines[0].type, 'layer27.model.error');
+  assert.equal(lines[0].operation, 'enrich_entities');
+  assert.equal(lines[0].errorCode, 'MODEL_HTTP_ERROR');
+  assert.equal(lines[0].statusCode, 503);
+  assert.equal(lines[0].retryable, true);
+  assert.equal(JSON.stringify(lines[0]).includes('provider diagnostic detail'), false);
+});
