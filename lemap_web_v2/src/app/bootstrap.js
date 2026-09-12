@@ -2,6 +2,7 @@ import path from 'node:path';
 import { connectBrowserSession } from '../browser/browserSession.js';
 import { createRunLogger } from '../diagnostics/runLogger.js';
 import { createRuntimeLogView } from '../diagnostics/runtimeLogView.js';
+import { createInputStateLogger } from '../diagnostics/inputStateDiagnostics.js';
 import { createModelGateway } from '../semantic/modelGateway.js';
 import { createProviderInvoke } from '../semantic/modelProvider.js';
 import {
@@ -66,6 +67,7 @@ export async function runConfiguredApplication({
       query,
       config
     });
+    const stateLogger = createInputStateLogger(runtimeLogger, state);
 
     const result = await deps.runApplication({
       state,
@@ -74,7 +76,7 @@ export async function runConfiguredApplication({
       gateway,
       requestInput,
       maxSteps: config.runtime.maxSteps,
-      logger: runtimeLogger,
+      logger: stateLogger,
       checkpoint: (currentState) => deps.checkpointRunState(currentState, config)
     });
 
