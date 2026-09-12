@@ -52,6 +52,72 @@ function locatorStrategy(spec = null) {
   return String(spec.strategy || 'unknown');
 }
 
+async function rawLocatorCount(page, spec) {
+  try {
+    if (spec?.strategy === 'css' && typeof page?.locator === 'function') {
+      const raw = page.locator(spec.selector);
+      return typeof raw?.count === 'function' ? await raw.count() : 0;
+    }
+    if (spec?.strategy === 'label' && typeof page?.getByLabel === 'function') {
+      const raw = page.getByLabel(spec.label);
+      return typeof raw?.count === 'function' ? await raw.count() : 0;
+    }
+  } catch {}
+  return 0;
+}
+
+async function inspectResolvedLocator(locator, probe) {
+  if (!locator || !probe) return;
+
+  if (typeof locator.isVisible === 'function') {
+    try { probe.matchedVisible = await locator.isVisible(); } catch {}
+  }
+  if (typeof locator.isEnabled === 'function') {
+    try { probe.matchedEnabled = await locator.isEnabled(); } catch {}
+  }
+  if (typeof locator.boundingBox === 'function') {
+    try { probe.matchedBoundingBoxPresent = !!(await locator.boundingBox()); } catch {}
+  }
+  if (typeof locator.evaluate !== 'function') return;
+
+  try {
+    const structure = await locator.evaluate((element) => {
+      const classNames = (node) => {
+        if (!node?.classList) return [];
+        return Array.from(node.classList).map((name) => String(name)).filter(Boolean).slice(0, 8);
+      };
+      const nodeShape = (node) => ({
+        tag: String(node?.tagName || '').toLowerCase(),
+        role: String(node?.getAttribute?.('role') || ''),
+        classes: classNames(node)
+      });
+      const parent = element?.parentElement ? nodeShape(element.parentElement) : { tag: '', role: '', classes: [] };
+      const children = Array.from(element?.children || []).slice(0, 8).map(nodeShape);
+      return {
+        ...nodeShape(element),
+        id: String(element?.id || ''),
+        name: String(element?.getAttribute?.('name') || ''),
+        parent,
+        children
+      };
+    });
+    if (!structure || typeof structure !== 'object') return;
+    probe.matchedTag = String(structure.tag || '');
+    probe.matchedRole = String(structure.role || '');
+    probe.matchedId = String(structure.id || '');
+    probe.matchedName = String(structure.name || '');
+    probe.matchedClasses = list(structure.classes).slice(0, 8).map((value) => String(value));
+    probe.parentTag = String(structure.parent?.tag || '');
+    probe.parentRole = String(structure.parent?.role || '');
+    probe.parentClasses = list(structure.parent?.classes).slice(0, 8).map((value) => String(value));
+    probe.directChildren = list(structure.children).slice(0, 8).map((child) => ({
+      tag: String(child?.tag || ''),
+      role: String(child?.role || ''),
+      classes: list(child?.classes).slice(0, 8).map((value) => String(value))
+    }));
+  } catch {}
+}
+
 function adapterFor(entity = {}) {
   const sourceAdapter = String(entity.structural?.sourceAdapter || '');
   if (sourceAdapter === angularMaterialAdapter.name) return angularMaterialAdapter;
@@ -100,7 +166,21 @@ export async function enumerateEntityValueDomain(page, entity = {}, { onProbe = 
     hasName: !!String(structural.name || '').trim(),
     hasLabel: !!String(structural.label || entity.name || '').trim(),
     locatorStrategy: 'none',
+    locatorSelector: '',
     locatorResolved: false,
+    locatorMatchCount: 0,
+    matchedTag: '',
+    matchedRole: '',
+    matchedId: '',
+    matchedName: '',
+    matchedClasses: [],
+    matchedVisible: false,
+    matchedEnabled: false,
+    matchedBoundingBoxPresent: false,
+    parentTag: '',
+    parentRole: '',
+    parentClasses: [],
+    directChildren: [],
     adapterResolved: false,
     adapterName: '',
     adapterOpenAttempted: false,
@@ -115,8 +195,11 @@ export async function enumerateEntityValueDomain(page, entity = {}, { onProbe = 
   try {
     const spec = resolveEntityLocator(entity);
     probe.locatorStrategy = locatorStrategy(spec);
+    probe.locatorSelector = spec.strategy === 'css' ? String(spec.selector || '') : '[label]';
+    probe.locatorMatchCount = await rawLocatorCount(page, spec);
     locator = createPageLocator(page, spec);
     probe.locatorResolved = !!locator;
+    await inspectResolvedLocator(locator, probe);
   } catch {
     await report(onProbe, probe);
     return [];
