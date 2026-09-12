@@ -13,11 +13,41 @@ test('model gateway forwards only the compact approved payload', async () => {
   assert.equal('instanceGraph' in received, false);
 });
 
-test('model gateway rejects runtime-shaped fields before provider invocation', async () => {
+test('model gateway logs the exact safe request and structured response', async () => {
+  const events = [];
+  const logger = {
+    logModelInput: async (request) => events.push(['input', structuredClone(request)]),
+    logModelOutput: async (operation, response) => events.push(['output', operation, structuredClone(response)])
+  };
+  const response = { selectedEntityId: 'next' };
+  const gateway = createModelGateway({
+    invoke: async () => response,
+    logger
+  });
+  const request = { operation: 'choose_navigation', payload: { query: 'continue', candidates: [{ id: 'next', label: 'Continue' }] } };
+
+  const result = await gateway.run(request);
+
+  assert.deepEqual(result, response);
+  assert.deepEqual(events, [
+    ['input', request],
+    ['output', 'choose_navigation', response]
+  ]);
+});
+
+test('model gateway rejects runtime-shaped fields before provider invocation or logging', async () => {
   let calls = 0;
-  const gateway = createModelGateway({ invoke: async () => { calls += 1; return {}; } });
+  let logs = 0;
+  const gateway = createModelGateway({
+    invoke: async () => { calls += 1; return {}; },
+    logger: {
+      logModelInput: async () => { logs += 1; },
+      logModelOutput: async () => { logs += 1; }
+    }
+  });
   await assert.rejects(() => gateway.run({ operation: 'enrich_entities', payload: { entities: [{ id: 'a', value: 'runtime' }] } }), /runtime/i);
   assert.equal(calls, 0);
+  assert.equal(logs, 0);
 });
 
 test('model gateway rejects missing provider invocation function', () => {
