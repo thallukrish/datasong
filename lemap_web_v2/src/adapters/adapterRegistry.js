@@ -1,3 +1,7 @@
+import { angularMaterialAdapter } from './angularMaterialAdapter.js';
+import { nativeControlAdapter } from './nativeControlAdapter.js';
+import { ariaControlAdapter } from './ariaControlAdapter.js';
+
 export function createAdapterRegistry(adapters = []) {
   const registered = Array.isArray(adapters) ? adapters.filter(Boolean) : [];
   return {
@@ -9,6 +13,19 @@ export function createAdapterRegistry(adapters = []) {
       }
       return null;
     },
+    forSource(sourceAdapter = '') {
+      const name = String(sourceAdapter || '').trim();
+      if (!name) return null;
+      return registered.find((adapter) => String(adapter?.name || '') === name) || null;
+    },
     adapters: [...registered]
   };
+}
+
+export function createDefaultAdapterRegistry() {
+  return createAdapterRegistry([
+    angularMaterialAdapter,
+    nativeControlAdapter,
+    ariaControlAdapter
+  ]);
 }
