@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enumerateEntityValueDomain } from '../src/execution/valueDomain.js';
+import { enumerateEntityValueDomain } from '../src/browser/valueDomain.js';
 import { runApplication } from '../src/app/applicationRunner.js';
 import { createEntityGraph } from '../src/graph/entityGraph.js';
 import { createInstanceGraph } from '../src/graph/instanceGraph.js';
@@ -27,12 +27,50 @@ test('enumerateEntityValueDomain returns native select option labels', async () 
     id: 'year',
     type: 'ui_control',
     name: 'Select Assessment year',
-    structural: { controlType: 'select', label: 'Select Assessment year' },
+    structural: { controlType: 'select', tag: 'select', label: 'Select Assessment year' },
     semantic: {},
     links: []
   };
 
   assert.deepEqual(await enumerateEntityValueDomain(page, entity), ['Select', '2026-27', '2025-26']);
+});
+
+test('enumerateEntityValueDomain opens a combobox overlay and reads visible role options', async () => {
+  let opened = false;
+  let escaped = false;
+  const controlLocator = {
+    click: async () => { opened = true; },
+    locator: () => { throw new Error('native option lookup should not be used'); }
+  };
+  const options = [
+    { isVisible: async () => opened, innerText: async () => '2026-27' },
+    { isVisible: async () => opened, innerText: async () => '2025-26' }
+  ];
+  const roleOptions = {
+    count: async () => options.length,
+    nth: (index) => options[index]
+  };
+  const page = {
+    getByLabel: () => controlLocator,
+    locator: (selector) => {
+      assert.equal(selector, '[role="option"]');
+      return roleOptions;
+    },
+    waitForTimeout: async () => {},
+    keyboard: { press: async (key) => { assert.equal(key, 'Escape'); escaped = true; } }
+  };
+  const entity = {
+    id: 'year',
+    type: 'ui_control',
+    name: 'Select Assessment year',
+    structural: { controlType: 'select', tag: 'mat-select', role: 'combobox', label: 'Select Assessment year' },
+    semantic: {},
+    links: []
+  };
+
+  assert.deepEqual(await enumerateEntityValueDomain(page, entity), ['2026-27', '2025-26']);
+  assert.equal(opened, true);
+  assert.equal(escaped, true);
 });
 
 test('runner learns missing finite choices before asking the user', async () => {
