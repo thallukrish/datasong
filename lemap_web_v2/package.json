@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/domScanner.test.js test/adapters.test.js test/canonicalEntity.test.js test/pageOrchestrator.test.js test/pageHierarchy.test.js test/logicalGroups.test.js test/entityGraph.test.js test/graphReconciler.test.js test/contextStack.test.js test/navigationResolver.test.js test/workflow.test.js test/instanceGraph.test.js test/controlExecutor.test.js test/privacyBoundary.test.js test/modelGateway.test.js test/config.test.js test/pageReuse.test.js test/runCoordinator.test.js test/semanticResolver.test.js test/semanticProtocol.test.js test/agentDecision.test.js test/decisionExecution.test.js test/safeDiagnostics.test.js test/persistence.test.js test/applicationRunner.test.js test/frameFirstRunner.test.js test/browserSession.test.js test/appBootstrap.test.js test/modelProvider.test.js",
+    "test": "node --test test/domScanner.test.js test/adapters.test.js test/canonicalEntity.test.js test/pageOrchestrator.test.js test/pageHierarchy.test.js test/logicalGroups.test.js test/entityGraph.test.js test/graphReconciler.test.js test/contextStack.test.js test/navigationResolver.test.js test/workflow.test.js test/instanceGraph.test.js test/controlExecutor.test.js test/privacyBoundary.test.js test/modelGateway.test.js test/config.test.js test/pageReuse.test.js test/runCoordinator.test.js test/semanticResolver.test.js test/semanticProtocol.test.js test/agentDecision.test.js test/decisionExecution.test.js test/safeDiagnostics.test.js test/runLogger.test.js test/persistence.test.js test/applicationRunner.test.js test/frameFirstRunner.test.js test/browserSession.test.js test/appBootstrap.test.js test/modelProvider.test.js",
     "start": "node src/app/cli.js"
   },
   "dependencies": {
