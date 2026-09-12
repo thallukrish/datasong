@@ -15,6 +15,7 @@ function control(id, structural = {}) {
       name: structural.name || '',
       label: structural.label || '',
       role: structural.role || '',
+      sourceAdapter: structural.sourceAdapter || '',
       path: structural.path || [],
       disabled: structural.disabled === true
     },
@@ -139,6 +140,41 @@ test('executeControlAction supports click, select and checkbox actions', async (
     ['selectOption', '[id="year"]', '2026'],
     ['check', '[id="agree"]']
   ]);
+});
+
+test('executeControlAction delegates framework-specific mechanics to the entity source adapter', async () => {
+  const { page, calls } = fakePage();
+  const entity = control('select:year', {
+    domId: 'filterStyleForChip myPanelClassItr',
+    controlType: 'select',
+    tag: 'mat-select',
+    sourceAdapter: 'angular-material'
+  });
+  const adapterCalls = [];
+  const adapter = {
+    async executeControlAction(args) {
+      adapterCalls.push(args.action);
+      return true;
+    }
+  };
+  const adapterRegistry = {
+    forSource(name) {
+      assert.equal(name, 'angular-material');
+      return adapter;
+    }
+  };
+
+  const result = await executeControlAction({
+    page,
+    entity,
+    activeFrame: { visibleEntityIds: ['select:year'] },
+    action: { type: 'select', value: '2026-27' },
+    adapterRegistry
+  });
+
+  assert.deepEqual(adapterCalls, [{ type: 'select', value: '2026-27' }]);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(result.instancePatch, { entityId: 'select:year', value: '2026-27' });
 });
 
 test('executeControlAction rejects controls outside the active frame and disabled controls', async () => {
