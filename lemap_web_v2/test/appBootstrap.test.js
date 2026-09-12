@@ -31,7 +31,7 @@ test('runConfiguredApplication composes browser, persistence, logger, gateway an
       loadPersistentRunState: async (args) => { calls.push(['load', args.workflowId]); return state; },
       checkpointRunState: async () => calls.push(['checkpoint']),
       runApplication: async (args) => {
-        calls.push(['run', args.page, args.maxSteps, typeof args.gateway.run, args.logger === logger]);
+        calls.push(['run', args.page, args.maxSteps, typeof args.gateway.run, args.logger !== logger, args.logger.path]);
         await args.checkpoint(state);
         return { reason: 'completed', steps: 0, state };
       }
@@ -43,7 +43,7 @@ test('runConfiguredApplication composes browser, persistence, logger, gateway an
   assert.deepEqual(calls, [
     ['log', 'run.start', { workflowId: 'wf:1' }],
     ['load', 'wf:1'],
-    ['run', page, 7, 'function', true],
+    ['run', page, 7, 'function', true, 'data/logs/layer27-run.jsonl'],
     ['checkpoint'],
     ['log', 'run.stop', { workflowId: 'wf:1', completed: true, stage: 'completed', step: 0 }]
   ]);
