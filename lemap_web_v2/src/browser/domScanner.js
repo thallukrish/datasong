@@ -1,36 +1,36 @@
-const SAFE_ATTRIBUTES = new Set([
-  'id',
-  'name',
-  'type',
-  'role',
-  'class',
-  'href',
-  'for',
-  'title',
-  'placeholder',
-  'required',
-  'disabled',
-  'aria-label',
-  'aria-labelledby',
-  'aria-describedby',
-  'aria-modal',
-  'aria-required',
-  'aria-disabled',
-  'aria-expanded',
-  'aria-controls'
-]);
-
-const IGNORED_TAGS = new Set([
-  'script',
-  'style',
-  'template',
-  'noscript',
-  'meta',
-  'link',
-  'head'
-]);
-
 export function scanDomTree(root) {
+  const safeAttributes = new Set([
+    'id',
+    'name',
+    'type',
+    'role',
+    'class',
+    'href',
+    'for',
+    'title',
+    'placeholder',
+    'required',
+    'disabled',
+    'aria-label',
+    'aria-labelledby',
+    'aria-describedby',
+    'aria-modal',
+    'aria-required',
+    'aria-disabled',
+    'aria-expanded',
+    'aria-controls'
+  ]);
+
+  const ignoredTags = new Set([
+    'script',
+    'style',
+    'template',
+    'noscript',
+    'meta',
+    'link',
+    'head'
+  ]);
+
   const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 
   const isVisible = (element) => {
@@ -58,7 +58,7 @@ export function scanDomTree(root) {
     const attributes = {};
     for (const attribute of Array.from(element.attributes || [])) {
       const name = String(attribute?.name || '').toLowerCase();
-      if (!SAFE_ATTRIBUTES.has(name)) continue;
+      if (!safeAttributes.has(name)) continue;
       attributes[name] = clean(attribute?.value || '');
     }
     return attributes;
@@ -67,7 +67,7 @@ export function scanDomTree(root) {
   const visit = (element) => {
     if (!element || element.nodeType !== 1) return null;
     const tag = String(element.tagName || '').toLowerCase();
-    if (!tag || IGNORED_TAGS.has(tag) || !isVisible(element)) return null;
+    if (!tag || ignoredTags.has(tag) || !isVisible(element)) return null;
 
     const children = Array.from(element.children || [])
       .map(visit)
