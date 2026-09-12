@@ -62,10 +62,13 @@ async function report(onProbe, probe) {
   if (typeof onProbe === 'function') await onProbe({ ...probe });
 }
 
-async function openValueDomain(page, entity, locator) {
+async function openValueDomain(page, entity, locator, probe) {
   const adapter = adapterFor(entity);
+  probe.adapterResolved = !!adapter;
+  probe.adapterName = String(adapter?.name || '');
   if (typeof adapter?.openValueDomain === 'function') {
-    return adapter.openValueDomain({ page, entity, locator });
+    probe.adapterOpenAttempted = true;
+    return adapter.openValueDomain({ page, entity, locator, probe });
   }
   if (typeof locator?.click !== 'function') return false;
   try {
@@ -92,11 +95,17 @@ export async function enumerateEntityValueDomain(page, entity = {}, { onProbe = 
     controlType: type,
     tag,
     role,
+    sourceAdapter: String(structural.sourceAdapter || ''),
     hasDomId: !!String(structural.domId || '').trim(),
     hasName: !!String(structural.name || '').trim(),
     hasLabel: !!String(structural.label || entity.name || '').trim(),
     locatorStrategy: 'none',
     locatorResolved: false,
+    adapterResolved: false,
+    adapterName: '',
+    adapterOpenAttempted: false,
+    triggerFound: false,
+    triggerClickSucceeded: false,
     nativeOptionCount: 0,
     opened: false,
     visibleOptionCount: 0
@@ -120,7 +129,7 @@ export async function enumerateEntityValueDomain(page, entity = {}, { onProbe = 
     return native;
   }
 
-  probe.opened = await openValueDomain(page, entity, locator);
+  probe.opened = await openValueDomain(page, entity, locator, probe);
   if (!probe.opened) {
     const alreadyVisible = await visibleChoiceLabels(page);
     probe.visibleOptionCount = alreadyVisible.length;
