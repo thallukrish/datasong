@@ -110,9 +110,14 @@ export function buildInputQuestion(entity = {}, entities = []) {
   };
 }
 
-export function selectNavigationCandidates(entities = [], { visibleEntityIds = null } = {}) {
+export function selectNavigationCandidates(entities = [], {
+  visibleEntityIds = null,
+  appliedEntityIds = []
+} = {}) {
+  const applied = idSet(appliedEntityIds);
   return arr(entities).filter((entity) => {
     if (entity?.type !== 'ui_control') return false;
+    if (applied.has(String(entity.id || ''))) return false;
     if (!['button', 'link'].includes(String(entity.structural?.controlType || ''))) return false;
     if (!visibleAndEnabled(entity, visibleEntityIds)) return false;
     const semantic = entity.semantic || {};
@@ -124,13 +129,14 @@ export function selectNavigationCandidates(entities = [], { visibleEntityIds = n
 export function workflowComplete({
   entities = [],
   instanceGraph,
-  visibleEntityIds = null
+  visibleEntityIds = null,
+  appliedEntityIds = []
 } = {}) {
   if (!instanceGraph || !Array.isArray(instanceGraph.instances)) {
     throw new Error('An instance graph with instances is required.');
   }
 
   if (selectNextRequiredInput({ entities, instanceGraph, visibleEntityIds })) return false;
-  if (selectNavigationCandidates(entities, { visibleEntityIds }).length) return false;
+  if (selectNavigationCandidates(entities, { visibleEntityIds, appliedEntityIds }).length) return false;
   return true;
 }
