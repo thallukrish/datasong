@@ -40,11 +40,22 @@ function fakePage() {
   return { page: { locator }, calls };
 }
 
-test('resolveEntityLocator prefers a unique DOM id anchor', () => {
+test('resolveEntityLocator prefers an exact DOM id attribute anchor', () => {
   const entity = control('control:income', { domId: 'grossIncome', label: 'Gross income' });
   assert.deepEqual(resolveEntityLocator(entity), {
     strategy: 'css',
-    selector: '#grossIncome'
+    selector: '[id="grossIncome"]'
+  });
+});
+
+test('resolveEntityLocator preserves whitespace inside DOM ids as one exact attribute value', () => {
+  const entity = control('control:year', {
+    domId: 'filterStyleForChip myPanelClassItr',
+    label: 'Assessment year'
+  });
+  assert.deepEqual(resolveEntityLocator(entity), {
+    strategy: 'css',
+    selector: '[id="filterStyleForChip myPanelClassItr"]'
   });
 });
 
@@ -75,10 +86,10 @@ test('createPageLocator resolves CSS and label anchors to the first concrete mat
     })
   };
 
-  assert.equal(createPageLocator(page, { strategy: 'css', selector: '#year' }), cssFirst);
+  assert.equal(createPageLocator(page, { strategy: 'css', selector: '[id="year"]' }), cssFirst);
   assert.equal(createPageLocator(page, { strategy: 'label', label: 'Assessment year' }), labelFirst);
   assert.deepEqual(calls, [
-    ['css-first', '#year'],
+    ['css-first', '[id="year"]'],
     ['label-first', 'Assessment year']
   ]);
 });
@@ -95,7 +106,7 @@ test('executeControlAction fills a visible actionable text control and returns l
     action: { type: 'fill', value: '1250' }
   });
 
-  assert.deepEqual(calls, [['fill', '#income', '1250']]);
+  assert.deepEqual(calls, [['fill', '[id="income"]', '1250']]);
   assert.deepEqual(result.instancePatch, { entityId: 'control:income', value: '1250' });
   assert.equal('value' in entity.structural, false);
 });
@@ -124,9 +135,9 @@ test('executeControlAction supports click, select and checkbox actions', async (
   });
 
   assert.deepEqual(calls, [
-    ['click', '#next'],
-    ['selectOption', '#year', '2026'],
-    ['check', '#agree']
+    ['click', '[id="next"]'],
+    ['selectOption', '[id="year"]', '2026'],
+    ['check', '[id="agree"]']
   ]);
 });
 
