@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveEntityLocator } from '../src/execution/entityLocator.js';
+import { resolveEntityLocator, createPageLocator } from '../src/execution/entityLocator.js';
 import { executeControlAction } from '../src/execution/controlExecutor.js';
 
 function control(id, structural = {}) {
@@ -25,14 +25,18 @@ function control(id, structural = {}) {
 
 function fakePage() {
   const calls = [];
-  const locator = (selector) => ({
-    selector,
-    click: async () => calls.push(['click', selector]),
-    fill: async (value) => calls.push(['fill', selector, value]),
-    selectOption: async (value) => calls.push(['selectOption', selector, value]),
-    check: async () => calls.push(['check', selector]),
-    uncheck: async () => calls.push(['uncheck', selector])
-  });
+  const locator = (selector) => {
+    const target = {
+      selector,
+      first: () => target,
+      click: async () => calls.push(['click', selector]),
+      fill: async (value) => calls.push(['fill', selector, value]),
+      selectOption: async (value) => calls.push(['selectOption', selector, value]),
+      check: async () => calls.push(['check', selector]),
+      uncheck: async () => calls.push(['uncheck', selector])
+    };
+    return target;
+  };
   return { page: { locator }, calls };
 }
 
@@ -56,6 +60,27 @@ test('resolveEntityLocator falls back to stable name and label anchors without u
     strategy: 'label',
     label: 'Reason'
   });
+});
+
+test('createPageLocator resolves CSS and label anchors to the first concrete match', () => {
+  const calls = [];
+  const cssFirst = { kind: 'css-first' };
+  const labelFirst = { kind: 'label-first' };
+  const page = {
+    locator: (selector) => ({
+      first: () => { calls.push(['css-first', selector]); return cssFirst; }
+    }),
+    getByLabel: (label) => ({
+      first: () => { calls.push(['label-first', label]); return labelFirst; }
+    })
+  };
+
+  assert.equal(createPageLocator(page, { strategy: 'css', selector: '#year' }), cssFirst);
+  assert.equal(createPageLocator(page, { strategy: 'label', label: 'Assessment year' }), labelFirst);
+  assert.deepEqual(calls, [
+    ['css-first', '#year'],
+    ['label-first', 'Assessment year']
+  ]);
 });
 
 test('executeControlAction fills a visible actionable text control and returns local runtime state', async () => {
