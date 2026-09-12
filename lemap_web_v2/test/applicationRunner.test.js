@@ -66,6 +66,7 @@ test('runApplication asks for a required value, executes it, recaptures and chec
       selectNextRequiredInput: () => iteration++ === 0 ? input : null,
       buildInputQuestion: () => ({ entityId: input.id, label: 'Income?' }),
       applyInputValue: async ({ value }) => seen.push(['apply', value]),
+      pageIdForSnapshot: () => 'page:a',
       refreshCurrentPage: () => seen.push(['refresh']),
       selectNavigationCandidates: () => [],
       workflowComplete: () => iteration > 1
