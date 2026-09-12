@@ -35,6 +35,32 @@ test('model gateway logs the exact safe request and structured response', async 
   ]);
 });
 
+test('model gateway records safe failure metadata and preserves it for the outer runner', async () => {
+  const events = [];
+  const failure = new Error('provider detail that must not be copied into runtime diagnostics');
+  failure.code = 'MODEL_HTTP_ERROR';
+  failure.statusCode = 503;
+  failure.retryable = true;
+  const gateway = createModelGateway({
+    invoke: async () => { throw failure; },
+    logger: {
+      logModelInput: async () => {},
+      logModelOutput: async () => {},
+      logModelError: async (operation, error) => events.push([operation, error.code, error.statusCode, error.retryable])
+    }
+  });
+
+  await assert.rejects(async () => {
+    await gateway.run({ operation: 'enrich_entities', payload: { query: 'q', entities: [] } });
+  }, (error) => {
+    assert.equal(error, failure);
+    assert.equal(error.lemapStage, 'model_gateway');
+    assert.equal(error.lemapOperation, 'enrich_entities');
+    return true;
+  });
+  assert.deepEqual(events, [['enrich_entities', 'MODEL_HTTP_ERROR', 503, true]]);
+});
+
 test('model gateway rejects runtime-shaped fields before provider invocation or logging', async () => {
   let calls = 0;
   let logs = 0;
