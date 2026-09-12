@@ -1,3 +1,4 @@
+import { angularMaterialAdapter } from '../adapters/angularMaterialAdapter.js';
 import { resolveEntityLocator, createPageLocator } from '../execution/entityLocator.js';
 
 function list(value) {
@@ -20,15 +21,18 @@ async function nativeOptionLabels(locator) {
 }
 
 async function visibleChoiceLabels(page) {
-  if (typeof page?.getByRole !== 'function') return [];
-  const options = page.getByRole('option');
-  if (typeof options?.count !== 'function') return [];
+  let options = null;
+  if (typeof page?.getByRole === 'function') options = page.getByRole('option');
+  else if (typeof page?.locator === 'function') options = page.locator('[role="option"]');
+  if (!options || typeof options.count !== 'function') return [];
+
   let count = 0;
   try {
     count = await options.count();
   } catch {
     return [];
   }
+
   const labels = [];
   for (let index = 0; index < count; index += 1) {
     const option = options.nth(index);
@@ -48,8 +52,28 @@ function locatorStrategy(spec = null) {
   return String(spec.strategy || 'unknown');
 }
 
+function adapterFor(entity = {}) {
+  const sourceAdapter = String(entity.structural?.sourceAdapter || '');
+  if (sourceAdapter === angularMaterialAdapter.name) return angularMaterialAdapter;
+  return null;
+}
+
 async function report(onProbe, probe) {
   if (typeof onProbe === 'function') await onProbe({ ...probe });
+}
+
+async function openValueDomain(page, entity, locator) {
+  const adapter = adapterFor(entity);
+  if (typeof adapter?.openValueDomain === 'function') {
+    return adapter.openValueDomain({ page, entity, locator });
+  }
+  if (typeof locator?.click !== 'function') return false;
+  try {
+    await locator.click({ timeout: 750 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function enumerateEntityValueDomain(page, entity = {}, { onProbe = null } = {}) {
@@ -95,15 +119,9 @@ export async function enumerateEntityValueDomain(page, entity = {}, { onProbe = 
     await report(onProbe, probe);
     return native;
   }
-  if (typeof locator?.click !== 'function') {
-    await report(onProbe, probe);
-    return [];
-  }
 
-  try {
-    await locator.click({ timeout: 750 });
-    probe.opened = true;
-  } catch {
+  probe.opened = await openValueDomain(page, entity, locator);
+  if (!probe.opened) {
     const alreadyVisible = await visibleChoiceLabels(page);
     probe.visibleOptionCount = alreadyVisible.length;
     if (!alreadyVisible.length) {
@@ -111,6 +129,7 @@ export async function enumerateEntityValueDomain(page, entity = {}, { onProbe = 
       return [];
     }
   }
+
   if (typeof page?.waitForTimeout === 'function') await page.waitForTimeout(50);
   const values = await visibleChoiceLabels(page);
   probe.visibleOptionCount = values.length;
