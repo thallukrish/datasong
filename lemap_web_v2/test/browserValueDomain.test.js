@@ -92,13 +92,19 @@ test('Angular Material opens the canonical mat-select host instead of depending 
 test('Angular Material falls back to DOM click on the host when Playwright click cannot open it', async () => {
   let domClicked = false;
   let probe = null;
+  const element = {
+    tagName: 'MAT-SELECT',
+    id: 'assessmentYear',
+    classList: [],
+    children: [],
+    parentElement: null,
+    getAttribute: () => '',
+    click: () => { domClicked = true; }
+  };
   const host = {
     first: () => host,
     click: async () => { throw new Error('locator.click: Timeout 1000ms exceeded because another element intercepts pointer events'); },
-    evaluate: async (fn) => {
-      domClicked = true;
-      fn({ click() {} });
-    },
+    evaluate: async (fn) => fn(element),
     locator: (selector) => {
       if (selector === 'option') return { allTextContents: async () => [] };
       throw new Error(`internal Angular selector should not be used: ${selector}`);
