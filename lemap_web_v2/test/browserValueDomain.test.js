@@ -42,12 +42,18 @@ test('delegates Angular Material value-domain opening to the framework adapter',
     { isVisible: async () => triggerClicked, innerText: async () => '2026-27' },
     { isVisible: async () => triggerClicked, innerText: async () => '2025-26' }
   ];
+  const trigger = {
+    count: async () => 1,
+    isVisible: async () => true,
+    isEnabled: async () => true,
+    click: async () => { triggerClicked = true; }
+  };
   const host = {
     click: async () => { hostClicked = true; throw new Error('host is not the interactive trigger'); },
     locator: (selector) => {
       if (selector === 'option') return { allTextContents: async () => [] };
       assert.match(selector, /mat-select-trigger|mat-mdc-select-trigger/);
-      return { first: () => ({ click: async () => { triggerClicked = true; } }) };
+      return { first: () => trigger, count: async () => 1 };
     }
   };
   const page = {
@@ -86,5 +92,55 @@ test('delegates Angular Material value-domain opening to the framework adapter',
   assert.equal(probe.adapterName, 'angular-material');
   assert.equal(probe.adapterOpenAttempted, true);
   assert.equal(probe.triggerFound, true);
+  assert.equal(probe.triggerCount, 1);
+  assert.equal(probe.triggerVisible, true);
+  assert.equal(probe.triggerEnabled, true);
+  assert.equal(probe.triggerAttached, true);
   assert.equal(probe.triggerClickSucceeded, true);
+  assert.equal(probe.triggerClickErrorCode, '');
+});
+
+test('Angular Material probe classifies a failed trigger click without logging raw error text', async () => {
+  let probe = null;
+  const trigger = {
+    count: async () => 1,
+    isVisible: async () => true,
+    isEnabled: async () => true,
+    click: async () => { throw new Error('locator.click: Timeout 1000ms exceeded because another element intercepts pointer events'); }
+  };
+  const host = {
+    click: async () => { throw new Error('host click also failed'); },
+    locator: (selector) => {
+      if (selector === 'option') return { allTextContents: async () => [] };
+      return { first: () => trigger, count: async () => 1 };
+    }
+  };
+  const page = {
+    locator: (selector) => {
+      if (selector === '#assessmentYear') return host;
+      if (selector === '[role="option"]') return { count: async () => 0, nth: () => null };
+      throw new Error(`unexpected selector: ${selector}`);
+    },
+    waitForTimeout: async () => {}
+  };
+  const entity = {
+    id: 'year',
+    type: 'ui_control',
+    structural: {
+      controlType: 'select',
+      tag: 'mat-select',
+      role: 'combobox',
+      domId: 'assessmentYear',
+      sourceAdapter: 'angular-material'
+    }
+  };
+
+  assert.deepEqual(await enumerateEntityValueDomain(page, entity, { onProbe: async (event) => { probe = event; } }), []);
+  assert.equal(probe.triggerCount, 1);
+  assert.equal(probe.triggerVisible, true);
+  assert.equal(probe.triggerEnabled, true);
+  assert.equal(probe.triggerAttached, true);
+  assert.equal(probe.triggerClickSucceeded, false);
+  assert.equal(probe.triggerClickErrorCode, 'POINTER_INTERCEPTED');
+  assert.equal(JSON.stringify(probe).includes('another element intercepts pointer events'), false);
 });
