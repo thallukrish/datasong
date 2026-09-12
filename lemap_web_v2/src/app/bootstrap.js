@@ -20,6 +20,18 @@ const DEFAULT_DEPS = {
   runApplication
 };
 
+function safeRunErrorData(workflowId, error) {
+  const data = {
+    workflowId,
+    errorCode: String(error?.code || 'RUN_FAILED')
+  };
+  if (error?.lemapStage) data.stage = String(error.lemapStage);
+  if (error?.lemapOperation) data.operation = String(error.lemapOperation);
+  if (Number.isInteger(error?.statusCode)) data.statusCode = error.statusCode;
+  if (typeof error?.retryable === 'boolean') data.retryable = error.retryable;
+  return data;
+}
+
 export async function runConfiguredApplication({
   config,
   workflowId,
@@ -74,10 +86,7 @@ export async function runConfiguredApplication({
     });
     return { ...result, logPath: logger.path };
   } catch (error) {
-    await runtimeLogger.log('run.error', {
-      workflowId,
-      errorCode: 'RUN_FAILED'
-    });
+    await runtimeLogger.log('run.error', safeRunErrorData(workflowId, error));
     throw error;
   } finally {
     await session.close();
