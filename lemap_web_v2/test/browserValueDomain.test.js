@@ -129,3 +129,64 @@ test('Angular Material falls back to DOM click on the host when Playwright click
   assert.equal(probe.hostDomClickSucceeded, true);
   assert.equal(JSON.stringify(probe).includes('another element intercepts pointer events'), false);
 });
+
+test('value-domain probe records selector and matched element structure', async () => {
+  let probe = null;
+  let opened = false;
+  const structure = {
+    tag: 'mat-select',
+    role: 'combobox',
+    id: 'assessmentYear',
+    name: 'assessmentYearField',
+    classes: ['mat-select', 'ng-star-inserted'],
+    parent: { tag: 'mat-form-field', role: '', classes: ['mat-form-field'] },
+    children: [{ tag: 'div', role: 'presentation', classes: ['mat-select-arrow-wrapper'] }]
+  };
+  const host = {
+    count: async () => 1,
+    isVisible: async () => true,
+    isEnabled: async () => true,
+    boundingBox: async () => ({ x: 10, y: 20, width: 100, height: 30 }),
+    evaluate: async () => structure,
+    click: async () => { opened = true; },
+    locator: (selector) => selector === 'option' ? { allTextContents: async () => [] } : null
+  };
+  const hostCollection = { count: async () => 2, first: () => host };
+  const option = { isVisible: async () => opened, innerText: async () => '2026-27' };
+  const page = {
+    locator: (selector) => {
+      if (selector === '#assessmentYear') return hostCollection;
+      if (selector === '[role="option"]') return { count: async () => 1, nth: () => option };
+      throw new Error(`unexpected selector: ${selector}`);
+    },
+    waitForTimeout: async () => {},
+    keyboard: { press: async () => {} }
+  };
+  const entity = {
+    id: 'year',
+    type: 'ui_control',
+    name: 'Assessment year',
+    structural: {
+      controlType: 'select',
+      tag: 'mat-select',
+      role: 'combobox',
+      domId: 'assessmentYear',
+      sourceAdapter: 'angular-material'
+    }
+  };
+
+  await enumerateEntityValueDomain(page, entity, { onProbe: async (event) => { probe = event; } });
+  assert.equal(probe.locatorSelector, '#assessmentYear');
+  assert.equal(probe.locatorMatchCount, 2);
+  assert.equal(probe.matchedTag, 'mat-select');
+  assert.equal(probe.matchedRole, 'combobox');
+  assert.equal(probe.matchedId, 'assessmentYear');
+  assert.equal(probe.matchedName, 'assessmentYearField');
+  assert.deepEqual(probe.matchedClasses, ['mat-select', 'ng-star-inserted']);
+  assert.equal(probe.matchedVisible, true);
+  assert.equal(probe.matchedEnabled, true);
+  assert.equal(probe.matchedBoundingBoxPresent, true);
+  assert.equal(probe.parentTag, 'mat-form-field');
+  assert.deepEqual(probe.parentClasses, ['mat-form-field']);
+  assert.deepEqual(probe.directChildren, [{ tag: 'div', role: 'presentation', classes: ['mat-select-arrow-wrapper'] }]);
+});
