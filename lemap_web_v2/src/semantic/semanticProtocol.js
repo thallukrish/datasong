@@ -10,6 +10,13 @@ function resolved(entity = {}) {
   if (entity.type === 'ui_control' && s.interaction === 'user_input' && s.relevantToGoal === true) return s.required !== undefined && (s.required !== true || !!s.question);
   return true;
 }
+function groupedChoiceMember(entity = {}, byId = new Map()) {
+  if (entity.type !== 'ui_control') return false;
+  return arr(entity.links)
+    .filter((link) => link.relationship === 'memberOf')
+    .map((link) => byId.get(link.id))
+    .some((group) => group?.type === 'ui_group');
+}
 function compactPage(page) {
   if (!page?.id) return undefined;
   return { id: String(page.id), name: text(page.name, 280), ...(page.semantic?.meaning ? { meaning: text(page.semantic.meaning, 280) } : {}) };
@@ -25,11 +32,15 @@ function compactEntity(entity = {}) {
 }
 
 export function selectSemanticCandidates(entities = []) {
-  return arr(entities).filter((entity) => {
+  const all = arr(entities);
+  const byId = new Map(all.map((entity) => [entity?.id, entity]));
+  return all.filter((entity) => {
     if (!entity?.id) return false;
+    if (entity.type === 'container') return false;
     if (entity.type === 'ui_control' && ACTION_TYPES.has(String(entity.structural?.controlType || ''))) return false;
+    if (groupedChoiceMember(entity, byId)) return false;
     if (resolved(entity)) return false;
-    return ['ui_control', 'ui_group', 'page', 'workflow', 'container'].includes(entity.type);
+    return ['ui_control', 'ui_group', 'page', 'workflow'].includes(entity.type);
   });
 }
 
