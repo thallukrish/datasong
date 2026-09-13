@@ -1,0 +1,6 @@
+{
+  "projectId": "acme-ems",
+  "repoUrl": "https://github.com/thallukrish/acme-ems-odoo",
+  "framework": "odoo",
+  "frameworkVersion": "19"
+}
