@@ -34,7 +34,7 @@ This first slice detects Odoo addons, reads literal `__manifest__.py` metadata, 
 
 Layered framework/project persistence and selective Odoo-core source enrichment are the next implementation slice after this parser/profile milestone is verified on ACME EMS.
 
-The Moqui adapter remains isolated and is selected only for Moqui repositories; the Odoo adapter is selected independently from Odoo manifest evidence. Common adapter abstractions should be extracted only after the ACME EMS path is proven.
+The existing Moqui path remains unchanged for non-Odoo repositories. Odoo detection and augmentation run through the isolated Odoo runtime helper. A shared cross-framework adapter contract is intentionally deferred until the ACME EMS path is proven, at which point the common behavior from both implementations can be extracted based on evidence rather than assumed up front.
 
 ## ACME EMS profile
 
