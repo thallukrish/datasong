@@ -1,6 +1,7 @@
 import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
 import { CallPathIndexerV3 } from './callPathIndexerV3.js';
-import { resolveFrameworkAdapters } from './adapters/frameworkResolver.js';
+import { createMoquiAdapters } from './adapters/moqui/index.js';
+import { resolveOdooRuntime } from './adapters/odoo/runtime.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -13,53 +14,67 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.callPathIndexer = new CallPathIndexerV3(this);
     this.callPathIndex = null;
 
-    this.frameworkKind = 'generic';
-    this.frameworkDetection = { detected: false };
-    this.frameworkAdapters = null;
-    this.frameworkEntitySchema = null;
-    this.frameworkExecution = null;
-
-    // Compatibility aliases for existing Moqui consumers. They are populated
-    // only when the repository is actually detected as Moqui.
-    this.moquiXmlAdapter = null;
-    this.moquiEntitySchemaAdapter = null;
+    // Preserve the existing Moqui path unchanged. Odoo is detected and run
+    // independently; a shared cross-framework contract comes after ACME is proven.
+    this.frameworkAdapters = createMoquiAdapters(this);
+    this.moquiXmlAdapter = this.frameworkAdapters.execution;
+    this.moquiEntitySchemaAdapter = this.frameworkAdapters.entitySchema;
     this.moquiXmlExecution = null;
     this.moquiEntitySchema = null;
 
     this.odooDetection = null;
+    this.odooAdapters = null;
+    this.odooEntitySchema = null;
+    this.frameworkKind = '';
+
     this.entitySchemas = [];
     this.entitySchemaByName = new Map();
   }
 
   async prepare(repoUrl) {
     const prep = await super.prepare(repoUrl);
-    const resolved = await resolveFrameworkAdapters(this);
+    const odooRuntime = await resolveOdooRuntime(this);
 
-    this.frameworkKind = resolved.kind;
-    this.frameworkDetection = resolved.detection;
-    this.frameworkAdapters = resolved.adapters;
-    this.odooDetection = resolved.kind === 'odoo' ? resolved.detection : null;
+    if (odooRuntime) {
+      this.frameworkKind = 'odoo';
+      this.odooDetection = odooRuntime.detection;
+      this.odooAdapters = odooRuntime.adapters;
+      this.odooEntitySchema = this.odooAdapters?.entitySchema
+        ? await this.odooAdapters.entitySchema.augment()
+        : null;
 
-    this.moquiXmlAdapter = resolved.kind === 'moqui' ? resolved.adapters?.execution || null : null;
-    this.moquiEntitySchemaAdapter = resolved.kind === 'moqui' ? resolved.adapters?.entitySchema || null : null;
+      this.moquiEntitySchema = null;
+      this.moquiXmlExecution = null;
+      this.callPathIndex = this.callPathIndexer.build();
+      return {
+        ...prep,
+        frameworkKind: this.frameworkKind,
+        odooDetection: this.odooDetection,
+        odooEntitySchema: this.odooEntitySchema,
+        moquiEntitySchema: null,
+        moquiXmlExecution: null,
+        callPathIndex: {
+          version: this.callPathIndex.version,
+          fragmentCount: this.callPathIndex.fragmentCount,
+          rawPathCount: this.callPathIndex.rawPathCount,
+          rankedPathCount: this.callPathIndex.rankedPathCount,
+          groupedPathCount: this.callPathIndex.groupedPathCount,
+          topPaths: this.callPathIndex.topPaths
+        }
+      };
+    }
 
-    this.frameworkEntitySchema = resolved.adapters?.entitySchema
-      ? await resolved.adapters.entitySchema.augment()
-      : null;
-    this.frameworkExecution = resolved.adapters?.execution
-      ? await resolved.adapters.execution.augment()
-      : null;
-
-    this.moquiEntitySchema = resolved.kind === 'moqui' ? this.frameworkEntitySchema : null;
-    this.moquiXmlExecution = resolved.kind === 'moqui' ? this.frameworkExecution : null;
-
+    // Non-Odoo repositories continue through the existing Moqui behavior.
+    this.frameworkKind = 'moqui';
+    this.odooDetection = null;
+    this.odooAdapters = null;
+    this.odooEntitySchema = null;
+    this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
+    this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
     this.callPathIndex = this.callPathIndexer.build();
     return {
       ...prep,
       frameworkKind: this.frameworkKind,
-      frameworkDetection: this.frameworkDetection,
-      frameworkEntitySchema: this.frameworkEntitySchema,
-      frameworkExecution: this.frameworkExecution,
       moquiEntitySchema: this.moquiEntitySchema,
       moquiXmlExecution: this.moquiXmlExecution,
       callPathIndex: {
