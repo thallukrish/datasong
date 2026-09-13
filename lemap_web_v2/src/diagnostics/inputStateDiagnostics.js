@@ -12,6 +12,8 @@ function inputState(state, entityId) {
 export function createInputStateLogger(logger, state) {
   if (!logger || typeof logger.log !== 'function') throw new Error('A logger with log() is required.');
   return {
+    path: logger.path,
+    layer: logger.layer,
     async log(type, data = {}) {
       if ((type === 'input.required' || type === 'input.applied') && data?.entityId) {
         return logger.log(type, { ...data, ...inputState(state, data.entityId) });
