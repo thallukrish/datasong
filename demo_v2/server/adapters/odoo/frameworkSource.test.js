@@ -60,6 +60,23 @@ test('uses an explicit Odoo source directory and reports its commit', async () =
   assert.equal(source.commit, 'abc123');
 });
 
+test('clones Odoo source with long path support enabled', async () => {
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-cache-'));
+  const calls = [];
+  const fakeGitFactory = (repoDir) => repoDir
+    ? { revparse: async () => 'abc123\n' }
+    : {
+        clone: async (repoUrl, targetDir, options) => {
+          calls.push({ repoUrl, targetDir, options });
+          await fs.mkdir(path.join(targetDir, '.git'), { recursive: true });
+        }
+      };
+
+  await ensureOdooSource({ version: '19', cacheRoot, gitFactory: fakeGitFactory });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].options.slice(0, 2), ['--config', 'core.longpaths=true']);
+});
+
 test('resolves only the standard Odoo module dependency closure', async () => {
   const repoDir = await makeSourceTree();
   const modules = await resolveOdooModuleClosure({ repoDir, seeds: ['mrp'] });
