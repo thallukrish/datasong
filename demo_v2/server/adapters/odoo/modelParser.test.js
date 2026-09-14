@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractOdooModels } from './modelParser.mjs';
+import { extractOdooModels } from './modelParser.js';
 
 test('extracts a new Odoo model and relational fields', () => {
   const src = `
