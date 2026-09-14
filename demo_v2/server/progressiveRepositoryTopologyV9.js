@@ -2,6 +2,7 @@ import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopology
 import { CallPathIndexerV3 } from './callPathIndexerV3.js';
 import { createMoquiAdapters } from './adapters/moqui/index.js';
 import { resolveOdooRuntime } from './adapters/odoo/runtime.js';
+import { composeOdooSchemas } from './adapters/odoo/composeSchemas.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -25,10 +26,47 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooDetection = null;
     this.odooAdapters = null;
     this.odooEntitySchema = null;
+    this.odooFramework = null;
     this.frameworkKind = '';
 
     this.entitySchemas = [];
     this.entitySchemaByName = new Map();
+  }
+
+  setEntitySchemas(schemas = []) {
+    this.entitySchemas = Array.isArray(schemas) ? schemas : [];
+    this.entitySchemaByName = new Map();
+    for (const schema of this.entitySchemas) {
+      if (schema?.name) this.entitySchemaByName.set(schema.name, schema);
+      if (schema?.fullName) this.entitySchemaByName.set(schema.fullName, schema);
+    }
+  }
+
+  async enrichOdooFrameworkSchemas(projectSchemas = this.entitySchemas) {
+    this.odooFramework = this.odooAdapters?.frameworkEnricher
+      ? await this.odooAdapters.frameworkEnricher.augment(projectSchemas)
+      : { seeds: [], frameworkSchemas: [], learned: [], reused: [], missing: [], source: null };
+
+    this.setEntitySchemas(composeOdooSchemas({
+      frameworkSchemas: this.odooFramework.frameworkSchemas,
+      projectSchemas
+    }));
+    return this.odooFramework;
+  }
+
+  odooFrameworkSummary() {
+    const framework = this.odooFramework || {};
+    return {
+      seeds: Array.isArray(framework.seeds) ? framework.seeds : [],
+      learned: Array.isArray(framework.learned) ? framework.learned : [],
+      reused: Array.isArray(framework.reused) ? framework.reused : [],
+      missing: Array.isArray(framework.missing) ? framework.missing : [],
+      frameworkSchemaCount: Array.isArray(framework.frameworkSchemas) ? framework.frameworkSchemas.length : 0,
+      source: framework.source ? {
+        repoUrl: framework.source.repoUrl || '',
+        commit: framework.source.commit || ''
+      } : null
+    };
   }
 
   async prepare(repoUrl) {
@@ -43,6 +81,9 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         ? await this.odooAdapters.entitySchema.augment()
         : null;
 
+      const projectSchemas = [...this.entitySchemas];
+      await this.enrichOdooFrameworkSchemas(projectSchemas);
+
       this.moquiEntitySchema = null;
       this.moquiXmlExecution = null;
       this.callPathIndex = this.callPathIndexer.build();
@@ -51,6 +92,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         frameworkKind: this.frameworkKind,
         odooDetection: this.odooDetection,
         odooEntitySchema: this.odooEntitySchema,
+        odooFramework: this.odooFrameworkSummary(),
         moquiEntitySchema: null,
         moquiXmlExecution: null,
         callPathIndex: {
@@ -69,6 +111,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooDetection = null;
     this.odooAdapters = null;
     this.odooEntitySchema = null;
+    this.odooFramework = null;
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
     this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
     this.callPathIndex = this.callPathIndexer.build();
