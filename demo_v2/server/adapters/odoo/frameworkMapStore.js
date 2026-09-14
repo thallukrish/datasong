@@ -44,11 +44,23 @@ export class OdooFrameworkMapStore {
     const dir = this.directory();
     const file = this.filePath();
     const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    const backup = `${file}.bak`;
     fs.mkdirSync(dir, { recursive: true });
     const payload = { ...clone(map), updatedAt: new Date().toISOString() };
-    fs.writeFileSync(temp, JSON.stringify(payload, null, 2));
-    JSON.parse(fs.readFileSync(temp, 'utf8'));
-    fs.renameSync(temp, file);
+    try {
+      fs.writeFileSync(temp, JSON.stringify(payload, null, 2));
+      JSON.parse(fs.readFileSync(temp, 'utf8'));
+      if (fs.existsSync(file)) {
+        try {
+          JSON.parse(fs.readFileSync(file, 'utf8'));
+          fs.copyFileSync(file, backup);
+        } catch {}
+        fs.rmSync(file, { force: true });
+      }
+      fs.renameSync(temp, file);
+    } finally {
+      if (fs.existsSync(temp)) fs.rmSync(temp, { force: true });
+    }
     return payload;
   }
 
