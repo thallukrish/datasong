@@ -10,6 +10,13 @@ const pickStringArg = (text, key) => {
   const m = text.match(new RegExp(`\\b${key}\\s*=\\s*["']([^"']+)["']`));
   return m ? m[1] : '';
 };
+const firstPositionalStringArg = (text) => {
+  const open = text.indexOf('(');
+  if (open < 0) return '';
+  const args = text.slice(open + 1);
+  const match = args.match(/^\s*["']([^"']+)["']/s);
+  return match ? match[1] : '';
+};
 
 function collectFieldCall(lines, startIndex) {
   let text = lines[startIndex];
@@ -60,8 +67,7 @@ export function extractOdooModels(sourcePath, source, addonName) {
       if (!fieldMatch) continue;
       const { text, endIndex } = collectFieldCall(lines, lineIndex);
       const [, fieldName, type] = fieldMatch;
-      const literals = stringLiterals(text.slice(text.indexOf('(') + 1));
-      const relatedModel = RELATION_BY_TYPE[type] ? (literals[0] || '') : '';
+      const relatedModel = RELATION_BY_TYPE[type] ? firstPositionalStringArg(text) : '';
       fields.push({
         name: fieldName,
         type,
