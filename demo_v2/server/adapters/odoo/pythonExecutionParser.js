@@ -11,6 +11,14 @@ function lineNumber(source, offset) {
   return source.slice(0, Math.max(0, offset)).split(/\r?\n/).length;
 }
 
+function callsFrom(body, modelName) {
+  const calls = [];
+  let match;
+  const re = /super\s*\(\s*\)\s*\.\s*([A-Za-z_]\w*)\s*\(/g;
+  while ((match = re.exec(body))) calls.push({ kind: 'super', modelName, methodName: match[1] });
+  return calls;
+}
+
 function classRanges(source) {
   const matches = [...source.matchAll(/^class\s+([A-Za-z_]\w*)\s*\([^\n]*models\.[A-Za-z_]\w*[^\n]*\)\s*:\s*$/gm)];
   return matches.map((match, index) => ({
@@ -38,14 +46,15 @@ function methodRanges(source, range, model) {
       bodyLines.push(candidate);
       j += 1;
     }
+    const body = bodyLines.join('\n');
     methods.push({
       modelName: model.name,
       className: range.className,
       methodName: match[2],
       line: baseLine + i,
       signature: `def ${match[2]}(${match[3].trim()})`,
-      body: bodyLines.join('\n'),
-      calls: [],
+      body,
+      calls: callsFrom(body, model.name),
       extension: model.extension,
       inherits: model.inherits
     });
