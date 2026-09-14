@@ -27,6 +27,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooAdapters = null;
     this.odooEntitySchema = null;
     this.odooFramework = null;
+    this.odooExecution = null;
     this.frameworkKind = '';
 
     this.entitySchemas = [];
@@ -85,6 +86,9 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
 
       const projectSchemas = [...this.entitySchemas];
       await this.enrichOdooFrameworkSchemas(projectSchemas);
+      this.odooExecution = this.odooAdapters?.execution
+        ? await this.odooAdapters.execution.augment()
+        : null;
 
       this.moquiEntitySchema = null;
       this.moquiXmlExecution = null;
@@ -95,6 +99,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         odooDetection: this.odooDetection,
         odooEntitySchema: this.odooEntitySchema,
         odooFramework: this.odooFrameworkSummary(),
+        odooExecution: this.odooExecution,
         moquiEntitySchema: null,
         moquiXmlExecution: null,
         callPathIndex: {
@@ -114,6 +119,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooAdapters = null;
     this.odooEntitySchema = null;
     this.odooFramework = null;
+    this.odooExecution = null;
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
     this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
     this.callPathIndex = this.callPathIndexer.build();
