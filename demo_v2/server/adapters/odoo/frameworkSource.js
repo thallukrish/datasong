@@ -37,7 +37,9 @@ export async function findOdooModelFiles({ repoDir, modelName, gitFactory = simp
 
   let raw = '';
   try {
-    raw = await gitFactory(repoDir).raw(['grep', '-l', '-F', wanted, '--', 'addons']);
+    raw = await gitFactory(repoDir).raw([
+      'grep', '-l', '-F', wanted, '--', 'addons', 'odoo/addons'
+    ]);
   } catch (error) {
     const text = String(error?.message || '');
     if (/exit code 1|not found|no match/i.test(text)) return [];
