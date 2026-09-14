@@ -45,7 +45,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
   async enrichOdooFrameworkSchemas(projectSchemas = this.entitySchemas) {
     this.odooFramework = this.odooAdapters?.frameworkEnricher
       ? await this.odooAdapters.frameworkEnricher.augment(projectSchemas)
-      : { seeds: [], frameworkSchemas: [], learned: [], reused: [], missing: [], source: null };
+      : { seeds: [], moduleSeeds: [], modules: [], frameworkSchemas: [], learned: [], reused: [], missing: [], source: null };
 
     this.setEntitySchemas(composeOdooSchemas({
       frameworkSchemas: this.odooFramework.frameworkSchemas,
@@ -58,6 +58,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     const framework = this.odooFramework || {};
     return {
       seeds: Array.isArray(framework.seeds) ? framework.seeds : [],
+      moduleSeeds: Array.isArray(framework.moduleSeeds) ? framework.moduleSeeds : [],
+      modules: Array.isArray(framework.modules) ? framework.modules : [],
       learned: Array.isArray(framework.learned) ? framework.learned : [],
       reused: Array.isArray(framework.reused) ? framework.reused : [],
       missing: Array.isArray(framework.missing) ? framework.missing : [],
