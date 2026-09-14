@@ -77,7 +77,7 @@ export async function findOdooModelFiles({ repoDir, modelName, allowedAddons = [
     ]);
   } catch (error) {
     const text = String(error?.message || '');
-    if (/exit code 1|not found|no match/i.test(text)) return [];
+    if (Number(error?.exitCode) === 1 || /exit(?:ed)?(?: with)? code 1|not found|no match/i.test(text)) return [];
     throw error;
   }
 
