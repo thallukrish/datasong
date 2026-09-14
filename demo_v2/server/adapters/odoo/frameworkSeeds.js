@@ -21,3 +21,15 @@ export function frameworkModelSeeds(projectSchemas = []) {
 
   return [...seeds].sort();
 }
+
+export function frameworkModuleSeeds(addons = []) {
+  const projectAddonNames = new Set(arr(addons).map((addon) => String(addon?.name || '')).filter(Boolean));
+  const seeds = new Set();
+  for (const addon of arr(addons)) {
+    for (const dependency of arr(addon?.depends)) {
+      const name = String(dependency || '');
+      if (name && !projectAddonNames.has(name)) seeds.add(name);
+    }
+  }
+  return [...seeds].sort();
+}
