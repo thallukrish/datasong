@@ -47,9 +47,16 @@ class ProductProduct(models.Model):
     calls.push(modelName);
     return filesByModel[modelName] || [];
   };
+  const resolveModuleClosure = async ({ seeds }) => {
+    assert.deepEqual(seeds, ['mrp', 'product']);
+    return ['base', 'mrp', 'product'];
+  };
   const topology = {
     cacheRoot: path.join(dataRoot, 'repo-cache'),
-    odooDetection: { version: '19' }
+    odooDetection: {
+      version: '19',
+      addons: [{ name: 'acme', depends: ['mrp', 'product'] }]
+    }
   };
   const store = new OdooFrameworkMapStore({ dataRoot, version: '19' });
   const projectSchemas = [{
@@ -58,10 +65,11 @@ class ProductProduct(models.Model):
   }];
 
   const first = await new OdooFrameworkEnricher(topology, {
-    source, store, findModelFiles, maxDepth: 1
+    source, store, findModelFiles, resolveModuleClosure, maxDepth: 1
   }).augment(projectSchemas);
 
   assert.deepEqual(first.seeds, ['mrp.production']);
+  assert.deepEqual(first.modules, ['base', 'mrp', 'product']);
   assert.deepEqual(first.learned.sort(), ['mrp.bom', 'mrp.production', 'product.product']);
   assert.equal(first.frameworkSchemas.find((schema) => schema.name === 'mrp.production').ownership, 'framework');
   assert.equal(first.frameworkSchemas.find((schema) => schema.name === 'mrp.bom').provenance.layer, 'framework');
@@ -69,7 +77,7 @@ class ProductProduct(models.Model):
 
   calls.length = 0;
   const second = await new OdooFrameworkEnricher(topology, {
-    source, store, findModelFiles, maxDepth: 1
+    source, store, findModelFiles, resolveModuleClosure, maxDepth: 1
   }).augment(projectSchemas);
 
   assert.deepEqual(second.reused.sort(), ['mrp.bom', 'mrp.production', 'product.product']);
