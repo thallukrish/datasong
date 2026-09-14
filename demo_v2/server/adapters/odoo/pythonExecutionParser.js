@@ -14,8 +14,15 @@ function lineNumber(source, offset) {
 function callsFrom(body, modelName) {
   const calls = [];
   let match;
-  const re = /super\s*\(\s*\)\s*\.\s*([A-Za-z_]\w*)\s*\(/g;
-  while ((match = re.exec(body))) calls.push({ kind: 'super', modelName, methodName: match[1] });
+  const superRe = /super\s*\(\s*\)\s*\.\s*([A-Za-z_]\w*)\s*\(/g;
+  while ((match = superRe.exec(body))) calls.push({ kind: 'super', modelName, methodName: match[1] });
+
+  const selfRe = /\bself\.([A-Za-z_]\w*)\s*\(/g;
+  while ((match = selfRe.exec(body))) {
+    const methodName = match[1];
+    const kind = WRITE_METHODS.has(methodName) ? 'write' : READ_METHODS.has(methodName) ? 'read' : 'self';
+    calls.push({ kind, modelName, methodName });
+  }
   return calls;
 }
 
