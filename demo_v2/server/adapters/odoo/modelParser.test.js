@@ -17,6 +17,21 @@ class BomRevision(models.Model):
   assert.equal(model.fields[0].relation, 'many-to-one');
 });
 
+test('does not mistake a related field path for an explicit relational comodel', () => {
+  const src = `
+class MrpProduction(models.Model):
+    _name = 'mrp.production'
+    product_variant_attributes = fields.Many2many(related='product_id.product_template_attribute_value_ids')
+    lot_ids = fields.Many2many(
+        'stock.lot',
+        string='Lots',
+    )
+`;
+  const [model] = extractOdooModels('addons/mrp/models/mrp_production.py', src, 'mrp');
+  assert.equal(model.fields[0].relatedModel, '');
+  assert.equal(model.fields[1].relatedModel, 'stock.lot');
+});
+
 test('extracts an extension of a standard Odoo model', () => {
   const src = `
 class MrpProduction(models.Model):
