@@ -66,10 +66,14 @@ export class OdooFrameworkMapStore {
 
   mergeSchemas({ source, schemas = [] }) {
     const map = this.load();
-    const sourceKey = `${source?.repoUrl || ''}@${source?.commit || ''}`;
+    const sourceRecord = {
+      repoUrl: String(source?.repoUrl || ''),
+      commit: String(source?.commit || '')
+    };
+    const sourceKey = `${sourceRecord.repoUrl}@${sourceRecord.commit}`;
     if (sourceKey !== '@') {
       const seen = new Set(map.sources.map((item) => `${item?.repoUrl || ''}@${item?.commit || ''}`));
-      if (!seen.has(sourceKey)) map.sources.push(clone(source));
+      if (!seen.has(sourceKey)) map.sources.push(sourceRecord);
     }
     for (const schema of Array.isArray(schemas) ? schemas : []) {
       if (!schema?.stableId) continue;
