@@ -99,7 +99,9 @@ export class OdooFrameworkEnricher {
 
     const persisted = store.load();
     const cachedByName = new Map(
-      Object.values(persisted.schemas || {}).filter((schema) => schema?.name).map((schema) => [schema.name, schema])
+      Object.values(persisted.schemas || {})
+        .filter((schema) => schema?.name && schema?.provenance?.commit === source.commit)
+        .map((schema) => [schema.name, schema])
     );
     const projectOnlyNames = new Set(
       arr(projectSchemas)
