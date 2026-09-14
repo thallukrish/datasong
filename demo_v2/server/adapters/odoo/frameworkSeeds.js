@@ -1,8 +1,11 @@
 const arr = (value) => Array.isArray(value) ? value : [];
 
 export function frameworkModelSeeds(projectSchemas = []) {
-  const projectNames = new Set(
-    arr(projectSchemas).map((schema) => String(schema?.name || '')).filter(Boolean)
+  const projectOnlyNames = new Set(
+    arr(projectSchemas)
+      .filter((schema) => schema?.ownership === 'project')
+      .map((schema) => String(schema?.name || ''))
+      .filter(Boolean)
   );
   const seeds = new Set();
 
@@ -12,7 +15,7 @@ export function frameworkModelSeeds(projectSchemas = []) {
     }
     for (const relationship of arr(schema?.relationships)) {
       const name = String(relationship?.relatedEntityName || '');
-      if (name && !projectNames.has(name)) seeds.add(name);
+      if (name && !projectOnlyNames.has(name)) seeds.add(name);
     }
   }
 
