@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { extractOdooModels } from './modelParser.js';
-import { frameworkModelSeeds } from './frameworkSeeds.js';
-import { ensureOdooSource, findOdooModelFiles } from './frameworkSource.js';
+import { frameworkModelSeeds, frameworkModuleSeeds } from './frameworkSeeds.js';
+import { ensureOdooSource, findOdooModelFiles, resolveOdooModuleClosure } from './frameworkSource.js';
 import { OdooFrameworkMapStore } from './frameworkMapStore.js';
 
 const arr = (value) => Array.isArray(value) ? value : [];
@@ -92,8 +92,18 @@ export class OdooFrameworkEnricher {
       sourceDir: this.options.sourceDir ?? process.env.ODOO_SOURCE_DIR ?? '',
       gitFactory: this.options.gitFactory
     });
+
+    const moduleSeeds = frameworkModuleSeeds(topology?.odooDetection?.addons || []);
+    const resolveModuleClosure = this.options.resolveModuleClosure || resolveOdooModuleClosure;
+    const modules = this.options.allowedAddons || await resolveModuleClosure({
+      repoDir: source.repoDir,
+      seeds: moduleSeeds,
+      maxModules: this.options.maxModules ?? 120
+    });
+    const allowedAddons = [...new Set(arr(modules).map(String).filter(Boolean))].sort();
     const findModelFiles = this.options.findModelFiles || ((args) => findOdooModelFiles({
       ...args,
+      allowedAddons,
       gitFactory: this.options.gitFactory
     }));
 
@@ -153,6 +163,8 @@ export class OdooFrameworkEnricher {
 
     return {
       seeds,
+      moduleSeeds,
+      modules: allowedAddons,
       frameworkSchemas: [...selected.values()].sort((a, b) => a.name.localeCompare(b.name)),
       learned: [...new Set(learned)].sort(),
       reused: [...new Set(reused)].sort(),
