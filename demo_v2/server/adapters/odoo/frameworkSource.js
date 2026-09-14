@@ -33,6 +33,7 @@ export async function ensureOdooSource({ version, cacheRoot, sourceDir = '', git
   if (!explicit && !fs.existsSync(path.join(repoDir, '.git'))) {
     fs.mkdirSync(path.dirname(repoDir), { recursive: true });
     await gitFactory().clone(ODOO_REPO_URL, repoDir, [
+      '--config', 'core.longpaths=true',
       '--branch', `${version}.0`,
       '--single-branch',
       '--depth', '1'
