@@ -79,3 +79,44 @@ class MrpProduction(models.Model):
   assert.ok(base.references.some((ref) => ref.relation === 'calls' && ref.name === createMoves.name));
   assert.ok(createMoves.references.some((ref) => ref.relation === 'writes' && ref.name === 'stock.move'));
 });
+
+test('uses Odoo UI object-button entrypoints as targeted framework seeds', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-ui-seed-'));
+  const frameworkRoot = path.join(root, 'odoo-source');
+  const frameworkFile = path.join(frameworkRoot, 'addons/sale/models/sale_order.py');
+  await fs.mkdir(path.dirname(frameworkFile), { recursive: true });
+  await fs.writeFile(frameworkFile, `
+from odoo import models
+class SaleOrder(models.Model):
+    _name = 'sale.order'
+    def action_confirm(self):
+        self._action_confirm()
+    def _action_confirm(self):
+        return True
+`);
+
+  const topology = topologyStub(root);
+  topology.trackedFiles = [];
+  topology.odooFramework.modules = ['sale'];
+
+  const adapter = new OdooExecutionAdapter(topology, {
+    source: { repoDir: frameworkRoot, repoUrl: 'https://github.com/odoo/odoo.git', commit: 'abc123' },
+    uiEntrypoints: [{
+      kind: 'object_button',
+      modelName: 'sale.order',
+      methodName: 'action_confirm',
+      sourcePath: 'addons/sale/views/sale_order_views.xml',
+      line: 10
+    }],
+    findModelFiles: async ({ modelName }) => modelName === 'sale.order' ? ['addons/sale/models/sale_order.py'] : []
+  });
+
+  const result = await adapter.augment();
+
+  assert.equal(result.uiEntrypointSeeds, 1);
+  const confirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order.action_confirm');
+  const actionConfirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order._action_confirm');
+  assert.ok(confirm);
+  assert.ok(actionConfirm);
+  assert.ok(confirm.references.some((ref) => ref.relation === 'calls' && ref.name === actionConfirm.name));
+});
