@@ -1,6 +1,8 @@
 import { OdooEntitySchemaAdapter } from './schemaAdapter.js';
 import { OdooFrameworkEnricher } from './frameworkEnricher.js';
 import { OdooExecutionAdapter } from './executionAdapter.js';
+import { extractOdooUiEntrypoints } from './uiEntrypoints.js';
+import { assessOdooEvidence } from './evidenceAssessment.js';
 
 export function createOdooAdapters(topology) {
   return {
@@ -10,4 +12,10 @@ export function createOdooAdapters(topology) {
   };
 }
 
-export { OdooEntitySchemaAdapter, OdooFrameworkEnricher, OdooExecutionAdapter };
+export {
+  OdooEntitySchemaAdapter,
+  OdooFrameworkEnricher,
+  OdooExecutionAdapter,
+  extractOdooUiEntrypoints,
+  assessOdooEvidence
+};
