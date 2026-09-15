@@ -120,3 +120,39 @@ class SaleOrder(models.Model):
   assert.ok(actionConfirm);
   assert.ok(confirm.references.some((ref) => ref.relation === 'calls' && ref.name === actionConfirm.name));
 });
+
+test('accepts facade-provided entrypoints at augment time', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-facade-seed-'));
+  const frameworkRoot = path.join(root, 'odoo-source');
+  const frameworkFile = path.join(frameworkRoot, 'addons/sale/models/sale_order.py');
+  await fs.mkdir(path.dirname(frameworkFile), { recursive: true });
+  await fs.writeFile(frameworkFile, `
+from odoo import models
+class SaleOrder(models.Model):
+    _name = 'sale.order'
+    def action_confirm(self):
+        return True
+`);
+
+  const topology = topologyStub(root);
+  topology.trackedFiles = [];
+  topology.odooFramework.modules = ['sale'];
+
+  const adapter = new OdooExecutionAdapter(topology, {
+    source: { repoDir: frameworkRoot, repoUrl: 'https://github.com/odoo/odoo.git', commit: 'abc123' },
+    findModelFiles: async ({ modelName }) => modelName === 'sale.order' ? ['addons/sale/models/sale_order.py'] : []
+  });
+
+  const result = await adapter.augment({
+    entrypoints: [{
+      kind: 'object_button',
+      modelName: 'sale.order',
+      methodName: 'action_confirm',
+      sourcePath: 'addons/sale/views/sale_order_views.xml',
+      line: 10
+    }]
+  });
+
+  assert.equal(result.uiEntrypointSeeds, 1);
+  assert.ok(topology.symbols.some((symbol) => symbol.name === 'odoo19:sale.order.action_confirm'));
+});
