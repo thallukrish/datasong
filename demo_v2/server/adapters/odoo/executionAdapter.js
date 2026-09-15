@@ -31,7 +31,7 @@ export class OdooExecutionAdapter {
     this.options = options;
   }
 
-  async augment() {
+  async augment(input = {}) {
     const topology = this.topology;
     const version = String(topology?.odooDetection?.version || '');
     const addons = Array.isArray(topology?.odooDetection?.addons) ? topology.odooDetection.addons : [];
@@ -49,7 +49,9 @@ export class OdooExecutionAdapter {
     const projectByKey = new Map(projectMethods.map((method) => [`${method.modelName}.${method.methodName}`, method]));
     const projectSymbols = new Map();
     const pendingFramework = [];
-    const uiEntrypoints = Array.isArray(this.options.uiEntrypoints) ? this.options.uiEntrypoints : [];
+    const configuredEntrypoints = Array.isArray(this.options.uiEntrypoints) ? this.options.uiEntrypoints : [];
+    const suppliedEntrypoints = Array.isArray(input?.entrypoints) ? input.entrypoints : [];
+    const uiEntrypoints = [...configuredEntrypoints, ...suppliedEntrypoints];
     let bridgedSuperCalls = 0;
 
     for (const entrypoint of uiEntrypoints) {
