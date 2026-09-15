@@ -49,7 +49,13 @@ export class OdooExecutionAdapter {
     const projectByKey = new Map(projectMethods.map((method) => [`${method.modelName}.${method.methodName}`, method]));
     const projectSymbols = new Map();
     const pendingFramework = [];
+    const uiEntrypoints = Array.isArray(this.options.uiEntrypoints) ? this.options.uiEntrypoints : [];
     let bridgedSuperCalls = 0;
+
+    for (const entrypoint of uiEntrypoints) {
+      if (!entrypoint?.modelName || !entrypoint?.methodName) continue;
+      pendingFramework.push({ modelName: entrypoint.modelName, methodName: entrypoint.methodName, depth: 0 });
+    }
 
     for (const method of projectMethods) {
       const symbol = topology.addSemanticFunction({
@@ -164,6 +170,7 @@ export class OdooExecutionAdapter {
       projectMethods: projectMethods.length,
       frameworkMethods: frameworkSymbols.size,
       bridgedSuperCalls,
+      uiEntrypointSeeds: uiEntrypoints.filter((entrypoint) => entrypoint?.modelName && entrypoint?.methodName).length,
       unresolvedCalls: [...new Set(unresolvedCalls)].sort(),
       source: { repoUrl: source.repoUrl, commit: source.commit }
     };
