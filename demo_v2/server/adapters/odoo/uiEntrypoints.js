@@ -75,3 +75,4 @@ export function extractOdooUiEntrypoints(sourcePath, xml) {
   }
 
   return { entrypoints: unique(entrypoints), modelActions: unique(modelActions) };
+}
