@@ -2,7 +2,16 @@ const lineOf = (source, index) => source.slice(0, Math.max(0, index)).split('\n'
 
 function records(xml) {
   return [...String(xml || '').matchAll(/<record\b[^>]*\bmodel=["']([^"']+)["'][^>]*>([\s\S]*?)<\/record>/g)]
-    .map((match) => ({ model: match[1], body: match[2], index: match.index || 0 }));
+    .map((match) => {
+      const index = match.index || 0;
+      const bodyOffset = match[0].indexOf(match[2]);
+      return {
+        model: match[1],
+        body: match[2],
+        index,
+        bodyIndex: index + Math.max(0, bodyOffset)
+      };
+    });
 }
 
 function fieldValue(body, name) {
@@ -34,7 +43,7 @@ export function extractOdooUiEntrypoints(sourcePath, xml) {
         const type = attrs.match(/\btype=["']([^"']+)["']/i)?.[1] || '';
         const methodName = attrs.match(/\bname=["']([^"']+)["']/i)?.[1] || '';
         if (type !== 'object' || !methodName) continue;
-        const absoluteIndex = record.index + record.body.indexOf(button[0]);
+        const absoluteIndex = record.bodyIndex + (button.index || 0);
         entrypoints.push({
           kind: 'object_button', modelName, methodName, sourcePath,
           line: lineOf(source, absoluteIndex)
@@ -66,4 +75,3 @@ export function extractOdooUiEntrypoints(sourcePath, xml) {
   }
 
   return { entrypoints: unique(entrypoints), modelActions: unique(modelActions) };
-}
