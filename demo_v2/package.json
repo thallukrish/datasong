@@ -9,6 +9,7 @@
     "compact-map": "node scripts/compact-semantic-map.js",
     "assess:acme": "node scripts/acme-odoo-assessment.js",
     "assess:acme:pass1": "node scripts/acme-pass1-handoff-assessment.js",
+    "assess:acme:pass2": "node scripts/acme-pass2-handoff-assessment.js",
     "test": "node --test"
   },
   "dependencies": {
