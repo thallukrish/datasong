@@ -28,6 +28,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooEntitySchema = null;
     this.odooFramework = null;
     this.odooExecution = null;
+    this.odooPatternEvidence = [];
+    this.odooUiEvidence = { entrypoints: [], modelActions: [] };
     this.frameworkKind = '';
 
     this.entitySchemas = [];
@@ -80,6 +82,12 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
       this.frameworkKind = 'odoo';
       this.odooDetection = odooRuntime.detection;
       this.odooAdapters = odooRuntime.adapters;
+      this.odooPatternEvidence = this.odooAdapters?.adapter?.collectPatternEvidence
+        ? await this.odooAdapters.adapter.collectPatternEvidence()
+        : [];
+      this.odooUiEvidence = this.odooAdapters?.adapter?.collectUiEvidence
+        ? await this.odooAdapters.adapter.collectUiEvidence()
+        : { entrypoints: [], modelActions: [] };
       this.odooEntitySchema = this.odooAdapters?.entitySchema
         ? await this.odooAdapters.entitySchema.augment()
         : null;
@@ -87,7 +95,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
       const projectSchemas = [...this.entitySchemas];
       await this.enrichOdooFrameworkSchemas(projectSchemas);
       this.odooExecution = this.odooAdapters?.execution
-        ? await this.odooAdapters.execution.augment()
+        ? await this.odooAdapters.execution.augment({ entrypoints: this.odooUiEvidence.entrypoints })
         : null;
 
       this.moquiEntitySchema = null;
@@ -97,6 +105,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         ...prep,
         frameworkKind: this.frameworkKind,
         odooDetection: this.odooDetection,
+        odooPatterns: this.odooPatternEvidence,
+        odooUi: this.odooUiEvidence,
         odooEntitySchema: this.odooEntitySchema,
         odooFramework: this.odooFrameworkSummary(),
         odooExecution: this.odooExecution,
@@ -120,6 +130,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooEntitySchema = null;
     this.odooFramework = null;
     this.odooExecution = null;
+    this.odooPatternEvidence = [];
+    this.odooUiEvidence = { entrypoints: [], modelActions: [] };
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
     this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
     this.callPathIndex = this.callPathIndexer.build();
