@@ -1,4 +1,5 @@
 import { applyOdooPatterns } from './patternRegistry.js';
+import { extractOdooRecordsetCalls } from './recordsetCallResolver.js';
 
 function indentOf(line = '') {
   return (String(line).match(/^(\s*)/)?.[1] || '').replace(/\t/g, '    ').length;
@@ -29,46 +30,6 @@ function functionRange(source, functionName) {
   return null;
 }
 
-function callKind(methodName) {
-  if (['create', 'write', 'unlink'].includes(methodName)) return 'write';
-  if (['search', 'browse', 'read', 'mapped', 'filtered', 'search_read', 'search_count'].includes(methodName)) return 'read';
-  return 'model';
-}
-
-function callsFromHook(sourcePath, body) {
-  const calls = [];
-  const boundModels = new Map();
-  let match;
-
-  // Binding across statements is contextual resolution, so keep this small piece
-  // in code while the direct env-call recognizer itself comes from the registry.
-  const bindRe = /\b([A-Za-z_]\w*)\s*=\s*env\s*\[\s*["']([^"']+)["']\s*\]\s*\.\s*(create|browse|search|search_read)\s*\(/g;
-  while ((match = bindRe.exec(body))) boundModels.set(match[1], match[2]);
-
-  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_env_model_call'] })) {
-    const modelName = candidate.captures.model;
-    const methodName = candidate.captures.method;
-    if (modelName && methodName) calls.push({ kind: callKind(methodName), modelName, methodName, ruleId: candidate.ruleId });
-  }
-
-  const variableCallRe = /\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(/g;
-  while ((match = variableCallRe.exec(body))) {
-    const modelName = boundModels.get(match[1]);
-    if (!modelName) continue;
-    const methodName = match[2];
-    if (['create', 'browse', 'search', 'search_read'].includes(methodName)) continue;
-    calls.push({ kind: 'model', modelName, methodName });
-  }
-
-  const seen = new Set();
-  return calls.filter((call) => {
-    const key = `${call.kind}:${call.modelName}.${call.methodName}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 export function extractOdooManifestHooks(sourcePath, source, addonName = '') {
   return applyOdooPatterns(sourcePath, source, { ids: ['manifest_lifecycle_hook'] }).map((candidate) => ({
     addon: addonName,
@@ -90,6 +51,6 @@ export function extractOdooHookExecution(sourcePath, source, addonName, hook) {
     hookType: hook.hookType,
     manifestPath: hook.manifestPath,
     ruleId: hook.ruleId,
-    calls: callsFromHook(sourcePath, range.body)
+    calls: extractOdooRecordsetCalls(range.body)
   };
 }
