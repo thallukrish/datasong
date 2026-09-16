@@ -189,11 +189,11 @@ export class OdooExecutionAdapter {
       ? this.options.allowedAddons
       : Array.isArray(topology?.odooFramework?.modules) ? topology.odooFramework.modules : [];
     const findModelFiles = this.options.findModelFiles || ((args) => findOdooModelFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
-    const maxDepth = Math.max(0, Number(this.options.maxDepth ?? 6));
     const maxFrameworkMethods = Math.max(1, Number(this.options.maxFrameworkMethods ?? 250));
     const frameworkSymbols = new Map();
     const visited = new Set();
     const relatedModelCache = new Map();
+    const dynamicFamilyCache = new Map();
 
     const resolveFrameworkRelatedModel = async (modelName, fieldName) => {
       const local = relatedModelForField(topology, modelName, fieldName);
@@ -219,6 +219,32 @@ export class OdooExecutionAdapter {
       }
       relatedModelCache.set(cacheKey, '');
       return '';
+    };
+
+    const resolveDynamicFrameworkMethods = async (call) => {
+      const modelName = call.modelName;
+      const prefix = call.methodPrefix || '';
+      const suffix = call.methodSuffix || '';
+      const cacheKey = `${modelName}:${prefix}*${suffix}`;
+      if (dynamicFamilyCache.has(cacheKey)) return dynamicFamilyCache.get(cacheKey);
+
+      const found = new Set();
+      const files = await findModelFiles({ repoDir: source.repoDir, modelName });
+      for (const sourcePath of files) {
+        const text = await fs.readFile(path.join(source.repoDir, sourcePath), 'utf8').catch(() => '');
+        if (!text) continue;
+        const addon = sourcePath.replace(/\\/g, '/').split('/')[1] || '';
+        const parsed = extractOdooExecution(sourcePath, text, addon);
+        for (const method of parsed.methods) {
+          if (method.modelName !== modelName) continue;
+          if (prefix && !method.methodName.startsWith(prefix)) continue;
+          if (suffix && !method.methodName.endsWith(suffix)) continue;
+          found.add(method.methodName);
+        }
+      }
+      const methods = [...found].sort();
+      dynamicFamilyCache.set(cacheKey, methods);
+      return methods;
     };
 
     while (pendingFramework.length && visited.size < maxFrameworkMethods) {
@@ -254,6 +280,18 @@ export class OdooExecutionAdapter {
           frameworkSymbols.set(`${method.sourcePath}:${key}`, symbol);
 
           for (const call of method.calls) {
+            if (call.kind === 'dynamic_model') {
+              const targets = await resolveDynamicFrameworkMethods(call);
+              if (!targets.length) {
+                unresolvedCalls.push(`${call.modelName}.${call.methodPrefix || ''}*${call.methodSuffix || ''}`);
+                continue;
+              }
+              for (const methodName of targets) {
+                addReference(symbol, frameworkMethodName(version, call.modelName, methodName), 'calls');
+                pendingFramework.push({ modelName: call.modelName, methodName, depth: current.depth + 1 });
+              }
+              continue;
+            }
             if (call.kind === 'self' || call.kind === 'super' || call.kind === 'model' || call.kind === 'field') {
               let targetModel = call.modelName;
               if (call.kind === 'field') {
@@ -265,7 +303,7 @@ export class OdooExecutionAdapter {
               }
               const target = frameworkMethodName(version, targetModel, call.methodName);
               addReference(symbol, target, 'calls');
-              if (current.depth < maxDepth) pendingFramework.push({ modelName: targetModel, methodName: call.methodName, depth: current.depth + 1 });
+              pendingFramework.push({ modelName: targetModel, methodName: call.methodName, depth: current.depth + 1 });
             } else if (call.kind === 'read' || call.kind === 'write') {
               addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
             }
