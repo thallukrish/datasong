@@ -24,9 +24,26 @@ function callsFrom(body, modelName, sourcePath) {
     calls.push({ kind: 'field', modelName, fieldName, methodName, ruleId: candidate.ruleId });
   }
 
+  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_env_dynamic_getattr_dispatch'] })) {
+    const targetModel = candidate.captures.model;
+    const methodPrefix = candidate.captures.prefix || '';
+    const methodSuffix = candidate.captures.suffix || '';
+    const selector = candidate.captures.selector || '';
+    if (!targetModel || (!methodPrefix && !methodSuffix)) continue;
+    calls.push({
+      kind: 'dynamic_model',
+      modelName: targetModel,
+      methodPrefix,
+      methodSuffix,
+      selector,
+      ruleId: candidate.ruleId
+    });
+  }
+
   const seen = new Set();
   return calls.filter((call) => {
-    const key = `${call.kind}:${call.modelName}.${call.fieldName || ''}.${call.methodName}`;
+    const methodKey = call.methodName || `${call.methodPrefix || ''}*${call.methodSuffix || ''}`;
+    const key = `${call.kind}:${call.modelName}.${call.fieldName || ''}.${methodKey}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
