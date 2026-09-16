@@ -1,10 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { extractOdooExecution } from './pythonExecutionParser.js';
+import { extractOdooManifestHooks, extractOdooHookExecution } from './manifestHooks.js';
 import { ensureOdooSource, findOdooModelFiles } from './frameworkSource.js';
 
 function projectMethodName(modelName, methodName) {
   return `odoo-project:${modelName}.${methodName}`;
+}
+
+function projectHookName(addon, functionName) {
+  return `odoo-project:hook:${addon}.${functionName}`;
 }
 
 function frameworkMethodName(version, modelName, methodName) {
@@ -37,6 +42,7 @@ export class OdooExecutionAdapter {
     const addons = Array.isArray(topology?.odooDetection?.addons) ? topology.odooDetection.addons : [];
     const tracked = Array.isArray(topology?.trackedFiles) ? topology.trackedFiles : [];
     const projectMethods = [];
+    const projectHooks = [];
 
     for (const sourcePath of tracked.filter((file) => /(?:^|\/)models\/.*\.py$/.test(file))) {
       const addon = addonForPath(sourcePath, addons);
@@ -44,6 +50,27 @@ export class OdooExecutionAdapter {
       const source = await fs.readFile(path.join(topology.repoDir, sourcePath), 'utf8').catch(() => '');
       if (!source) continue;
       projectMethods.push(...extractOdooExecution(sourcePath, source, addon).methods);
+    }
+
+    for (const manifestPath of tracked.filter((file) => /(?:^|\/)__manifest__\.py$/.test(file))) {
+      const addon = addonForPath(manifestPath, addons);
+      if (!addon) continue;
+      const manifestSource = await fs.readFile(path.join(topology.repoDir, manifestPath), 'utf8').catch(() => '');
+      if (!manifestSource) continue;
+      const hooks = extractOdooManifestHooks(manifestPath, manifestSource, addon);
+      if (!hooks.length) continue;
+      const addonRoot = manifestPath.replace(/\/__manifest__\.py$/, '');
+      const pythonFiles = tracked.filter((file) => file.startsWith(`${addonRoot}/`) && file.endsWith('.py') && file !== manifestPath);
+      for (const hook of hooks) {
+        for (const sourcePath of pythonFiles) {
+          const source = await fs.readFile(path.join(topology.repoDir, sourcePath), 'utf8').catch(() => '');
+          if (!source) continue;
+          const parsed = extractOdooHookExecution(sourcePath, source, addon, hook);
+          if (!parsed) continue;
+          projectHooks.push(parsed);
+          break;
+        }
+      }
     }
 
     const projectByKey = new Map(projectMethods.map((method) => [`${method.modelName}.${method.methodName}`, method]));
@@ -71,6 +98,31 @@ export class OdooExecutionAdapter {
       });
       symbol.odooExecution = { layer: 'project', modelName: method.modelName, methodName: method.methodName, addon: method.addon };
       projectSymbols.set(`${method.modelName}.${method.methodName}`, symbol);
+    }
+
+    for (const hook of projectHooks) {
+      const symbol = topology.addSemanticFunction({
+        sourcePath: hook.sourcePath,
+        name: projectHookName(hook.addon, hook.functionName),
+        symbolKind: 'odoo_project_hook',
+        semanticType: 'odoo_executable_python',
+        line: hook.line,
+        signature: `${hook.hookType} ${hook.signature}`,
+        body: hook.body
+      });
+      symbol.odooExecution = {
+        layer: 'project', addon: hook.addon, hookType: hook.hookType,
+        methodName: hook.functionName, manifestPath: hook.manifestPath
+      };
+      for (const call of hook.calls) {
+        if (call.kind === 'model') {
+          const target = frameworkMethodName(version, call.modelName, call.methodName);
+          addReference(symbol, target, 'calls');
+          pendingFramework.push({ modelName: call.modelName, methodName: call.methodName, depth: 0 });
+        } else if (call.kind === 'read' || call.kind === 'write') {
+          addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
+        }
+      }
     }
 
     for (const method of projectMethods) {
@@ -170,6 +222,7 @@ export class OdooExecutionAdapter {
     return {
       adapter: 'odoo-execution-v1',
       projectMethods: projectMethods.length,
+      projectHooks: projectHooks.length,
       frameworkMethods: frameworkSymbols.size,
       bridgedSuperCalls,
       uiEntrypointSeeds: uiEntrypoints.filter((entrypoint) => entrypoint?.modelName && entrypoint?.methodName).length,
@@ -179,4 +232,4 @@ export class OdooExecutionAdapter {
   }
 }
 
-export { projectMethodName, frameworkMethodName };
+export { projectMethodName, projectHookName, frameworkMethodName };
