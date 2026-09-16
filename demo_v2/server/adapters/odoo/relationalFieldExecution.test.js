@@ -13,13 +13,7 @@ function topologyStub(root) {
     trackedFiles: [],
     odooDetection: { version: '19', addons: [] },
     odooFramework: { modules: ['example_parent', 'example_line'] },
-    entitySchemaByName: new Map([
-      ['example.parent', {
-        name: 'example.parent',
-        fields: [{ name: 'line_ids', relatedModel: 'example.line' }],
-        relationships: [{ title: 'line_ids', relatedEntityName: 'example.line' }]
-      }]
-    ]),
+    entitySchemaByName: new Map(),
     symbols,
     symbolById: new Map(),
     nameIndex: new Map(),
@@ -45,7 +39,7 @@ function topologyStub(root) {
   };
 }
 
-test('resolves self relational-field calls through Odoo schema into the related model', async () => {
+test('resolves relational-field calls from framework source when project schema does not contain the model', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-field-call-'));
   const frameworkRoot = path.join(root, 'odoo-source');
   const parentFile = path.join(frameworkRoot, 'addons/example_parent/models/parent.py');
@@ -53,17 +47,19 @@ test('resolves self relational-field calls through Odoo schema into the related 
   await fs.mkdir(path.dirname(parentFile), { recursive: true });
   await fs.mkdir(path.dirname(lineFile), { recursive: true });
   await fs.writeFile(parentFile, `
-from odoo import models
+from odoo import fields, models
 class ExampleParent(models.Model):
     _name = 'example.parent'
+    line_ids = fields.One2many('example.line', 'parent_id')
     def action_start(self):
         self.line_ids._launch_rule()
         return super(ExampleParent, self).action_start()
 `);
   await fs.writeFile(lineFile, `
-from odoo import models
+from odoo import fields, models
 class ExampleLine(models.Model):
     _name = 'example.line'
+    parent_id = fields.Many2one('example.parent')
     def _launch_rule(self):
         return True
 `);
