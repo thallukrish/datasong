@@ -17,6 +17,22 @@ class BomRevision(models.Model):
   assert.equal(model.fields[0].relation, 'many-to-one');
 });
 
+test('extracts relational comodel from Odoo comodel_name keyword argument', () => {
+  const src = `
+class SaleOrder(models.Model):
+    _name = 'sale.order'
+    order_line = fields.One2many(
+        comodel_name='sale.order.line',
+        inverse_name='order_id',
+        string='Order Lines',
+    )
+`;
+  const [model] = extractOdooModels('addons/sale/models/sale_order.py', src, 'sale');
+  assert.equal(model.fields[0].name, 'order_line');
+  assert.equal(model.fields[0].relatedModel, 'sale.order.line');
+  assert.equal(model.fields[0].relation, 'one-to-many');
+});
+
 test('does not mistake a related field path for an explicit relational comodel', () => {
   const src = `
 class MrpProduction(models.Model):
