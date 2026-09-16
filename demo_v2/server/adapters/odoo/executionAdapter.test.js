@@ -156,3 +156,49 @@ class SaleOrder(models.Model):
   assert.equal(result.uiEntrypointSeeds, 1);
   assert.ok(topology.symbols.some((symbol) => symbol.name === 'odoo19:sale.order.action_confirm'));
 });
+
+test('uses manifest post_init_hook calls as targeted framework seeds', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-hook-seed-'));
+  const manifestFile = path.join(root, 'addons/acme_demo/__manifest__.py');
+  const hookFile = path.join(root, 'addons/acme_demo/hooks.py');
+  const frameworkRoot = path.join(root, 'odoo-source');
+  const frameworkFile = path.join(frameworkRoot, 'addons/sale/models/sale_order.py');
+  await fs.mkdir(path.dirname(manifestFile), { recursive: true });
+  await fs.mkdir(path.dirname(frameworkFile), { recursive: true });
+  await fs.writeFile(manifestFile, `{'post_init_hook': 'post_init_hook'}`);
+  await fs.writeFile(hookFile, `
+def post_init_hook(env):
+    so1 = env['sale.order'].create({'name': 'SO1'})
+    so1.action_confirm()
+`);
+  await fs.writeFile(frameworkFile, `
+from odoo import models
+class SaleOrder(models.Model):
+    _name = 'sale.order'
+    def action_confirm(self):
+        self._action_confirm()
+    def _action_confirm(self):
+        return True
+`);
+
+  const topology = topologyStub(root);
+  topology.trackedFiles = ['addons/acme_demo/__manifest__.py', 'addons/acme_demo/hooks.py'];
+  topology.odooDetection = { version: '19', addons: [{ name: 'acme_demo', depends: ['sale'] }] };
+  topology.odooFramework.modules = ['sale'];
+
+  const adapter = new OdooExecutionAdapter(topology, {
+    source: { repoDir: frameworkRoot, repoUrl: 'https://github.com/odoo/odoo.git', commit: 'abc123' },
+    findModelFiles: async ({ modelName }) => modelName === 'sale.order' ? ['addons/sale/models/sale_order.py'] : []
+  });
+  const result = await adapter.augment();
+
+  assert.equal(result.projectHooks, 1);
+  const hook = topology.symbols.find((symbol) => symbol.name === 'odoo-project:hook:acme_demo.post_init_hook');
+  const confirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order.action_confirm');
+  const actionConfirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order._action_confirm');
+  assert.ok(hook);
+  assert.ok(confirm);
+  assert.ok(actionConfirm);
+  assert.ok(hook.references.some((ref) => ref.relation === 'calls' && ref.name === confirm.name));
+  assert.ok(confirm.references.some((ref) => ref.relation === 'calls' && ref.name === actionConfirm.name));
+});
