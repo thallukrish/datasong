@@ -3,6 +3,14 @@ import { odooRecordsetPreservingMethods } from './patternRegistry.js';
 export const READ_METHODS = new Set(['search', 'browse', 'read', 'mapped', 'filtered', 'search_read', 'search_count']);
 export const WRITE_METHODS = new Set(['create', 'write', 'unlink']);
 
+export function ormCrudForMethod(methodName = '') {
+  if (methodName === 'create') return 'create';
+  if (READ_METHODS.has(methodName)) return 'read';
+  if (methodName === 'write') return 'update';
+  if (methodName === 'unlink') return 'delete';
+  return '';
+}
+
 function skipSpace(text, index) {
   let i = index;
   while (i < text.length && /\s/.test(text[i])) i += 1;
@@ -71,7 +79,7 @@ function inferVariableModels(body) {
 function uniqueCalls(calls) {
   const seen = new Set();
   return calls.filter((call) => {
-    const key = `${call.kind}:${call.modelName}.${call.methodName}`;
+    const key = `${call.kind}:${call.modelName}.${call.methodName}:${call.crud || ''}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -87,7 +95,14 @@ export function extractOdooRecordsetCalls(body, currentModel = '') {
     if (!modelName || !methods.length) return;
     for (const methodName of methods) {
       if (preserving.has(methodName)) continue;
-      calls.push({ kind: callKind(methodName, baseKind), modelName, methodName });
+      const crud = ormCrudForMethod(methodName);
+      calls.push({
+        kind: callKind(methodName, baseKind),
+        modelName,
+        methodName,
+        crud,
+        persistenceKind: crud ? 'odoo_orm' : ''
+      });
       break;
     }
   };
