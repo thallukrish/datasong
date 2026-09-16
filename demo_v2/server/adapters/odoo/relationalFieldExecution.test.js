@@ -39,7 +39,7 @@ function topologyStub(root) {
   };
 }
 
-test('resolves relational-field calls from framework source when project schema does not contain the model', async () => {
+test('resolves relational-field calls from framework source as cross-model calls', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-field-call-'));
   const frameworkRoot = path.join(root, 'odoo-source');
   const parentFile = path.join(frameworkRoot, 'addons/example_parent/models/parent.py');
@@ -80,6 +80,10 @@ class ExampleLine(models.Model):
   const line = topology.symbols.find((symbol) => symbol.name === 'odoo19:example.line._launch_rule');
   assert.ok(parent);
   assert.ok(line);
-  assert.ok(parent.references.some((ref) => ref.relation === 'calls' && ref.name === line.name));
+  const reference = parent.references.find((ref) => ref.relation === 'calls' && ref.name === line.name);
+  assert.ok(reference);
+  assert.equal(reference.data.boundaryKind, 'cross_model');
+  assert.equal(reference.data.sourceModel, 'example.parent');
+  assert.equal(reference.data.targetModel, 'example.line');
   assert.equal(result.unresolvedCalls.includes('example.parent.line_ids._launch_rule'), false);
 });
