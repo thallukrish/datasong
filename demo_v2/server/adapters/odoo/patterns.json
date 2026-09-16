@@ -1,0 +1,60 @@
+{
+  "patterns": [
+    {
+      "id": "manifest_lifecycle_hook",
+      "files": ["**/__manifest__.py"],
+      "regex": "['\"](pre_init_hook|post_init_hook|uninstall_hook)['\"]\\s*:\\s*['\"]([^'\"]+)['\"]",
+      "flags": "g",
+      "captures": { "hookType": 1, "function": 2 },
+      "emit": { "kind": "entrypoint", "relation": "triggers", "evidence": "configured" }
+    },
+    {
+      "id": "xml_object_button",
+      "files": ["**/*.xml"],
+      "regex": "<button\\b(?=[^>]*\\btype\\s*=\\s*['\"]object['\"])(?=[^>]*\\bname\\s*=\\s*['\"]([^'\"]+)['\"])[^>]*>",
+      "flags": "gis",
+      "captures": { "method": 1 },
+      "emit": { "kind": "entrypoint", "relation": "triggers", "evidence": "configured" }
+    },
+    {
+      "id": "server_action_method_call",
+      "files": ["**/*.xml"],
+      "regex": "\\b(?:records?|model)\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\(",
+      "flags": "g",
+      "captures": { "method": 1 },
+      "emit": { "kind": "entrypoint", "relation": "triggers", "evidence": "configured" }
+    },
+    {
+      "id": "python_env_model_call",
+      "files": ["**/*.py"],
+      "regex": "\\b(?:self\\s*\\.\\s*)?env\\s*\\[\\s*['\"]([^'\"]+)['\"]\\s*\\]\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\(",
+      "flags": "g",
+      "captures": { "model": 1, "method": 2 },
+      "emit": { "kind": "function", "relation": "calls", "evidence": "static" }
+    },
+    {
+      "id": "python_super_call",
+      "files": ["**/*.py"],
+      "regex": "\\bsuper\\s*\\(\\s*\\)\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\(",
+      "flags": "g",
+      "captures": { "method": 1 },
+      "emit": { "kind": "function", "relation": "calls", "evidence": "static" }
+    },
+    {
+      "id": "python_model_name",
+      "files": ["**/*.py"],
+      "regex": "\\b_name\\s*=\\s*['\"]([^'\"]+)['\"]",
+      "flags": "g",
+      "captures": { "model": 1 },
+      "emit": { "kind": "entity", "relation": "declares", "evidence": "static" }
+    },
+    {
+      "id": "python_model_inherit",
+      "files": ["**/*.py"],
+      "regex": "\\b_inherit\\s*=\\s*['\"]([^'\"]+)['\"]",
+      "flags": "g",
+      "captures": { "model": 1 },
+      "emit": { "kind": "entity", "relation": "extends", "evidence": "static" }
+    }
+  ]
+}
