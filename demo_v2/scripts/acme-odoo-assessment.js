@@ -35,6 +35,7 @@ console.log(`addons: ${arr(topology.odooDetection?.addons).map((x) => x?.name).f
 console.log('\n=== ACME / ODOO EXECUTION ===');
 const execution = topology.odooExecution || {};
 console.log(`project methods: ${Number(execution.projectMethods || 0)}`);
+console.log(`manifest hooks: ${Number(execution.projectHooks || 0)}`);
 console.log(`framework methods reached: ${Number(execution.frameworkMethods || 0)}`);
 console.log(`super() bridges: ${Number(execution.bridgedSuperCalls || 0)}`);
 console.log(`UI entrypoint seeds: ${Number(execution.uiEntrypointSeeds || 0)}`);
@@ -44,7 +45,7 @@ const projectSymbols = arr(topology.symbols)
   .filter((s) => String(s?.name || '').startsWith('odoo-project:'))
   .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
-console.log('\n=== ACME EXECUTABLE ODOO METHODS ===');
+console.log('\n=== ACME EXECUTABLE ODOO METHODS / HOOKS ===');
 if (!projectSymbols.length) console.log('(none discovered)');
 for (const symbol of projectSymbols) {
   const calls = arr(symbol.references)
@@ -72,7 +73,8 @@ if (projectSymbols.length && Number(execution.frameworkMethods || 0) > 0 && cros
   console.log('PASS: ACME executable Odoo code crosses into Odoo framework source and reaches CallPathIndexer.');
 } else {
   console.log('INCOMPLETE: the static path did not yet prove ACME -> Odoo framework -> CallPathIndexer end to end.');
-  if (!projectSymbols.length) console.log('- No ACME Odoo project methods were discovered under models/*.py.');
+  if (!projectSymbols.length) console.log('- No ACME Odoo executable methods or manifest hooks were discovered.');
+  if (!Number(execution.projectHooks || 0)) console.log('- No manifest lifecycle hook was discovered.');
   if (!Number(execution.frameworkMethods || 0)) console.log('- No Odoo framework methods were reached.');
   if (!crossRepoPaths.length) console.log('- No Odoo-containing call path was produced by CallPathIndexer.');
 }
