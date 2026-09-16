@@ -1,4 +1,12 @@
 {
+  "recordsetPreservingMethods": [
+    "with_context",
+    "sudo",
+    "with_user",
+    "with_company",
+    "with_env",
+    "with_prefetch"
+  ],
   "patterns": [
     {
       "id": "manifest_lifecycle_hook",
