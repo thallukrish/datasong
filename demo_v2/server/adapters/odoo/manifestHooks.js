@@ -1,5 +1,6 @@
 import { applyOdooPatterns } from './patternRegistry.js';
 import { extractOdooRecordsetCalls } from './recordsetCallResolver.js';
+import { extractSqlCalls } from './pythonExecutionParser.js';
 
 function indentOf(line = '') {
   return (String(line).match(/^(\s*)/)?.[1] || '').replace(/\t/g, '    ').length;
@@ -51,6 +52,6 @@ export function extractOdooHookExecution(sourcePath, source, addonName, hook) {
     hookType: hook.hookType,
     manifestPath: hook.manifestPath,
     ruleId: hook.ruleId,
-    calls: extractOdooRecordsetCalls(range.body)
+    calls: [...extractOdooRecordsetCalls(range.body), ...extractSqlCalls(range.body)]
   };
 }
