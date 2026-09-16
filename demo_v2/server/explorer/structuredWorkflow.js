@@ -8,9 +8,27 @@ const meaningfulOutcome = (value) => {
   const s = String(value || '').trim();
   return !!s && !/^(no outcome|none|unknown|not evidenced)/i.test(s);
 };
-const entityNamesIn = (value) => {
-  const source = JSON.stringify(value || {});
+export const entityNamesIn = (value) => {
   const names = [];
+  const visit = (node, key = '') => {
+    if (Array.isArray(node)) {
+      if (key === 'entities') {
+        for (const item of node) if (typeof item === 'string' && item.trim()) names.push(item.trim());
+      }
+      for (const item of node) visit(item, key);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+    for (const [childKey, child] of Object.entries(node)) {
+      if (['logicalEntity', 'sourceEntity', 'targetEntity'].includes(childKey) && typeof child === 'string' && child.trim()) names.push(child.trim());
+      visit(child, childKey);
+    }
+  };
+  visit(value);
+
+  // Preserve the existing Moqui XML entity-name extraction. This remains useful
+  // for compact signatures that predate canonical structuralEvidence metadata.
+  const source = JSON.stringify(value || {});
   const re = /entity-name=["']([^"']+)["']/gi;
   let m;
   while ((m = re.exec(source))) names.push(m[1]);
@@ -103,12 +121,15 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
       '- Reconstruct an ordered business workflow, not a bag of labels.',
       '- workflowSteps must follow executable/business sequence from trigger to outcome.',
       '- Every step description must explain what happens, which entities/records participate, and the effect when evidenced.',
+      '- EXECUTABLE_FLOW.structuralEvidence.entityBoundaries are deterministic first-class framework entity/model handoffs; use them as workflow landmarks without assuming every handoff is business-significant.',
+      '- EXECUTABLE_FLOW.structuralEvidence.persistence contains deterministic ORM/SQL read-write CRUD checkpoints; use these to identify persistentObjects and effects, but persistence alone does not prove a semantic workflow terminal.',
+      '- Technical/log/cache persistence can appear in structuralEvidence; interpret it in the context of the surrounding executable and entity path.',
       '- relationshipDetails must explicitly connect from -> relation -> to and explain the business scenario.',
       '- entityDetails must explain what each entity represents in this workflow.',
       '- When EXECUTABLE_FLOW.entitySchemas contains fields, describe only those exact fields; do not invent fields.',
       '- Field descriptions should explain business meaning, not repeat the camel-case field name.',
       '- Attach sourcePath to the individual step when a supplied source path reasonably matches it; otherwise leave empty.',
-      '- Use only evidence in the supplied deterministic flow and entity schemas. Never invent persistence or behavior.',
+      '- Use only evidence in the supplied deterministic flow, structuralEvidence, and entity schemas. Never invent persistence or behavior.',
       '- unresolvedBranches is normally empty and only for materially ambiguous supplied branches.',
       `- Valid unresolved branch indexes are 0..${Math.max(-1, branchCount - 1)}.`,
       '- flowAction=complete when the supplied flow is semantically interpreted.',
