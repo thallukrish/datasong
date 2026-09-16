@@ -49,6 +49,22 @@
       "emit": { "kind": "function", "relation": "calls", "evidence": "static" }
     },
     {
+      "id": "python_explicit_super_call",
+      "files": ["*.py", "**/*.py"],
+      "regex": "\\bsuper\\s*\\(\\s*[A-Za-z_]\\w*\\s*,\\s*self\\s*\\)\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\(",
+      "flags": "g",
+      "captures": { "method": 1 },
+      "emit": { "kind": "function", "relation": "calls", "evidence": "static" }
+    },
+    {
+      "id": "python_self_relational_field_call",
+      "files": ["*.py", "**/*.py"],
+      "regex": "\\bself\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\(",
+      "flags": "g",
+      "captures": { "field": 1, "method": 2 },
+      "emit": { "kind": "function", "relation": "calls", "evidence": "static" }
+    },
+    {
       "id": "python_model_name",
       "files": ["*.py", "**/*.py"],
       "regex": "\\b_name\\s*=\\s*['\"]([^'\"]+)['\"]",
