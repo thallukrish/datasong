@@ -8,7 +8,7 @@ function cleanPath(value = '') {
 }
 
 function escapeRegexChar(ch) {
-  return /[\\^$.*+?()[\]{}|]/.test(ch) ? `\\${ch}` : ch;
+  return '.+?^${}()|[]\\'.includes(ch) ? `\\${ch}` : ch;
 }
 
 function selectorRegex(selector = '') {
