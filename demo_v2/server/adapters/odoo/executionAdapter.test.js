@@ -90,7 +90,7 @@ from odoo import models
 class SaleOrder(models.Model):
     _name = 'sale.order'
     def action_confirm(self):
-        self._action_confirm()
+        self.with_context(skip_check=True)._action_confirm()
     def _action_confirm(self):
         return True
 `);
@@ -119,6 +119,7 @@ class SaleOrder(models.Model):
   assert.ok(confirm);
   assert.ok(actionConfirm);
   assert.ok(confirm.references.some((ref) => ref.relation === 'calls' && ref.name === actionConfirm.name));
+  assert.equal(result.unresolvedCalls.includes('sale.order.with_context'), false);
 });
 
 test('accepts facade-provided entrypoints at augment time', async () => {
