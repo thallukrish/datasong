@@ -38,6 +38,7 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
       variants: compact.variants,
       alternateEntranceCount: compact.alternateEntranceCount,
       terminal: compact.terminal,
+      structuralEvidence: compact.structuralEvidence || { entities: [], entityBoundaries: [], persistence: [] },
       ...(compact.flow ? { flow: compact.flow } : { flowSequence: arr(compact.flowSequence) })
     };
   }
@@ -83,7 +84,14 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     if (isBranch && flowPackage.flow) {
       const branch = arr(flowPackage.flow.branches)[branchIndex];
       if (!branch) return null;
-      payload = { pathId: flowPackage.pathId, branchIndex, context: { prefix: arr(flowPackage.flow.prefix), suffix: arr(flowPackage.flow.suffix) }, branch, terminal: flowPackage.terminal };
+      payload = {
+        pathId: flowPackage.pathId,
+        branchIndex,
+        context: { prefix: arr(flowPackage.flow.prefix), suffix: arr(flowPackage.flow.suffix) },
+        branch,
+        terminal: flowPackage.terminal,
+        structuralEvidence: flowPackage.structuralEvidence
+      };
     }
     return {
       id: `${isBranch ? 'pass2-flow-branch' : 'pass2-whole-flow'}:${arc.id}:${isBranch ? branchIndex : 'all'}`,
