@@ -41,6 +41,14 @@
       "emit": { "kind": "function", "relation": "calls", "evidence": "static" }
     },
     {
+      "id": "python_env_dynamic_getattr_dispatch",
+      "files": ["*.py", "**/*.py"],
+      "regex": "\\bgetattr\\s*\\(\\s*(?:self\\s*\\.\\s*)?env\\s*\\[\\s*['\"]([^'\"]+)['\"]\\s*\\]\\s*,\\s*['\"]([^'\"]*)%s([^'\"]*)['\"]\\s*%\\s*([A-Za-z_]\\w*)\\s*\\)\\s*\\(",
+      "flags": "g",
+      "captures": { "model": 1, "prefix": 2, "suffix": 3, "selector": 4 },
+      "emit": { "kind": "function_family", "relation": "calls", "evidence": "static" }
+    },
+    {
       "id": "python_super_call",
       "files": ["*.py", "**/*.py"],
       "regex": "\\bsuper\\s*\\(\\s*\\)\\s*\\.\\s*([A-Za-z_]\\w*)\\s*\\(",
