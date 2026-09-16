@@ -1,8 +1,6 @@
 import { extractOdooModels } from './modelParser.js';
 import { applyOdooPatterns } from './patternRegistry.js';
-
-const READ_METHODS = new Set(['search', 'browse', 'read', 'mapped', 'filtered', 'search_read', 'search_count']);
-const WRITE_METHODS = new Set(['create', 'write']);
+import { extractOdooRecordsetCalls, READ_METHODS, WRITE_METHODS } from './recordsetCallResolver.js';
 
 function indentOf(line = '') {
   return (String(line).match(/^(\s*)/)?.[1] || '').replace(/\t/g, '    ').length;
@@ -13,26 +11,19 @@ function lineNumber(source, offset) {
 }
 
 function callsFrom(body, modelName, sourcePath) {
-  const calls = [];
-  let match;
-
-  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_env_model_call'] })) {
-    const methodName = candidate.captures.method;
-    const kind = WRITE_METHODS.has(methodName) ? 'write' : READ_METHODS.has(methodName) ? 'read' : 'model';
-    calls.push({ kind, modelName: candidate.captures.model, methodName, ruleId: candidate.ruleId });
-  }
+  const calls = extractOdooRecordsetCalls(body, modelName);
 
   for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_super_call'] })) {
     calls.push({ kind: 'super', modelName, methodName: candidate.captures.method, ruleId: candidate.ruleId });
   }
 
-  const selfRe = /\bself\.([A-Za-z_]\w*)\s*\(/g;
-  while ((match = selfRe.exec(body))) {
-    const methodName = match[1];
-    const kind = WRITE_METHODS.has(methodName) ? 'write' : READ_METHODS.has(methodName) ? 'read' : 'self';
-    calls.push({ kind, modelName, methodName });
-  }
-  return calls;
+  const seen = new Set();
+  return calls.filter((call) => {
+    const key = `${call.kind}:${call.modelName}.${call.methodName}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function classRanges(source) {
