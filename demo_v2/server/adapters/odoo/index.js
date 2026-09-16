@@ -3,6 +3,7 @@ import { OdooFrameworkEnricher } from './frameworkEnricher.js';
 import { OdooExecutionAdapter } from './executionAdapter.js';
 import { OdooAdapter } from './adapter.js';
 import { extractOdooUiEntrypoints } from './uiEntrypoints.js';
+import { applyOdooPatterns, odooPatternRules } from './patternRegistry.js';
 import { assessOdooEvidence } from './evidenceAssessment.js';
 
 export function createOdooAdapters(topology) {
@@ -20,5 +21,7 @@ export {
   OdooFrameworkEnricher,
   OdooExecutionAdapter,
   extractOdooUiEntrypoints,
+  applyOdooPatterns,
+  odooPatternRules,
   assessOdooEvidence
 };
