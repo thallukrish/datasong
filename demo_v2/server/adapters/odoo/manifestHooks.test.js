@@ -29,3 +29,18 @@ test('extracts post_init_hook from Odoo manifest and resolves model-bound method
     ]
   );
 });
+
+test('preserves bound model identity through recordset wrapper calls in hooks', () => {
+  const hook = {
+    functionName: 'post_init_hook',
+    hookType: 'post_init_hook',
+    manifestPath: 'addons/example/__manifest__.py'
+  };
+  const source = `def post_init_hook(env):
+    order = env['purchase.order'].create({'partner_id': 1})
+    order.sudo().with_context(skip_check=True).button_confirm()
+`;
+  const parsed = extractOdooHookExecution('addons/example/hooks.py', source, 'example', hook);
+  assert.ok(parsed.calls.some((call) => call.kind === 'model' && call.modelName === 'purchase.order' && call.methodName === 'button_confirm'));
+  assert.equal(parsed.calls.some((call) => ['sudo', 'with_context'].includes(call.methodName)), false);
+});
