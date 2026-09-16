@@ -3,6 +3,7 @@ import path from 'node:path';
 import { extractOdooExecution } from './pythonExecutionParser.js';
 import { extractOdooManifestHooks, extractOdooHookExecution } from './manifestHooks.js';
 import { ensureOdooSource, findOdooModelFiles } from './frameworkSource.js';
+import { extractOdooModels } from './modelParser.js';
 
 function projectMethodName(modelName, methodName) {
   return `odoo-project:${modelName}.${methodName}`;
@@ -192,6 +193,33 @@ export class OdooExecutionAdapter {
     const maxFrameworkMethods = Math.max(1, Number(this.options.maxFrameworkMethods ?? 250));
     const frameworkSymbols = new Map();
     const visited = new Set();
+    const relatedModelCache = new Map();
+
+    const resolveFrameworkRelatedModel = async (modelName, fieldName) => {
+      const local = relatedModelForField(topology, modelName, fieldName);
+      if (local) return local;
+      const cacheKey = `${modelName}.${fieldName}`;
+      if (relatedModelCache.has(cacheKey)) return relatedModelCache.get(cacheKey);
+
+      const files = await findModelFiles({ repoDir: source.repoDir, modelName });
+      for (const sourcePath of files) {
+        const text = await fs.readFile(path.join(source.repoDir, sourcePath), 'utf8').catch(() => '');
+        if (!text) continue;
+        const addon = sourcePath.replace(/\\/g, '/').split('/')[1] || '';
+        const models = extractOdooModels(sourcePath, text, addon)
+          .filter((model) => model.name === modelName || model.inherits.includes(modelName));
+        for (const model of models) {
+          const field = (Array.isArray(model.fields) ? model.fields : [])
+            .find((item) => item?.name === fieldName && item?.relatedModel);
+          if (field?.relatedModel) {
+            relatedModelCache.set(cacheKey, field.relatedModel);
+            return field.relatedModel;
+          }
+        }
+      }
+      relatedModelCache.set(cacheKey, '');
+      return '';
+    };
 
     while (pendingFramework.length && visited.size < maxFrameworkMethods) {
       const current = pendingFramework.shift();
@@ -229,7 +257,7 @@ export class OdooExecutionAdapter {
             if (call.kind === 'self' || call.kind === 'super' || call.kind === 'model' || call.kind === 'field') {
               let targetModel = call.modelName;
               if (call.kind === 'field') {
-                targetModel = relatedModelForField(topology, call.modelName, call.fieldName);
+                targetModel = await resolveFrameworkRelatedModel(call.modelName, call.fieldName);
                 if (!targetModel) {
                   unresolvedCalls.push(`${call.modelName}.${call.fieldName}.${call.methodName}`);
                   continue;
