@@ -23,12 +23,52 @@ function addonForPath(sourcePath, addons = []) {
   return '';
 }
 
-function addReference(symbol, name, relation) {
-  if (!symbol || !name) return;
+function referenceIdentity(name, relation, data = {}) {
+  return [
+    name,
+    relation,
+    data?.boundaryKind || '',
+    data?.persistenceKind || '',
+    data?.crud || '',
+    data?.logicalEntity || '',
+    data?.persistedEntity || ''
+  ].join('|');
+}
+
+function addReference(symbol, name, relation, data = undefined) {
+  if (!symbol || !name) return false;
   if (!Array.isArray(symbol.references)) symbol.references = [];
-  if (!symbol.references.some((ref) => ref.name === name && ref.relation === relation)) {
-    symbol.references.push({ name, simpleName: String(name).split(/[.:/]/).at(-1), relation, explicit: true });
-  }
+  const identity = referenceIdentity(name, relation, data || {});
+  const exists = symbol.references.some((ref) => referenceIdentity(ref.name, ref.relation, ref.data || {}) === identity);
+  if (exists) return false;
+  symbol.references.push({
+    name,
+    simpleName: String(name).split(/[.:/]/).at(-1),
+    relation,
+    explicit: true,
+    ...(data && Object.keys(data).length ? { data } : {})
+  });
+  return true;
+}
+
+function boundaryData(sourceModel, targetModel) {
+  if (!sourceModel || !targetModel) return {};
+  return {
+    framework: 'odoo',
+    boundaryKind: sourceModel === targetModel ? 'same_model' : 'cross_model',
+    sourceModel,
+    targetModel
+  };
+}
+
+function persistenceData(call, logicalEntity = '') {
+  return {
+    operationKind: 'persistence',
+    persistenceKind: call.persistenceKind || 'odoo_orm',
+    crud: call.crud || '',
+    ...(logicalEntity ? { logicalEntity } : {}),
+    ...(call.persistedEntity ? { persistedEntity: call.persistedEntity } : {})
+  };
 }
 
 function relatedModelForField(topology, modelName, fieldName) {
@@ -41,6 +81,23 @@ function relatedModelForField(topology, modelName, fieldName) {
   const relationship = (Array.isArray(schema.relationships) ? schema.relationships : [])
     .find((item) => item?.title === fieldName && item?.relatedEntityName);
   return relationship?.relatedEntityName || '';
+}
+
+function emptyStructuralStats() {
+  return {
+    firstClassMethods: 0,
+    crossModelCalls: 0,
+    sameModelCalls: 0,
+    helperCalls: 0,
+    ormReads: 0,
+    ormCreates: 0,
+    ormUpdates: 0,
+    ormDeletes: 0,
+    sqlReads: 0,
+    sqlCreates: 0,
+    sqlUpdates: 0,
+    sqlDeletes: 0
+  };
 }
 
 export class OdooExecutionAdapter {
@@ -57,6 +114,43 @@ export class OdooExecutionAdapter {
     const projectMethods = [];
     const projectHooks = [];
     const unresolvedCalls = [];
+    const unresolvedPersistence = [];
+    const structuralStats = emptyStructuralStats();
+
+    const recordBoundary = (inserted, data = {}) => {
+      if (!inserted) return;
+      if (data.boundaryKind === 'cross_model') structuralStats.crossModelCalls += 1;
+      else if (data.boundaryKind === 'same_model') structuralStats.sameModelCalls += 1;
+      else if (data.boundaryKind === 'helper_or_library') structuralStats.helperCalls += 1;
+    };
+
+    const recordPersistence = (inserted, call) => {
+      if (!inserted) return;
+      const prefix = call.persistenceKind === 'sql' ? 'sql' : 'orm';
+      const suffix = call.crud === 'read' ? 'Reads'
+        : call.crud === 'create' ? 'Creates'
+          : call.crud === 'update' ? 'Updates'
+            : call.crud === 'delete' ? 'Deletes' : '';
+      if (suffix && Object.hasOwn(structuralStats, `${prefix}${suffix}`)) structuralStats[`${prefix}${suffix}`] += 1;
+    };
+
+    const attachPersistence = (symbol, call) => {
+      if (call.kind === 'sql') {
+        if (!call.persistedEntity || !call.crud) {
+          unresolvedPersistence.push(`sql:${call.sqlOperation || 'dynamic'}:${call.persistedEntity || '(target unresolved)'}`);
+          return;
+        }
+        const relation = call.crud === 'read' ? 'reads' : 'writes';
+        const inserted = addReference(symbol, call.persistedEntity, relation, persistenceData(call));
+        recordPersistence(inserted, call);
+        return;
+      }
+      if (call.kind !== 'read' && call.kind !== 'write') return;
+      if (!call.modelName || !call.crud) return;
+      const relation = call.kind === 'read' ? 'reads' : 'writes';
+      const inserted = addReference(symbol, call.modelName, relation, persistenceData(call, call.modelName));
+      recordPersistence(inserted, call);
+    };
 
     for (const sourcePath of tracked.filter((file) => /(?:^|\/)models\/.*\.py$/.test(file))) {
       const addon = addonForPath(sourcePath, addons);
@@ -95,7 +189,7 @@ export class OdooExecutionAdapter {
     const uiEntrypoints = [...configuredEntrypoints, ...suppliedEntrypoints];
     let bridgedSuperCalls = 0;
 
-    const queueFramework = (symbol, call, depth = 0) => {
+    const queueFramework = (symbol, call, depth = 0, sourceModel = '') => {
       let targetModel = call.modelName;
       if (call.kind === 'field') {
         targetModel = relatedModelForField(topology, call.modelName, call.fieldName);
@@ -106,7 +200,8 @@ export class OdooExecutionAdapter {
       }
       if (!targetModel || !call.methodName) return false;
       const target = frameworkMethodName(version, targetModel, call.methodName);
-      addReference(symbol, target, 'calls');
+      const data = boundaryData(sourceModel, targetModel);
+      recordBoundary(addReference(symbol, target, 'calls', data), data);
       pendingFramework.push({ modelName: targetModel, methodName: call.methodName, depth });
       return true;
     };
@@ -126,7 +221,15 @@ export class OdooExecutionAdapter {
         signature: `${method.modelName}.${method.signature}`,
         body: method.body
       });
-      symbol.odooExecution = { layer: 'project', modelName: method.modelName, methodName: method.methodName, addon: method.addon };
+      symbol.odooExecution = {
+        layer: 'project',
+        modelName: method.modelName,
+        methodName: method.methodName,
+        addon: method.addon,
+        firstClassEntity: true,
+        firstClassMethod: true
+      };
+      structuralStats.firstClassMethods += 1;
       projectSymbols.set(`${method.modelName}.${method.methodName}`, symbol);
     }
 
@@ -142,14 +245,12 @@ export class OdooExecutionAdapter {
       });
       symbol.odooExecution = {
         layer: 'project', addon: hook.addon, hookType: hook.hookType,
-        methodName: hook.functionName, manifestPath: hook.manifestPath
+        methodName: hook.functionName, manifestPath: hook.manifestPath,
+        firstClassEntity: false, firstClassMethod: false
       };
       for (const call of hook.calls) {
-        if (call.kind === 'model') {
-          queueFramework(symbol, call, 0);
-        } else if (call.kind === 'read' || call.kind === 'write') {
-          addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
-        }
+        if (call.kind === 'model') queueFramework(symbol, call, 0, '');
+        else attachPersistence(symbol, call);
       }
     }
 
@@ -157,25 +258,25 @@ export class OdooExecutionAdapter {
       const symbol = projectSymbols.get(`${method.modelName}.${method.methodName}`);
       for (const call of method.calls) {
         if (call.kind === 'super') {
-          queueFramework(symbol, call, 0);
+          queueFramework(symbol, call, 0, method.modelName);
           bridgedSuperCalls += 1;
           continue;
         }
         if (call.kind === 'self') {
-          const projectTarget = projectByKey.has(`${call.modelName}.${call.methodName}`)
+          const isProjectTarget = projectByKey.has(`${call.modelName}.${call.methodName}`);
+          const projectTarget = isProjectTarget
             ? projectMethodName(call.modelName, call.methodName)
             : frameworkMethodName(version, call.modelName, call.methodName);
-          addReference(symbol, projectTarget, 'calls');
-          if (!projectByKey.has(`${call.modelName}.${call.methodName}`)) {
-            pendingFramework.push({ modelName: call.modelName, methodName: call.methodName, depth: 0 });
-          }
+          const data = boundaryData(method.modelName, call.modelName);
+          recordBoundary(addReference(symbol, projectTarget, 'calls', data), data);
+          if (!isProjectTarget) pendingFramework.push({ modelName: call.modelName, methodName: call.methodName, depth: 0 });
           continue;
         }
         if (call.kind === 'model' || call.kind === 'field') {
-          queueFramework(symbol, call, 0);
+          queueFramework(symbol, call, 0, method.modelName);
           continue;
         }
-        if (call.kind === 'read' || call.kind === 'write') addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
+        attachPersistence(symbol, call);
       }
     }
 
@@ -275,8 +376,10 @@ export class OdooExecutionAdapter {
           });
           symbol.odooExecution = {
             layer: 'framework', modelName: method.modelName, methodName: method.methodName,
-            sourcePath: method.sourcePath, repoUrl: source.repoUrl, commit: source.commit
+            sourcePath: method.sourcePath, repoUrl: source.repoUrl, commit: source.commit,
+            firstClassEntity: true, firstClassMethod: true
           };
+          structuralStats.firstClassMethods += 1;
           frameworkSymbols.set(`${method.sourcePath}:${key}`, symbol);
 
           for (const call of method.calls) {
@@ -287,7 +390,8 @@ export class OdooExecutionAdapter {
                 continue;
               }
               for (const methodName of targets) {
-                addReference(symbol, frameworkMethodName(version, call.modelName, methodName), 'calls');
+                const data = boundaryData(method.modelName, call.modelName);
+                recordBoundary(addReference(symbol, frameworkMethodName(version, call.modelName, methodName), 'calls', data), data);
                 pendingFramework.push({ modelName: call.modelName, methodName, depth: current.depth + 1 });
               }
               continue;
@@ -302,10 +406,11 @@ export class OdooExecutionAdapter {
                 }
               }
               const target = frameworkMethodName(version, targetModel, call.methodName);
-              addReference(symbol, target, 'calls');
+              const data = boundaryData(method.modelName, targetModel);
+              recordBoundary(addReference(symbol, target, 'calls', data), data);
               pendingFramework.push({ modelName: targetModel, methodName: call.methodName, depth: current.depth + 1 });
-            } else if (call.kind === 'read' || call.kind === 'write') {
-              addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
+            } else {
+              attachPersistence(symbol, call);
             }
           }
         }
@@ -313,19 +418,25 @@ export class OdooExecutionAdapter {
       if (!found) unresolvedCalls.push(key);
     }
 
+    const truncated = pendingFramework.length > 0 && visited.size >= maxFrameworkMethods;
     topology.reindexAllSymbols();
     topology.rebuildCallers();
     return {
-      adapter: 'odoo-execution-v1',
+      adapter: 'odoo-execution-v2',
       projectMethods: projectMethods.length,
       projectHooks: projectHooks.length,
       frameworkMethods: frameworkSymbols.size,
       bridgedSuperCalls,
       uiEntrypointSeeds: uiEntrypoints.filter((entrypoint) => entrypoint?.modelName && entrypoint?.methodName).length,
       unresolvedCalls: [...new Set(unresolvedCalls)].sort(),
+      unresolvedPersistence: [...new Set(unresolvedPersistence)].sort(),
+      truncated,
+      remainingFrameworkQueue: pendingFramework.length,
+      maxFrameworkMethods,
+      structuralStats,
       source: { repoUrl: source.repoUrl, commit: source.commit }
     };
   }
 }
 
-export { projectMethodName, projectHookName, frameworkMethodName, relatedModelForField };
+export { projectMethodName, projectHookName, frameworkMethodName, relatedModelForField, boundaryData, persistenceData };
