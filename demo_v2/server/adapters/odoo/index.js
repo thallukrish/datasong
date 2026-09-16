@@ -7,11 +7,16 @@ import { applyOdooPatterns, odooPatternRules } from './patternRegistry.js';
 import { assessOdooEvidence } from './evidenceAssessment.js';
 
 export function createOdooAdapters(topology) {
+  // Static framework traversal is already bounded by method-level cycle protection
+  // and maxFrameworkMethods. Do not impose a shallow depth ceiling that truncates
+  // legitimate Odoo call chains before they reach their business handoff points.
+  const executionOptions = { maxDepth: Number.POSITIVE_INFINITY };
+
   return {
-    adapter: new OdooAdapter(topology),
+    adapter: new OdooAdapter(topology, { execution: executionOptions }),
     entitySchema: new OdooEntitySchemaAdapter(topology),
     frameworkEnricher: new OdooFrameworkEnricher(topology),
-    execution: new OdooExecutionAdapter(topology)
+    execution: new OdooExecutionAdapter(topology, executionOptions)
   };
 }
 
