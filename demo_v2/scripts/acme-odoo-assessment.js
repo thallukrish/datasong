@@ -32,6 +32,12 @@ console.log(`framework: ${result.frameworkKind || '(none)'}`);
 console.log(`version: ${topology.odooDetection?.version || '(unknown)'}`);
 console.log(`addons: ${arr(topology.odooDetection?.addons).map((x) => x?.name).filter(Boolean).join(', ') || '(none)'}`);
 
+console.log('\n=== ODOO PATTERN REGISTRY ===');
+const patternEvidence = arr(result.odooPatterns);
+const patternRules = [...new Set(patternEvidence.map((fact) => fact?.provenance?.ruleId).filter(Boolean))].sort();
+console.log(`matches: ${patternEvidence.length}`);
+console.log(`rules matched: ${patternRules.join(', ') || '(none)'}`);
+
 console.log('\n=== ACME / ODOO EXECUTION ===');
 const execution = topology.odooExecution || {};
 console.log(`project methods: ${Number(execution.projectMethods || 0)}`);
