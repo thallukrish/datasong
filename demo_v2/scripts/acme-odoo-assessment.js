@@ -4,6 +4,19 @@ import { ProgressiveRepositoryTopologyV9 } from '../server/progressiveRepository
 
 function arr(value) { return Array.isArray(value) ? value : []; }
 
+function compactPath(callPath) {
+  const signatures = arr(callPath?.signatures);
+  const relations = arr(callPath?.relations);
+  if (!signatures.length) return '';
+  const out = [signatures[0]];
+  for (let i = 1; i < signatures.length; i += 1) {
+    const relation = relations[i - 1] || 'calls';
+    out.push(relation === 'calls' ? '->' : `-[${relation.toUpperCase()}]->`);
+    out.push(signatures[i]);
+  }
+  return out.join(' ');
+}
+
 const requestedRepo = process.argv[2] || process.env.ACME_ODOO_REPO || path.resolve(process.cwd(), '..', '..', 'acme-ems-odoo');
 const repoDir = path.resolve(requestedRepo);
 const gitDir = path.join(repoDir, '.git');
@@ -82,7 +95,7 @@ for (const [index, callPath] of crossRepoPaths.entries()) {
   const entrySymbol = topology.symbolById?.get(callPath.entrySymbolId);
   console.log(`\n[${index + 1}] entry: ${entrySymbol?.name || callPath.entrySymbolId}`);
   console.log(`    sources: ${arr(callPath.sourcePaths).join(' -> ')}`);
-  console.log(`    path: ${callPath.rendered || arr(callPath.signatures).join(' -> ')}`);
+  console.log(`    path: ${compactPath(callPath) || callPath.rendered || arr(callPath.signatures).join(' -> ')}`);
 }
 
 console.log('\n=== ASSESSMENT ===');
