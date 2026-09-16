@@ -45,8 +45,7 @@ export function extractOdooUiEntrypoints(sourcePath, xml) {
         if (!methodName) continue;
         entrypoints.push({
           kind: 'object_button', modelName, methodName, sourcePath,
-          line: lineOf(source, record.bodyIndex + button.index),
-          ruleId: button.ruleId
+          line: lineOf(source, record.bodyIndex + button.index)
         });
       }
       continue;
@@ -70,8 +69,7 @@ export function extractOdooUiEntrypoints(sourcePath, xml) {
         if (!methodName) continue;
         entrypoints.push({
           kind: 'server_action', modelName, methodName, sourcePath,
-          line: lineOf(source, record.index),
-          ruleId: call.ruleId
+          line: lineOf(source, record.index)
         });
       }
     }
