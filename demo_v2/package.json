@@ -7,6 +7,7 @@
     "start": "node --env-file=.env --input-type=module -e \"process.env.SINGLE_STEP='0'; await import('./server/index.js')\"",
     "start:step": "node --env-file=.env server/index.js",
     "compact-map": "node scripts/compact-semantic-map.js",
+    "assess:acme": "node scripts/acme-odoo-assessment.js",
     "test": "node --test"
   },
   "dependencies": {
