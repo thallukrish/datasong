@@ -67,7 +67,9 @@ export function extractOdooModels(sourcePath, source, addonName) {
       if (!fieldMatch) continue;
       const { text, endIndex } = collectFieldCall(lines, lineIndex);
       const [, fieldName, type] = fieldMatch;
-      const relatedModel = RELATION_BY_TYPE[type] ? firstPositionalStringArg(text) : '';
+      const relatedModel = RELATION_BY_TYPE[type]
+        ? (firstPositionalStringArg(text) || pickStringArg(text, 'comodel_name'))
+        : '';
       fields.push({
         name: fieldName,
         type,
