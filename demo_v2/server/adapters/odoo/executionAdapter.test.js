@@ -38,7 +38,7 @@ function topologyStub(projectDir) {
   };
 }
 
-test('bridges a project super call into targeted Odoo framework methods', async () => {
+test('bridges a project super call into targeted Odoo framework methods with structural evidence', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-exec-'));
   const projectFile = path.join(root, 'addons/acme/models/mrp_production.py');
   const frameworkRoot = path.join(root, 'odoo-source');
@@ -52,6 +52,7 @@ class MrpProduction(models.Model):
     _inherit = 'mrp.production'
     def action_confirm(self):
         result = super().action_confirm()
+        self.env.cr.execute("UPDATE mrp_production SET state = 'progress'")
         return result
 `);
   await fs.writeFile(frameworkFile, `
@@ -75,9 +76,16 @@ class MrpProduction(models.Model):
   const project = topology.symbols.find((symbol) => symbol.name === 'odoo-project:mrp.production.action_confirm');
   const base = topology.symbols.find((symbol) => symbol.name === 'odoo19:mrp.production.action_confirm');
   const createMoves = topology.symbols.find((symbol) => symbol.name === 'odoo19:mrp.production._create_moves');
-  assert.ok(project.references.some((ref) => ref.relation === 'calls' && ref.name === base.name));
-  assert.ok(base.references.some((ref) => ref.relation === 'calls' && ref.name === createMoves.name));
-  assert.ok(createMoves.references.some((ref) => ref.relation === 'writes' && ref.name === 'stock.move'));
+  assert.equal(project.odooExecution.firstClassEntity, true);
+  assert.equal(project.odooExecution.firstClassMethod, true);
+  assert.equal(base.odooExecution.firstClassMethod, true);
+  const superRef = project.references.find((ref) => ref.relation === 'calls' && ref.name === base.name);
+  assert.equal(superRef.data.boundaryKind, 'same_model');
+  assert.ok(base.references.some((ref) => ref.relation === 'calls' && ref.name === createMoves.name && ref.data.boundaryKind === 'same_model'));
+  assert.ok(createMoves.references.some((ref) => ref.relation === 'writes' && ref.name === 'stock.move' && ref.data.crud === 'create' && ref.data.logicalEntity === 'stock.move'));
+  assert.ok(project.references.some((ref) => ref.relation === 'writes' && ref.name === 'mrp_production' && ref.data.persistenceKind === 'sql' && ref.data.crud === 'update'));
+  assert.ok(result.structuralStats.ormCreates >= 1);
+  assert.ok(result.structuralStats.sqlUpdates >= 1);
 });
 
 test('uses Odoo UI object-button entrypoints as targeted framework seeds', async () => {
@@ -102,24 +110,59 @@ class SaleOrder(models.Model):
   const adapter = new OdooExecutionAdapter(topology, {
     source: { repoDir: frameworkRoot, repoUrl: 'https://github.com/odoo/odoo.git', commit: 'abc123' },
     uiEntrypoints: [{
-      kind: 'object_button',
-      modelName: 'sale.order',
-      methodName: 'action_confirm',
-      sourcePath: 'addons/sale/views/sale_order_views.xml',
-      line: 10
+      kind: 'object_button', modelName: 'sale.order', methodName: 'action_confirm',
+      sourcePath: 'addons/sale/views/sale_order_views.xml', line: 10
     }],
     findModelFiles: async ({ modelName }) => modelName === 'sale.order' ? ['addons/sale/models/sale_order.py'] : []
   });
 
   const result = await adapter.augment();
-
   assert.equal(result.uiEntrypointSeeds, 1);
   const confirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order.action_confirm');
   const actionConfirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order._action_confirm');
   assert.ok(confirm);
   assert.ok(actionConfirm);
-  assert.ok(confirm.references.some((ref) => ref.relation === 'calls' && ref.name === actionConfirm.name));
+  assert.ok(confirm.references.some((ref) => ref.relation === 'calls' && ref.name === actionConfirm.name && ref.data.boundaryKind === 'same_model'));
   assert.equal(result.unresolvedCalls.includes('sale.order.with_context'), false);
+});
+
+test('classifies cross-model framework calls', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-cross-model-'));
+  const frameworkRoot = path.join(root, 'odoo-source');
+  const saleFile = path.join(frameworkRoot, 'addons/sale/models/sale_order.py');
+  const stockFile = path.join(frameworkRoot, 'addons/stock/models/stock_rule.py');
+  await fs.mkdir(path.dirname(saleFile), { recursive: true });
+  await fs.mkdir(path.dirname(stockFile), { recursive: true });
+  await fs.writeFile(saleFile, `
+from odoo import models
+class SaleOrder(models.Model):
+    _name = 'sale.order'
+    def action_confirm(self):
+        self.env['stock.rule'].run([])
+`);
+  await fs.writeFile(stockFile, `
+from odoo import models
+class StockRule(models.Model):
+    _name = 'stock.rule'
+    def run(self, procurements):
+        return True
+`);
+  const topology = topologyStub(root);
+  topology.trackedFiles = [];
+  topology.odooFramework.modules = ['sale', 'stock'];
+  const files = { 'sale.order': ['addons/sale/models/sale_order.py'], 'stock.rule': ['addons/stock/models/stock_rule.py'] };
+  const adapter = new OdooExecutionAdapter(topology, {
+    source: { repoDir: frameworkRoot, repoUrl: 'x', commit: 'abc' },
+    uiEntrypoints: [{ modelName: 'sale.order', methodName: 'action_confirm' }],
+    findModelFiles: async ({ modelName }) => files[modelName] || []
+  });
+  const result = await adapter.augment();
+  const confirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order.action_confirm');
+  const ref = confirm.references.find((item) => item.name === 'odoo19:stock.rule.run');
+  assert.equal(ref.data.boundaryKind, 'cross_model');
+  assert.equal(ref.data.sourceModel, 'sale.order');
+  assert.equal(ref.data.targetModel, 'stock.rule');
+  assert.ok(result.structuralStats.crossModelCalls >= 1);
 });
 
 test('accepts facade-provided entrypoints at augment time', async () => {
@@ -134,31 +177,19 @@ class SaleOrder(models.Model):
     def action_confirm(self):
         return True
 `);
-
   const topology = topologyStub(root);
   topology.trackedFiles = [];
   topology.odooFramework.modules = ['sale'];
-
   const adapter = new OdooExecutionAdapter(topology, {
     source: { repoDir: frameworkRoot, repoUrl: 'https://github.com/odoo/odoo.git', commit: 'abc123' },
     findModelFiles: async ({ modelName }) => modelName === 'sale.order' ? ['addons/sale/models/sale_order.py'] : []
   });
-
-  const result = await adapter.augment({
-    entrypoints: [{
-      kind: 'object_button',
-      modelName: 'sale.order',
-      methodName: 'action_confirm',
-      sourcePath: 'addons/sale/views/sale_order_views.xml',
-      line: 10
-    }]
-  });
-
+  const result = await adapter.augment({ entrypoints: [{ kind: 'object_button', modelName: 'sale.order', methodName: 'action_confirm' }] });
   assert.equal(result.uiEntrypointSeeds, 1);
   assert.ok(topology.symbols.some((symbol) => symbol.name === 'odoo19:sale.order.action_confirm'));
 });
 
-test('uses manifest post_init_hook calls as targeted framework seeds', async () => {
+test('uses manifest post_init_hook calls as targeted framework seeds and keeps hooks non-model', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-hook-seed-'));
   const manifestFile = path.join(root, 'addons/acme_demo/__manifest__.py');
   const hookFile = path.join(root, 'addons/acme_demo/hooks.py');
@@ -181,25 +212,50 @@ class SaleOrder(models.Model):
     def _action_confirm(self):
         return True
 `);
-
   const topology = topologyStub(root);
   topology.trackedFiles = ['addons/acme_demo/__manifest__.py', 'addons/acme_demo/hooks.py'];
   topology.odooDetection = { version: '19', addons: [{ name: 'acme_demo', depends: ['sale'] }] };
   topology.odooFramework.modules = ['sale'];
-
   const adapter = new OdooExecutionAdapter(topology, {
     source: { repoDir: frameworkRoot, repoUrl: 'https://github.com/odoo/odoo.git', commit: 'abc123' },
     findModelFiles: async ({ modelName }) => modelName === 'sale.order' ? ['addons/sale/models/sale_order.py'] : []
   });
   const result = await adapter.augment();
-
   assert.equal(result.projectHooks, 1);
   const hook = topology.symbols.find((symbol) => symbol.name === 'odoo-project:hook:acme_demo.post_init_hook');
   const confirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order.action_confirm');
-  const actionConfirm = topology.symbols.find((symbol) => symbol.name === 'odoo19:sale.order._action_confirm');
-  assert.ok(hook);
-  assert.ok(confirm);
-  assert.ok(actionConfirm);
+  assert.equal(hook.odooExecution.firstClassMethod, false);
+  assert.ok(hook.references.some((ref) => ref.relation === 'writes' && ref.name === 'sale.order' && ref.data.crud === 'create'));
   assert.ok(hook.references.some((ref) => ref.relation === 'calls' && ref.name === confirm.name));
-  assert.ok(confirm.references.some((ref) => ref.relation === 'calls' && ref.name === actionConfirm.name));
+});
+
+test('reports traversal truncation instead of silently stopping', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-truncate-'));
+  const frameworkRoot = path.join(root, 'odoo-source');
+  const frameworkFile = path.join(frameworkRoot, 'addons/example/models/example.py');
+  await fs.mkdir(path.dirname(frameworkFile), { recursive: true });
+  await fs.writeFile(frameworkFile, `
+from odoo import models
+class Example(models.Model):
+    _name = 'example.model'
+    def first(self):
+        self.second()
+    def second(self):
+        self.third()
+    def third(self):
+        return True
+`);
+  const topology = topologyStub(root);
+  topology.trackedFiles = [];
+  topology.odooFramework.modules = ['example'];
+  const adapter = new OdooExecutionAdapter(topology, {
+    source: { repoDir: frameworkRoot, repoUrl: 'x', commit: 'abc' },
+    uiEntrypoints: [{ modelName: 'example.model', methodName: 'first' }],
+    maxFrameworkMethods: 1,
+    findModelFiles: async () => ['addons/example/models/example.py']
+  });
+  const result = await adapter.augment();
+  assert.equal(result.truncated, true);
+  assert.equal(result.maxFrameworkMethods, 1);
+  assert.ok(result.remainingFrameworkQueue > 0);
 });
