@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { OdooAdapter } from './adapter.js';
 
-test('facade combines static UI entrypoints, execution report and runtime-evidence assessment', async () => {
+test('facade combines static pattern evidence, UI entrypoints, execution report and runtime-evidence assessment', async () => {
   const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-adapter-'));
   const xmlPath = 'addons/acme/views/sale.xml';
   await fs.mkdir(path.dirname(path.join(repoDir, xmlPath)), { recursive: true });
@@ -41,6 +41,12 @@ test('facade combines static UI entrypoints, execution report and runtime-eviden
   assert.deepEqual(result.ui.entrypoints.map((item) => `${item.modelName}.${item.methodName}`), [
     'sale.order.action_confirm'
   ]);
+  const buttonFact = result.patterns.find((fact) => fact.provenance?.ruleId === 'xml_object_button');
+  assert.ok(buttonFact);
+  assert.equal(buttonFact.kind, 'entrypoint');
+  assert.equal(buttonFact.relation, 'triggers');
+  assert.equal(buttonFact.captures.method, 'action_confirm');
+  assert.equal(buttonFact.provenance.sourcePath, xmlPath);
   assert.equal(result.evidence.runtimeEvidenceRequired, true);
   assert.deepEqual(result.evidence.ambiguousBoundaries, ['stock.rule.run']);
   assert.equal(result.execution.frameworkMethods, 1);
