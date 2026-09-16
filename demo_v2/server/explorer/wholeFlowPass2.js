@@ -3,6 +3,7 @@ const arr = (value) => Array.isArray(value) ? value : [];
 const PASS2_FLOW_SYSTEM = `You are DataSong's PASS-2 COMPRESSED-FLOW INTERPRETER.
 Pass 1 has already admitted one business-use-case arc.
 You receive the ENTIRE deterministic compressed executable flow family for that arc, not one graph node at a time.
+When functionEvidence is supplied, its source bodies are direct implementation evidence for functions on the admitted flow family.
 Interpret the supplied flow as evidence for the active arc in one pass.
 Do not request repository search, files, arbitrary neighbors, or node-by-node traversal.
 Only ask for a branch follow-up when one supplied branch is genuinely ambiguous and materially affects the business map.
@@ -28,10 +29,36 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     return map[arc.id];
   }
 
+  functionEvidenceForGroupedPath(grouped) {
+    if (!grouped) return [];
+    const ids = [
+      ...arr(grouped.symbolIds),
+      ...arr(grouped.alternatives).flatMap((alternative) => arr(alternative?.symbolIds))
+    ];
+    const seen = new Set();
+    const evidence = [];
+    for (const symbolId of ids) {
+      if (!symbolId || seen.has(symbolId)) continue;
+      seen.add(symbolId);
+      const symbol = this.topology?.symbolById?.get?.(symbolId);
+      const body = String(symbol?.body || '').trim();
+      if (!symbol || !body) continue;
+      evidence.push({
+        symbolId,
+        name: String(symbol.name || ''),
+        signature: String(symbol.signature || ''),
+        sourcePath: String(symbol.sourcePath || ''),
+        body
+      });
+    }
+    return evidence;
+  }
+
   compactFlowPackage(arc) {
     const grouped = this.groupedPathForArc(arc);
     if (!grouped) return null;
     const compact = this.compactCallPath(grouped);
+    const functionEvidence = this.functionEvidenceForGroupedPath(grouped);
     return {
       pathId: compact.pathId,
       functionCount: compact.functionCount,
@@ -39,6 +66,7 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
       alternateEntranceCount: compact.alternateEntranceCount,
       terminal: compact.terminal,
       structuralEvidence: compact.structuralEvidence || { entities: [], entityBoundaries: [], persistence: [] },
+      ...(functionEvidence.length ? { functionEvidence } : {}),
       ...(compact.flow ? { flow: compact.flow } : { flowSequence: arr(compact.flowSequence) })
     };
   }
@@ -90,7 +118,8 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
         context: { prefix: arr(flowPackage.flow.prefix), suffix: arr(flowPackage.flow.suffix) },
         branch,
         terminal: flowPackage.terminal,
-        structuralEvidence: flowPackage.structuralEvidence
+        structuralEvidence: flowPackage.structuralEvidence,
+        ...(arr(flowPackage.functionEvidence).length ? { functionEvidence: flowPackage.functionEvidence } : {})
       };
     }
     return {
@@ -149,7 +178,27 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
             state.completed = true;
           }
         }
-        await this.appendRunLog({ type: 'pass2_whole_flow_applied', call: result.callNumber, explorationStep: this.state.step, retry, timestamp: new Date().toISOString(), arcId: arc?.id || '', branchIndex: args.observation?.canonical?.branchIndex ?? null, parsedResponse: parsed });
+        const flow = args.observation?.canonical?.executableFlow || {};
+        await this.appendRunLog({
+          type: 'pass2_whole_flow_applied',
+          call: result.callNumber,
+          explorationStep: this.state.step,
+          retry,
+          timestamp: new Date().toISOString(),
+          arcId: arc?.id || '',
+          branchIndex: args.observation?.canonical?.branchIndex ?? null,
+          evidence: {
+            pathId: flow.pathId || '',
+            structuralEvidence: flow.structuralEvidence || null,
+            functionEvidence: arr(flow.functionEvidence).map((item) => ({
+              symbolId: item?.symbolId || '',
+              name: item?.name || '',
+              sourcePath: item?.sourcePath || '',
+              bodyChars: String(item?.body || '').length
+            }))
+          },
+          parsedResponse: parsed
+        });
         return { ...result, parsed };
       } catch (error) {
         lastError = error;
