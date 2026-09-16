@@ -30,6 +30,18 @@ function addReference(symbol, name, relation) {
   }
 }
 
+function relatedModelForField(topology, modelName, fieldName) {
+  const schema = topology?.entitySchemaByName?.get?.(modelName)
+    || (typeof topology?.entitySchema === 'function' ? topology.entitySchema(modelName) : null);
+  if (!schema) return '';
+  const field = (Array.isArray(schema.fields) ? schema.fields : [])
+    .find((item) => item?.name === fieldName && item?.relatedModel);
+  if (field?.relatedModel) return field.relatedModel;
+  const relationship = (Array.isArray(schema.relationships) ? schema.relationships : [])
+    .find((item) => item?.title === fieldName && item?.relatedEntityName);
+  return relationship?.relatedEntityName || '';
+}
+
 export class OdooExecutionAdapter {
   constructor(topology, options = {}) {
     this.topology = topology;
@@ -43,6 +55,7 @@ export class OdooExecutionAdapter {
     const tracked = Array.isArray(topology?.trackedFiles) ? topology.trackedFiles : [];
     const projectMethods = [];
     const projectHooks = [];
+    const unresolvedCalls = [];
 
     for (const sourcePath of tracked.filter((file) => /(?:^|\/)models\/.*\.py$/.test(file))) {
       const addon = addonForPath(sourcePath, addons);
@@ -81,6 +94,22 @@ export class OdooExecutionAdapter {
     const uiEntrypoints = [...configuredEntrypoints, ...suppliedEntrypoints];
     let bridgedSuperCalls = 0;
 
+    const queueFramework = (symbol, call, depth = 0) => {
+      let targetModel = call.modelName;
+      if (call.kind === 'field') {
+        targetModel = relatedModelForField(topology, call.modelName, call.fieldName);
+        if (!targetModel) {
+          unresolvedCalls.push(`${call.modelName}.${call.fieldName}.${call.methodName}`);
+          return false;
+        }
+      }
+      if (!targetModel || !call.methodName) return false;
+      const target = frameworkMethodName(version, targetModel, call.methodName);
+      addReference(symbol, target, 'calls');
+      pendingFramework.push({ modelName: targetModel, methodName: call.methodName, depth });
+      return true;
+    };
+
     for (const entrypoint of uiEntrypoints) {
       if (!entrypoint?.modelName || !entrypoint?.methodName) continue;
       pendingFramework.push({ modelName: entrypoint.modelName, methodName: entrypoint.methodName, depth: 0 });
@@ -116,9 +145,7 @@ export class OdooExecutionAdapter {
       };
       for (const call of hook.calls) {
         if (call.kind === 'model') {
-          const target = frameworkMethodName(version, call.modelName, call.methodName);
-          addReference(symbol, target, 'calls');
-          pendingFramework.push({ modelName: call.modelName, methodName: call.methodName, depth: 0 });
+          queueFramework(symbol, call, 0);
         } else if (call.kind === 'read' || call.kind === 'write') {
           addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
         }
@@ -129,9 +156,7 @@ export class OdooExecutionAdapter {
       const symbol = projectSymbols.get(`${method.modelName}.${method.methodName}`);
       for (const call of method.calls) {
         if (call.kind === 'super') {
-          const target = frameworkMethodName(version, call.modelName, call.methodName);
-          addReference(symbol, target, 'calls');
-          pendingFramework.push({ modelName: call.modelName, methodName: call.methodName, depth: 0 });
+          queueFramework(symbol, call, 0);
           bridgedSuperCalls += 1;
           continue;
         }
@@ -145,10 +170,8 @@ export class OdooExecutionAdapter {
           }
           continue;
         }
-        if (call.kind === 'model') {
-          const target = frameworkMethodName(version, call.modelName, call.methodName);
-          addReference(symbol, target, 'calls');
-          pendingFramework.push({ modelName: call.modelName, methodName: call.methodName, depth: 0 });
+        if (call.kind === 'model' || call.kind === 'field') {
+          queueFramework(symbol, call, 0);
           continue;
         }
         if (call.kind === 'read' || call.kind === 'write') addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
@@ -169,7 +192,6 @@ export class OdooExecutionAdapter {
     const maxFrameworkMethods = Math.max(1, Number(this.options.maxFrameworkMethods ?? 250));
     const frameworkSymbols = new Map();
     const visited = new Set();
-    const unresolvedCalls = [];
 
     while (pendingFramework.length && visited.size < maxFrameworkMethods) {
       const current = pendingFramework.shift();
@@ -204,10 +226,18 @@ export class OdooExecutionAdapter {
           frameworkSymbols.set(`${method.sourcePath}:${key}`, symbol);
 
           for (const call of method.calls) {
-            if (call.kind === 'self' || call.kind === 'super' || call.kind === 'model') {
-              const target = frameworkMethodName(version, call.modelName, call.methodName);
+            if (call.kind === 'self' || call.kind === 'super' || call.kind === 'model' || call.kind === 'field') {
+              let targetModel = call.modelName;
+              if (call.kind === 'field') {
+                targetModel = relatedModelForField(topology, call.modelName, call.fieldName);
+                if (!targetModel) {
+                  unresolvedCalls.push(`${call.modelName}.${call.fieldName}.${call.methodName}`);
+                  continue;
+                }
+              }
+              const target = frameworkMethodName(version, targetModel, call.methodName);
               addReference(symbol, target, 'calls');
-              if (current.depth < maxDepth) pendingFramework.push({ modelName: call.modelName, methodName: call.methodName, depth: current.depth + 1 });
+              if (current.depth < maxDepth) pendingFramework.push({ modelName: targetModel, methodName: call.methodName, depth: current.depth + 1 });
             } else if (call.kind === 'read' || call.kind === 'write') {
               addReference(symbol, call.modelName, call.kind === 'read' ? 'reads' : 'writes');
             }
@@ -232,4 +262,4 @@ export class OdooExecutionAdapter {
   }
 }
 
-export { projectMethodName, projectHookName, frameworkMethodName };
+export { projectMethodName, projectHookName, frameworkMethodName, relatedModelForField };
