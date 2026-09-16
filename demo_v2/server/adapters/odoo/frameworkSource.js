@@ -6,6 +6,7 @@ import { extractOdooModels } from './modelParser.js';
 import { parseOdooManifestText } from './detect.js';
 
 const ODOO_REPO_URL = 'https://github.com/odoo/odoo.git';
+const MODEL_FILE_CACHE = new Map();
 
 function addonNameFor(sourcePath) {
   const parts = String(sourcePath || '').replace(/\\/g, '/').split('/');
@@ -69,8 +70,11 @@ export async function resolveOdooModuleClosure({ repoDir, seeds = [], maxModules
 export async function findOdooModelFiles({ repoDir, modelName, allowedAddons = [], gitFactory = simpleGit }) {
   const wanted = String(modelName || '').trim();
   if (!wanted) return [];
-  const allowed = new Set((Array.isArray(allowedAddons) ? allowedAddons : []).map(String).filter(Boolean));
+  const allowedList = (Array.isArray(allowedAddons) ? allowedAddons : []).map(String).filter(Boolean).sort();
+  const cacheKey = `${path.resolve(repoDir)}|${wanted}|${allowedList.join(',')}`;
+  if (MODEL_FILE_CACHE.has(cacheKey)) return [...MODEL_FILE_CACHE.get(cacheKey)];
 
+  const allowed = new Set(allowedList);
   let raw = '';
   try {
     raw = await gitFactory(repoDir).raw([
@@ -78,7 +82,10 @@ export async function findOdooModelFiles({ repoDir, modelName, allowedAddons = [
     ]);
   } catch (error) {
     const text = String(error?.message || '');
-    if (Number(error?.exitCode) === 1 || /exit(?:ed)?(?: with)? code 1|not found|no match/i.test(text)) return [];
+    if (Number(error?.exitCode) === 1 || /exit(?:ed)?(?: with)? code 1|not found|no match/i.test(text)) {
+      MODEL_FILE_CACHE.set(cacheKey, []);
+      return [];
+    }
     throw error;
   }
 
@@ -97,7 +104,13 @@ export async function findOdooModelFiles({ repoDir, modelName, allowedAddons = [
     const models = extractOdooModels(sourcePath, source, addonName);
     if (models.some((model) => model.name === wanted || model.inherits.includes(wanted))) matched.push(sourcePath);
   }
-  return matched;
+
+  MODEL_FILE_CACHE.set(cacheKey, matched);
+  return [...matched];
+}
+
+export function clearOdooFrameworkSourceCaches() {
+  MODEL_FILE_CACHE.clear();
 }
 
 export { ODOO_REPO_URL };
