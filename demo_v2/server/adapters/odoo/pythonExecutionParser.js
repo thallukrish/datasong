@@ -1,4 +1,5 @@
 import { extractOdooModels } from './modelParser.js';
+import { applyOdooPatterns } from './patternRegistry.js';
 
 const READ_METHODS = new Set(['search', 'browse', 'read', 'mapped', 'filtered', 'search_read', 'search_count']);
 const WRITE_METHODS = new Set(['create', 'write']);
@@ -11,19 +12,19 @@ function lineNumber(source, offset) {
   return source.slice(0, Math.max(0, offset)).split(/\r?\n/).length;
 }
 
-function callsFrom(body, modelName) {
+function callsFrom(body, modelName, sourcePath) {
   const calls = [];
   let match;
 
-  const envRe = /self\.env\s*\[\s*["']([^"']+)["']\s*\]\s*\.\s*([A-Za-z_]\w*)\s*\(/g;
-  while ((match = envRe.exec(body))) {
-    const methodName = match[2];
+  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_env_model_call'] })) {
+    const methodName = candidate.captures.method;
     const kind = WRITE_METHODS.has(methodName) ? 'write' : READ_METHODS.has(methodName) ? 'read' : 'model';
-    calls.push({ kind, modelName: match[1], methodName });
+    calls.push({ kind, modelName: candidate.captures.model, methodName, ruleId: candidate.ruleId });
   }
 
-  const superRe = /super\s*\(\s*\)\s*\.\s*([A-Za-z_]\w*)\s*\(/g;
-  while ((match = superRe.exec(body))) calls.push({ kind: 'super', modelName, methodName: match[1] });
+  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_super_call'] })) {
+    calls.push({ kind: 'super', modelName, methodName: candidate.captures.method, ruleId: candidate.ruleId });
+  }
 
   const selfRe = /\bself\.([A-Za-z_]\w*)\s*\(/g;
   while ((match = selfRe.exec(body))) {
@@ -43,7 +44,7 @@ function classRanges(source) {
   }));
 }
 
-function methodRanges(source, range, model) {
+function methodRanges(source, range, model, sourcePath) {
   const text = source.slice(range.bodyStart, range.end);
   const lines = text.split(/\r?\n/);
   const baseLine = lineNumber(source, range.bodyStart);
@@ -69,7 +70,7 @@ function methodRanges(source, range, model) {
       line: baseLine + i,
       signature: `def ${match[2]}(${match[3].trim()})`,
       body,
-      calls: callsFrom(body, model.name),
+      calls: callsFrom(body, model.name, sourcePath),
       extension: model.extension,
       inherits: model.inherits
     });
@@ -85,7 +86,7 @@ export function extractOdooExecution(sourcePath, source, addonName) {
   for (const range of classRanges(source)) {
     const model = byClass.get(range.className);
     if (!model) continue;
-    methods.push(...methodRanges(source, range, model).map((method) => ({ ...method, sourcePath, addon: addonName })));
+    methods.push(...methodRanges(source, range, model, sourcePath).map((method) => ({ ...method, sourcePath, addon: addonName })));
   }
   return { models, methods };
 }
