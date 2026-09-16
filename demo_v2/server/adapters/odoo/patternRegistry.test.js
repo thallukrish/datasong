@@ -4,7 +4,9 @@ import { applyOdooPatterns, fileMatches, odooPatternRules } from './patternRegis
 
 test('matches configured Odoo files with simple glob selectors', () => {
   assert.equal(fileMatches('addons/acme/__manifest__.py', ['**/__manifest__.py']), true);
+  assert.equal(fileMatches('__manifest__.py', ['__manifest__.py']), true);
   assert.equal(fileMatches('addons/acme/views/order.xml', ['**/*.xml']), true);
+  assert.equal(fileMatches('order.xml', ['*.xml']), true);
   assert.equal(fileMatches('addons/acme/models/order.py', ['**/*.xml']), false);
 });
 
@@ -42,6 +44,21 @@ self.env["mrp.production"].search([])
   assert.deepEqual(matches.map((item) => item.captures), [
     { model: 'sale.order', method: 'create' },
     { model: 'mrp.production', method: 'search' }
+  ]);
+});
+
+test('maps Odoo model declarations to generic entity evidence', () => {
+  const source = `
+class SaleOrder(models.Model):
+    _name = "x.sale.order"
+    _inherit   =   'sale.order'
+`;
+  const matches = applyOdooPatterns('addons/demo/models/sale_order.py', source, {
+    ids: ['python_model_name', 'python_model_inherit']
+  });
+  assert.deepEqual(matches.map((item) => [item.emit.kind, item.emit.relation, item.captures.model]), [
+    ['entity', 'declares', 'x.sale.order'],
+    ['entity', 'extends', 'sale.order']
   ]);
 });
 
