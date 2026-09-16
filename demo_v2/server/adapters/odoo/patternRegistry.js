@@ -50,6 +50,12 @@ export function odooPatternRules() {
   return (Array.isArray(registry.patterns) ? registry.patterns : []).map((rule) => ({ ...rule }));
 }
 
+export function odooRecordsetPreservingMethods() {
+  return [...new Set((Array.isArray(registry.recordsetPreservingMethods) ? registry.recordsetPreservingMethods : [])
+    .map((name) => String(name || '').trim())
+    .filter(Boolean))];
+}
+
 export function applyOdooPatterns(sourcePath, source, options = {}) {
   const text = String(source || '');
   const matches = [];
