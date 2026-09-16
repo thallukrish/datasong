@@ -105,7 +105,7 @@ test('Pass 1 prompt carries structural evidence without changing CallPathIndexer
   const prompt = explorer.callPathPrompt();
 
   assert.match(prompt, /^MODE call-path-business-seed-classification-v5/);
-  assert.match(prompt, /"boundaryKind"/); // rules describe boundary semantics
+  assert.match(prompt, /"kind":"cross_model","sourceEntity":"sale\.order","targetEntity":"stock\.rule"/);
   assert.match(prompt, /"entityBoundaries":\[\{"from":"sale\.order\.def action_confirm\(self\)"/);
   assert.match(prompt, /"persistenceKind":"odoo_orm","crud":"create","logicalEntity":"mrp\.production"/);
   assert.match(prompt, /"flowSequence":\["code:sale\.order\.def action_confirm\(self\)"/);
