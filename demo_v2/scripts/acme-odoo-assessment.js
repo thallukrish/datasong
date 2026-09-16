@@ -64,14 +64,25 @@ for (const symbol of projectSymbols) {
 
 const paths = topology.topCallPaths(30);
 const crossRepoPaths = paths.filter((p) => {
-  const text = `${arr(p.signatures).join(' ')} ${p.rendered || ''}`;
-  return text.includes('odoo-project:') || text.includes('odoo19:') || text.includes('@odoo19/');
+  const sourcePaths = arr(p.sourcePaths).map((value) => String(value || ''));
+  const entrySymbol = topology.symbolById?.get(p.entrySymbolId);
+  const startsInProject = String(entrySymbol?.name || '').startsWith('odoo-project:')
+    || sourcePaths.some((sourcePath) => !sourcePath.startsWith('@odoo'));
+  const reachesFramework = sourcePaths.some((sourcePath) => /^@odoo\d+\//.test(sourcePath));
+  return startsInProject && reachesFramework;
 });
+
+console.log('\n=== CALL PATH INDEX ===');
+console.log(`ranked paths: ${paths.length}`);
+console.log(`cross-repo paths: ${crossRepoPaths.length}`);
 
 console.log('\n=== CROSS-REPO CALL PATHS ===');
 if (!crossRepoPaths.length) console.log('(none yet)');
 for (const [index, callPath] of crossRepoPaths.entries()) {
-  console.log(`\n[${index + 1}] ${callPath.rendered || arr(callPath.signatures).join(' -> ')}`);
+  const entrySymbol = topology.symbolById?.get(callPath.entrySymbolId);
+  console.log(`\n[${index + 1}] entry: ${entrySymbol?.name || callPath.entrySymbolId}`);
+  console.log(`    sources: ${arr(callPath.sourcePaths).join(' -> ')}`);
+  console.log(`    path: ${callPath.rendered || arr(callPath.signatures).join(' -> ')}`);
 }
 
 console.log('\n=== ASSESSMENT ===');
@@ -82,5 +93,5 @@ if (projectSymbols.length && Number(execution.frameworkMethods || 0) > 0 && cros
   if (!projectSymbols.length) console.log('- No ACME Odoo executable methods or manifest hooks were discovered.');
   if (!Number(execution.projectHooks || 0)) console.log('- No manifest lifecycle hook was discovered.');
   if (!Number(execution.frameworkMethods || 0)) console.log('- No Odoo framework methods were reached.');
-  if (!crossRepoPaths.length) console.log('- No Odoo-containing call path was produced by CallPathIndexer.');
+  if (!crossRepoPaths.length) console.log('- No ACME-to-Odoo call path was identified from CallPathIndexer provenance.');
 }
