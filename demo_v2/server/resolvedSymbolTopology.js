@@ -108,6 +108,14 @@ export class ResolvedSymbolTopology extends CodeTopology {
   }
 
   resolveReference(ref) {
+    const value = normalize(ref?.name);
+    if (value) {
+      const exactIds = this.nameIndex.get(value.toLowerCase()) || [];
+      const exact = exactIds.map((id) => this.symbolById.get(id)).filter(Boolean)
+        .filter((symbol) => normalize(symbol.name).toLowerCase() === value.toLowerCase());
+      if (exact.length) return exact;
+    }
+
     const qualified = this.resolveQualifiedService(ref);
     if (qualified.length) return qualified;
 
