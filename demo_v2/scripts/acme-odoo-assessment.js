@@ -58,7 +58,23 @@ console.log(`manifest hooks: ${Number(execution.projectHooks || 0)}`);
 console.log(`framework methods reached: ${Number(execution.frameworkMethods || 0)}`);
 console.log(`super() bridges: ${Number(execution.bridgedSuperCalls || 0)}`);
 console.log(`UI entrypoint seeds: ${Number(execution.uiEntrypointSeeds || 0)}`);
-console.log(`unresolved: ${arr(execution.unresolvedCalls).join(', ') || '(none)'}`);
+console.log(`unresolved calls: ${arr(execution.unresolvedCalls).join(', ') || '(none)'}`);
+console.log(`unresolved persistence: ${arr(execution.unresolvedPersistence).join(', ') || '(none)'}`);
+
+const stats = execution.structuralStats || {};
+console.log('\n=== STRUCTURAL COVERAGE ===');
+console.log(`first-class Odoo methods: ${Number(stats.firstClassMethods || 0)}`);
+console.log(`cross-model calls: ${Number(stats.crossModelCalls || 0)}`);
+console.log(`same-model calls: ${Number(stats.sameModelCalls || 0)}`);
+console.log(`helper/library calls classified: ${Number(stats.helperCalls || 0)}`);
+console.log(`ORM CRUD: read=${Number(stats.ormReads || 0)} create=${Number(stats.ormCreates || 0)} update=${Number(stats.ormUpdates || 0)} delete=${Number(stats.ormDeletes || 0)}`);
+console.log(`SQL CRUD: read=${Number(stats.sqlReads || 0)} create=${Number(stats.sqlCreates || 0)} update=${Number(stats.sqlUpdates || 0)} delete=${Number(stats.sqlDeletes || 0)}`);
+console.log(`truncated: ${Boolean(execution.truncated)}`);
+console.log(`framework safety cap: ${Number(execution.maxFrameworkMethods || 0)}`);
+console.log(`remaining framework queue: ${Number(execution.remainingFrameworkQueue || 0)}`);
+if (execution.truncated) {
+  console.log('WARNING: static Odoo traversal hit the framework-method safety cap; this is boundary proof, not complete static coverage.');
+}
 
 const projectSymbols = arr(topology.symbols)
   .filter((s) => String(s?.name || '').startsWith('odoo-project:'))
@@ -69,10 +85,14 @@ if (!projectSymbols.length) console.log('(none discovered)');
 for (const symbol of projectSymbols) {
   const calls = arr(symbol.references)
     .filter((ref) => ref?.relation === 'calls')
-    .map((ref) => ref?.name)
-    .filter(Boolean);
+    .map((ref) => ({ name: ref?.name, boundary: ref?.data?.boundaryKind || '' }))
+    .filter((ref) => ref.name);
+  const persistence = arr(symbol.references)
+    .filter((ref) => ['reads', 'writes'].includes(ref?.relation) && ref?.data?.operationKind === 'persistence')
+    .map((ref) => `${ref.data.persistenceKind}:${ref.data.crud}:${ref.name}`);
   console.log(`- ${symbol.name}`);
-  for (const call of calls) console.log(`    -> ${call}`);
+  for (const call of calls) console.log(`    -> ${call.name}${call.boundary ? ` [${call.boundary}]` : ''}`);
+  for (const operation of persistence) console.log(`    * ${operation}`);
 }
 
 const paths = topology.topCallPaths(30);
@@ -101,6 +121,7 @@ for (const [index, callPath] of crossRepoPaths.entries()) {
 console.log('\n=== ASSESSMENT ===');
 if (projectSymbols.length && Number(execution.frameworkMethods || 0) > 0 && crossRepoPaths.length) {
   console.log('PASS: ACME executable Odoo code crosses into Odoo framework source and reaches CallPathIndexer.');
+  if (execution.truncated) console.log('NOTE: traversal is truncated, so PASS does not imply complete static coverage.');
 } else {
   console.log('INCOMPLETE: the static path did not yet prove ACME -> Odoo framework -> CallPathIndexer end to end.');
   if (!projectSymbols.length) console.log('- No ACME Odoo executable methods or manifest hooks were discovered.');
