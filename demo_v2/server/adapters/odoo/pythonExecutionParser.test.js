@@ -59,3 +59,29 @@ class StockPicking(models.Model):
   assert.ok(method.calls.some((call) => call.kind === 'read' && call.modelName === 'stock.move' && call.methodName === 'search'));
   assert.equal(method.calls.some((call) => ['with_context', 'sudo', 'with_company'].includes(call.methodName)), false);
 });
+
+test('recognizes relational-field method calls and explicit Python super syntax', () => {
+  const source = `
+from odoo import models
+
+class ExampleOrder(models.Model):
+    _inherit = 'example.order'
+
+    def _action_confirm(self):
+        self.line_ids._launch_rule()
+        return super(ExampleOrder, self)._action_confirm()
+`;
+
+  const parsed = extractOdooExecution('addons/example/models/example_order.py', source, 'example');
+  const method = parsed.methods.find((item) => item.methodName === '_action_confirm');
+  assert.ok(method);
+  assert.ok(method.calls.some((call) =>
+    call.kind === 'field'
+    && call.modelName === 'example.order'
+    && call.fieldName === 'line_ids'
+    && call.methodName === '_launch_rule'));
+  assert.ok(method.calls.some((call) =>
+    call.kind === 'super'
+    && call.modelName === 'example.order'
+    && call.methodName === '_action_confirm'));
+});
