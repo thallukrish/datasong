@@ -1,3 +1,5 @@
+import { applyOdooPatterns } from './patternRegistry.js';
+
 const lineOf = (source, index) => source.slice(0, Math.max(0, index)).split('\n').length;
 
 function records(xml) {
@@ -38,15 +40,13 @@ export function extractOdooUiEntrypoints(sourcePath, xml) {
     if (record.model === 'ir.ui.view') {
       const modelName = fieldValue(record.body, 'model');
       if (!modelName) continue;
-      for (const button of record.body.matchAll(/<button\b([^>]*)>/gi)) {
-        const attrs = button[1] || '';
-        const type = attrs.match(/\btype=["']([^"']+)["']/i)?.[1] || '';
-        const methodName = attrs.match(/\bname=["']([^"']+)["']/i)?.[1] || '';
-        if (type !== 'object' || !methodName) continue;
-        const absoluteIndex = record.bodyIndex + (button.index || 0);
+      for (const button of applyOdooPatterns(sourcePath, record.body, { ids: ['xml_object_button'] })) {
+        const methodName = button.captures.method;
+        if (!methodName) continue;
         entrypoints.push({
           kind: 'object_button', modelName, methodName, sourcePath,
-          line: lineOf(source, absoluteIndex)
+          line: lineOf(source, record.bodyIndex + button.index),
+          ruleId: button.ruleId
         });
       }
       continue;
@@ -65,10 +65,13 @@ export function extractOdooUiEntrypoints(sourcePath, xml) {
       const modelName = fieldValue(record.body, 'model_name') || fieldValue(record.body, 'res_model');
       const code = fieldValue(record.body, 'code');
       if (!modelName || !code) continue;
-      for (const call of code.matchAll(/\b(?:records?|model)\.([A-Za-z_]\w*)\s*\(/g)) {
+      for (const call of applyOdooPatterns(sourcePath, code, { ids: ['server_action_method_call'] })) {
+        const methodName = call.captures.method;
+        if (!methodName) continue;
         entrypoints.push({
-          kind: 'server_action', modelName, methodName: call[1], sourcePath,
-          line: lineOf(source, record.index)
+          kind: 'server_action', modelName, methodName, sourcePath,
+          line: lineOf(source, record.index),
+          ruleId: call.ruleId
         });
       }
     }
