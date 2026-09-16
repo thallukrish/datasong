@@ -13,13 +13,20 @@ function lineNumber(source, offset) {
 function callsFrom(body, modelName, sourcePath) {
   const calls = extractOdooRecordsetCalls(body, modelName);
 
-  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_super_call'] })) {
+  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_super_call', 'python_explicit_super_call'] })) {
     calls.push({ kind: 'super', modelName, methodName: candidate.captures.method, ruleId: candidate.ruleId });
+  }
+
+  for (const candidate of applyOdooPatterns(sourcePath, body, { ids: ['python_self_relational_field_call'] })) {
+    const fieldName = candidate.captures.field;
+    const methodName = candidate.captures.method;
+    if (!fieldName || !methodName || fieldName === 'env') continue;
+    calls.push({ kind: 'field', modelName, fieldName, methodName, ruleId: candidate.ruleId });
   }
 
   const seen = new Set();
   return calls.filter((call) => {
-    const key = `${call.kind}:${call.modelName}.${call.methodName}`;
+    const key = `${call.kind}:${call.modelName}.${call.fieldName || ''}.${call.methodName}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
