@@ -4,9 +4,19 @@ import { OdooEntitySchemaAdapter } from './schemaAdapter.js';
 import { OdooFrameworkEnricher } from './frameworkEnricher.js';
 import { OdooExecutionAdapter } from './executionAdapter.js';
 import { extractOdooUiEntrypoints } from './uiEntrypoints.js';
+import { applyOdooPatterns } from './patternRegistry.js';
 import { assessOdooEvidence } from './evidenceAssessment.js';
 
 const arr = (value) => Array.isArray(value) ? value : [];
+
+function addonForPath(sourcePath, addons = []) {
+  const parts = String(sourcePath || '').replace(/\\/g, '/').split('/');
+  return addons.find((addon) => parts.includes(addon?.name))?.name || '';
+}
+
+function isPatternSource(file) {
+  return /(?:\.py|\.xml)$/i.test(String(file || ''));
+}
 
 export class OdooAdapter {
   constructor(topology, options = {}) {
@@ -15,6 +25,37 @@ export class OdooAdapter {
     this.schemaAdapter = options.schemaAdapter || new OdooEntitySchemaAdapter(topology);
     this.frameworkEnricher = options.frameworkEnricher || new OdooFrameworkEnricher(topology, options.framework || {});
     this.executionAdapter = options.executionAdapter || new OdooExecutionAdapter(topology, options.execution || {});
+  }
+
+  async collectPatternEvidence() {
+    const repoDir = this.topology?.repoDir || '';
+    const trackedFiles = arr(this.topology?.trackedFiles);
+    const addons = arr(this.topology?.odooDetection?.addons);
+    const facts = [];
+
+    for (const sourcePath of trackedFiles.filter(isPatternSource)) {
+      const addon = addonForPath(sourcePath, addons);
+      if (addons.length && !addon) continue;
+      const source = await fs.readFile(path.join(repoDir, sourcePath), 'utf8').catch(() => '');
+      if (!source) continue;
+      for (const match of applyOdooPatterns(sourcePath, source)) {
+        facts.push({
+          kind: match.emit?.kind || 'evidence',
+          relation: match.emit?.relation || 'observed_in',
+          evidence: match.emit?.evidence || 'static',
+          captures: { ...match.captures },
+          provenance: {
+            ruleId: match.ruleId,
+            sourcePath,
+            line: match.line,
+            addon,
+            matchedText: match.match
+          }
+        });
+      }
+    }
+
+    return facts;
   }
 
   async collectUiEvidence() {
@@ -35,15 +76,22 @@ export class OdooAdapter {
   }
 
   async assess() {
-    const ui = await this.collectUiEvidence();
+    const [patterns, ui] = await Promise.all([
+      this.collectPatternEvidence(),
+      this.collectUiEvidence()
+    ]);
     return {
+      patterns,
       ui,
       evidence: assessOdooEvidence({ uiEntrypoints: ui.entrypoints })
     };
   }
 
   async augment() {
-    const ui = await this.collectUiEvidence();
+    const [patterns, ui] = await Promise.all([
+      this.collectPatternEvidence(),
+      this.collectUiEvidence()
+    ]);
     const schema = await this.schemaAdapter.augment();
     const framework = await this.frameworkEnricher.augment(arr(schema?.schemas));
     const execution = await this.executionAdapter.augment({ entrypoints: ui.entrypoints });
@@ -68,6 +116,7 @@ export class OdooAdapter {
 
     return {
       adapter: 'odoo-v2',
+      patterns,
       ui,
       schema,
       framework,
