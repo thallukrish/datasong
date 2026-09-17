@@ -7,6 +7,7 @@ import { parseOdooManifestText } from './detect.js';
 
 const ODOO_REPO_URL = 'https://github.com/odoo/odoo.git';
 const MODEL_FILE_CACHE = new Map();
+const UI_FILE_CACHE = new Map();
 
 function addonNameFor(sourcePath) {
   const parts = String(sourcePath || '').replace(/\\/g, '/').split('/');
@@ -109,8 +110,50 @@ export async function findOdooModelFiles({ repoDir, modelName, allowedAddons = [
   return [...matched];
 }
 
+export async function findOdooUiFiles({ repoDir, modelNames = [], allowedAddons = [], gitFactory = simpleGit }) {
+  const wanted = [...new Set((Array.isArray(modelNames) ? modelNames : [])
+    .map((name) => String(name || '').trim())
+    .filter(Boolean))].sort();
+  if (!wanted.length) return [];
+
+  const allowedList = (Array.isArray(allowedAddons) ? allowedAddons : []).map(String).filter(Boolean).sort();
+  const cacheKey = `${path.resolve(repoDir)}|${wanted.join(',')}|${allowedList.join(',')}`;
+  if (UI_FILE_CACHE.has(cacheKey)) return [...UI_FILE_CACHE.get(cacheKey)];
+
+  const allowed = new Set(allowedList);
+  const args = ['grep', '-l', '-F'];
+  for (const modelName of wanted) args.push('-e', modelName);
+  args.push('--', 'addons', 'odoo/addons');
+
+  let raw = '';
+  try {
+    raw = await gitFactory(repoDir).raw(args);
+  } catch (error) {
+    const text = String(error?.message || '');
+    if (Number(error?.exitCode) === 1 || /exit(?:ed)?(?: with)? code 1|not found|no match/i.test(text)) {
+      UI_FILE_CACHE.set(cacheKey, []);
+      return [];
+    }
+    throw error;
+  }
+
+  const files = [...new Set(String(raw || '')
+    .split(/\r?\n/)
+    .map((file) => file.trim().replace(/\\/g, '/'))
+    .filter((file) => file.endsWith('.xml'))
+    .filter((file) => {
+      const addonName = addonNameFor(file);
+      return !allowed.size || allowed.has(addonName);
+    }))]
+    .sort();
+
+  UI_FILE_CACHE.set(cacheKey, files);
+  return [...files];
+}
+
 export function clearOdooFrameworkSourceCaches() {
   MODEL_FILE_CACHE.clear();
+  UI_FILE_CACHE.clear();
 }
 
 export { ODOO_REPO_URL };
