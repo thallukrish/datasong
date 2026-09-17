@@ -45,6 +45,7 @@ export function extractOdooManifestHooks(sourcePath, source, addonName = '') {
 export function extractOdooHookExecution(sourcePath, source, addonName, hook) {
   const range = functionRange(source, hook?.functionName || '');
   if (!range) return null;
+  const lifecycleCalls = [...extractOdooRecordsetCalls(range.body), ...extractSqlCalls(range.body)];
   return {
     ...range,
     sourcePath,
@@ -52,6 +53,11 @@ export function extractOdooHookExecution(sourcePath, source, addonName, hook) {
     hookType: hook.hookType,
     manifestPath: hook.manifestPath,
     ruleId: hook.ruleId,
-    calls: [...extractOdooRecordsetCalls(range.body), ...extractSqlCalls(range.body)]
+    executionKind: 'lifecycle_setup',
+    // Lifecycle hooks are installation/setup evidence, not normal runtime
+    // business-flow entrypoints. Preserve deterministic persistence facts but
+    // do not emit model-method calls into the executable call topology.
+    calls: lifecycleCalls.filter((call) => ['read', 'write', 'sql'].includes(call.kind)),
+    lifecycleCalls
   };
 }
