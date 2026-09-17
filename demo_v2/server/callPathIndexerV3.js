@@ -5,6 +5,15 @@ function weight(profile, name) {
   const value = Number(profile?.weights?.[name]);
   return Number.isFinite(value) ? value : 0;
 }
+function valueAtPath(object, path) {
+  const parts = String(path || '').split('.').filter(Boolean);
+  let current = object;
+  for (const part of parts) {
+    if (current == null || typeof current !== 'object') return undefined;
+    current = current[part];
+  }
+  return current;
+}
 
 function commonPrefixLength(a, b) {
   const max = Math.min(a.length, b.length);
@@ -31,11 +40,39 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
     return profile?.weights && typeof profile.weights === 'object' ? profile : null;
   }
 
+  isPriorityExcluded(symbols, profile) {
+    for (const rule of arr(profile?.excludeWhen)) {
+      const values = new Set(arr(rule?.values).map((value) => String(value)));
+      if (!rule?.path || !values.size) continue;
+      if (symbols.some((symbol) => values.has(String(valueAtPath(symbol, rule.path) ?? '')))) return true;
+    }
+    return false;
+  }
+
+  firstClassNodeIdentities(symbols, profile) {
+    const config = profile?.firstClassNodes;
+    if (!config?.metadataPath || !config?.identityField) return [];
+    const identities = new Set();
+    for (const symbol of symbols) {
+      const metadata = valueAtPath(symbol, config.metadataPath);
+      if (!metadata || typeof metadata !== 'object') continue;
+      const flags = arr(config.flags);
+      const isFirstClass = flags.length
+        ? flags.some((flag) => metadata?.[flag] === true)
+        : metadata?.firstClass === true;
+      if (!isFirstClass) continue;
+      const identity = String(metadata?.[config.identityField] || '').trim();
+      if (identity) identities.add(identity);
+    }
+    return [...identities].sort();
+  }
+
   pathStructuralPriority(path, profile) {
     const symbols = arr(path?.symbolIds)
       .map((id) => this.topology?.symbolById?.get?.(id))
       .filter(Boolean);
-    const entities = new Set();
+    const firstClassNodes = this.firstClassNodeIdentities(symbols, profile);
+    const excluded = this.isPriorityExcluded(symbols, profile);
     let crossEntityBoundaryCount = 0;
     let persistenceWriteCount = 0;
     let persistenceReadCount = 0;
@@ -53,13 +90,12 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
       const data = ref?.data || {};
       const sourceEntity = String(data.sourceModel || data.sourceEntity || '');
       const targetEntity = String(data.targetModel || data.targetEntity || '');
-      if (sourceEntity) entities.add(sourceEntity);
-      if (targetEntity) entities.add(targetEntity);
       if (sourceEntity && targetEntity && sourceEntity !== targetEntity) crossEntityBoundaryCount += 1;
     }
 
-    // Persistence is attached to the function itself, so reads/writes performed
-    // by any function admitted to this path are valid structural landmarks.
+    // Persistence is supporting evidence only. It must not create first-class
+    // node credit; first-class credit comes from configured path nodes actually
+    // traversed by the executable path.
     for (const symbol of symbols) {
       for (const ref of arr(symbol?.references)) {
         const data = ref?.data || {};
@@ -68,8 +104,6 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
         const persistence = ['reads', 'writes'].includes(relation)
           && (persistenceKind || String(data.operationKind || '') === 'persistence');
         if (!persistence) continue;
-        const logicalEntity = String(data.logicalEntity || '');
-        if (logicalEntity) entities.add(logicalEntity);
         if (relation === 'writes') persistenceWriteCount += 1;
         else persistenceReadCount += 1;
         if (persistenceKind === 'sql') sqlPersistenceCount += 1;
@@ -80,11 +114,11 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
       .filter((relation) => this.executableRelations.has(String(relation || ''))).length;
     const functionCount = Number(path?.functionCount || symbols.length || 0);
     const isolated = functionCount <= 1
-      && entities.size === 0
+      && firstClassNodes.length === 0
       && persistenceWriteCount + persistenceReadCount === 0
       && executableRelationCount === 0;
 
-    const score = entities.size * weight(profile, 'firstClassEntity')
+    const normalScore = firstClassNodes.length * weight(profile, 'firstClassNode')
       + crossEntityBoundaryCount * weight(profile, 'crossEntityBoundary')
       + persistenceWriteCount * weight(profile, 'persistenceWrite')
       + persistenceReadCount * weight(profile, 'persistenceRead')
@@ -92,19 +126,23 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
       + executableRelationCount * weight(profile, 'executableRelation')
       + functionCount * weight(profile, 'function')
       + (isolated ? weight(profile, 'isolatedNoEntityNoPersistence') : 0);
+    const excludedScore = Number(profile?.excludedPriorityScore);
+    const score = excluded && Number.isFinite(excludedScore) ? excludedScore : normalScore;
 
     return {
       score,
       evidence: {
         profileVersion: String(profile?.version || ''),
-        firstClassEntities: [...entities].sort(),
+        firstClassNodeCount: firstClassNodes.length,
+        firstClassNodes,
         crossEntityBoundaryCount,
         persistenceWriteCount,
         persistenceReadCount,
         sqlPersistenceCount,
         executableRelationCount,
         functionCount,
-        isolatedNoEntityNoPersistence: isolated
+        isolatedNoEntityNoPersistence: isolated,
+        excludedFromPriority: excluded
       }
     };
   }
@@ -275,7 +313,7 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
 
   snapshot() {
     return {
-      version: 7,
+      version: 8,
       fragmentCount: this.fragments.length,
       rawPathCount: this.rawPaths.length,
       rankedPathCount: this.rankedPaths.length,
