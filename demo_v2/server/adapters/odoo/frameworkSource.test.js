@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ensureOdooSource, findOdooModelFiles, resolveOdooModuleClosure } from './frameworkSource.js';
+import { ensureOdooSource, findOdooModelFiles, findOdooMethodFiles, resolveOdooModuleClosure } from './frameworkSource.js';
 
 async function makeSourceTree() {
   const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-source-'));
@@ -98,4 +98,41 @@ test('finds model files only inside allowed Odoo addons', async () => {
     'addons/mrp/models/mrp_extension.py',
     'addons/mrp/models/mrp_production.py'
   ]);
+});
+
+test('bounds inherited method grep to the allowed addon closure', async () => {
+  const repoDir = await makeSourceTree();
+  await fs.writeFile(path.join(repoDir, 'addons/mrp/models/mrp_method.py'), `
+from odoo import models
+class MrpProduction(models.Model):
+    _inherit = 'mrp.production'
+    def action_confirm(self):
+        return True
+`);
+  const calls = [];
+  const fakeGitFactory = () => ({
+    raw: async (args) => {
+      calls.push(args);
+      return 'addons/mrp/models/mrp_method.py\n';
+    }
+  });
+
+  const files = await findOdooMethodFiles({
+    repoDir,
+    modelName: 'mrp.production',
+    methodName: 'action_confirm',
+    allowedAddons: ['mrp', 'stock'],
+    gitFactory: fakeGitFactory
+  });
+
+  assert.deepEqual(files, ['addons/mrp/models/mrp_method.py']);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(-4), [
+    'addons/mrp',
+    'odoo/addons/mrp',
+    'addons/stock',
+    'odoo/addons/stock'
+  ]);
+  assert.equal(calls[0].includes('addons'), false);
+  assert.equal(calls[0].includes('odoo/addons'), false);
 });
