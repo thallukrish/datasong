@@ -5,6 +5,7 @@ import { OdooAdapter } from './adapter.js';
 import { extractOdooUiEntrypoints } from './uiEntrypoints.js';
 import { applyOdooPatterns, odooPatternRules } from './patternRegistry.js';
 import { assessOdooEvidence } from './evidenceAssessment.js';
+import { odooCallPathPriorityProfile } from './callPathPriorityProfile.js';
 
 export function createOdooAdapters(topology) {
   // Static framework traversal is already bounded by method-level cycle protection
@@ -16,7 +17,8 @@ export function createOdooAdapters(topology) {
     adapter: new OdooAdapter(topology, { execution: executionOptions }),
     entitySchema: new OdooEntitySchemaAdapter(topology),
     frameworkEnricher: new OdooFrameworkEnricher(topology),
-    execution: new OdooExecutionAdapter(topology, executionOptions)
+    execution: new OdooExecutionAdapter(topology, executionOptions),
+    callPathPriorityProfile: odooCallPathPriorityProfile
   };
 }
 
@@ -28,5 +30,6 @@ export {
   extractOdooUiEntrypoints,
   applyOdooPatterns,
   odooPatternRules,
-  assessOdooEvidence
+  assessOdooEvidence,
+  odooCallPathPriorityProfile
 };
