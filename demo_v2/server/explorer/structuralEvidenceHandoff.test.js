@@ -8,7 +8,20 @@ const Base = class {
     return {
       id: 'callpath:7',
       symbolIds: ['s-sale', 's-rule', 's-moqui'],
-      alternatives: [{ symbolIds: ['s-mrp', 's-rule'] }]
+      normalizedFlowTokens: [
+        'code:sale.order.def action_confirm(self)',
+        'code:stock.rule.def run(self, procurements)',
+        'transition:approve'
+      ],
+      alternatives: [{
+        pathId: 'callpath:manufacture',
+        symbolIds: ['s-sale', 's-rule', 's-mrp'],
+        normalizedFlowTokens: [
+          'code:sale.order.def action_confirm(self)',
+          'code:stock.rule.def run(self, procurements)',
+          'code:stock.rule.def _run_manufacture(self, procurements)'
+        ]
+      }]
     };
   }
 
@@ -95,14 +108,37 @@ test('whole-flow Pass 2 package preserves structural evidence from Pass 1 path',
   assert.equal(pkg.structuralEvidence.persistence[1].persistedEntity, 'stock_quant');
 });
 
-test('Pass 2 dereferences source bodies from representative and alternative path symbols', () => {
+test('Pass 2 defaults to representative-path bodies instead of expanding every grouped alternative', () => {
   const explorer = explorerWithSymbols();
   const pkg = explorer.compactFlowPackage({ id: 'arc:1' });
 
-  assert.deepEqual(pkg.functionEvidence.map((item) => item.symbolId), ['s-sale', 's-rule', 's-mrp']);
-  assert.equal(pkg.functionEvidence[0].body, 'self._action_confirm()');
-  assert.equal(pkg.functionEvidence[2].body, "self.env['mrp.production'].create(vals)");
+  assert.equal(pkg.selectedConcretePathId, 'callpath:7');
+  assert.deepEqual(pkg.functionEvidence.map((item) => item.symbolId), ['s-sale', 's-rule']);
+  assert.equal(pkg.functionEvidence.some((item) => item.symbolId === 's-mrp'), false);
   assert.equal(pkg.functionEvidence.some((item) => item.symbolId === 's-moqui'), false, 'symbols without source bodies must not add empty function evidence');
+});
+
+test('Pass 2 selects the unique grouped branch identified by Pass 1 coherentThroughSignature', () => {
+  const explorer = explorerWithSymbols();
+  const pkg = explorer.compactFlowPackage({
+    id: 'arc:manufacture',
+    coherentThroughSignature: 'code:stock.rule.def _run_manufacture(self, procurements)'
+  });
+
+  assert.equal(pkg.selectedConcretePathId, 'callpath:manufacture');
+  assert.deepEqual(pkg.functionEvidence.map((item) => item.symbolId), ['s-sale', 's-rule', 's-mrp']);
+  assert.equal(pkg.functionEvidence[2].body, "self.env['mrp.production'].create(vals)");
+});
+
+test('Pass 2 does not expand alternatives when coherentThroughSignature is shared by several variants', () => {
+  const explorer = explorerWithSymbols();
+  const pkg = explorer.compactFlowPackage({
+    id: 'arc:shared-prefix',
+    coherentThroughSignature: 'code:stock.rule.def run(self, procurements)'
+  });
+
+  assert.equal(pkg.selectedConcretePathId, 'callpath:7');
+  assert.deepEqual(pkg.functionEvidence.map((item) => item.symbolId), ['s-sale', 's-rule']);
 });
 
 test('Pass 2 omits functionEvidence completely when selected symbols have no bodies', () => {
