@@ -46,8 +46,8 @@ for (const [index, callPath] of paths.entries()) {
   console.log(`\n[${index + 1}] ${callPath.id} priority=${priority}`);
   console.log(`flow: ${JSON.stringify(compact.flow || compact.flowSequence || [])}`);
   console.log(`sources: ${arr(callPath.sourcePaths).join(' | ') || '(none)'}`);
-  console.log(`priority entities: ${arr(priorityEvidence.firstClassEntities).join(', ') || '(none)'}`);
-  console.log(`priority boundaries=${priorityEvidence.crossEntityBoundaryCount ?? 0} writes=${priorityEvidence.persistenceWriteCount ?? 0} reads=${priorityEvidence.persistenceReadCount ?? 0} sql=${priorityEvidence.sqlPersistenceCount ?? 0} executable=${priorityEvidence.executableRelationCount ?? 0} functions=${priorityEvidence.functionCount ?? callPath.functionCount ?? 0}`);
+  console.log(`first-class nodes (${priorityEvidence.firstClassNodeCount ?? 0}): ${arr(priorityEvidence.firstClassNodes).join(', ') || '(none)'}`);
+  console.log(`excluded=${priorityEvidence.excludedFromPriority === true} boundaries=${priorityEvidence.crossEntityBoundaryCount ?? 0} writes=${priorityEvidence.persistenceWriteCount ?? 0} reads=${priorityEvidence.persistenceReadCount ?? 0} sql=${priorityEvidence.sqlPersistenceCount ?? 0} executable=${priorityEvidence.executableRelationCount ?? 0} functions=${priorityEvidence.functionCount ?? callPath.functionCount ?? 0}`);
   console.log(`handoff entities: ${arr(evidence.entities).join(', ') || '(none)'}`);
 }
 
