@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { extractOdooManifestHooks, extractOdooHookExecution } from './manifestHooks.js';
 
-test('extracts post_init_hook from Odoo manifest and resolves model-bound method calls', () => {
+test('extracts post_init_hook while keeping runtime method calls out of executable hook calls', () => {
   const manifest = `{
     'name': 'Demo',
     'post_init_hook': 'post_init_hook',
@@ -20,17 +20,18 @@ test('extracts post_init_hook from Odoo manifest and resolves model-bound method
   const hook = extractOdooHookExecution('addons/demo/hooks.py', source, 'demo', hooks[0]);
   assert.ok(hook);
   assert.equal(hook.functionName, 'post_init_hook');
+  assert.equal(hook.executionKind, 'lifecycle_setup');
   assert.deepEqual(
     hook.calls.map((call) => [call.kind, call.modelName, call.methodName]),
     [
       ['write', 'sale.order', 'create'],
-      ['write', 'mrp.production', 'create'],
-      ['model', 'sale.order', 'action_confirm']
+      ['write', 'mrp.production', 'create']
     ]
   );
+  assert.ok(hook.lifecycleCalls.some((call) => call.kind === 'model' && call.modelName === 'sale.order' && call.methodName === 'action_confirm'));
 });
 
-test('preserves bound model identity through recordset wrapper calls in hooks', () => {
+test('preserves wrapped model identity as lifecycle context without exposing a runtime call edge', () => {
   const hook = {
     functionName: 'post_init_hook',
     hookType: 'post_init_hook',
@@ -41,6 +42,7 @@ test('preserves bound model identity through recordset wrapper calls in hooks', 
     order.sudo().with_context(skip_check=True).button_confirm()
 `;
   const parsed = extractOdooHookExecution('addons/example/hooks.py', source, 'example', hook);
-  assert.ok(parsed.calls.some((call) => call.kind === 'model' && call.modelName === 'purchase.order' && call.methodName === 'button_confirm'));
-  assert.equal(parsed.calls.some((call) => ['sudo', 'with_context'].includes(call.methodName)), false);
+  assert.ok(parsed.lifecycleCalls.some((call) => call.kind === 'model' && call.modelName === 'purchase.order' && call.methodName === 'button_confirm'));
+  assert.equal(parsed.calls.some((call) => call.kind === 'model' && call.methodName === 'button_confirm'), false);
+  assert.equal(parsed.lifecycleCalls.some((call) => ['sudo', 'with_context'].includes(call.methodName)), false);
 });
