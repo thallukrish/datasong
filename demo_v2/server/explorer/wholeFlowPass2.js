@@ -2,8 +2,10 @@ const arr = (value) => Array.isArray(value) ? value : [];
 
 const PASS2_FLOW_SYSTEM = `You are DataSong's PASS-2 COMPRESSED-FLOW INTERPRETER.
 Pass 1 has already admitted one business-use-case arc.
-You receive the ENTIRE deterministic compressed executable flow family for that arc, not one graph node at a time.
-When functionEvidence is supplied, its source bodies are direct implementation evidence from the concrete path selected by Pass 1's coherent-flow boundary.
+You receive the deterministic compressed executable flow family for that arc, plus the one concrete path selected by Pass 1.
+When coherentThroughSignature is supplied, it is the semantic end of the admitted business flow. Do not sequence executable behavior after that boundary as part of the workflow.
+When selectedFlowSequence is supplied, it is the concrete admitted path clipped through that boundary.
+When functionEvidence is supplied, its source bodies are direct implementation evidence from that same clipped concrete path.
 Interpret the supplied flow as evidence for the active arc in one pass.
 Do not request repository search, files, arbitrary neighbors, or node-by-node traversal.
 Only ask for a branch follow-up when one supplied branch is genuinely ambiguous and materially affects the business map.
@@ -12,7 +14,7 @@ Return strict compact JSON only.`;
 export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends Base {
   emptyState() {
     const state = super.emptyState();
-    state.arcSchedulerVersion = 'callgraph-whole-flow-pass2-v22';
+    state.arcSchedulerVersion = 'callgraph-whole-flow-pass2-v23';
     state.pass2WholeFlowByArc = {};
     return state;
   }
@@ -40,6 +42,21 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     ].filter((path) => arr(path?.symbolIds).length);
   }
 
+  clipConcretePathAtBoundary(selected, through) {
+    if (!selected) return null;
+    const boundary = String(through || '').trim();
+    if (!boundary) return selected;
+    const tokens = arr(selected?.normalizedFlowTokens);
+    const index = tokens.findIndex((token) => token === boundary);
+    if (index < 0) return selected;
+    return {
+      ...selected,
+      normalizedFlowTokens: tokens.slice(0, index + 1),
+      symbolIds: arr(selected?.symbolIds).slice(0, index + 1),
+      coherentBoundaryIndex: index
+    };
+  }
+
   selectedConcretePath(grouped, arc) {
     const candidates = this.concretePathCandidates(grouped);
     if (!candidates.length) return null;
@@ -48,14 +65,16 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     if (!through) return candidates[0];
 
     const matching = candidates.filter((candidate) => arr(candidate?.normalizedFlowTokens).includes(through));
-    if (matching.length === 1) return matching[0];
-
-    // If the boundary token is shared by several variants it does not uniquely
-    // identify a branch. Keep the representative path rather than expanding all
-    // alternatives and flooding Pass 2 with unrelated implementation bodies.
-    const representative = candidates[0];
-    if (matching.includes(representative)) return representative;
-    return matching[0] || representative;
+    let selected = null;
+    if (matching.length === 1) selected = matching[0];
+    else {
+      // If the boundary token is shared by several variants it does not uniquely
+      // identify a branch. Keep the representative path rather than expanding all
+      // alternatives and flooding Pass 2 with unrelated implementation bodies.
+      const representative = candidates[0];
+      selected = matching.includes(representative) ? representative : (matching[0] || representative);
+    }
+    return this.clipConcretePathAtBoundary(selected, through);
   }
 
   functionEvidenceForGroupedPath(grouped, arc) {
@@ -86,16 +105,21 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     const compact = this.compactCallPath(grouped);
     const selected = this.selectedConcretePath(grouped, arc);
     const functionEvidence = this.functionEvidenceForGroupedPath(grouped, arc);
+    const coherentThroughSignature = String(arc?.coherentThroughSignature || '').trim();
     return {
       pathId: compact.pathId,
       selectedConcretePathId: selected?.id || selected?.pathId || grouped?.id || '',
+      ...(coherentThroughSignature ? { coherentThroughSignature } : {}),
+      ...(Number.isInteger(selected?.coherentBoundaryIndex) ? { coherentBoundaryIndex: selected.coherentBoundaryIndex } : {}),
+      selectedFlowSequence: arr(selected?.normalizedFlowTokens),
+      selectedSymbolCount: arr(selected?.symbolIds).length,
       functionCount: compact.functionCount,
       variants: compact.variants,
       alternateEntranceCount: compact.alternateEntranceCount,
       terminal: compact.terminal,
       structuralEvidence: compact.structuralEvidence || { entities: [], entityBoundaries: [], persistence: [] },
       ...(functionEvidence.length ? { functionEvidence } : {}),
-      ...(compact.flow ? { flow: compact.flow } : { flowSequence: arr(compact.flowSequence) })
+      ...(compact.flow ? { flow: compact.flow } : { flowSequence: arr(selected?.normalizedFlowTokens).length ? arr(selected.normalizedFlowTokens) : arr(compact.flowSequence) })
     };
   }
 
@@ -143,6 +167,9 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
       payload = {
         pathId: flowPackage.pathId,
         selectedConcretePathId: flowPackage.selectedConcretePathId,
+        coherentThroughSignature: flowPackage.coherentThroughSignature || '',
+        selectedFlowSequence: flowPackage.selectedFlowSequence,
+        selectedSymbolCount: flowPackage.selectedSymbolCount,
         branchIndex,
         context: { prefix: arr(flowPackage.flow.prefix), suffix: arr(flowPackage.flow.suffix) },
         branch,
@@ -161,7 +188,9 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
         arcId: arc.id,
         branchIndex: isBranch ? branchIndex : null,
         executableFlow: payload,
-        policy: isBranch ? 'Interpret only this previously unresolved branch; no repository traversal.' : 'Interpret the complete precomputed flow family in one semantic pass; request follow-up only for materially ambiguous supplied branches.'
+        policy: isBranch
+          ? 'Interpret only this previously unresolved branch; no repository traversal. Respect coherentThroughSignature as the semantic boundary of the admitted business flow.'
+          : 'Interpret the complete precomputed flow family in one semantic pass. Treat selectedFlowSequence/functionEvidence as the admitted concrete path and do not sequence behavior after coherentThroughSignature as part of the workflow.'
       },
       neighbors: [], sourceCoverage: null
     };
@@ -219,6 +248,10 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
           evidence: {
             pathId: flow.pathId || '',
             selectedConcretePathId: flow.selectedConcretePathId || '',
+            coherentThroughSignature: flow.coherentThroughSignature || '',
+            coherentBoundaryIndex: Number.isInteger(flow.coherentBoundaryIndex) ? flow.coherentBoundaryIndex : null,
+            selectedSymbolCount: Number(flow.selectedSymbolCount || 0),
+            functionEvidenceCount: arr(flow.functionEvidence).length,
             structuralEvidence: flow.structuralEvidence || null,
             functionEvidence: arr(flow.functionEvidence).map((item) => ({
               symbolId: item?.symbolId || '',
