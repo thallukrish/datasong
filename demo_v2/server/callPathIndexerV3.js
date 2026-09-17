@@ -1,6 +1,10 @@
 import { CallPathIndexerV2 } from './callPathIndexerV2.js';
 
 function arr(value) { return Array.isArray(value) ? value : []; }
+function weight(profile, name) {
+  const value = Number(profile?.weights?.[name]);
+  return Number.isFinite(value) ? value : 0;
+}
 
 function commonPrefixLength(a, b) {
   const max = Math.min(a.length, b.length);
@@ -21,6 +25,92 @@ function sameSequence(a, b) {
 }
 
 export class CallPathIndexerV3 extends CallPathIndexerV2 {
+  priorityProfile() {
+    if (typeof this.topology?.callPathPriorityProfile !== 'function') return null;
+    const profile = this.topology.callPathPriorityProfile();
+    return profile?.weights && typeof profile.weights === 'object' ? profile : null;
+  }
+
+  pathStructuralPriority(path, profile) {
+    const symbols = arr(path?.symbolIds)
+      .map((id) => this.topology?.symbolById?.get?.(id))
+      .filter(Boolean);
+    const entities = new Set();
+    let crossEntityBoundaryCount = 0;
+    let persistenceWriteCount = 0;
+    let persistenceReadCount = 0;
+    let sqlPersistenceCount = 0;
+
+    for (const symbol of symbols) {
+      for (const ref of arr(symbol?.references)) {
+        const data = ref?.data || {};
+        const sourceEntity = String(data.sourceModel || data.sourceEntity || '');
+        const targetEntity = String(data.targetModel || data.targetEntity || '');
+        const logicalEntity = String(data.logicalEntity || '');
+        if (sourceEntity) entities.add(sourceEntity);
+        if (targetEntity) entities.add(targetEntity);
+        if (logicalEntity) entities.add(logicalEntity);
+        if (sourceEntity && targetEntity && sourceEntity !== targetEntity) crossEntityBoundaryCount += 1;
+
+        const relation = String(ref?.relation || '');
+        const persistenceKind = String(data.persistenceKind || '');
+        const persistence = ['reads', 'writes'].includes(relation)
+          && (persistenceKind || String(data.operationKind || '') === 'persistence');
+        if (!persistence) continue;
+        if (relation === 'writes') persistenceWriteCount += 1;
+        else persistenceReadCount += 1;
+        if (persistenceKind === 'sql') sqlPersistenceCount += 1;
+      }
+    }
+
+    const executableRelationCount = arr(path?.relations)
+      .filter((relation) => this.executableRelations.has(String(relation || ''))).length;
+    const functionCount = Number(path?.functionCount || symbols.length || 0);
+    const isolated = functionCount <= 1
+      && entities.size === 0
+      && persistenceWriteCount + persistenceReadCount === 0
+      && executableRelationCount === 0;
+
+    const score = entities.size * weight(profile, 'firstClassEntity')
+      + crossEntityBoundaryCount * weight(profile, 'crossEntityBoundary')
+      + persistenceWriteCount * weight(profile, 'persistenceWrite')
+      + persistenceReadCount * weight(profile, 'persistenceRead')
+      + sqlPersistenceCount * weight(profile, 'sqlPersistence')
+      + executableRelationCount * weight(profile, 'executableRelation')
+      + functionCount * weight(profile, 'function')
+      + (isolated ? weight(profile, 'isolatedNoEntityNoPersistence') : 0);
+
+    return {
+      score,
+      evidence: {
+        profileVersion: String(profile?.version || ''),
+        firstClassEntities: [...entities].sort(),
+        crossEntityBoundaryCount,
+        persistenceWriteCount,
+        persistenceReadCount,
+        sqlPersistenceCount,
+        executableRelationCount,
+        functionCount,
+        isolatedNoEntityNoPersistence: isolated
+      }
+    };
+  }
+
+  orderedPaths() {
+    const profile = this.priorityProfile();
+    if (!profile) return { paths: this.rankedPaths, priorityById: new Map() };
+    const scored = this.rankedPaths.map((path, index) => ({
+      path,
+      index,
+      priority: this.pathStructuralPriority(path, profile)
+    }));
+    scored.sort((a, b) => b.priority.score - a.priority.score || a.index - b.index);
+    return {
+      paths: scored.map((item) => item.path),
+      priorityById: new Map(scored.map((item) => [item.path.id, item.priority]))
+    };
+  }
+
   overlapShape(a, b) {
     const aa = arr(a?.normalizedFlowTokens);
     const bb = arr(b?.normalizedFlowTokens);
@@ -88,8 +178,9 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
   top(limit = 10) {
     const groups = [];
     const sharedSubflows = [];
+    const { paths, priorityById } = this.orderedPaths();
 
-    for (const path of this.rankedPaths) {
+    for (const path of paths) {
       let chosen = null;
       let chosenShape = null;
       for (const group of groups) {
@@ -151,9 +242,14 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
           .filter((branch, index, all) => branch.length && all.findIndex((other) => sameSequence(other, branch)) === index),
         commonSuffix: branchShapes[0].commonSuffix || []
       } : null;
+      const structuralPriority = priorityById.get(representative.id);
 
       return {
         ...representative,
+        ...(structuralPriority ? {
+          structuralPriority: structuralPriority.score,
+          structuralPriorityEvidence: structuralPriority.evidence
+        } : {}),
         branchVariantCount: 1 + alternatives.filter((item) => item.familyRelation === 'branch').length,
         alternateEntranceCount: alternatives.filter((item) => item.familyRelation === 'alternate_entrance').length,
         duplicateVariantCount: alternatives.filter((item) => item.familyRelation === 'duplicate').length,
@@ -166,7 +262,7 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
 
   snapshot() {
     return {
-      version: 6,
+      version: 7,
       fragmentCount: this.fragments.length,
       rawPathCount: this.rawPaths.length,
       rankedPathCount: this.rankedPaths.length,
