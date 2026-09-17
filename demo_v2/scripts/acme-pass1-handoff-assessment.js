@@ -23,39 +23,59 @@ const Classifier = withInitialCallPathClassifier(class {});
 const classifier = new Classifier();
 classifier.topology = topology;
 
-const paths = topology.topCallPaths(10);
-const crossRepo = paths.filter((callPath) => {
+const allPaths = topology.callPathIndexer.top(Number.MAX_SAFE_INTEGER);
+const topPaths = allPaths.slice(0, 10);
+
+function isCrossRepo(callPath) {
   const sourcePaths = arr(callPath.sourcePaths).map(String);
   const entry = topology.symbolById?.get(callPath.entrySymbolId);
   const startsInProject = String(entry?.name || '').startsWith('odoo-project:')
     || sourcePaths.some((sourcePath) => !sourcePath.startsWith('@odoo'));
   const reachesFramework = sourcePaths.some((sourcePath) => /^@odoo\d+\//.test(sourcePath));
   return startsInProject && reachesFramework;
-});
+}
+
+const allCrossRepo = allPaths.filter(isCrossRepo);
+const multiFirstClass = allPaths.filter((path) => (path.structuralPriorityEvidence?.firstClassNodeCount || 0) > 1);
 
 console.log(`=== PASS 1 STRUCTURAL HANDOFF ===`);
-console.log(`top paths: ${paths.length}`);
-console.log(`cross-repo paths in top set: ${crossRepo.length}`);
+console.log(`all grouped paths: ${allPaths.length}`);
+console.log(`top paths considered by Pass 1: ${topPaths.length}`);
+console.log(`cross-repo paths across ALL paths: ${allCrossRepo.length}`);
+console.log(`paths with >1 first-class node: ${multiFirstClass.length}`);
 
-console.log('\n=== TOP PATH PRIORITIES ===');
-for (const [index, callPath] of paths.entries()) {
+console.log('\n=== ALL PATH SCORES ===');
+for (const [index, callPath] of allPaths.entries()) {
   const compact = classifier.compactCallPath(callPath);
   const evidence = compact.structuralEvidence || {};
   const priority = callPath.structuralPriority ?? '(default)';
   const priorityEvidence = callPath.structuralPriorityEvidence || {};
-  console.log(`\n[${index + 1}] ${callPath.id} priority=${priority}`);
+  const crossRepo = isCrossRepo(callPath);
+
+  console.log(`\n[${index + 1}/${allPaths.length}] ${callPath.id} priority=${priority}`);
   console.log(`flow: ${JSON.stringify(compact.flow || compact.flowSequence || [])}`);
   console.log(`sources: ${arr(callPath.sourcePaths).join(' | ') || '(none)'}`);
   console.log(`first-class nodes (${priorityEvidence.firstClassNodeCount ?? 0}): ${arr(priorityEvidence.firstClassNodes).join(', ') || '(none)'}`);
-  console.log(`excluded=${priorityEvidence.excludedFromPriority === true} boundaries=${priorityEvidence.crossEntityBoundaryCount ?? 0} writes=${priorityEvidence.persistenceWriteCount ?? 0} reads=${priorityEvidence.persistenceReadCount ?? 0} sql=${priorityEvidence.sqlPersistenceCount ?? 0} executable=${priorityEvidence.executableRelationCount ?? 0} functions=${priorityEvidence.functionCount ?? callPath.functionCount ?? 0}`);
+  console.log(`crossRepo=${crossRepo} excluded=${priorityEvidence.excludedFromPriority === true} boundaries=${priorityEvidence.crossEntityBoundaryCount ?? 0} writes=${priorityEvidence.persistenceWriteCount ?? 0} reads=${priorityEvidence.persistenceReadCount ?? 0} sql=${priorityEvidence.sqlPersistenceCount ?? 0} executable=${priorityEvidence.executableRelationCount ?? 0} functions=${priorityEvidence.functionCount ?? callPath.functionCount ?? 0}`);
   console.log(`handoff entities: ${arr(evidence.entities).join(', ') || '(none)'}`);
 }
 
-console.log('\n=== CROSS-REPO DETAILS ===');
-for (const [index, callPath] of crossRepo.entries()) {
+console.log('\n=== MULTI-FIRST-CLASS PATHS ===');
+if (!multiFirstClass.length) console.log('(none)');
+for (const [index, callPath] of multiFirstClass.entries()) {
+  const priorityEvidence = callPath.structuralPriorityEvidence || {};
+  console.log(`[${index + 1}] ${callPath.id} priority=${callPath.structuralPriority ?? '(default)'} nodes=${priorityEvidence.firstClassNodeCount ?? 0} crossRepo=${isCrossRepo(callPath)}`);
+  console.log(`  ${arr(callPath.signatures).join(' -> ')}`);
+  console.log(`  first-class: ${arr(priorityEvidence.firstClassNodes).join(' -> ') || '(none)'}`);
+}
+
+console.log('\n=== CROSS-REPO PATHS ===');
+if (!allCrossRepo.length) console.log('(none)');
+for (const [index, callPath] of allCrossRepo.entries()) {
   const compact = classifier.compactCallPath(callPath);
   const evidence = compact.structuralEvidence || {};
-  console.log(`\n[${index + 1}] ${compact.pathId}`);
+  const priorityEvidence = callPath.structuralPriorityEvidence || {};
+  console.log(`\n[${index + 1}] ${callPath.id} priority=${callPath.structuralPriority ?? '(default)'} firstClass=${priorityEvidence.firstClassNodeCount ?? 0}`);
   console.log(`flow: ${JSON.stringify(compact.flow || compact.flowSequence || [])}`);
   console.log(`entities: ${arr(evidence.entities).join(', ') || '(none)'}`);
   console.log('entity boundaries:');
