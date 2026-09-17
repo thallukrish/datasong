@@ -41,22 +41,35 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
     let persistenceReadCount = 0;
     let sqlPersistenceCount = 0;
 
+    // Count framework/entity handoffs only when the reference is the actual
+    // executable edge used by this path. This avoids giving a path credit for
+    // unrelated branches hanging off one of its symbols.
+    for (let i = 0; i < symbols.length - 1; i += 1) {
+      const source = symbols[i];
+      const target = symbols[i + 1];
+      const ref = arr(source?.references).find((candidate) =>
+        this.executableRelations.has(String(candidate?.relation || ''))
+        && String(candidate?.name || '') === String(target?.name || ''));
+      const data = ref?.data || {};
+      const sourceEntity = String(data.sourceModel || data.sourceEntity || '');
+      const targetEntity = String(data.targetModel || data.targetEntity || '');
+      if (sourceEntity) entities.add(sourceEntity);
+      if (targetEntity) entities.add(targetEntity);
+      if (sourceEntity && targetEntity && sourceEntity !== targetEntity) crossEntityBoundaryCount += 1;
+    }
+
+    // Persistence is attached to the function itself, so reads/writes performed
+    // by any function admitted to this path are valid structural landmarks.
     for (const symbol of symbols) {
       for (const ref of arr(symbol?.references)) {
         const data = ref?.data || {};
-        const sourceEntity = String(data.sourceModel || data.sourceEntity || '');
-        const targetEntity = String(data.targetModel || data.targetEntity || '');
-        const logicalEntity = String(data.logicalEntity || '');
-        if (sourceEntity) entities.add(sourceEntity);
-        if (targetEntity) entities.add(targetEntity);
-        if (logicalEntity) entities.add(logicalEntity);
-        if (sourceEntity && targetEntity && sourceEntity !== targetEntity) crossEntityBoundaryCount += 1;
-
         const relation = String(ref?.relation || '');
         const persistenceKind = String(data.persistenceKind || '');
         const persistence = ['reads', 'writes'].includes(relation)
           && (persistenceKind || String(data.operationKind || '') === 'persistence');
         if (!persistence) continue;
+        const logicalEntity = String(data.logicalEntity || '');
+        if (logicalEntity) entities.add(logicalEntity);
         if (relation === 'writes') persistenceWriteCount += 1;
         else persistenceReadCount += 1;
         if (persistenceKind === 'sql') sqlPersistenceCount += 1;
