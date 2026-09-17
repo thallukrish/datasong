@@ -10,7 +10,16 @@ const meaningfulOutcome = (value) => {
 };
 export const entityNamesIn = (value) => {
   const names = [];
+  const scanXmlEntityNames = (source) => {
+    const re = /entity-name=["']([^"']+)["']/gi;
+    let m;
+    while ((m = re.exec(String(source || '')))) names.push(m[1]);
+  };
   const visit = (node, key = '') => {
+    if (typeof node === 'string') {
+      scanXmlEntityNames(node);
+      return;
+    }
     if (Array.isArray(node)) {
       if (key === 'entities') {
         for (const item of node) if (typeof item === 'string' && item.trim()) names.push(item.trim());
@@ -25,13 +34,6 @@ export const entityNamesIn = (value) => {
     }
   };
   visit(value);
-
-  // Preserve the existing Moqui XML entity-name extraction. This remains useful
-  // for compact signatures that predate canonical structuralEvidence metadata.
-  const source = JSON.stringify(value || {});
-  const re = /entity-name=["']([^"']+)["']/gi;
-  let m;
-  while ((m = re.exec(source))) names.push(m[1]);
   return uniq(names);
 };
 
