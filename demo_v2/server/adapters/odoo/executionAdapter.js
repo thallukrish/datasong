@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { extractOdooExecution } from './pythonExecutionParser.js';
 import { extractOdooManifestHooks, extractOdooHookExecution } from './manifestHooks.js';
-import { ensureOdooSource, findOdooModelFiles, findOdooUiFiles } from './frameworkSource.js';
+import { ensureOdooSource, findOdooModelFiles, findOdooMethodFiles, findOdooUiFiles } from './frameworkSource.js';
 import { extractOdooModels } from './modelParser.js';
 import { extractOdooUiEntrypoints } from './uiEntrypoints.js';
 
@@ -204,8 +204,14 @@ export class OdooExecutionAdapter {
     const allowedAddons = Array.isArray(this.options.allowedAddons)
       ? this.options.allowedAddons
       : Array.isArray(topology?.odooFramework?.modules) ? topology.odooFramework.modules : [];
-    const findModelFiles = this.options.findModelFiles || ((args) => findOdooModelFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
-    const findUiFiles = this.options.findUiFiles || ((args) => findOdooUiFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
+    const findModelFiles = this.options.findModelFiles
+      || ((args) => findOdooModelFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
+    const findMethodFiles = this.options.findMethodFiles
+      || (this.options.findModelFiles
+        ? ((args) => findModelFiles(args))
+        : ((args) => findOdooMethodFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory })));
+    const findUiFiles = this.options.findUiFiles
+      || ((args) => findOdooUiFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
 
     const frameworkModelNames = [...new Set((Array.isArray(topology?.odooFramework?.frameworkSchemas)
       ? topology.odooFramework.frameworkSchemas : [])
@@ -386,7 +392,13 @@ export class OdooExecutionAdapter {
       if (!current.modelName || !current.methodName || visited.has(key)) continue;
       visited.add(key);
 
-      const files = await findModelFiles({ repoDir: source.repoDir, modelName: current.modelName });
+      const implementationFiles = await findMethodFiles({
+        repoDir: source.repoDir,
+        modelName: current.modelName,
+        methodName: current.methodName
+      });
+      const modelFiles = await findModelFiles({ repoDir: source.repoDir, modelName: current.modelName });
+      const files = [...new Set([...implementationFiles, ...modelFiles])];
       let found = false;
       for (const sourcePath of files) {
         const text = await fs.readFile(path.join(source.repoDir, sourcePath), 'utf8').catch(() => '');
@@ -409,6 +421,7 @@ export class OdooExecutionAdapter {
           symbol.odooExecution = {
             layer: 'framework', modelName: method.modelName, methodName: method.methodName,
             sourcePath: method.sourcePath, repoUrl: source.repoUrl, commit: source.commit,
+            addon: method.addon, extension: Boolean(method.extension),
             firstClassEntity: true, firstClassMethod: true
           };
           structuralStats.firstClassMethods += 1;
