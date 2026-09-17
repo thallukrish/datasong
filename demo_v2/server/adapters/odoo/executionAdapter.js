@@ -2,8 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { extractOdooExecution } from './pythonExecutionParser.js';
 import { extractOdooManifestHooks, extractOdooHookExecution } from './manifestHooks.js';
-import { ensureOdooSource, findOdooModelFiles } from './frameworkSource.js';
+import { ensureOdooSource, findOdooModelFiles, findOdooUiFiles } from './frameworkSource.js';
 import { extractOdooModels } from './modelParser.js';
+import { extractOdooUiEntrypoints } from './uiEntrypoints.js';
 
 function projectMethodName(modelName, methodName) {
   return `odoo-project:${modelName}.${methodName}`;
@@ -100,6 +101,19 @@ function emptyStructuralStats() {
   };
 }
 
+function uniqueEntrypoints(items = []) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const modelName = String(item?.modelName || '');
+    const methodName = String(item?.methodName || '');
+    if (!modelName || !methodName) return false;
+    const key = `${modelName}|${methodName}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export class OdooExecutionAdapter {
   constructor(topology, options = {}) {
     this.topology = topology;
@@ -181,12 +195,41 @@ export class OdooExecutionAdapter {
       }
     }
 
+    const source = this.options.source || await ensureOdooSource({
+      version,
+      cacheRoot: topology.cacheRoot,
+      sourceDir: this.options.sourceDir ?? process.env.ODOO_SOURCE_DIR ?? '',
+      gitFactory: this.options.gitFactory
+    });
+    const allowedAddons = Array.isArray(this.options.allowedAddons)
+      ? this.options.allowedAddons
+      : Array.isArray(topology?.odooFramework?.modules) ? topology.odooFramework.modules : [];
+    const findModelFiles = this.options.findModelFiles || ((args) => findOdooModelFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
+    const findUiFiles = this.options.findUiFiles || ((args) => findOdooUiFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
+
+    const frameworkModelNames = [...new Set((Array.isArray(topology?.odooFramework?.frameworkSchemas)
+      ? topology.odooFramework.frameworkSchemas : [])
+      .map((schema) => String(schema?.name || ''))
+      .filter(Boolean))].sort();
+    const relevantFrameworkModels = new Set(frameworkModelNames);
+    const frameworkUiEntrypoints = [];
+    if (frameworkModelNames.length) {
+      const uiFiles = await findUiFiles({ repoDir: source.repoDir, modelNames: frameworkModelNames });
+      for (const sourcePath of uiFiles) {
+        const xml = await fs.readFile(path.join(source.repoDir, sourcePath), 'utf8').catch(() => '');
+        if (!xml) continue;
+        const parsed = extractOdooUiEntrypoints(sourcePath, xml);
+        frameworkUiEntrypoints.push(...(Array.isArray(parsed?.entrypoints) ? parsed.entrypoints : [])
+          .filter((entrypoint) => relevantFrameworkModels.has(String(entrypoint?.modelName || ''))));
+      }
+    }
+
     const projectByKey = new Map(projectMethods.map((method) => [`${method.modelName}.${method.methodName}`, method]));
     const projectSymbols = new Map();
     const pendingFramework = [];
     const configuredEntrypoints = Array.isArray(this.options.uiEntrypoints) ? this.options.uiEntrypoints : [];
     const suppliedEntrypoints = Array.isArray(input?.entrypoints) ? input.entrypoints : [];
-    const uiEntrypoints = [...configuredEntrypoints, ...suppliedEntrypoints];
+    const uiEntrypoints = uniqueEntrypoints([...configuredEntrypoints, ...suppliedEntrypoints, ...frameworkUiEntrypoints]);
     let bridgedSuperCalls = 0;
 
     const queueFramework = (symbol, call, depth = 0, sourceModel = '') => {
@@ -207,7 +250,6 @@ export class OdooExecutionAdapter {
     };
 
     for (const entrypoint of uiEntrypoints) {
-      if (!entrypoint?.modelName || !entrypoint?.methodName) continue;
       pendingFramework.push({ modelName: entrypoint.modelName, methodName: entrypoint.methodName, depth: 0 });
     }
 
@@ -280,16 +322,6 @@ export class OdooExecutionAdapter {
       }
     }
 
-    const source = this.options.source || await ensureOdooSource({
-      version,
-      cacheRoot: topology.cacheRoot,
-      sourceDir: this.options.sourceDir ?? process.env.ODOO_SOURCE_DIR ?? '',
-      gitFactory: this.options.gitFactory
-    });
-    const allowedAddons = Array.isArray(this.options.allowedAddons)
-      ? this.options.allowedAddons
-      : Array.isArray(topology?.odooFramework?.modules) ? topology.odooFramework.modules : [];
-    const findModelFiles = this.options.findModelFiles || ((args) => findOdooModelFiles({ ...args, allowedAddons, gitFactory: this.options.gitFactory }));
     const maxFrameworkMethods = Math.max(1, Number(this.options.maxFrameworkMethods ?? 250));
     const frameworkSymbols = new Map();
     const visited = new Set();
@@ -427,7 +459,8 @@ export class OdooExecutionAdapter {
       projectHooks: projectHooks.length,
       frameworkMethods: frameworkSymbols.size,
       bridgedSuperCalls,
-      uiEntrypointSeeds: uiEntrypoints.filter((entrypoint) => entrypoint?.modelName && entrypoint?.methodName).length,
+      frameworkUiEntrypointSeeds: uniqueEntrypoints(frameworkUiEntrypoints).length,
+      uiEntrypointSeeds: uiEntrypoints.length,
       unresolvedCalls: [...new Set(unresolvedCalls)].sort(),
       unresolvedPersistence: [...new Set(unresolvedPersistence)].sort(),
       truncated,
