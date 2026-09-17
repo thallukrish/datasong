@@ -16,20 +16,70 @@ function topologyFor(edges) {
   };
 }
 
+function priorityProfile() {
+  return {
+    version: 'test-profile-v2',
+    firstClassNodes: {
+      metadataPath: 'odooExecution',
+      flags: ['firstClassEntity', 'firstClassMethod'],
+      identityField: 'modelName'
+    },
+    excludeWhen: [{ path: 'odooExecution.hookType', values: ['post_init_hook'] }],
+    excludedPriorityScore: -1000000,
+    weights: {
+      firstClassNode: 100,
+      crossEntityBoundary: 20,
+      persistenceWrite: 5,
+      persistenceRead: 2,
+      sqlPersistence: 3,
+      executableRelation: 2,
+      function: 0.25,
+      isolatedNoEntityNoPersistence: -12
+    }
+  };
+}
+
 function structuralPriorityTopology({ enabled = true } = {}) {
   const symbols = [
     { id: 'DeployA', name: 'DeployA', signature: 'DeployA()', sourcePath: 'docker-compose.yml', references: [{ relation: 'calls', name: 'DeployB' }] },
     { id: 'DeployB', name: 'DeployB', signature: 'DeployB()', sourcePath: 'docker-compose.yml', references: [{ relation: 'calls', name: 'DeployC' }] },
     { id: 'DeployC', name: 'DeployC', signature: 'DeployC()', sourcePath: 'docker-compose.yml', references: [{ relation: 'calls', name: 'DeployD' }] },
     { id: 'DeployD', name: 'DeployD', signature: 'DeployD()', sourcePath: 'docker-compose.yml', references: [] },
-    { id: 'SaleConfirm', name: 'SaleConfirm', signature: 'sale.order.action_confirm()', sourcePath: 'sale.py', references: [{ relation: 'calls', name: 'StockRun', data: { sourceModel: 'sale.order', targetModel: 'stock.rule', boundaryKind: 'model_call' } }] },
-    { id: 'StockRun', name: 'StockRun', signature: 'stock.rule.run()', sourcePath: 'stock.py', references: [{ relation: 'calls', name: 'ProductionCreate', data: { sourceModel: 'stock.rule', targetModel: 'mrp.production', boundaryKind: 'model_call' } }] },
-    { id: 'ProductionCreate', name: 'ProductionCreate', signature: 'mrp.production.create()', sourcePath: 'mrp.py', references: [{ relation: 'writes', name: 'mrp.production', data: { operationKind: 'persistence', persistenceKind: 'orm', crud: 'create', logicalEntity: 'mrp.production', persistedEntity: 'mrp_production' } }] }
+    {
+      id: 'SaleConfirm', name: 'SaleConfirm', signature: 'sale.order.action_confirm()', sourcePath: 'sale.py',
+      odooExecution: { firstClassEntity: true, firstClassMethod: true, modelName: 'sale.order' },
+      references: [{ relation: 'calls', name: 'StockRun', data: { sourceModel: 'sale.order', targetModel: 'stock.rule', boundaryKind: 'cross_model' } }]
+    },
+    {
+      id: 'SaleHelper', name: 'SaleHelper', signature: 'sale.order._action_confirm()', sourcePath: 'sale.py',
+      odooExecution: { firstClassEntity: true, firstClassMethod: true, modelName: 'sale.order' },
+      references: [{ relation: 'calls', name: 'StockRun', data: { sourceModel: 'sale.order', targetModel: 'stock.rule', boundaryKind: 'cross_model' } }]
+    },
+    {
+      id: 'StockRun', name: 'StockRun', signature: 'stock.rule.run()', sourcePath: 'stock.py',
+      odooExecution: { firstClassEntity: true, firstClassMethod: true, modelName: 'stock.rule' },
+      references: [{ relation: 'calls', name: 'ProductionCreate', data: { sourceModel: 'stock.rule', targetModel: 'mrp.production', boundaryKind: 'cross_model' } }]
+    },
+    {
+      id: 'ProductionCreate', name: 'ProductionCreate', signature: 'mrp.production.create()', sourcePath: 'mrp.py',
+      odooExecution: { firstClassEntity: true, firstClassMethod: true, modelName: 'mrp.production' },
+      references: [{ relation: 'writes', name: 'mrp.production', data: { operationKind: 'persistence', persistenceKind: 'odoo_orm', crud: 'create', logicalEntity: 'mrp.production', persistedEntity: 'mrp_production' } }]
+    },
+    {
+      id: 'SetupHook', name: 'SetupHook', signature: 'post_init_hook()', sourcePath: 'hooks.py',
+      odooExecution: { firstClassEntity: false, firstClassMethod: false, hookType: 'post_init_hook' },
+      references: [
+        { relation: 'writes', name: 'sale.order', data: { operationKind: 'persistence', persistenceKind: 'odoo_orm', crud: 'create', logicalEntity: 'sale.order' } },
+        { relation: 'writes', name: 'mrp.production', data: { operationKind: 'persistence', persistenceKind: 'odoo_orm', crud: 'create', logicalEntity: 'mrp.production' } },
+        { relation: 'writes', name: 'stock.lot', data: { operationKind: 'persistence', persistenceKind: 'odoo_orm', crud: 'create', logicalEntity: 'stock.lot' } }
+      ]
+    }
   ];
   const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
   const edges = {
     DeployA: ['DeployB'], DeployB: ['DeployC'], DeployC: ['DeployD'], DeployD: [],
-    SaleConfirm: ['StockRun'], StockRun: ['ProductionCreate'], ProductionCreate: []
+    SaleConfirm: ['SaleHelper'], SaleHelper: ['StockRun'], StockRun: ['ProductionCreate'], ProductionCreate: [],
+    SetupHook: []
   };
   return {
     symbols,
@@ -38,23 +88,7 @@ function structuralPriorityTopology({ enabled = true } = {}) {
       return (edges[symbol.id] || []).map((target) => ({ target: byId.get(target), relation: 'calls' }));
     },
     resolveOutboundReference() { return []; },
-    ...(enabled ? {
-      callPathPriorityProfile() {
-        return {
-          version: 'test-profile-v1',
-          weights: {
-            firstClassEntity: 8,
-            crossEntityBoundary: 12,
-            persistenceWrite: 10,
-            persistenceRead: 4,
-            sqlPersistence: 6,
-            executableRelation: 2,
-            function: 0.25,
-            isolatedNoEntityNoPersistence: -12
-          }
-        };
-      }
-    } : {})
+    ...(enabled ? { callPathPriorityProfile: () => priorityProfile() } : {})
   };
 }
 
@@ -104,21 +138,31 @@ test('large distinct prefixes converging on a common suffix remain separate and 
   assert.ok(refs.some((ref) => (ref.sharedSuffix || []).length >= 4));
 });
 
-test('adapter structural priority profile promotes cross-entity persistence flow above longer config path', () => {
+test('configured first-class scoring counts distinct traversed model nodes, not repeated methods or persistence targets', () => {
   const indexer = new CallPathIndexerV3(structuralPriorityTopology());
   indexer.build();
   const top = indexer.top(10);
   assert.equal(top[0].entrySymbolId, 'SaleConfirm');
-  assert.ok(top[0].structuralPriority > top[1].structuralPriority);
-  assert.deepEqual(top[0].structuralPriorityEvidence.firstClassEntities, ['mrp.production', 'sale.order', 'stock.rule']);
+  assert.equal(top[0].structuralPriorityEvidence.firstClassNodeCount, 3);
+  assert.deepEqual(top[0].structuralPriorityEvidence.firstClassNodes, ['mrp.production', 'sale.order', 'stock.rule']);
   assert.equal(top[0].structuralPriorityEvidence.crossEntityBoundaryCount, 2);
   assert.equal(top[0].structuralPriorityEvidence.persistenceWriteCount, 1);
+});
+
+test('lifecycle setup path is excluded from business-flow priority even when it writes many first-class entities', () => {
+  const indexer = new CallPathIndexerV3(structuralPriorityTopology());
+  indexer.build();
+  const setup = indexer.top(10).find((path) => path.entrySymbolId === 'SetupHook');
+  assert.ok(setup);
+  assert.equal(setup.structuralPriority, -1000000);
+  assert.equal(setup.structuralPriorityEvidence.firstClassNodeCount, 0);
+  assert.equal(setup.structuralPriorityEvidence.excludedFromPriority, true);
 });
 
 test('without adapter structural priority profile existing function-count ordering is preserved', () => {
   const indexer = new CallPathIndexerV3(structuralPriorityTopology({ enabled: false }));
   indexer.build();
   const top = indexer.top(10);
-  assert.equal(top[0].entrySymbolId, 'DeployA');
+  assert.equal(top[0].entrySymbolId, 'SaleConfirm');
   assert.equal(top[0].structuralPriority, undefined);
 });
