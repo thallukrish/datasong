@@ -91,6 +91,46 @@ for (const [index, callPath] of allCrossRepo.entries()) {
   }
 }
 
+console.log('\n=== EXECUTABLE EDGE RESOLUTION DIAGNOSTIC ===');
+const executableRelations = new Set(['calls', 'routes_to', 'handles', 'triggers', 'on_success', 'on_failure', 'returns_to', 'delayed_trigger']);
+const diagnosticPatterns = [
+  'sale.order.action_confirm',
+  'sale.order._action_confirm',
+  'sale.order.line._action_launch_stock_rule',
+  'stock.rule.run',
+  '_run_manufacture',
+  'mrp.production'
+];
+const diagnosticSymbols = arr(topology.symbols).filter((symbol) => {
+  const haystack = `${symbol?.name || ''} ${symbol?.signature || ''}`.toLowerCase();
+  return diagnosticPatterns.some((pattern) => haystack.includes(pattern));
+});
+
+console.log(`matching symbols: ${diagnosticSymbols.length}`);
+for (const symbol of diagnosticSymbols) {
+  const refs = arr(symbol.references).filter((ref) => executableRelations.has(String(ref?.relation || '')));
+  const outbound = typeof topology.outboundReferenceCandidates === 'function'
+    ? arr(topology.outboundReferenceCandidates(symbol))
+    : [];
+  console.log(`\nSYMBOL ${symbol.id}`);
+  console.log(`name: ${symbol.name}`);
+  console.log(`source: ${symbol.sourcePath}`);
+  console.log(`odooExecution: ${JSON.stringify(symbol.odooExecution || {})}`);
+  console.log(`executable refs: ${refs.length}`);
+  if (!refs.length) console.log('  (none)');
+  for (const ref of refs) {
+    const resolved = typeof topology.resolveOutboundReference === 'function'
+      ? arr(topology.resolveOutboundReference(symbol, ref))
+      : [];
+    console.log(`  ref ${ref.relation}:${ref.name} data=${JSON.stringify(ref.data || {})}`);
+    console.log(`    resolved(${resolved.length}): ${resolved.map((target) => `${target.id} | ${target.name} | ${target.sourcePath}`).join(' || ') || '(none)'}`);
+  }
+  console.log(`outbound candidates: ${outbound.length}`);
+  for (const edge of outbound) {
+    console.log(`  ${edge.relation} -> ${edge.target?.id || '?'} | ${edge.target?.name || '?'} | ${edge.target?.sourcePath || '?'}`);
+  }
+}
+
 console.log('\n=== PROMPT CONTRACT ===');
 console.log('mode: call-path-business-seed-classification-v5');
 console.log('structuralEvidence included: entity boundaries + ORM/SQL persistence checkpoints');
