@@ -3,7 +3,7 @@ const arr = (value) => Array.isArray(value) ? value : [];
 const PASS2_FLOW_SYSTEM = `You are DataSong's PASS-2 COMPRESSED-FLOW INTERPRETER.
 Pass 1 has already admitted one business-use-case arc.
 You receive the ENTIRE deterministic compressed executable flow family for that arc, not one graph node at a time.
-When functionEvidence is supplied, its source bodies are direct implementation evidence for functions on the admitted flow family.
+When functionEvidence is supplied, its source bodies are direct implementation evidence from the concrete path selected by Pass 1's coherent-flow boundary.
 Interpret the supplied flow as evidence for the active arc in one pass.
 Do not request repository search, files, arbitrary neighbors, or node-by-node traversal.
 Only ask for a branch follow-up when one supplied branch is genuinely ambiguous and materially affects the business map.
@@ -29,15 +29,41 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     return map[arc.id];
   }
 
-  functionEvidenceForGroupedPath(grouped) {
+  concretePathCandidates(grouped) {
     if (!grouped) return [];
-    const ids = [
-      ...arr(grouped.symbolIds),
-      ...arr(grouped.alternatives).flatMap((alternative) => arr(alternative?.symbolIds))
-    ];
+    return [
+      grouped,
+      ...arr(grouped.alternatives).map((alternative) => ({
+        ...alternative,
+        id: alternative?.pathId || alternative?.id || ''
+      }))
+    ].filter((path) => arr(path?.symbolIds).length);
+  }
+
+  selectedConcretePath(grouped, arc) {
+    const candidates = this.concretePathCandidates(grouped);
+    if (!candidates.length) return null;
+
+    const through = String(arc?.coherentThroughSignature || '').trim();
+    if (!through) return candidates[0];
+
+    const matching = candidates.filter((candidate) => arr(candidate?.normalizedFlowTokens).includes(through));
+    if (matching.length === 1) return matching[0];
+
+    // If the boundary token is shared by several variants it does not uniquely
+    // identify a branch. Keep the representative path rather than expanding all
+    // alternatives and flooding Pass 2 with unrelated implementation bodies.
+    const representative = candidates[0];
+    if (matching.includes(representative)) return representative;
+    return matching[0] || representative;
+  }
+
+  functionEvidenceForGroupedPath(grouped, arc) {
+    const selected = this.selectedConcretePath(grouped, arc);
+    if (!selected) return [];
     const seen = new Set();
     const evidence = [];
-    for (const symbolId of ids) {
+    for (const symbolId of arr(selected.symbolIds)) {
       if (!symbolId || seen.has(symbolId)) continue;
       seen.add(symbolId);
       const symbol = this.topology?.symbolById?.get?.(symbolId);
@@ -58,9 +84,11 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     const grouped = this.groupedPathForArc(arc);
     if (!grouped) return null;
     const compact = this.compactCallPath(grouped);
-    const functionEvidence = this.functionEvidenceForGroupedPath(grouped);
+    const selected = this.selectedConcretePath(grouped, arc);
+    const functionEvidence = this.functionEvidenceForGroupedPath(grouped, arc);
     return {
       pathId: compact.pathId,
+      selectedConcretePathId: selected?.id || selected?.pathId || grouped?.id || '',
       functionCount: compact.functionCount,
       variants: compact.variants,
       alternateEntranceCount: compact.alternateEntranceCount,
@@ -114,6 +142,7 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
       if (!branch) return null;
       payload = {
         pathId: flowPackage.pathId,
+        selectedConcretePathId: flowPackage.selectedConcretePathId,
         branchIndex,
         context: { prefix: arr(flowPackage.flow.prefix), suffix: arr(flowPackage.flow.suffix) },
         branch,
@@ -189,6 +218,7 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
           branchIndex: args.observation?.canonical?.branchIndex ?? null,
           evidence: {
             pathId: flow.pathId || '',
+            selectedConcretePathId: flow.selectedConcretePathId || '',
             structuralEvidence: flow.structuralEvidence || null,
             functionEvidence: arr(flow.functionEvidence).map((item) => ({
               symbolId: item?.symbolId || '',
