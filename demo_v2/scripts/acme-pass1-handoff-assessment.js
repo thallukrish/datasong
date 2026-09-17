@@ -37,6 +37,21 @@ console.log(`=== PASS 1 STRUCTURAL HANDOFF ===`);
 console.log(`top paths: ${paths.length}`);
 console.log(`cross-repo paths in top set: ${crossRepo.length}`);
 
+console.log('\n=== TOP PATH PRIORITIES ===');
+for (const [index, callPath] of paths.entries()) {
+  const compact = classifier.compactCallPath(callPath);
+  const evidence = compact.structuralEvidence || {};
+  const priority = callPath.structuralPriority ?? '(default)';
+  const priorityEvidence = callPath.structuralPriorityEvidence || {};
+  console.log(`\n[${index + 1}] ${callPath.id} priority=${priority}`);
+  console.log(`flow: ${JSON.stringify(compact.flow || compact.flowSequence || [])}`);
+  console.log(`sources: ${arr(callPath.sourcePaths).join(' | ') || '(none)'}`);
+  console.log(`priority entities: ${arr(priorityEvidence.firstClassEntities).join(', ') || '(none)'}`);
+  console.log(`priority boundaries=${priorityEvidence.crossEntityBoundaryCount ?? 0} writes=${priorityEvidence.persistenceWriteCount ?? 0} reads=${priorityEvidence.persistenceReadCount ?? 0} sql=${priorityEvidence.sqlPersistenceCount ?? 0} executable=${priorityEvidence.executableRelationCount ?? 0} functions=${priorityEvidence.functionCount ?? callPath.functionCount ?? 0}`);
+  console.log(`handoff entities: ${arr(evidence.entities).join(', ') || '(none)'}`);
+}
+
+console.log('\n=== CROSS-REPO DETAILS ===');
 for (const [index, callPath] of crossRepo.entries()) {
   const compact = classifier.compactCallPath(callPath);
   const evidence = compact.structuralEvidence || {};
