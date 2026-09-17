@@ -48,7 +48,7 @@ function structuralPriorityTopology({ enabled = true } = {}) {
     {
       id: 'SaleConfirm', name: 'SaleConfirm', signature: 'sale.order.action_confirm()', sourcePath: 'sale.py',
       odooExecution: { firstClassEntity: true, firstClassMethod: true, modelName: 'sale.order' },
-      references: [{ relation: 'calls', name: 'StockRun', data: { sourceModel: 'sale.order', targetModel: 'stock.rule', boundaryKind: 'cross_model' } }]
+      references: [{ relation: 'calls', name: 'SaleHelper', data: { sourceModel: 'sale.order', targetModel: 'sale.order', boundaryKind: 'same_model' } }]
     },
     {
       id: 'SaleHelper', name: 'SaleHelper', signature: 'sale.order._action_confirm()', sourcePath: 'sale.py',
@@ -163,6 +163,6 @@ test('without adapter structural priority profile existing function-count orderi
   const indexer = new CallPathIndexerV3(structuralPriorityTopology({ enabled: false }));
   indexer.build();
   const top = indexer.top(10);
-  assert.equal(top[0].entrySymbolId, 'SaleConfirm');
+  assert.equal(top[0].entrySymbolId, 'DeployA');
   assert.equal(top[0].structuralPriority, undefined);
 });
