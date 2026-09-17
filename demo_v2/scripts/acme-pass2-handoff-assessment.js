@@ -48,6 +48,8 @@ for (const [index, callPath] of crossRepo.entries()) {
   const totalBodyChars = functions.reduce((sum, item) => sum + String(item?.body || '').length, 0);
 
   console.log(`\n[${index + 1}] ${callPath.id}`);
+  console.log(`selected concrete path: ${pkg?.selectedConcretePathId || '(none)'}`);
+  console.log(`grouped alternatives: ${arr(callPath.alternatives).length}`);
   console.log(`functions with bodies: ${functions.length}`);
   console.log(`total body chars: ${totalBodyChars}`);
   console.log(`functionEvidence field present: ${Object.hasOwn(pkg || {}, 'functionEvidence')}`);
@@ -63,6 +65,8 @@ for (const [index, callPath] of crossRepo.entries()) {
 }
 
 console.log('\n=== PASS 2 CONTRACT ===');
-console.log('function bodies are dereferenced from selected call-path symbolIds only');
+console.log('function bodies are dereferenced from one selected concrete call path, never all grouped alternatives at once');
+console.log('Pass 1 coherentThroughSignature selects a unique alternative when it identifies one');
+console.log('if the boundary is absent or shared, Pass 2 keeps the representative path instead of expanding the group');
 console.log('body text is not copied into CallPathIndexer records');
 console.log('symbols without body text do not produce functionEvidence entries');
