@@ -166,6 +166,12 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     ) || null;
   }
 
+  callPathPriorityProfile() {
+    return this.frameworkKind === 'odoo'
+      ? (this.odooAdapters?.callPathPriorityProfile || null)
+      : null;
+  }
+
   topCallPaths(limit = 10) {
     return this.callPathIndexer.top(limit).map((path) => ({
       ...path,
