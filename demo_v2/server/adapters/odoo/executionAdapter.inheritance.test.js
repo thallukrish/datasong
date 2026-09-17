@@ -45,15 +45,16 @@ function topologyStub(projectDir) {
   };
 }
 
-test('traverses inherited Odoo method implementations across addons', async () => {
+test('discovers an inherited Odoo implementation even when base model lookup only returns the base file', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-inherit-'));
   const frameworkRoot = path.join(root, 'odoo-source');
   const saleFile = path.join(frameworkRoot, 'addons/sale/models/sale_order.py');
   const saleStockFile = path.join(frameworkRoot, 'addons/sale_stock/models/sale_order.py');
-  const saleLineFile = path.join(frameworkRoot, 'addons/sale_stock/models/sale_order_line.py');
+  const stockRuleFile = path.join(frameworkRoot, 'addons/stock/models/stock_rule.py');
 
   await fs.mkdir(path.dirname(saleFile), { recursive: true });
   await fs.mkdir(path.dirname(saleStockFile), { recursive: true });
+  await fs.mkdir(path.dirname(stockRuleFile), { recursive: true });
 
   await fs.writeFile(saleFile, `
 from odoo import models
@@ -68,25 +69,27 @@ from odoo import models
 class SaleOrder(models.Model):
     _inherit = 'sale.order'
     def _action_confirm(self):
-        self.order_line._action_launch_stock_rule()
+        self.env['stock.rule'].run([])
         return super()._action_confirm()
 `);
 
-  await fs.writeFile(saleLineFile, `
+  await fs.writeFile(stockRuleFile, `
 from odoo import models
-class SaleOrderLine(models.Model):
-    _inherit = 'sale.order.line'
-    def _action_launch_stock_rule(self):
+class StockRule(models.Model):
+    _name = 'stock.rule'
+    def run(self, procurements):
         return True
 `);
 
   const topology = topologyStub(root);
-  const files = {
-    'sale.order': [
-      'addons/sale/models/sale_order.py',
-      'addons/sale_stock/models/sale_order.py'
-    ],
-    'sale.order.line': ['addons/sale_stock/models/sale_order_line.py']
+  const modelFiles = {
+    'sale.order': ['addons/sale/models/sale_order.py'],
+    'stock.rule': ['addons/stock/models/stock_rule.py']
+  };
+  const methodFiles = {
+    'sale.order.action_confirm': ['addons/sale/models/sale_order.py'],
+    'sale.order._action_confirm': ['addons/sale_stock/models/sale_order.py'],
+    'stock.rule.run': ['addons/stock/models/stock_rule.py']
   };
 
   const adapter = new OdooExecutionAdapter(topology, {
@@ -102,7 +105,8 @@ class SaleOrderLine(models.Model):
       sourcePath: 'addons/sale/views/sale_order_views.xml',
       line: 10
     }],
-    findModelFiles: async ({ modelName }) => files[modelName] || []
+    findModelFiles: async ({ modelName }) => modelFiles[modelName] || [],
+    findMethodFiles: async ({ modelName, methodName }) => methodFiles[`${modelName}.${methodName}`] || []
   });
 
   const result = await adapter.augment();
@@ -114,9 +118,13 @@ class SaleOrderLine(models.Model):
     (symbol) => symbol.name === 'odoo19:sale.order._action_confirm'
       && symbol.sourcePath.includes('sale_stock')
   );
+  const stockRun = topology.symbols.find(
+    (symbol) => symbol.name === 'odoo19:stock.rule.run'
+  );
 
   assert.ok(actionConfirm);
   assert.ok(inheritedConfirm, 'expected sale_stock inherited _action_confirm implementation');
+  assert.ok(stockRun, 'expected traversal to continue from inherited implementation');
   assert.ok(
     actionConfirm.references.some(
       (ref) => ref.relation === 'calls' && ref.name === 'odoo19:sale.order._action_confirm'
@@ -124,13 +132,7 @@ class SaleOrderLine(models.Model):
   );
   assert.ok(
     inheritedConfirm.references.some(
-      (ref) => ref.relation === 'calls'
-        && ref.name === 'odoo19:sale.order.line._action_launch_stock_rule'
-    )
-  );
-  assert.ok(
-    topology.symbols.some(
-      (symbol) => symbol.name === 'odoo19:sale.order.line._action_launch_stock_rule'
+      (ref) => ref.relation === 'calls' && ref.name === 'odoo19:stock.rule.run'
     )
   );
   assert.ok(result.frameworkMethods >= 3);
