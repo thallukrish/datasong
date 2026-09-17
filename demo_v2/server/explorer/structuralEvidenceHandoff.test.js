@@ -15,11 +15,12 @@ const Base = class {
       ],
       alternatives: [{
         pathId: 'callpath:manufacture',
-        symbolIds: ['s-sale', 's-rule', 's-mrp'],
+        symbolIds: ['s-sale', 's-rule', 's-mrp', 's-xmlid'],
         normalizedFlowTokens: [
           'code:sale.order.def action_confirm(self)',
           'code:stock.rule.def run(self, procurements)',
-          'code:stock.rule.def _run_manufacture(self, procurements)'
+          'code:stock.rule.def _run_manufacture(self, procurements)',
+          'code:ir.model.data.def _xmlid_to_res_id(self, xmlid)'
         ]
       }]
     };
@@ -86,6 +87,13 @@ function explorerWithSymbols() {
         sourcePath: '@odoo19/addons/mrp/models/stock_rule.py',
         body: "self.env['mrp.production'].create(vals)"
       }],
+      ['s-xmlid', {
+        id: 's-xmlid',
+        name: 'odoo19:ir.model.data._xmlid_to_res_id',
+        signature: 'ir.model.data.def _xmlid_to_res_id(self, xmlid)',
+        sourcePath: '@odoo19/odoo/addons/base/models/ir_model.py',
+        body: 'return self._xmlid_to_res_model_res_id(xmlid)[1]'
+      }],
       ['s-moqui', {
         id: 's-moqui',
         name: 'moqui:transition:approve',
@@ -126,8 +134,33 @@ test('Pass 2 selects the unique grouped branch identified by Pass 1 coherentThro
   });
 
   assert.equal(pkg.selectedConcretePathId, 'callpath:manufacture');
+  assert.deepEqual(pkg.selectedFlowSequence, [
+    'code:sale.order.def action_confirm(self)',
+    'code:stock.rule.def run(self, procurements)',
+    'code:stock.rule.def _run_manufacture(self, procurements)'
+  ]);
+  assert.equal(pkg.selectedSymbolCount, 3);
+  assert.equal(pkg.coherentBoundaryIndex, 2);
   assert.deepEqual(pkg.functionEvidence.map((item) => item.symbolId), ['s-sale', 's-rule', 's-mrp']);
+  assert.equal(pkg.functionEvidence.some((item) => item.symbolId === 's-xmlid'), false, 'technical tail after semantic boundary must not reach Pass 2 bodies');
   assert.equal(pkg.functionEvidence[2].body, "self.env['mrp.production'].create(vals)");
+});
+
+test('Pass 2 leaves selected concrete path unchanged when coherentThroughSignature is absent from candidates', () => {
+  const explorer = explorerWithSymbols();
+  const pkg = explorer.compactFlowPackage({
+    id: 'arc:missing-boundary',
+    coherentThroughSignature: 'code:not.present'
+  });
+
+  assert.equal(pkg.selectedConcretePathId, 'callpath:7');
+  assert.deepEqual(pkg.selectedFlowSequence, [
+    'code:sale.order.def action_confirm(self)',
+    'code:stock.rule.def run(self, procurements)',
+    'transition:approve'
+  ]);
+  assert.equal(pkg.selectedSymbolCount, 3);
+  assert.equal(Object.hasOwn(pkg, 'coherentBoundaryIndex'), false);
 });
 
 test('Pass 2 does not expand alternatives when coherentThroughSignature is shared by several variants', () => {
@@ -138,6 +171,10 @@ test('Pass 2 does not expand alternatives when coherentThroughSignature is share
   });
 
   assert.equal(pkg.selectedConcretePathId, 'callpath:7');
+  assert.deepEqual(pkg.selectedFlowSequence, [
+    'code:sale.order.def action_confirm(self)',
+    'code:stock.rule.def run(self, procurements)'
+  ]);
   assert.deepEqual(pkg.functionEvidence.map((item) => item.symbolId), ['s-sale', 's-rule']);
 });
 
