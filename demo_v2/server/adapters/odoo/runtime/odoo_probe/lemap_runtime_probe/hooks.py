@@ -87,7 +87,7 @@ def post_load():
     global _ENABLED
     if _ENABLED:
         return
-    if _env('LEMAP_RUNTIME_TRACE') .lower() not in {'1', 'true', 'yes', 'on'}:
+    if _env('LEMAP_RUNTIME_TRACE').lower() not in {'1', 'true', 'yes', 'on'}:
         return
     if not _env('LEMAP_RUNTIME_TRACE_FILE'):
         return
