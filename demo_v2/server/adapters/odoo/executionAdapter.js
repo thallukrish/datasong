@@ -5,6 +5,7 @@ import { extractOdooManifestHooks, extractOdooHookExecution } from './manifestHo
 import { ensureOdooSource, findOdooModelFiles, findOdooMethodFiles, findOdooUiFiles } from './frameworkSource.js';
 import { extractOdooModels } from './modelParser.js';
 import { extractOdooUiEntrypoints } from './uiEntrypoints.js';
+import { runtimeObservedMethodKeys, selectRuntimeMethodCandidates } from './runtimeTraversal.js';
 
 function projectMethodName(modelName, methodName) {
   return `odoo-project:${modelName}.${methodName}`;
@@ -136,6 +137,15 @@ export class OdooExecutionAdapter {
 
   async augment(input = {}) {
     const topology = this.topology;
+    const runtimeMethodKeys = runtimeObservedMethodKeys(input?.runtimeTrace);
+    const runtimeTraversalStats = {
+      enabled: runtimeMethodKeys.size > 0,
+      uiEntrypointsBefore: 0,
+      uiEntrypointsAfter: 0,
+      frameworkBranchPoints: 0,
+      prunedFrameworkBranchPoints: 0,
+      prunedFrameworkEdges: 0
+    };
     const version = String(topology?.odooDetection?.version || '');
     const addons = Array.isArray(topology?.odooDetection?.addons) ? topology.odooDetection.addons : [];
     const tracked = Array.isArray(topology?.trackedFiles) ? topology.trackedFiles : [];
@@ -250,6 +260,10 @@ export class OdooExecutionAdapter {
     const configuredEntrypoints = Array.isArray(this.options.uiEntrypoints) ? this.options.uiEntrypoints : [];
     const suppliedEntrypoints = Array.isArray(input?.entrypoints) ? input.entrypoints : [];
     const uiEntrypoints = uniqueEntrypoints([...configuredEntrypoints, ...suppliedEntrypoints, ...frameworkUiEntrypoints]);
+    runtimeTraversalStats.uiEntrypointsBefore = uiEntrypoints.length;
+    const runtimeEntrypointSelection = selectRuntimeMethodCandidates(uiEntrypoints, runtimeMethodKeys);
+    const traversalEntrypoints = runtimeEntrypointSelection.candidates;
+    runtimeTraversalStats.uiEntrypointsAfter = traversalEntrypoints.length;
     let bridgedSuperCalls = 0;
 
     const queueFramework = (symbol, call, depth = 0, sourceModel = '') => {
@@ -269,7 +283,7 @@ export class OdooExecutionAdapter {
       return true;
     };
 
-    for (const entrypoint of uiEntrypoints) {
+    for (const entrypoint of traversalEntrypoints) {
       pendingFramework.push({ modelName: entrypoint.modelName, methodName: entrypoint.methodName, depth: 0 });
     }
 
@@ -496,9 +510,21 @@ export class OdooExecutionAdapter {
       }
 
       // Follow descendants of the current entrypoint before moving on to the
-      // next unrelated UI seed. This prevents broad XML button discovery from
-      // consuming the framework-method budget before meaningful chains close.
-      if (descendants.length) pendingFramework.unshift(...descendants);
+      // next unrelated UI seed. When runtime evidence exists, use it here to
+      // prune static branch explosion before deeper Odoo framework traversal.
+      if (descendants.length) {
+        const uniqueDescendants = [...new Map(descendants.map((item) => [
+          `${item.modelName}.${item.methodName}`,
+          item
+        ])).values()];
+        const selected = selectRuntimeMethodCandidates(uniqueDescendants, runtimeMethodKeys);
+        if (uniqueDescendants.length > 1) runtimeTraversalStats.frameworkBranchPoints += 1;
+        if (selected.prunedCount > 0) {
+          runtimeTraversalStats.prunedFrameworkBranchPoints += 1;
+          runtimeTraversalStats.prunedFrameworkEdges += selected.prunedCount;
+        }
+        pendingFramework.unshift(...selected.candidates);
+      }
     }
 
     const truncated = pendingFramework.length > 0 && visited.size >= maxFrameworkMethods;
@@ -512,6 +538,8 @@ export class OdooExecutionAdapter {
       bridgedSuperCalls,
       frameworkUiEntrypointSeeds: uniqueEntrypoints(frameworkUiEntrypoints).length,
       uiEntrypointSeeds: uiEntrypoints.length,
+      traversalUiEntrypointSeeds: traversalEntrypoints.length,
+      runtimeTraversal: runtimeTraversalStats,
       unresolvedCalls: [...new Set(unresolvedCalls)].sort(),
       unresolvedPersistence: [...new Set(unresolvedPersistence)].sort(),
       truncated,
