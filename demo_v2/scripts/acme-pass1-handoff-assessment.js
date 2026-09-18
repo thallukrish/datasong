@@ -47,7 +47,7 @@ console.log(`top paths considered by Pass 1: ${topPaths.length}`);
 console.log(`cross-repo paths across ALL paths: ${allCrossRepo.length}`);
 console.log(`paths with >1 first-class node: ${multiFirstClass.length}`);
 if (topology.odooRuntimeEvidence) {
-  console.log(`runtime evidence: events=${topology.odooRuntimeEvidence.eventCount} matchedEvents=${topology.odooRuntimeEvidence.matchedEvents} matchedEdges=${topology.odooRuntimeEvidence.matchedEdges}`);
+  console.log(`runtime evidence: events=${topology.odooRuntimeEvidence.eventCount} matchedEvents=${topology.odooRuntimeEvidence.matchedEvents} matchedEdges=${topology.odooRuntimeEvidence.matchedEdges} bridgedEdges=${topology.odooRuntimeEvidence.bridgedEdges || 0}`);
   const early = topology.odooExecution?.runtimeTraversal || {};
   console.log(`runtime-guided static DFS: uiSeeds=${early.uiEntrypointsBefore || 0}->${early.uiEntrypointsAfter || 0} branchPoints=${early.frameworkBranchPoints || 0} prunedBranchPoints=${early.prunedFrameworkBranchPoints || 0} prunedEdges=${early.prunedFrameworkEdges || 0}`);
   const traversal = topology.odooRuntimeTraversal || {};
