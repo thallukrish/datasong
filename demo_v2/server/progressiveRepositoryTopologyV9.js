@@ -5,6 +5,7 @@ import { resolveOdooRuntime } from './adapters/odoo/runtime.js';
 import { composeOdooSchemas } from './adapters/odoo/composeSchemas.js';
 import { loadOdooRuntimeTrace } from './adapters/odoo/runtime/traceStore.js';
 import { correlateOdooRuntimeTrace } from './adapters/odoo/correlation/runtimeCorrelator.js';
+import { selectOdooRuntimeTraversalEdges } from './adapters/odoo/runtimeTraversal.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -31,6 +32,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooFramework = null;
     this.odooExecution = null;
     this.odooRuntimeEvidence = null;
+    this.odooRuntimeTraversal = null;
     this.odooPatternEvidence = [];
     this.odooUiEvidence = { entrypoints: [], modelActions: [] };
     this.frameworkKind = '';
@@ -105,6 +107,13 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
       this.odooRuntimeEvidence = runtimeTracePath
         ? correlateOdooRuntimeTrace(this, await loadOdooRuntimeTrace(runtimeTracePath))
         : null;
+      this.odooRuntimeTraversal = this.odooRuntimeEvidence ? {
+        branchPoints: 0,
+        prunedBranchPoints: 0,
+        prunedEdges: 0,
+        observedEdgeBranchPoints: 0,
+        observedTargetBranchPoints: 0
+      } : null;
 
       this.moquiEntitySchema = null;
       this.moquiXmlExecution = null;
@@ -119,6 +128,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         odooFramework: this.odooFrameworkSummary(),
         odooExecution: this.odooExecution,
         odooRuntimeEvidence: this.odooRuntimeEvidence,
+        odooRuntimeTraversal: this.odooRuntimeTraversal,
         moquiEntitySchema: null,
         moquiXmlExecution: null,
         callPathIndex: {
@@ -140,6 +150,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooFramework = null;
     this.odooExecution = null;
     this.odooRuntimeEvidence = null;
+    this.odooRuntimeTraversal = null;
     this.odooPatternEvidence = [];
     this.odooUiEvidence = { entrypoints: [], modelActions: [] };
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
@@ -174,6 +185,29 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
       identityKey(schema?.fullName) === identityKey(raw) ||
       identityKey(String(schema?.fullName || '').split(/[.#:/]/).at(-1)) === wanted
     ) || null;
+  }
+
+  selectTraversalEdges(symbol, edges) {
+    const candidates = Array.isArray(edges) ? edges : [];
+    if (this.frameworkKind !== 'odoo' || !this.odooRuntimeEvidence || candidates.length <= 1) return candidates;
+
+    const result = selectOdooRuntimeTraversalEdges({
+      source: symbol,
+      edges: candidates,
+      scenarioIds: this.odooRuntimeEvidence.scenarioIds
+    });
+
+    if (this.odooRuntimeTraversal) {
+      this.odooRuntimeTraversal.branchPoints += 1;
+      if (result.prunedCount > 0) {
+        this.odooRuntimeTraversal.prunedBranchPoints += 1;
+        this.odooRuntimeTraversal.prunedEdges += result.prunedCount;
+        if (result.reason === 'observed_edge') this.odooRuntimeTraversal.observedEdgeBranchPoints += 1;
+        if (result.reason === 'observed_target') this.odooRuntimeTraversal.observedTargetBranchPoints += 1;
+      }
+    }
+
+    return result.edges;
   }
 
   callPathPriorityProfile() {
