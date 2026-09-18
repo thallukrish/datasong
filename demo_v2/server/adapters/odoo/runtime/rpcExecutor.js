@@ -46,7 +46,41 @@ export class OdooRpcScenarioExecutor {
     return this.sessionId;
   }
 
-  async open() {}
+  async open({ model, recordIds = [], action = {} } = {}) {
+    const viewType = String(action.view || action.viewType || 'form');
+    const viewId = action.viewId == null ? false : action.viewId;
+    const views = await this.executeKw(model, 'get_views', [[[viewId, viewType]]], {
+      options: { toolbar: true, load_filters: true }
+    });
+
+    const arch = String(views?.views?.[viewType]?.arch || '');
+    const fieldNames = [...new Set(
+      [...arch.matchAll(/<field\\b[^>]*\\bname=[\"']([^\"']+)[\"']/gi)]
+        .map((match) => String(match[1] || '').trim())
+        .filter(Boolean)
+    )];
+
+    const ids = Array.isArray(recordIds) ? recordIds.filter((id) => id != null) : [];
+    if (!ids.length) {
+      if (fieldNames.length) {
+        await this.executeKw(model, 'default_get', [fieldNames], {});
+      }
+      return { views, recordIds: [], fields: fieldNames };
+    }
+
+    if (!fieldNames.length) {
+      await this.executeKw(model, 'read', [ids], { fields: [] });
+      return { views, recordIds: ids, fields: [] };
+    }
+
+    const specification = Object.fromEntries(fieldNames.map((name) => [name, {}]));
+    try {
+      await this.executeKw(model, 'web_read', [ids, specification], {});
+    } catch {
+      await this.executeKw(model, 'read', [ids], { fields: fieldNames });
+    }
+    return { views, recordIds: ids, fields: fieldNames };
+  }
 
   async lookup(fixture = {}) {
     const model = String(fixture.model || '');
