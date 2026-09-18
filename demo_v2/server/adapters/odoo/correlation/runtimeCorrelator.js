@@ -28,15 +28,32 @@ function mergeEvidence(target = {}, event) {
   };
 }
 
+function buildSymbolIndex(symbols) {
+  const byEventKey = new Map();
+  for (const symbol of symbols) {
+    const meta = symbol?.odooExecution || {};
+    if (!meta.modelName || !meta.methodName) continue;
+    const key = `${String(meta.modelName)}.${String(meta.methodName)}`;
+    if (!byEventKey.has(key)) byEventKey.set(key, []);
+    byEventKey.get(key).push(symbol);
+  }
+  return byEventKey;
+}
+
+function indexedMatches(index, event) {
+  return arr(index.get(eventKey(event))).filter((symbol) => symbolMatchesEvent(symbol, event));
+}
+
 export function correlateOdooRuntimeTrace(topology, trace) {
   const symbols = arr(topology?.symbols);
   const events = arr(trace?.events).filter((event) => event?.model && event?.method);
+  const symbolIndex = buildSymbolIndex(symbols);
   let matchedEvents = 0;
   let matchedEdges = 0;
 
   const matchedBySeq = [];
   for (const event of events) {
-    const matches = symbols.filter((symbol) => symbolMatchesEvent(symbol, event));
+    const matches = indexedMatches(symbolIndex, event);
     if (matches.length) matchedEvents += 1;
     for (const symbol of matches) {
       symbol.runtimeEvidence = mergeEvidence(symbol.runtimeEvidence, event);
@@ -46,11 +63,13 @@ export function correlateOdooRuntimeTrace(topology, trace) {
 
   const annotateEdge = (sourceMatches, targetEvent, targetMatches) => {
     let linked = false;
+    const targetByName = new Set(targetMatches.map((candidate) => String(candidate?.name || '')));
+    if (!targetByName.size) return false;
+
     for (const source of sourceMatches) {
       for (const ref of arr(source.references)) {
         if (String(ref.relation || '') !== 'calls') continue;
-        const target = targetMatches.find((candidate) => String(ref.name || '') === String(candidate?.name || ''));
-        if (!target) continue;
+        if (!targetByName.has(String(ref.name || ''))) continue;
         ref.data = { ...(ref.data || {}), runtimeEvidence: mergeEvidence(ref.data?.runtimeEvidence, targetEvent) };
         linked = true;
       }
@@ -69,9 +88,7 @@ export function correlateOdooRuntimeTrace(topology, trace) {
           sessionId: current.event.sessionId
         }
       : null;
-    const callerMatches = callerEvent
-      ? symbols.filter((symbol) => symbolMatchesEvent(symbol, callerEvent))
-      : [];
+    const callerMatches = callerEvent ? indexedMatches(symbolIndex, callerEvent) : [];
 
     let linked = callerMatches.length
       ? annotateEdge(callerMatches, current.event, current.matches)
