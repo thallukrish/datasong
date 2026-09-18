@@ -21,11 +21,17 @@ export function validateOdooScenarioDocument(document) {
     if (!arr(scenario?.actions).length) throw new Error(`Scenario ${id} requires actions`);
     for (const action of scenario.actions) {
       const type = String(action?.type || '').trim();
-      if (!['open', 'create', 'edit', 'click', 'assert'].includes(type)) {
+      if (!['open', 'create', 'find', 'read', 'edit', 'click', 'assert'].includes(type)) {
         throw new Error(`Scenario ${id} has unsupported action type: ${type || '(blank)'}`);
       }
       if (type === 'click' && !String(action?.label || action?.xmlId || '').trim()) {
         throw new Error(`Scenario ${id} click action requires label or xmlId`);
+      }
+      if (type === 'find' && !String(action?.model || scenario?.start?.model || '').trim()) {
+        throw new Error(`Scenario ${id} find action requires model`);
+      }
+      if (type === 'read' && !arr(action?.fields).length) {
+        throw new Error(`Scenario ${id} read action requires fields`);
       }
     }
   }
