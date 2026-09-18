@@ -48,6 +48,22 @@ export class OdooRpcScenarioExecutor {
 
   async open() {}
 
+  async lookup(fixture = {}) {
+    const model = String(fixture.model || '');
+    const domain = Array.isArray(fixture.domain) ? fixture.domain : [];
+    const field = String(fixture.field || 'id');
+    const rows = await this.executeKw(model, 'search_read', [domain], {
+      fields: [field],
+      limit: Number(fixture.limit || 1)
+    });
+    if (!Array.isArray(rows) || !rows.length) {
+      throw new Error(`Odoo fixture lookup returned no rows for ${model}`);
+    }
+    const value = rows[0]?.[field];
+    if (value == null) throw new Error(`Odoo fixture lookup missing field ${field} on ${model}`);
+    return Array.isArray(value) ? value[0] : value;
+  }
+
   async create({ model, values }) {
     const id = await this.executeKw(model, 'create', [values]);
     return { recordIds: Array.isArray(id) ? id : [id] };
