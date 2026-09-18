@@ -9,6 +9,7 @@ The older documents remain useful design history and deeper notes:
 - `docs/SEMANTIC_EXPLORATION_ARCHITECTURE.md` describes the source-agnostic evidence-world and semantic-exploration principles.
 - `demo_v2/ARCHITECTURE.md` describes the concrete Scout / deterministic call-path / Pass-1 / Pass-2 learning architecture.
 - `demo_v2/PASS1_BUSINESS_ARC_DISCOVERY.md` contains additional detail on Pass-1 arc discovery.
+- `docs/ODOO_RUNTIME_PROCESSING.md` defines the Odoo-specific static + runtime evidence pipeline and its correlation boundary before CallPathIndexer.
 
 This document connects those ideas into one system-level view and records the current implementation boundaries.
 
@@ -138,9 +139,13 @@ Generic parsing should capture relationships that are not framework-specific, fo
 
 Framework-specific semantics belong behind adapters.
 
-The current example is Moqui, where executable XML and entity definitions contain semantics that a generic XML parser cannot infer.
+The current examples include Moqui and Odoo.
 
-The current implementation includes Moqui-specific execution and entity-schema adapters.
+For Moqui, executable XML and entity definitions contain semantics that a generic XML parser cannot infer.
+
+For Odoo, the adapter combines project models, framework source, XML UI entrypoints, inheritance-aware method discovery and persistence evidence. Odoo also has a planned runtime-evidence path: enterprise-specific scenarios execute against a disposable or authorized staging instance, structured traces are collected, and those observations are correlated back onto the static topology before CallPathIndexer.
+
+The detailed Odoo runtime contract is in `docs/ODOO_RUNTIME_PROCESSING.md`.
 
 Future adapters can add support for other frameworks without changing the higher-level semantic model.
 
@@ -549,6 +554,8 @@ Important current components include:
 - repository topology
 - Moqui XML execution adapter
 - Moqui entity-schema adapter
+- Odoo static execution/schema adapter
+- Odoo runtime-evidence design and correlation boundary documented in `docs/ODOO_RUNTIME_PROCESSING.md`
 - adapter composition under `server/adapters`
 
 ### Query
