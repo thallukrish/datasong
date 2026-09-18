@@ -99,13 +99,19 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
 
       const projectSchemas = [...this.entitySchemas];
       await this.enrichOdooFrameworkSchemas(projectSchemas);
-      this.odooExecution = this.odooAdapters?.execution
-        ? await this.odooAdapters.execution.augment({ entrypoints: this.odooUiEvidence.entrypoints })
-        : null;
 
       const runtimeTracePath = String(process.env.ODOO_RUNTIME_TRACE_PATH || '').trim();
-      this.odooRuntimeEvidence = runtimeTracePath
-        ? correlateOdooRuntimeTrace(this, await loadOdooRuntimeTrace(runtimeTracePath))
+      const runtimeTrace = runtimeTracePath ? await loadOdooRuntimeTrace(runtimeTracePath) : null;
+
+      this.odooExecution = this.odooAdapters?.execution
+        ? await this.odooAdapters.execution.augment({
+            entrypoints: this.odooUiEvidence.entrypoints,
+            runtimeTrace
+          })
+        : null;
+
+      this.odooRuntimeEvidence = runtimeTrace
+        ? correlateOdooRuntimeTrace(this, runtimeTrace)
         : null;
       this.odooRuntimeTraversal = this.odooRuntimeEvidence ? {
         branchPoints: 0,
