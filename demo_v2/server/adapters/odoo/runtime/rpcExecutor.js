@@ -55,7 +55,7 @@ export class OdooRpcScenarioExecutor {
 
     const arch = String(views?.views?.[viewType]?.arch || '');
     const fieldNames = [...new Set(
-      [...arch.matchAll(/<field\\b[^>]*\\bname=[\"']([^\"']+)[\"']/gi)]
+      [...arch.matchAll(/<field\b[^>]*\bname=["']([^"']+)["']/gi)]
         .map((match) => String(match[1] || '').trim())
         .filter(Boolean)
     )];
