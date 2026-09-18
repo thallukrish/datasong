@@ -3,6 +3,8 @@ import { CallPathIndexerV3 } from './callPathIndexerV3.js';
 import { createMoquiAdapters } from './adapters/moqui/index.js';
 import { resolveOdooRuntime } from './adapters/odoo/runtime.js';
 import { composeOdooSchemas } from './adapters/odoo/composeSchemas.js';
+import { loadOdooRuntimeTrace } from './adapters/odoo/runtime/traceStore.js';
+import { correlateOdooRuntimeTrace } from './adapters/odoo/correlation/runtimeCorrelator.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -28,6 +30,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooEntitySchema = null;
     this.odooFramework = null;
     this.odooExecution = null;
+    this.odooRuntimeEvidence = null;
     this.odooPatternEvidence = [];
     this.odooUiEvidence = { entrypoints: [], modelActions: [] };
     this.frameworkKind = '';
@@ -98,6 +101,11 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         ? await this.odooAdapters.execution.augment({ entrypoints: this.odooUiEvidence.entrypoints })
         : null;
 
+      const runtimeTracePath = String(process.env.ODOO_RUNTIME_TRACE_PATH || '').trim();
+      this.odooRuntimeEvidence = runtimeTracePath
+        ? correlateOdooRuntimeTrace(this, await loadOdooRuntimeTrace(runtimeTracePath))
+        : null;
+
       this.moquiEntitySchema = null;
       this.moquiXmlExecution = null;
       this.callPathIndex = this.callPathIndexer.build();
@@ -110,6 +118,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         odooEntitySchema: this.odooEntitySchema,
         odooFramework: this.odooFrameworkSummary(),
         odooExecution: this.odooExecution,
+        odooRuntimeEvidence: this.odooRuntimeEvidence,
         moquiEntitySchema: null,
         moquiXmlExecution: null,
         callPathIndex: {
@@ -130,6 +139,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.odooEntitySchema = null;
     this.odooFramework = null;
     this.odooExecution = null;
+    this.odooRuntimeEvidence = null;
     this.odooPatternEvidence = [];
     this.odooUiEvidence = { entrypoints: [], modelActions: [] };
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
