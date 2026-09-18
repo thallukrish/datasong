@@ -107,3 +107,31 @@ test('keeps static DFS candidates when runtime does not identify any branch', ()
   assert.equal(result.reason, 'no_runtime_match');
   assert.deepEqual(result.candidates, candidates);
 });
+
+test('treats runtime caller model.method as observed DFS evidence', () => {
+  const observedKeys = runtimeObservedMethodKeys({
+    events: [
+      {
+        model: 'mrp.production',
+        method: 'create',
+        callerModel: 'stock.rule',
+        callerMethod: '_run_manufacture'
+      }
+    ]
+  });
+
+  assert.equal(observedKeys.has('mrp.production.create'), true);
+  assert.equal(observedKeys.has('stock.rule._run_manufacture'), true);
+
+  const result = selectRuntimeMethodCandidates([
+    { modelName: 'stock.rule', methodName: '_run_pull' },
+    { modelName: 'stock.rule', methodName: '_run_manufacture' },
+    { modelName: 'stock.rule', methodName: '_run_push' }
+  ], observedKeys);
+
+  assert.equal(result.reason, 'observed_method');
+  assert.deepEqual(
+    result.candidates.map((item) => item.methodName),
+    ['_run_manufacture']
+  );
+});
