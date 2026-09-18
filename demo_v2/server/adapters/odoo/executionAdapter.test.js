@@ -310,3 +310,49 @@ class Example(models.Model):
   assert.equal(result.maxFrameworkMethods, 1);
   assert.ok(result.remainingFrameworkQueue > 0);
 });
+
+
+test('follows descendants before unrelated UI seeds when framework budget is tight', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-odoo-descendant-priority-'));
+  const frameworkRoot = path.join(root, 'odoo-source');
+  const saleFile = path.join(frameworkRoot, 'addons/sale/models/sale_order.py');
+  await fs.mkdir(path.dirname(saleFile), { recursive: true });
+  await fs.writeFile(saleFile, `
+from odoo import models
+class SaleOrder(models.Model):
+    _name = 'sale.order'
+    def action_confirm(self):
+        self._action_confirm()
+    def _action_confirm(self):
+        return True
+    def action_unrelated(self):
+        return True
+`);
+
+  const topology = topologyStub(root);
+  topology.trackedFiles = [];
+  topology.odooFramework.modules = ['sale'];
+
+  const adapter = new OdooExecutionAdapter(topology, {
+    source: { repoDir: frameworkRoot, repoUrl: 'x', commit: 'abc' },
+    maxFrameworkMethods: 2,
+    uiEntrypoints: [
+      { modelName: 'sale.order', methodName: 'action_confirm' },
+      { modelName: 'sale.order', methodName: 'action_unrelated' }
+    ],
+    findModelFiles: async ({ modelName }) => modelName === 'sale.order'
+      ? ['addons/sale/models/sale_order.py'] : [],
+    findUiFiles: async () => []
+  });
+
+  const result = await adapter.augment();
+
+  assert.ok(topology.symbols.some((symbol) => symbol.name === 'odoo19:sale.order.action_confirm'));
+  assert.ok(topology.symbols.some((symbol) => symbol.name === 'odoo19:sale.order._action_confirm'));
+  assert.equal(
+    topology.symbols.some((symbol) => symbol.name === 'odoo19:sale.order.action_unrelated'),
+    false,
+    'descendant should consume the remaining method budget before unrelated UI seeds'
+  );
+  assert.equal(result.truncated, true);
+});
