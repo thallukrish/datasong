@@ -101,6 +101,20 @@ function emptyStructuralStats() {
   };
 }
 
+function odooDebugEnabled() {
+  return /^(?:1|true|yes|on)$/i.test(String(process.env.ODOO_EXEC_DEBUG || '').trim());
+}
+
+function odooDebugMatches(value = '') {
+  const filter = String(process.env.ODOO_EXEC_DEBUG_MATCH || '').trim().toLowerCase();
+  return !filter || String(value || '').toLowerCase().includes(filter);
+}
+
+function odooDebug(scope, message) {
+  if (!odooDebugEnabled()) return;
+  console.error(`[odoo:${scope}] ${message}`);
+}
+
 function uniqueEntrypoints(items = []) {
   const seen = new Set();
   return items.filter((item) => {
@@ -399,6 +413,15 @@ export class OdooExecutionAdapter {
       });
       const modelFiles = await findModelFiles({ repoDir: source.repoDir, modelName: current.modelName });
       const files = [...new Set([...implementationFiles, ...modelFiles])];
+      if (odooDebugMatches(key)) {
+        odooDebug(
+          'traverse',
+          `${key} depth=${current.depth} implementations=${implementationFiles.length} modelFiles=${modelFiles.length} candidates=${files.length}`
+        );
+        if (implementationFiles.length) {
+          odooDebug('traverse', `${key} implementation files: ${implementationFiles.join(' | ')}`);
+        }
+      }
       let found = false;
       for (const sourcePath of files) {
         const text = await fs.readFile(path.join(source.repoDir, sourcePath), 'utf8').catch(() => '');
@@ -407,6 +430,12 @@ export class OdooExecutionAdapter {
         const parsed = extractOdooExecution(sourcePath, text, addon);
         for (const method of parsed.methods.filter((item) => item.modelName === current.modelName && item.methodName === current.methodName)) {
           found = true;
+          if (odooDebugMatches(key)) {
+            odooDebug(
+              'traverse',
+              `loaded ${key} from ${method.sourcePath} addon=${method.addon || '(unknown)'} extension=${Boolean(method.extension)}`
+            );
+          }
           const logicalName = frameworkMethodName(version, method.modelName, method.methodName);
           const syntheticSource = `@odoo${version}/${method.sourcePath}`;
           const symbol = topology.addSemanticFunction({
@@ -460,7 +489,10 @@ export class OdooExecutionAdapter {
           }
         }
       }
-      if (!found) unresolvedCalls.push(key);
+      if (!found) {
+        if (odooDebugMatches(key)) odooDebug('traverse', `UNRESOLVED ${key}`);
+        unresolvedCalls.push(key);
+      }
     }
 
     const truncated = pendingFramework.length > 0 && visited.size >= maxFrameworkMethods;
