@@ -46,6 +46,11 @@ console.log(`all grouped paths: ${allPaths.length}`);
 console.log(`top paths considered by Pass 1: ${topPaths.length}`);
 console.log(`cross-repo paths across ALL paths: ${allCrossRepo.length}`);
 console.log(`paths with >1 first-class node: ${multiFirstClass.length}`);
+if (topology.odooRuntimeEvidence) {
+  console.log(`runtime evidence: events=${topology.odooRuntimeEvidence.eventCount} matchedEvents=${topology.odooRuntimeEvidence.matchedEvents} matchedEdges=${topology.odooRuntimeEvidence.matchedEdges}`);
+  const traversal = topology.odooRuntimeTraversal || {};
+  console.log(`runtime-guided DFS: branchPoints=${traversal.branchPoints || 0} prunedBranchPoints=${traversal.prunedBranchPoints || 0} prunedEdges=${traversal.prunedEdges || 0} edgeEvidence=${traversal.observedEdgeBranchPoints || 0} targetEvidence=${traversal.observedTargetBranchPoints || 0}`);
+}
 
 console.log('\n=== ALL PATH SCORES ===');
 for (const [index, callPath] of allPaths.entries()) {
