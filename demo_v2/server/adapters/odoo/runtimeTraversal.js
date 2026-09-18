@@ -52,9 +52,14 @@ function methodKey(value) {
 }
 
 export function runtimeObservedMethodKeys(trace) {
-  return new Set(arr(trace?.events)
-    .filter((event) => event?.model && event?.method)
-    .map((event) => methodKey(event)));
+  const keys = new Set();
+  for (const event of arr(trace?.events)) {
+    if (event?.model && event?.method) keys.add(methodKey(event));
+    if (event?.callerModel && event?.callerMethod) {
+      keys.add(`${String(event.callerModel)}.${String(event.callerMethod)}`);
+    }
+  }
+  return keys;
 }
 
 export function selectRuntimeMethodCandidates(candidates, observedKeys) {
