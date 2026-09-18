@@ -12,6 +12,7 @@ Supporting design history and deeper notes remain in:
 
 ```text
 docs/SEMANTIC_EXPLORATION_ARCHITECTURE.md
+docs/ODOO_RUNTIME_PROCESSING.md
 demo_v2/ARCHITECTURE.md
 demo_v2/PASS1_BUSINESS_ARC_DISCOVERY.md
 ```
@@ -173,7 +174,9 @@ Generic parsing should capture generic program/data relationships.
 
 Framework-specific execution/schema semantics belong behind adapters.
 
-Current examples include Moqui XML execution and Moqui entity-schema handling.
+Current examples include Moqui XML execution and Moqui entity-schema handling, plus the Odoo adapter for project/framework models, XML UI entrypoints and Odoo execution topology.
+
+Odoo additionally has a documented runtime-evidence extension. Static analysis discovers plausible executable structure; enterprise-specific scenarios can be executed against a disposable or authorized staging Odoo instance, producing runtime traces that are correlated back onto the static topology before CallPathIndexer. See `docs/ODOO_RUNTIME_PROCESSING.md`.
 
 This boundary is intended to allow future frameworks and evidence sources to plug into the same LeMap semantic model.
 
