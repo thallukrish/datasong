@@ -12,6 +12,20 @@ const METHOD_FILE_CACHE = new Map();
 const METHOD_INDEX_CACHE = new Map();
 const UI_FILE_CACHE = new Map();
 
+function odooDebugEnabled() {
+  return /^(?:1|true|yes|on)$/i.test(String(process.env.ODOO_EXEC_DEBUG || '').trim());
+}
+
+function odooDebugMatches(value = '') {
+  const filter = String(process.env.ODOO_EXEC_DEBUG_MATCH || '').trim().toLowerCase();
+  return !filter || String(value || '').toLowerCase().includes(filter);
+}
+
+function odooDebug(scope, message) {
+  if (!odooDebugEnabled()) return;
+  console.error(`[odoo:${scope}] ${message}`);
+}
+
 function addonNameFor(sourcePath) {
   const parts = String(sourcePath || '').replace(/\\/g, '/').split('/');
   const addonsAt = parts.indexOf('addons');
@@ -144,6 +158,10 @@ async function buildOdooMethodFileIndex({ repoDir, allowedAddons = [], gitFactor
       }))]
       .sort();
 
+    if (odooDebugEnabled()) {
+      odooDebug('method-index', `scanning ${files.length} Python files across ${allowedList.length || 'all'} addon(s)`);
+    }
+
     const byMethod = new Map();
     for (const sourcePath of files) {
       const addonName = addonNameFor(sourcePath);
@@ -158,9 +176,13 @@ async function buildOdooMethodFileIndex({ repoDir, allowedAddons = [], gitFactor
       }
     }
 
-    return new Map(
+    const index = new Map(
       [...byMethod.entries()].map(([key, paths]) => [key, [...paths].sort()])
     );
+    if (odooDebugEnabled()) {
+      odooDebug('method-index', `indexed ${index.size} logical model.method implementation key(s)`);
+    }
+    return index;
   })();
 
   METHOD_INDEX_CACHE.set(indexKey, build);
@@ -185,11 +207,21 @@ export async function findOdooMethodFiles({
 
   const allowedList = (Array.isArray(allowedAddons) ? allowedAddons : []).map(String).filter(Boolean).sort();
   const cacheKey = `${path.resolve(repoDir)}|${wantedModel}.${wantedMethod}|${allowedList.join(',')}`;
-  if (METHOD_FILE_CACHE.has(cacheKey)) return [...METHOD_FILE_CACHE.get(cacheKey)];
+  if (METHOD_FILE_CACHE.has(cacheKey)) {
+    const cached = [...METHOD_FILE_CACHE.get(cacheKey)];
+    if (odooDebugMatches(`${wantedModel}.${wantedMethod}`)) {
+      odooDebug('method-lookup', `${wantedModel}.${wantedMethod} cache-hit -> ${cached.length} file(s): ${cached.join(' | ') || '(none)'}`);
+    }
+    return cached;
+  }
 
   const index = await buildOdooMethodFileIndex({ repoDir, allowedAddons: allowedList, gitFactory });
-  const matched = [...(index.get(`${wantedModel}.${wantedMethod}`) || [])];
+  const logicalKey = `${wantedModel}.${wantedMethod}`;
+  const matched = [...(index.get(logicalKey) || [])];
   METHOD_FILE_CACHE.set(cacheKey, matched);
+  if (odooDebugMatches(logicalKey)) {
+    odooDebug('method-lookup', `${logicalKey} -> ${matched.length} file(s): ${matched.join(' | ') || '(none)'}`);
+  }
   return matched;
 }
 
