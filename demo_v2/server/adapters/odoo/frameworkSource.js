@@ -135,8 +135,8 @@ async function buildOdooMethodFileIndex({ repoDir, allowedAddons = [], gitFactor
     }
 
     const files = [...new Set(String(raw || '')
-      .split(/\\r?\\n/)
-      .map((file) => file.trim().replace(/\\\\/g, '/'))
+      .split(/\r?\n/)
+      .map((file) => file.trim().replace(/\\/g, '/'))
       .filter((file) => file.endsWith('.py'))
       .filter((file) => {
         const addonName = addonNameFor(file);
@@ -148,7 +148,7 @@ async function buildOdooMethodFileIndex({ repoDir, allowedAddons = [], gitFactor
     for (const sourcePath of files) {
       const addonName = addonNameFor(sourcePath);
       const source = await fsp.readFile(path.join(repoDir, sourcePath), 'utf8').catch(() => '');
-      if (!source || !/\\bdef\\s+[A-Za-z_]\\w*\\s*\\(/.test(source)) continue;
+      if (!source || !/\bdef\s+[A-Za-z_]\w*\s*\(/.test(source)) continue;
       const parsed = extractOdooExecution(sourcePath, source, addonName);
       for (const method of parsed.methods) {
         if (!method?.modelName || !method?.methodName) continue;
