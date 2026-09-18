@@ -118,6 +118,14 @@ function edgeLabel(relation) {
 }
 
 export class CallPathIndexerV2 extends CallPathIndexer {
+  traversalEdges(symbol, edges) {
+    const candidates = arr(edges);
+    if (candidates.length <= 1) return candidates;
+    if (typeof this.topology?.selectTraversalEdges !== 'function') return candidates;
+    const selected = arr(this.topology.selectTraversalEdges(symbol, candidates));
+    return selected.length ? selected : candidates;
+  }
+
   walk(symbolId, prefix, active, outgoing, byId, covered, relations = []) {
     const symbol = byId.get(symbolId);
     if (!symbol) return;
@@ -135,7 +143,7 @@ export class CallPathIndexerV2 extends CallPathIndexer {
     const nextPrefix = [...prefix, symbolId];
     const nextActive = new Map(active);
     nextActive.set(symbolId, nextPrefix.length - 1);
-    const edges = outgoing.get(symbolId) || [];
+    const edges = this.traversalEdges(symbol, outgoing.get(symbolId) || []);
 
     if (!edges.length) {
       const external = this.unresolvedExecutableRefs(symbol);
