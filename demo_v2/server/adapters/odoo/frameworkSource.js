@@ -9,6 +9,7 @@ import { parseOdooManifestText } from './detect.js';
 const ODOO_REPO_URL = 'https://github.com/odoo/odoo.git';
 const MODEL_FILE_CACHE = new Map();
 const METHOD_FILE_CACHE = new Map();
+const METHOD_INDEX_CACHE = new Map();
 const UI_FILE_CACHE = new Map();
 
 function addonNameFor(sourcePath) {
@@ -112,6 +113,65 @@ export async function findOdooModelFiles({ repoDir, modelName, allowedAddons = [
   return [...matched];
 }
 
+async function buildOdooMethodFileIndex({ repoDir, allowedAddons = [], gitFactory = simpleGit }) {
+  const allowedList = (Array.isArray(allowedAddons) ? allowedAddons : []).map(String).filter(Boolean).sort();
+  const indexKey = `${path.resolve(repoDir)}|${allowedList.join(',')}`;
+  if (METHOD_INDEX_CACHE.has(indexKey)) return METHOD_INDEX_CACHE.get(indexKey);
+
+  const build = (async () => {
+    const allowed = new Set(allowedList);
+    const pathspecs = allowedList.length
+      ? allowedList.flatMap((addon) => [
+        `:(glob)addons/${addon}/**/*.py`,
+        `:(glob)odoo/addons/${addon}/**/*.py`
+      ])
+      : [':(glob)addons/**/*.py', ':(glob)odoo/addons/**/*.py'];
+
+    let raw = '';
+    try {
+      raw = await gitFactory(repoDir).raw(['ls-files', '--', ...pathspecs]);
+    } catch {
+      raw = '';
+    }
+
+    const files = [...new Set(String(raw || '')
+      .split(/\\r?\\n/)
+      .map((file) => file.trim().replace(/\\\\/g, '/'))
+      .filter((file) => file.endsWith('.py'))
+      .filter((file) => {
+        const addonName = addonNameFor(file);
+        return !allowed.size || allowed.has(addonName);
+      }))]
+      .sort();
+
+    const byMethod = new Map();
+    for (const sourcePath of files) {
+      const addonName = addonNameFor(sourcePath);
+      const source = await fsp.readFile(path.join(repoDir, sourcePath), 'utf8').catch(() => '');
+      if (!source || !/\\bdef\\s+[A-Za-z_]\\w*\\s*\\(/.test(source)) continue;
+      const parsed = extractOdooExecution(sourcePath, source, addonName);
+      for (const method of parsed.methods) {
+        if (!method?.modelName || !method?.methodName) continue;
+        const key = `${method.modelName}.${method.methodName}`;
+        if (!byMethod.has(key)) byMethod.set(key, new Set());
+        byMethod.get(key).add(sourcePath);
+      }
+    }
+
+    return new Map(
+      [...byMethod.entries()].map(([key, paths]) => [key, [...paths].sort()])
+    );
+  })();
+
+  METHOD_INDEX_CACHE.set(indexKey, build);
+  try {
+    return await build;
+  } catch (error) {
+    METHOD_INDEX_CACHE.delete(indexKey);
+    throw error;
+  }
+}
+
 export async function findOdooMethodFiles({
   repoDir,
   modelName,
@@ -127,41 +187,10 @@ export async function findOdooMethodFiles({
   const cacheKey = `${path.resolve(repoDir)}|${wantedModel}.${wantedMethod}|${allowedList.join(',')}`;
   if (METHOD_FILE_CACHE.has(cacheKey)) return [...METHOD_FILE_CACHE.get(cacheKey)];
 
-  const allowed = new Set(allowedList);
-  let raw = '';
-  try {
-    raw = await gitFactory(repoDir).raw([
-      'grep', '-l', '-F', `def ${wantedMethod}(`, '--', 'addons', 'odoo/addons'
-    ]);
-  } catch (error) {
-    const text = String(error?.message || '');
-    if (Number(error?.exitCode) === 1 || /exit(?:ed)?(?: with)? code 1|not found|no match/i.test(text)) {
-      METHOD_FILE_CACHE.set(cacheKey, []);
-      return [];
-    }
-    throw error;
-  }
-
-  const candidates = [...new Set(String(raw || '')
-    .split(/\r?\n/)
-    .map((file) => file.trim().replace(/\\/g, '/'))
-    .filter((file) => file.endsWith('.py')))]
-    .sort();
-
-  const matched = [];
-  for (const sourcePath of candidates) {
-    const addonName = addonNameFor(sourcePath);
-    if (allowed.size && !allowed.has(addonName)) continue;
-    const source = await fsp.readFile(path.join(repoDir, sourcePath), 'utf8').catch(() => '');
-    if (!source) continue;
-    const parsed = extractOdooExecution(sourcePath, source, addonName);
-    if (parsed.methods.some((method) => method.modelName === wantedModel && method.methodName === wantedMethod)) {
-      matched.push(sourcePath);
-    }
-  }
-
+  const index = await buildOdooMethodFileIndex({ repoDir, allowedAddons: allowedList, gitFactory });
+  const matched = [...(index.get(`${wantedModel}.${wantedMethod}`) || [])];
   METHOD_FILE_CACHE.set(cacheKey, matched);
-  return [...matched];
+  return matched;
 }
 
 export async function findOdooUiFiles({ repoDir, modelNames = [], allowedAddons = [], gitFactory = simpleGit }) {
@@ -208,7 +237,8 @@ export async function findOdooUiFiles({ repoDir, modelNames = [], allowedAddons 
 export function clearOdooFrameworkSourceCaches() {
   MODEL_FILE_CACHE.clear();
   METHOD_FILE_CACHE.clear();
+  METHOD_INDEX_CACHE.clear();
   UI_FILE_CACHE.clear();
 }
 
-export { ODOO_REPO_URL };
+export { ODOO_REPO_URL, buildOdooMethodFileIndex };
