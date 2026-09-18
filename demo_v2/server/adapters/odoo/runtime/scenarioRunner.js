@@ -1,5 +1,18 @@
 function arr(value) { return Array.isArray(value) ? value : []; }
 
+async function resolveValue(value, fixtures, executor) {
+  if (Array.isArray(value)) return Promise.all(value.map((item) => resolveValue(item, fixtures, executor)));
+  if (!value || typeof value !== 'object') return value;
+  if (Object.keys(value).length === 1 && value.$ref) {
+    const fixture = fixtures?.[value.$ref];
+    if (!fixture) throw new Error(`Unknown Odoo scenario fixture: ${value.$ref}`);
+    return executor.lookup(fixture);
+  }
+  const out = {};
+  for (const [key, item] of Object.entries(value)) out[key] = await resolveValue(item, fixtures, executor);
+  return out;
+}
+
 export class OdooScenarioRunner {
   constructor({ executor, uiResolver, logger = console } = {}) {
     if (!executor) throw new Error('OdooScenarioRunner requires executor');
@@ -21,10 +34,10 @@ export class OdooScenarioRunner {
         continue;
       }
       if (action.type === 'create') {
+        const values = await resolveValue(action.values || scenario.data || {}, scenario.fixtures || {}, this.executor);
         const created = await this.executor.create({
           model: action.model || state.model,
-          values: action.values || scenario.data || {},
-          fixtures: scenario.fixtures || {}
+          values
         });
         state = { ...state, model: action.model || state.model, recordIds: arr(created?.recordIds || created?.ids) };
         continue;
