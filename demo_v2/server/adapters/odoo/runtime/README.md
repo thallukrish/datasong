@@ -49,3 +49,36 @@ node scripts/acme-pass1-handoff-assessment.js
 ```
 
 `ProgressiveRepositoryTopologyV9` correlates the trace onto static Odoo symbols/edges before CallPathIndexer runs. Equal first-class-count paths then prefer stronger runtime-observed edge/symbol evidence.
+
+
+## Docker harness
+
+The current preferred V1 path is the Docker harness:
+
+```powershell
+cd demo_v2
+node scripts/odoo-runtime-docker.js "C:\\Users\\thall\\Documents\\datasong\\acme-ems-odoo"
+```
+
+It:
+
+```text
+loads the enterprise scenario
+→ resolves the Odoo framework XML for the scenario model
+→ writes a temporary compose override under <enterprise>/.lemap-runtime
+→ mounts the generic LeMap runtime probe
+→ restarts only the Odoo service with tracing enabled
+→ executes the selected user scenario through Odoo RPC
+→ verifies that a non-empty JSONL trace was produced
+→ restores the normal Odoo service
+```
+
+The enterprise database/volumes are preserved. Set `ODOO_RUNTIME_RESTORE=0` only when you intentionally want to leave the instrumented Odoo process running.
+
+The generated trace is:
+
+```text
+<enterprise-repo>/.lemap-runtime/<scenario-id>.jsonl
+```
+
+The script prints the exact `ODOO_RUNTIME_TRACE_PATH` and Pass-1 assessment command to run next.
