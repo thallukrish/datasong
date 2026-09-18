@@ -63,7 +63,16 @@ export class OdooScenarioRunner {
 
     for (const action of arr(scenario.actions)) {
       if (action.type === 'open') {
-        state = { ...state, model: action.model || state.model };
+        const model = action.model || state.model;
+        const explicitRecordValue = action.recordIds ?? action.recordId;
+        let recordIds;
+        if (explicitRecordValue !== undefined) {
+          const resolved = await resolveValue(explicitRecordValue, scenario.fixtures || {}, this.executor, saved);
+          recordIds = Array.isArray(resolved) ? resolved : [resolved];
+        } else {
+          recordIds = model === state.model ? state.recordIds : [];
+        }
+        state = { ...state, model, recordIds: recordIds.filter((id) => id != null) };
         await this.executor.open?.({ ...state, action });
         continue;
       }
