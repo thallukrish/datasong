@@ -69,6 +69,19 @@ export class OdooRpcScenarioExecutor {
     return { recordIds: Array.isArray(id) ? id : [id] };
   }
 
+  async find({ model, domain = [], fields = [], limit } = {}) {
+    const kwargs = {};
+    if (Array.isArray(fields) && fields.length) kwargs.fields = ['id', ...fields.filter((field) => field !== 'id')];
+    if (limit != null) kwargs.limit = Number(limit);
+    return this.executeKw(model, 'search_read', [domain], kwargs);
+  }
+
+  async read({ model, recordIds = [], fields = [] } = {}) {
+    return this.executeKw(model, 'read', [recordIds], {
+      fields: Array.isArray(fields) ? fields : []
+    });
+  }
+
   async write({ model, recordIds, values }) {
     return this.executeKw(model, 'write', [recordIds, values]);
   }
