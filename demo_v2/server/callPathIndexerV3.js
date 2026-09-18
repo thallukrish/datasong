@@ -77,6 +77,8 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
     let persistenceWriteCount = 0;
     let persistenceReadCount = 0;
     let sqlPersistenceCount = 0;
+    let runtimeObservedEdgeCount = 0;
+    const runtimeScenarioIds = new Set();
 
     // Count framework/entity handoffs only when the reference is the actual
     // executable edge used by this path. This avoids giving a path credit for
@@ -88,6 +90,10 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
         this.executableRelations.has(String(candidate?.relation || ''))
         && String(candidate?.name || '') === String(target?.name || ''));
       const data = ref?.data || {};
+      if (data?.runtimeEvidence?.observed === true) {
+        runtimeObservedEdgeCount += 1;
+        for (const scenarioId of arr(data.runtimeEvidence.scenarioIds)) runtimeScenarioIds.add(String(scenarioId));
+      }
       const sourceEntity = String(data.sourceModel || data.sourceEntity || '');
       const targetEntity = String(data.targetModel || data.targetEntity || '');
       if (sourceEntity && targetEntity && sourceEntity !== targetEntity) crossEntityBoundaryCount += 1;
@@ -108,6 +114,11 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
         else persistenceReadCount += 1;
         if (persistenceKind === 'sql') sqlPersistenceCount += 1;
       }
+    }
+
+    const runtimeObservedSymbolCount = symbols.filter((symbol) => symbol?.runtimeEvidence?.observed === true).length;
+    for (const symbol of symbols) {
+      for (const scenarioId of arr(symbol?.runtimeEvidence?.scenarioIds)) runtimeScenarioIds.add(String(scenarioId));
     }
 
     const executableRelationCount = arr(path?.relations)
@@ -140,6 +151,10 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
         persistenceReadCount,
         sqlPersistenceCount,
         executableRelationCount,
+        runtimeObservedEdgeCount,
+        runtimeObservedSymbolCount,
+        runtimeScenarioCount: runtimeScenarioIds.size,
+        runtimeScenarioIds: [...runtimeScenarioIds].filter(Boolean).sort(),
         functionCount,
         isolatedNoEntityNoPersistence: isolated,
         excludedFromPriority: excluded
@@ -163,6 +178,14 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
       const firstClassDiff = Number(b.priority?.evidence?.firstClassNodeCount || 0)
         - Number(a.priority?.evidence?.firstClassNodeCount || 0);
       if (firstClassDiff) return firstClassDiff;
+
+      const runtimeEdgeDiff = Number(b.priority?.evidence?.runtimeObservedEdgeCount || 0)
+        - Number(a.priority?.evidence?.runtimeObservedEdgeCount || 0);
+      if (runtimeEdgeDiff) return runtimeEdgeDiff;
+
+      const runtimeSymbolDiff = Number(b.priority?.evidence?.runtimeObservedSymbolCount || 0)
+        - Number(a.priority?.evidence?.runtimeObservedSymbolCount || 0);
+      if (runtimeSymbolDiff) return runtimeSymbolDiff;
 
       return b.priority.score - a.priority.score || a.index - b.index;
     });
