@@ -46,3 +46,27 @@ export function selectOdooRuntimeTraversalEdges({ source, edges, scenarioIds = [
 
   return { edges: candidates, reason: 'no_runtime_match', prunedCount: 0 };
 }
+
+function methodKey(value) {
+  return `${String(value?.modelName || value?.model || '')}.${String(value?.methodName || value?.method || '')}`;
+}
+
+export function runtimeObservedMethodKeys(trace) {
+  return new Set(arr(trace?.events)
+    .filter((event) => event?.model && event?.method)
+    .map((event) => methodKey(event)));
+}
+
+export function selectRuntimeMethodCandidates(candidates, observedKeys) {
+  const items = arr(candidates);
+  if (items.length <= 1 || !(observedKeys instanceof Set) || !observedKeys.size) {
+    return { candidates: items, reason: 'not_runtime_branch', prunedCount: 0 };
+  }
+  const observed = items.filter((candidate) => observedKeys.has(methodKey(candidate)));
+  if (!observed.length) return { candidates: items, reason: 'no_runtime_match', prunedCount: 0 };
+  return {
+    candidates: observed,
+    reason: 'observed_method',
+    prunedCount: items.length - observed.length
+  };
+}
