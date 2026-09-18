@@ -100,7 +100,7 @@ test('finds model files only inside allowed Odoo addons', async () => {
   ]);
 });
 
-test('bounds inherited method grep to the allowed addon closure', async () => {
+test('indexes inherited methods once for the allowed addon closure', async () => {
   const repoDir = await makeSourceTree();
   await fs.writeFile(path.join(repoDir, 'addons/mrp/models/mrp_method.py'), `
 from odoo import models
@@ -108,31 +108,41 @@ class MrpProduction(models.Model):
     _inherit = 'mrp.production'
     def action_confirm(self):
         return True
+    def button_mark_done(self):
+        return True
 `);
+
   const calls = [];
   const fakeGitFactory = () => ({
     raw: async (args) => {
       calls.push(args);
-      return 'addons/mrp/models/mrp_method.py\n';
+      return [
+        'addons/mrp/models/mrp_method.py',
+        'addons/mrp/models/mrp_production.py',
+        'addons/stock/models/unused.py'
+      ].join('\n');
     }
   });
 
-  const files = await findOdooMethodFiles({
+  const actionFiles = await findOdooMethodFiles({
     repoDir,
     modelName: 'mrp.production',
     methodName: 'action_confirm',
     allowedAddons: ['mrp', 'stock'],
     gitFactory: fakeGitFactory
   });
+  const doneFiles = await findOdooMethodFiles({
+    repoDir,
+    modelName: 'mrp.production',
+    methodName: 'button_mark_done',
+    allowedAddons: ['mrp', 'stock'],
+    gitFactory: fakeGitFactory
+  });
 
-  assert.deepEqual(files, ['addons/mrp/models/mrp_method.py']);
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].slice(-4), [
-    'addons/mrp',
-    'odoo/addons/mrp',
-    'addons/stock',
-    'odoo/addons/stock'
-  ]);
-  assert.equal(calls[0].includes('addons'), false);
-  assert.equal(calls[0].includes('odoo/addons'), false);
+  assert.deepEqual(actionFiles, ['addons/mrp/models/mrp_method.py']);
+  assert.deepEqual(doneFiles, ['addons/mrp/models/mrp_method.py']);
+  assert.equal(calls.length, 1, 'the addon closure should be scanned only once');
+  assert.equal(calls[0][0], 'ls-files');
+  assert.ok(calls[0].some((arg) => String(arg).includes('addons/mrp/**/*.py')));
+  assert.ok(calls[0].some((arg) => String(arg).includes('addons/stock/**/*.py')));
 });
