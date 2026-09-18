@@ -29,6 +29,23 @@ function remember(saved, name, value) {
   return value;
 }
 
+function normalizeSavedFieldValue(value) {
+  if (Array.isArray(value) && value.length === 2
+      && (typeof value[0] === 'number' || typeof value[0] === 'string')
+      && typeof value[1] === 'string') {
+    return value[0];
+  }
+  return value;
+}
+
+function savedFieldValues(rows, field, many) {
+  const values = rows
+    .map((row) => normalizeSavedFieldValue(row?.[field]))
+    .filter((value) => value != null);
+  if (!many) return values[0];
+  return values.flatMap((value) => Array.isArray(value) ? value : [value]);
+}
+
 export class OdooScenarioRunner {
   constructor({ executor, uiResolver, logger = console } = {}) {
     if (!executor) throw new Error('OdooScenarioRunner requires executor');
@@ -79,8 +96,7 @@ export class OdooScenarioRunner {
         state = { ...state, model, recordIds };
         if (action.saveAs) {
           const field = String(action.field || 'id');
-          const values = rows.map((row) => row?.[field]).filter((value) => value != null);
-          remember(saved, action.saveAs, action.many === true ? values : values[0]);
+          remember(saved, action.saveAs, savedFieldValues(rows, field, action.many === true));
         }
         continue;
       }
@@ -90,8 +106,7 @@ export class OdooScenarioRunner {
         const rows = await this.executor.read({ ...state, fields });
         if (action.saveAs) {
           const field = String(action.field || 'id');
-          const values = rows.map((row) => row?.[field]).filter((value) => value != null);
-          remember(saved, action.saveAs, action.many === true ? values : values[0]);
+          remember(saved, action.saveAs, savedFieldValues(rows, field, action.many === true));
         }
         continue;
       }
