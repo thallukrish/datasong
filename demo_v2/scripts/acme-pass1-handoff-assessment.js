@@ -17,7 +17,10 @@ try {
 }
 
 const topology = new ProgressiveRepositoryTopologyV9({ cacheRoot: path.resolve(process.cwd(), 'data', 'repo-cache') });
+console.log(`[acme-pass1] preparing topology for ${repoDir}`);
+const prepareStartedAt = Date.now();
 await topology.prepare(repoDir);
+console.log(`[acme-pass1] topology ready in ${((Date.now() - prepareStartedAt) / 1000).toFixed(1)}s`);
 
 const Classifier = withInitialCallPathClassifier(class {});
 const classifier = new Classifier();
