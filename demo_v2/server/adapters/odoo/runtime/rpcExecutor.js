@@ -54,11 +54,18 @@ export class OdooRpcScenarioExecutor {
     });
 
     const arch = String(views?.views?.[viewType]?.arch || '');
-    const fieldNames = [...new Set(
+    const archFieldNames = [...new Set(
       [...arch.matchAll(/<field\b[^>]*\bname=["']([^"']+)["']/gi)]
         .map((match) => String(match[1] || '').trim())
         .filter(Boolean)
     )];
+
+    const ownFields = await this.executeKw(model, 'fields_get', [], {
+      attributes: ['type', 'relation']
+    });
+    const fieldNames = archFieldNames.filter(
+      (name) => Object.prototype.hasOwnProperty.call(ownFields || {}, name)
+    );
 
     const ids = Array.isArray(recordIds) ? recordIds.filter((id) => id != null) : [];
     if (!ids.length) {
