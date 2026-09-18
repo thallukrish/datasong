@@ -51,3 +51,45 @@ test('saves created ids, finds related rows, and reuses saved ids', async () => 
   assert.deepEqual(calls[2][2], [['order_id', '=', 10]]);
   assert.deepEqual(calls[3][2], [['sale_line_id', 'in', [20]]]);
 });
+
+
+test('open can switch models using saved record ids without carrying stale ids', async () => {
+  const opens = [];
+  const executor = {
+    async beginScenario() { return 's2'; },
+    async create() { return { recordIds: [11] }; },
+    async find({ model }) {
+      if (model === 'x.related') return [{ id: 42 }];
+      return [];
+    },
+    async open(args) { opens.push(args); },
+    async read() { return []; },
+    async write() {},
+    async callMethod() {},
+    async assert() {},
+    async endScenario() {},
+    async lookup() { throw new Error('fixture lookup not expected'); }
+  };
+  const uiResolver = { async resolveClick() { return null; } };
+  const runner = new OdooScenarioRunner({ executor, uiResolver });
+
+  const result = await runner.runScenario({
+    enterpriseId: 'generic-enterprise',
+    scenario: {
+      id: 'generic-open',
+      start: { model: 'x.source', view: 'form' },
+      actions: [
+        { type: 'create', saveAs: 'source_id', values: { name: 'source' } },
+        { type: 'find', model: 'x.related', domain: [], saveAs: 'related_id' },
+        { type: 'open', model: 'x.related', recordId: { $saved: 'related_id' } },
+        { type: 'open', model: 'x.other' }
+      ]
+    }
+  });
+
+  assert.deepEqual(opens[0].recordIds, [42]);
+  assert.equal(opens[0].model, 'x.related');
+  assert.deepEqual(opens[1].recordIds, []);
+  assert.equal(opens[1].model, 'x.other');
+  assert.equal(result.saved.related_id, 42);
+});
