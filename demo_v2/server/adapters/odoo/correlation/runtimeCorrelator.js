@@ -44,21 +44,46 @@ export function correlateOdooRuntimeTrace(topology, trace) {
     matchedBySeq.push({ event, matches });
   }
 
-  for (let i = 0; i < matchedBySeq.length - 1; i += 1) {
-    const current = matchedBySeq[i];
-    const next = matchedBySeq[i + 1];
-    if (current.event.sessionId && next.event.sessionId && current.event.sessionId !== next.event.sessionId) continue;
-    const targetKey = eventKey(next.event);
+  const annotateEdge = (sourceMatches, targetEvent, targetMatches) => {
     let linked = false;
-    for (const source of current.matches) {
+    for (const source of sourceMatches) {
       for (const ref of arr(source.references)) {
         if (String(ref.relation || '') !== 'calls') continue;
-        const target = symbols.find((symbol) => String(symbol.name || '').endsWith(`:${targetKey}`) && symbolMatchesEvent(symbol, next.event));
-        if (!target || String(ref.name || '') !== String(target.name || '')) continue;
-        ref.data = { ...(ref.data || {}), runtimeEvidence: mergeEvidence(ref.data?.runtimeEvidence, next.event) };
+        const target = targetMatches.find((candidate) => String(ref.name || '') === String(candidate?.name || ''));
+        if (!target) continue;
+        ref.data = { ...(ref.data || {}), runtimeEvidence: mergeEvidence(ref.data?.runtimeEvidence, targetEvent) };
         linked = true;
       }
     }
+    return linked;
+  };
+
+  for (let i = 0; i < matchedBySeq.length; i += 1) {
+    const current = matchedBySeq[i];
+    const callerEvent = current.event?.callerModel && current.event?.callerMethod
+      ? {
+          model: current.event.callerModel,
+          method: current.event.callerMethod,
+          enterpriseId: current.event.enterpriseId,
+          scenarioId: current.event.scenarioId,
+          sessionId: current.event.sessionId
+        }
+      : null;
+    const callerMatches = callerEvent
+      ? symbols.filter((symbol) => symbolMatchesEvent(symbol, callerEvent))
+      : [];
+
+    let linked = callerMatches.length
+      ? annotateEdge(callerMatches, current.event, current.matches)
+      : false;
+
+    if (!linked && i > 0) {
+      const previous = matchedBySeq[i - 1];
+      const sameSession = !previous.event.sessionId || !current.event.sessionId
+        || previous.event.sessionId === current.event.sessionId;
+      if (sameSession) linked = annotateEdge(previous.matches, current.event, current.matches);
+    }
+
     if (linked) matchedEdges += 1;
   }
 
