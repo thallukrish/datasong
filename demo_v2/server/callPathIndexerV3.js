@@ -155,7 +155,17 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
       index,
       priority: this.pathStructuralPriority(path, profile)
     }));
-    scored.sort((a, b) => b.priority.score - a.priority.score || a.index - b.index);
+    scored.sort((a, b) => {
+      const aExcluded = Boolean(a.priority?.evidence?.excludedFromPriority);
+      const bExcluded = Boolean(b.priority?.evidence?.excludedFromPriority);
+      if (aExcluded !== bExcluded) return aExcluded ? 1 : -1;
+
+      const firstClassDiff = Number(b.priority?.evidence?.firstClassNodeCount || 0)
+        - Number(a.priority?.evidence?.firstClassNodeCount || 0);
+      if (firstClassDiff) return firstClassDiff;
+
+      return b.priority.score - a.priority.score || a.index - b.index;
+    });
     return {
       paths: scored.map((item) => item.path),
       priorityById: new Map(scored.map((item) => [item.path.id, item.priority]))
