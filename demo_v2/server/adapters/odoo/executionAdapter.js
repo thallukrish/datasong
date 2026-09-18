@@ -402,6 +402,7 @@ export class OdooExecutionAdapter {
 
     while (pendingFramework.length && visited.size < maxFrameworkMethods) {
       const current = pendingFramework.shift();
+      const descendants = [];
       const key = `${current.modelName}.${current.methodName}`;
       if (!current.modelName || !current.methodName || visited.has(key)) continue;
       visited.add(key);
@@ -466,7 +467,7 @@ export class OdooExecutionAdapter {
               for (const methodName of targets) {
                 const data = boundaryData(method.modelName, call.modelName);
                 recordBoundary(addReference(symbol, frameworkMethodName(version, call.modelName, methodName), 'calls', data), data);
-                pendingFramework.push({ modelName: call.modelName, methodName, depth: current.depth + 1 });
+                descendants.push({ modelName: call.modelName, methodName, depth: current.depth + 1 });
               }
               continue;
             }
@@ -482,7 +483,7 @@ export class OdooExecutionAdapter {
               const target = frameworkMethodName(version, targetModel, call.methodName);
               const data = boundaryData(method.modelName, targetModel);
               recordBoundary(addReference(symbol, target, 'calls', data), data);
-              pendingFramework.push({ modelName: targetModel, methodName: call.methodName, depth: current.depth + 1 });
+              descendants.push({ modelName: targetModel, methodName: call.methodName, depth: current.depth + 1 });
             } else {
               attachPersistence(symbol, call);
             }
@@ -493,6 +494,11 @@ export class OdooExecutionAdapter {
         if (odooDebugMatches(key)) odooDebug('traverse', `UNRESOLVED ${key}`);
         unresolvedCalls.push(key);
       }
+
+      // Follow descendants of the current entrypoint before moving on to the
+      // next unrelated UI seed. This prevents broad XML button discovery from
+      // consuming the framework-method budget before meaningful chains close.
+      if (descendants.length) pendingFramework.unshift(...descendants);
     }
 
     const truncated = pendingFramework.length > 0 && visited.size >= maxFrameworkMethods;
