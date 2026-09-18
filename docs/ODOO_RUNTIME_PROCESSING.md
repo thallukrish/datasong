@@ -485,16 +485,27 @@ Already implemented in the current branch:
 - first-class path-priority profile
 - static diagnostic logging
 
-Still to implement from this document:
+Implemented in the current branch:
 
-- descendant-first / queue-priority traversal fix
-- dedicated Odoo runtime harness folder
-- scenario schema + loader
-- disposable/staging execution runner
-- Odoo runtime instrumentation
-- enterprise-scoped structured trace format/store
+- descendant-first / queue-priority traversal
+- dedicated Odoo `runtime/` harness folder
+- enterprise scenario schema + loader
+- XML button resolver for user-visible click labels
+- RPC scenario executor for disposable/staging Odoo instances
+- generic Odoo runtime probe addon
+- enterprise-scoped JSONL trace loader
 - static/runtime correlator
-- generic runtime evidence annotations for CallPathIndexer
-- runtime-aware path ranking tie-breakers
+- runtime evidence annotations on static symbols and call edges
+- runtime-aware CallPathIndexer tie-breakers after first-class entity count
+- automatic correlation before CallPathIndexer when `ODOO_RUNTIME_TRACE_PATH` is set
+- ACME enterprise scenario stored outside the generic adapter
 
-This document is the contract for those additions.
+Still to implement:
+
+- Docker lifecycle orchestration that automatically mounts the probe, starts/reset the enterprise Odoo instance and runs scenario sets
+- richer fixture/data-generation helpers
+- runtime trace persistence/retention policy for SaaS
+- multi-scenario/session orchestration without restarting a disposable runtime
+- broader validation against real Odoo execution traces
+
+This document remains the contract for those additions.
