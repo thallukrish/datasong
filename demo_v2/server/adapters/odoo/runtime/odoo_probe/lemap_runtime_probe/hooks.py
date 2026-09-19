@@ -49,11 +49,18 @@ def _profile(frame, event, arg):
         return
     filename = str(frame.f_code.co_filename or '')
     normalized = filename.replace('\\', '/')
-    if '/addons/' not in normalized:
+    # Inherited ORM methods execute in Odoo core rather than add-on files.
+    is_addon = '/addons/' in normalized
+    is_core_orm = (
+        '/odoo/' in normalized
+        and not is_addon
+        and frame.f_code.co_name in {'create', 'search', 'search_read', 'read', 'write', 'unlink'}
+    )
+    if not is_addon and not is_core_orm:
         return
 
     model = _frame_model(frame)
-    if not model:
+    if not model or (is_core_orm and not model.startswith('acme.')):
         return
 
     caller = frame.f_back
