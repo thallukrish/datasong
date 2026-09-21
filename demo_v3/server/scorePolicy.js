@@ -30,13 +30,7 @@ export function normalizeStudentScores(packet, raw = {}) {
   }
 
   const novelty = Object.fromEntries(NOVELTY_FIELDS.map((field) => [field, clamp01(raw[field] ?? raw.novelty?.[field])]));
-
-  return {
-    schemaVersion: 'datasong.student-scores.v1',
-    arcScores,
-    neighbourScores,
-    ...novelty
-  };
+  return { schemaVersion: 'datasong.student-scores.v1', arcScores, neighbourScores, ...novelty };
 }
 
 export function applyStudentScores(packet, rawScores) {
@@ -56,6 +50,7 @@ export function applyStudentScores(packet, rawScores) {
   })).sort((a, b) => b.value - a.value || a.artifactId.localeCompare(b.artifactId));
 
   const bestExisting = rankedArcs[0] || null;
+  const bestNeighbour = rankedNeighbours[0] || null;
   const noveltyValue = weighted([
     [scores.newArcLikelihood, 0.40],
     [scores.newBusinessUseCaseLikelihood, 0.40],
@@ -65,21 +60,21 @@ export function applyStudentScores(packet, rawScores) {
   let action;
   if (packet.phase === 'scout') {
     const existingValue = bestExisting?.value ?? 0;
-    action = noveltyValue > existingValue
-      ? {
-          type: 'open_new_arc_candidate',
-          value: noveltyValue,
-          arcType: scores.newBusinessUseCaseLikelihood >= scores.newTechnicalUseCaseLikelihood ? 'business' : 'technical'
-        }
-      : bestExisting
-        ? { type: 'continue_existing_arc', arcId: bestExisting.arcId, value: bestExisting.value }
-        : { type: 'open_new_arc_candidate', value: noveltyValue, arcType: scores.newBusinessUseCaseLikelihood >= scores.newTechnicalUseCaseLikelihood ? 'business' : 'technical' };
+    const arcType = scores.newBusinessUseCaseLikelihood >= scores.newTechnicalUseCaseLikelihood ? 'business' : 'technical';
+    if (noveltyValue > existingValue || !bestExisting) {
+      action = bestNeighbour
+        ? { type: 'open_new_arc_candidate', artifactId: bestNeighbour.artifactId, value: noveltyValue, candidateValue: bestNeighbour.value, arcType }
+        : { type: 'no_neighbour_available', value: noveltyValue };
+    } else {
+      action = bestNeighbour
+        ? { type: 'continue_existing_arc', arcId: bestExisting.arcId, artifactId: bestNeighbour.artifactId, value: bestExisting.value, candidateValue: bestNeighbour.value }
+        : { type: 'continue_existing_arc', arcId: bestExisting.arcId, value: bestExisting.value };
+    }
   } else if (packet.phase === 'pass1') {
     action = bestExisting
       ? { type: 'select_arc', arcId: bestExisting.arcId, value: bestExisting.value }
       : { type: 'no_arc_available', value: 0 };
   } else {
-    const bestNeighbour = rankedNeighbours[0] || null;
     action = bestNeighbour
       ? { type: 'select_neighbour', artifactId: bestNeighbour.artifactId, value: bestNeighbour.value }
       : { type: 'no_neighbour_available', value: 0 };
