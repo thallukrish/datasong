@@ -9,6 +9,22 @@ import { coverageState, evaluateEntityCoverage } from './coverage.js';
 import { expandLinkedEntities, expandState, rootStates } from './stateExpander.js';
 
 const MAX_STEPS = 64;
+const summarizeLearningGaps = ({ question, logicalRequest, coverage, connectivity, accepted, steps }) => {
+  const supported = new Set([...accepted.values()].flatMap((item) => arr(item.covered).map((entry) => String(entry.dimension).toLowerCase())));
+  const missing = new Set(arr(coverage?.missing).map((value) => String(value).toLowerCase()));
+  const targets = arr(logicalRequest?.steps).map((step, index) => {
+    const requires = arr(step.requires);
+    const unmet = requires.filter((name) => missing.has(String(name).toLowerCase()) || !supported.has(String(name).toLowerCase()));
+    const relationNeedsEvidence = !connectivity?.connected && !!step.relation;
+    if (!unmet.length && !relationNeedsEvidence) return null;
+    return { stepId:`S${index + 1}`, action:step.action, requiredConcepts:requires, missingConcepts:unmet,
+      requiredRelation:step.relation || '', needsConnectivity:relationNeedsEvidence,
+      knownEntityRefs:[...accepted.keys()].slice(0, 16),
+      objective:unmet.length ? `Find evidenced fields/entities for ${unmet.join(', ')}` : `Establish evidenced structural relation: ${step.relation}` };
+  }).filter(Boolean);
+  if (!targets.length && !connectivity?.connected) targets.push({ stepId:'CONNECT', action:'Connect the accepted evidence', missingConcepts:[], needsConnectivity:true, knownEntityRefs:[...accepted.keys()].slice(0,16), objective:'Find verified schema or record-level links at the required observation grain' });
+  return { version:1, status:'needs_learning', question, grain:logicalRequest?.grain || '', plan:arr(logicalRequest?.steps).map((step,index)=>({stepId:`S${index+1}`,...step})), missingDimensions:arr(coverage?.missing), targets, evidenceRefs:[...accepted.keys()].slice(0,24), explorationSteps:steps };
+};
 const FINAL_SYSTEM = `Answer using ONLY the evidence-backed entities and evidenced joins supplied. Evidence bindings may be fields or simple expressions over supplied fields. Join fields may appear only from supplied keyMaps. LeMap's supplied connectivity paths and joins are structurally evidenced and authoritative; do not second-guess whether connected entities are related.
 
 Your job is to construct the best executable answer from the grounded evidence and state semantic uncertainty explicitly. If a required concept is not explicitly confirmed but there is one best-supported coherent evidence choice and no stronger contradictory evidence, use it and add a qualifier instead of rejecting the answer. This includes a business-event attribute on an evidenced parent/header entity when it coherently characterizes the child/detail observation, for example an order header placedDate used as the transaction date for its order items. Do not invent fields, joins, constants, or business logic. A generic lifecycle timestamp should not be treated as business-event time unless the supplied evidence supports that meaning.
@@ -343,6 +359,14 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     connectivity,
     evidencedGraph:grounded
   };
+  if (!complete) {
+    const learningRequest = summarizeLearningGaps({ question, logicalRequest, coverage, connectivity, accepted, steps:stepRef.value });
+    log('query_v4_needs_learning', { learningRequest, cumulativeUsage:{...usage} });
+    return { status:'needs_learning', answer:'', nextStep:'Targeted learning is required to establish the missing query evidence.', learningRequest,
+      investigation:{ mode:'semantic-best-first-workflow-fk-guided-v4', logicalRequest, complete:false, connected,
+        steps:stepRef.value, coverage, accepted:[...accepted.values()], connectivity,
+        frontier:frontier.snapshot(coverage.missing.length ? coverage.missing : dimensions), events, usage } };
+  }
   const finalCall = await modelJson(client, model, FINAL_SYSTEM, finalPayload, { maxTokens:900 });
   addUsage(usage, finalCall.usage);
   log('query_v4_answer', { response:finalCall.parsed, usage:finalCall.usage, cumulativeUsage:{...usage} });
