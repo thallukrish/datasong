@@ -3,6 +3,7 @@ import path from 'node:path';
 import { graphFromSemanticObjects } from '../explorer/mapPersistence.js';
 import { loadEntityDirectory } from '../entityDirectory.js';
 import { runSemanticBestFirstQueryV4 } from './queryEngine.js';
+import { createQueryLearningOrchestrator } from './queryLearningOrchestrator.js';
 
 const arr = (value) => Array.isArray(value) ? value : [];
 
@@ -51,6 +52,8 @@ function uiProjection(response = {}) {
     answer:response?.answer || '',
     status:response?.status || 'answered',
     learningRequest:response?.learningRequest || null,
+    stepAssessment:response?.stepAssessment || [],
+    learningState:response?.learningState || null,
     investigation:response?.status === 'needs_learning' ? { complete:false, missingDimensions:response?.learningRequest?.missingDimensions || [] } : undefined,
     dataView,
     relevantEntities,
@@ -105,15 +108,16 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
         mode:'semantic-best-first-workflow-first-v4'
       });
 
-      const rawResponse = await runSemanticBestFirstQueryV4({
-        question,
-        client:queryClient,
-        model:queryModel,
-        graph,
-        directory,
-        workflows,
-        log:(type, payload) => append(queryLog, type, payload)
+      const orchestrate = createQueryLearningOrchestrator({
+        // Query V4 continues to own the plan and evidence assessment. A targeted
+        // adapter learner must be registered before autoLearn can execute.
+        runQuery:({question:currentQuestion}) => runSemanticBestFirstQueryV4({
+          question:currentQuestion, client:queryClient, model:queryModel, graph, directory, workflows,
+          log:(type,payload)=>append(queryLog,type,payload)
+        }),
+        log:(type,payload)=>append(queryLog,type,payload)
       });
+      const rawResponse = await orchestrate({question, autoLearn:req.body?.autoLearn === true});
 
       append(queryLog, 'query_v4_complete', {
         question,
