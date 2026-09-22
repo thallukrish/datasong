@@ -608,3 +608,12 @@ New consumers should read the same persistent map and submit durable new knowled
 The current design can be summarized as:
 
 > **LeMap is the persistent semantic model. Learning and querying are separate processes operating around that model. Source adapters expose evidence and deterministic topology; the model supplies business meaning where structure cannot prove it; persistence retains the resulting evidence-backed knowledge for reuse.**
+
+
+---
+
+## 22. Planned query-driven targeted learning (supersedes the separate-process invariant for the target architecture)
+
+The preceding sections describe the **current implementation**. The agreed **target design** makes conversational queries the primary initiator of *targeted* learning: Query V4 first explores existing relevant workflows and entities, assesses the ordered answer plan step by step, and sends only evidenced unmet requirements to the selected adapter when the map cannot support an answer. Adapter-guided fixture generation, runtime/static correlation, PK/FK and data associations, targeted indexing, Pass 1/2 and map persistence then return the same question to Query V4. Existing-map sufficiency bypasses learning; bounded retries prevent cycles. The existing Learn UI remains useful during transition, but an exhaustive repository Learn is not a prerequisite for every query.
+
+**Detailed contract, limitations and worked ACME capacity + quality/rework examples:** [Query-driven targeted learning](QUERY_DRIVEN_TARGETED_LEARNING.md). This section describes the intended evolution, not current end-to-end implementation or live Odoo data execution.
