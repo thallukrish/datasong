@@ -49,6 +49,8 @@ export async function scoreNextStates({ intent, dimensions, missingDimensions, p
   addUsage(usage, call.usage);
 
   const rejected = new Set(arr(call.parsed?.r).map(String));
+  const cutoff = Math.max(0, Math.min(1, Number(process.env.LEMAP_QUERY_RELEVANCE_CUTOFF ?? 0.3)));
+  const thresholdRejected = [];
   const used = new Set();
   const scored = [];
   for (const item of arr(call.parsed?.c)) {
@@ -57,7 +59,17 @@ export async function scoreNextStates({ intent, dimensions, missingDimensions, p
     const state = byIndex.get(idx);
     if (!state || rejected.has(idx)) continue;
     used.add(idx);
-    scored.push({ state, score:scoreVector(dimensions, item[1]) });
+    const score = scoreVector(dimensions, item[1]);
+    const unresolvedScores = missingDimensions.map((name) => Number(score[name] || 0));
+    const best = unresolvedScores.length ? Math.max(...unresolvedScores) : 0;
+    // Schema-FK candidates may be essential bridges between otherwise relevant entities.
+    // Retain them for the deterministic connectivity check even without direct dimension support.
+    const isConnector = state?.edge?.kind === 'schema_fk';
+    if (best < cutoff && !isConnector) {
+      thresholdRejected.push({ state:state.name, type:state.type, best, cutoff });
+      continue;
+    }
+    scored.push({ state, score });
   }
   const omitted = candidates.filter((_state, index) => !used.has(String(index)) && !rejected.has(String(index)));
   log('query_v4_score_model', {
@@ -65,10 +77,12 @@ export async function scoreNextStates({ intent, dimensions, missingDimensions, p
     scored:scored.map((item) => ({ state:item.state.name, type:item.state.type, score:item.score })),
     omitted:omitted.map((state) => state.name),
     rejected:[...rejected],
+    thresholdRejected,
+    relevanceCutoff:cutoff,
     usage:call.usage,
     cumulativeUsage:{...usage}
   });
-  return { scored, omitted, rejected, usage:call.usage };
+  return { scored, omitted, rejected, thresholdRejected, usage:call.usage };
 }
 
 function relationText(rel) {
