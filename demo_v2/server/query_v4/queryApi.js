@@ -49,6 +49,9 @@ function uiProjection(response = {}) {
 
   return {
     answer:response?.answer || '',
+    status:response?.status || 'answered',
+    learningRequest:response?.learningRequest || null,
+    investigation:response?.status === 'needs_learning' ? { complete:false, missingDimensions:response?.learningRequest?.missingDimensions || [] } : undefined,
     dataView,
     relevantEntities,
     scenarios,
@@ -84,9 +87,9 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       const snapshot = explorer.snapshot();
       const graph = graphFromSemanticObjects(snapshot.semanticObjects || {});
       const entityCount = graph.filter((node) => node?.type === 'entity').length;
-      if (!entityCount) return res.status(409).json({ error:'The semantic graph has no entities yet' });
+      if (!entityCount) return res.json(uiProjection({ status:'needs_learning', nextStep:'No learned entities exist; targeted learning is required.', learningRequest:{ version:1, status:'needs_learning', question, grain:'', plan:[], targets:[{ stepId:'BOOTSTRAP', action:'Discover the initial query-relevant workflow and entities', objective:question, missingConcepts:[], knownEntityRefs:[] }], evidenceRefs:[], missingDimensions:[] } }));
       const { directory, file } = loadEntityDirectory({ dataRoot, repoUrl:snapshot.repoUrl || '' });
-      if (!directory?.groups?.length) return res.status(409).json({ error:'The entity directory is not ready yet.' });
+      if (!directory?.groups?.length) return res.json(uiProjection({ status:'needs_learning', nextStep:'The entity directory is unavailable; targeted learning is required.', learningRequest:{ version:1, status:'needs_learning', question, grain:'', plan:[], targets:[{ stepId:'BOOTSTRAP', action:'Discover and index query-relevant entity relationships', objective:question, missingConcepts:[], knownEntityRefs:[] }], evidenceRefs:[], missingDimensions:[] } }));
       const workflows = arr(snapshot?.pass1Arcs).filter(isBusinessWorkflow);
 
       console.log(`\n[lemap query-v4] ${question}`);
