@@ -137,9 +137,6 @@ function pruneUnconnectedEvidence(accepted, connectivity) {
 
 export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], enterpriseContext = {}, planningOnly = false, approvedPlan = null, planningGuidance = '', log = () => {} }) {
   const usage = { prompt:0, completion:0, total:0 };
-  const index = buildGraphIndex(graph);
-  const semanticHints = buildSemanticFieldHints(index.entities);
-  const hierarchy = buildSemanticHierarchy(directory, index.entities);
   // Give the planner an enterprise orientation, not a preselected query path.
   // Workflow names/intents are learned hypotheses, not verified end-to-end coverage.
   const processOverview = workflows.slice(0, 40).map((workflow) => ({
@@ -152,6 +149,10 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     log('query_v4_plan_review', { question, logicalRequest, planningGuidance, cumulativeUsage:{...usage} });
     return { status:'plan_review', queryPlan:logicalRequest, answer:'', nextStep:'Review the investigation plan before exploring workflows.' };
   }
+  // Only the approved exploration phase needs an entity graph and directory.
+  const index = buildGraphIndex(graph);
+  const semanticHints = buildSemanticFieldHints(index.entities);
+  const hierarchy = buildSemanticHierarchy(directory, index.entities);
   const dimensions = logicalRequest.dimensions.map((item) => item.name);
   const accepted = new Map();
   const traversedJoins = new Map();
