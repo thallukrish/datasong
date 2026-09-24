@@ -135,7 +135,7 @@ function pruneUnconnectedEvidence(accepted, connectivity) {
   return [...new Set(reopened)];
 }
 
-export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], enterpriseContext = {}, log = () => {} }) {
+export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], enterpriseContext = {}, planningOnly = false, approvedPlan = null, planningGuidance = '', log = () => {} }) {
   const usage = { prompt:0, completion:0, total:0 };
   const index = buildGraphIndex(graph);
   const semanticHints = buildSemanticFieldHints(index.entities);
@@ -147,7 +147,11 @@ export async function runSemanticBestFirstQueryV4({ question, client, model, gra
     intent:String(workflow?.businessIntent || workflow?.intent || '').slice(0, 180),
     outcome:String(workflow?.outcome || '').slice(0, 180)
   })).filter((workflow) => workflow.name);
-  const logicalRequest = await deriveDimensions({ question, client, model, usage, log, enterpriseContext, processOverview });
+  const logicalRequest = approvedPlan || await deriveDimensions({ question, client, model, usage, log, enterpriseContext, processOverview, planningGuidance });
+  if (planningOnly) {
+    log('query_v4_plan_review', { question, logicalRequest, planningGuidance, cumulativeUsage:{...usage} });
+    return { status:'plan_review', queryPlan:logicalRequest, answer:'', nextStep:'Review the investigation plan before exploring workflows.' };
+  }
   const dimensions = logicalRequest.dimensions.map((item) => item.name);
   const accepted = new Map();
   const traversedJoins = new Map();
