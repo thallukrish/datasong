@@ -1,7 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { compactVector, scoreVector } from '../query_v3/pathScore.js';
 
-const PATH_SYSTEM = `Score candidate RESULTING PATHS against the ORDERED ANSWER PLAN in the supplied intent context. The answer-plan steps are authoritative; dimensions are only the searchable concepts needed by those steps. Prefer candidates that advance the earliest unresolved analytical step while preserving already-supported prior steps. Workflow, cluster, topic, entity, workflow-member entity, and schema-linked entity are all simply candidate states. A workflow is a learned business-process hypothesis: score it by how strongly it appears to implement one or more answer-plan steps, especially a coherent contiguous portion of the early unresolved plan. Do not require one workflow to implement the whole plan. Directory seeds remain valid alternatives when they better advance the plan.
+const PATH_SYSTEM = `Score candidate RESULTING PATHS against the ORDERED ANSWER PLAN in the supplied intent context. The answer-plan steps are provisional investigation hypotheses, not evidence; dimensions are searchable concepts needed to test them. Score candidate paths for their ability to investigate the ORIGINAL QUESTION, and do not treat an easy metric as a substitute for the requested causal explanation. Prefer candidates that advance the earliest unresolved analytical step while preserving already-supported prior steps. Workflow, cluster, topic, entity, workflow-member entity, and schema-linked entity are all simply candidate states. A workflow is a learned business-process hypothesis: score it by how strongly it appears to implement one or more answer-plan steps, especially a coherent contiguous portion of the early unresolved plan. Do not require one workflow to implement the whole plan. Directory seeds remain valid alternatives when they better advance the plan.
 
 Score the accumulated path for each supplied concept, but use the answer-plan relationships/grain to decide whether apparent concept support is actually useful. A generic field that matches a concept but does not participate in the required step should score lower than evidence that completes the required relationship. Example: when the step is to associate a sales observation with transaction time, a product introduction date should not strengthen transaction_time; an order/event time attached to the same sale should. Likewise, product or region evidence should be associated with the same sale/observation grain when the plan requires that.
 
@@ -162,7 +162,7 @@ Steps describe WHAT must be established, not implementation details. For a calcu
     }))
     .filter((item) => item.action);
 
-  // Requirement closure: searchable concepts are derived from the authoritative plan,
+  // Requirement closure: searchable concepts are derived from the provisional plan,
   // not trusted solely from a separately returned dimensions list.
   const conceptMap = new Map();
   for (const item of rawDimensions) addConcept(conceptMap, item.name, item.role);
@@ -189,8 +189,9 @@ Steps describe WHAT must be established, not implementation details. For a calcu
   const relationSummary = relations.map(relationText).filter(Boolean).join('; ');
   const derivedSummary = derived.map(derivedText).filter(Boolean).join('; ');
   const scoringIntent = [
+    `ORIGINAL QUESTION: ${text(question, 500)}`,
     baseIntent,
-    stepSummary ? `ANSWER PLAN: ${stepSummary}` : '',
+    stepSummary ? `INVESTIGATION PLAN: ${stepSummary}` : '',
     grain ? `required grain: ${grain}` : '',
     relationSummary ? `required relationships: ${relationSummary}` : '',
     derivedSummary ? `derived: ${derivedSummary}` : ''
