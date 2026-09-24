@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { graphFromSemanticObjects } from '../explorer/mapPersistence.js';
 import { loadEntityDirectory } from '../entityDirectory.js';
@@ -58,11 +59,13 @@ function uiProjection(response = {}) {
     dataView,
     relevantEntities,
     scenarios,
-    nextStep:response?.nextStep || ''
+    nextStep:response?.nextStep || '',
+    queryPlan:response?.queryPlan || null
   };
 }
 
 export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
+  const pendingPlans = new Map();
   const queryRunPath = () => {
     const dir = path.join(dataRoot, 'query-runs-v4');
     fs.mkdirSync(dir, { recursive:true });
@@ -76,6 +79,11 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
     try {
       if (!queryClient) return res.status(503).json({ error:'The reasoning service is not configured' });
       const question = String(req.body?.question || '').trim();
+      const phase = String(req.body?.phase || 'plan');
+      const pendingId = String(req.body?.planId || '');
+      const pending = phase === 'explore' ? pendingPlans.get(pendingId) : null;
+      if (phase === 'explore' && !pending) return res.status(409).json({ error:'This plan is no longer available. Generate and review a new plan.' });
+      if (!['plan','explore'].includes(phase)) return res.status(400).json({ error:'Invalid query phase' });
       if (!question) return res.status(400).json({ error:'question is required' });
 
       // A persisted semantic map may have been loaded before the runtime source
@@ -102,6 +110,9 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
         description:String(req.body?.enterpriseDescription || '').slice(0,3000)
       } : { name:'', description:'' };
 
+      if (pending && (pending.question !== question || pending.repoUrl !== snapshot.repoUrl || pending.commit !== snapshot.commit)) {
+        return res.status(409).json({ error:'Question or enterprise map changed. Generate and review a new plan.' });
+      }
       console.log(`\n[lemap query-v4] ${question}`);
       console.log(`[lemap query-v4] workflow-first semantic search over ${workflows.length} workflows and ${entityCount} entities`);
       append(queryLog, 'query_v4_start', {
@@ -120,11 +131,21 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
         // adapter learner must be registered before autoLearn can execute.
         runQuery:({question:currentQuestion}) => runSemanticBestFirstQueryV4({
           question:currentQuestion, client:queryClient, model:queryModel, graph, directory, workflows, enterpriseContext,
+          planningOnly:phase === 'plan', approvedPlan:pending?.queryPlan || null,
+          planningGuidance:phase === 'plan' ? String(req.body?.planningGuidance || '').slice(0,2000) : '',
           log:(type,payload)=>append(queryLog,type,payload)
         }),
         log:(type,payload)=>append(queryLog,type,payload)
       });
-      const rawResponse = await orchestrate({question, autoLearn:req.body?.autoLearn === true});
+      const rawResponse = await orchestrate({question, autoLearn:phase === 'explore' && req.body?.autoLearn === true});
+      if (phase === 'plan' && rawResponse.status === 'plan_review') {
+        const planId = randomUUID();
+        // Bound review sessions: no exploration occurs until an explicit approval request.
+        if (pendingPlans.size >= 100) pendingPlans.delete(pendingPlans.keys().next().value);
+        pendingPlans.set(planId, { question, repoUrl:snapshot.repoUrl, commit:snapshot.commit, queryPlan:rawResponse.queryPlan });
+        return res.json({ status:'plan_review', planId, queryPlan:rawResponse.queryPlan });
+      }
+      if (phase === 'explore') pendingPlans.delete(pendingId);
 
       append(queryLog, 'query_v4_complete', {
         question,
