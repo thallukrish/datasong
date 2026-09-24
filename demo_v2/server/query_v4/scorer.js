@@ -5,7 +5,7 @@ const PATH_SYSTEM = `Score candidate RESULTING PATHS against the ORDERED ANSWER 
 
 Score the accumulated path for each supplied concept, but use the answer-plan relationships/grain to decide whether apparent concept support is actually useful. A generic field that matches a concept but does not participate in the required step should score lower than evidence that completes the required relationship. Example: when the step is to associate a sales observation with transaction time, a product introduction date should not strengthen transaction_time; an order/event time attached to the same sale should. Likewise, product or region evidence should be associated with the same sale/observation grain when the plan requires that.
 
-Do not score hypothetical future reachability beyond the supplied candidate. Preserve a prior score only when the accumulated path still supports it; raise it when the new state adds evidence or advances a required answer-plan step; lower it when the path becomes less analytically coherent. Use 1.0=direct/near-certain, 0.8=strong, 0.6=good, 0.4=plausible, 0.2=weak, 0=no support. Avoid 1.0 unless warranted. Return JSON only: {"c":[[candidateIndex,[[dimensionIndex,score]]]],"r":[candidateIndex]}. Return AT MOST 8 candidates, prioritizing paths that best advance the earliest unresolved plan steps. Omitted candidates remain eligible but unscored. r means explicitly irrelevant from supplied evidence, not merely weak. No names, reasons, or extra keys.`;
+Do not score hypothetical future reachability beyond the supplied candidate. Preserve a prior score only when the accumulated path still supports it; raise it when the new state adds evidence or advances a required answer-plan step; lower it when the path becomes less analytically coherent. Use 1.0=direct/near-certain, 0.8=strong, 0.6=good, 0.4=plausible, 0.2=weak, 0=no support. Avoid 1.0 unless warranted. Return JSON only: {"c":[[candidateIndex,[[dimensionIndex,score]]]],"r":[candidateIndex]}. Return AT MOST 5 candidates, prioritizing paths that best advance the earliest unresolved plan steps. Return SPARSE score vectors: include only meaningful nonzero support for at most 5 of the most relevant dimensions per candidate. Omit weak 0.2 scores and all zero scores; absent dimensions mean no supported evidence, not an invitation to invent support. If an accumulated path already supports a dimension, include its prior score only when still directly relevant to the unresolved plan. Never enumerate every dimension for every candidate. Omitted candidates remain eligible but unscored. r means explicitly irrelevant from supplied evidence, not merely weak. No names, reasons, or extra keys.`;
 
 function compactEvidence(state) {
   const evidence = state?.evidence;
@@ -45,7 +45,7 @@ export async function scoreNextStates({ intent, dimensions, missingDimensions, p
     o:rows
   };
   log('query_v4_score_payload', { step, payload });
-  const call = await modelJson(client, model, PATH_SYSTEM, payload, { maxTokens:420 });
+  const call = await modelJson(client, model, PATH_SYSTEM, payload, { maxTokens:1100 });
   addUsage(usage, call.usage);
 
   const rejected = new Set(arr(call.parsed?.r).map(String));
