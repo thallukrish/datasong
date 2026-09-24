@@ -139,7 +139,7 @@ Steps describe WHAT must be established, not implementation details. For a calcu
     overviewIsIncomplete:true
   };
   log('query_v4_planning_context', { enterprise:context.enterprise, learnedProcessOverview:context.learnedProcessOverview });
-  const call = await modelJson(client, model, system, context, { maxTokens:1200 });
+  const call = await modelJson(client, model, system, context, { maxTokens:3000 });
   addUsage(usage, call.usage);
 
   const rawDimensions = arr(call.parsed?.dimensions).slice(0, 16)
