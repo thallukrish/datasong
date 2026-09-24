@@ -56,39 +56,36 @@ async function createCompletion(client, model, messages, maxTokens) {
 }
 
 export async function modelJson(client, model, system, payload, { maxTokens = 1200 } = {}) {
-  const baseMessages = [
-    { role:'system', content:`Return compact JSON only. ${system}` },
-    { role:'user', content:JSON.stringify(payload) }
-  ];
-
-  const first = await createCompletion(client, model, baseMessages, maxTokens);
-  const firstRaw = first.choices?.[0]?.message?.content || '';
-  const firstUsage = usageOf(first.usage || {});
-  const firstParsed = parseJson(firstRaw);
-  if (firstParsed) return { parsed:firstParsed, raw:firstRaw, usage:firstUsage, attempts:1 };
-
-  console.warn(`[lemap query-v2] malformed model JSON; retrying once | prompt ${firstUsage.prompt} | output ${firstUsage.completion} | raw ${text(firstRaw, 320)}`);
-
-  // Retry from the original request rather than asking the model to repair a
-  // potentially truncated blob; this keeps the second prompt small and avoids
-  // circulating malformed output.
-  const retryMessages = [
-    { role:'system', content:`Return ONE complete compact JSON object only. No markdown fences, prose, comments, or trailing text. ${system}` },
-    { role:'user', content:JSON.stringify(payload) }
-  ];
-  const second = await createCompletion(client, model, retryMessages, maxTokens);
-  const secondRaw = second.choices?.[0]?.message?.content || '';
-  const secondUsage = usageOf(second.usage || {});
-  const secondParsed = parseJson(secondRaw);
-  const usage = combinedUsage(firstUsage, secondUsage);
-
-  if (!secondParsed) {
-    const error = new Error(`Query DFS model returned malformed JSON after retry; raw=${text(secondRaw || firstRaw, 500)}`);
-    error.modelUsage = usage;
-    error.modelRaw = secondRaw || firstRaw;
-    throw error;
+  const input = JSON.stringify(payload);
+  const initialBudget = Math.max(128, Math.floor(maxTokens));
+  // The caller's budget is an initial allowance, not a correctness limit.
+  // A length-terminated response is retried from the original request with
+  // more room; a syntactically malformed response gets one normal retry.
+  const maxBudget = Math.max(initialBudget, 8192);
+  const usages = [];
+  let budget = initialBudget;
+  let lastRaw = '';
+  let lastReason = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const messages = [
+      { role:'system', content:`Return ONE complete JSON object only. No markdown fences, prose, comments, or trailing text. ${system}` },
+      { role:'user', content:input }
+    ];
+    const result = await createCompletion(client, model, messages, budget);
+    lastRaw = result.choices?.[0]?.message?.content || '';
+    lastReason = result.choices?.[0]?.finish_reason || '';
+    const attemptUsage = usageOf(result.usage || {});
+    usages.push(attemptUsage);
+    const parsed = parseJson(lastRaw);
+    if (parsed) return { parsed, raw:lastRaw, usage:combinedUsage(...usages), attempts:attempt };
+    const nearBudget = attemptUsage.completion >= budget * 0.95;
+    const cutOff = lastReason === 'length' || nearBudget;
+    console.warn(`[lemap query-v2] incomplete model JSON | attempt ${attempt}/3 | finish ${lastReason || 'unknown'} | output ${attemptUsage.completion}/${budget} | retryable ${attempt < 3}`);
+    if (attempt === 3) break;
+    if (cutOff) budget = Math.min(maxBudget, Math.max(budget + 512, budget * 2));
   }
-
-  console.log(`[lemap query-v2] malformed JSON recovered on retry | retry ${secondUsage.total} tokens | combined ${usage.total}`);
-  return { parsed:secondParsed, raw:secondRaw, usage, attempts:2 };
+  const error = new Error(`Query model returned incomplete JSON after 3 attempts; finish=${lastReason || 'unknown'}; output budget=${budget}. Check model output capacity or simplify response schema.`);
+  error.modelUsage = combinedUsage(...usages);
+  error.modelRaw = lastRaw;
+  throw error;
 }
