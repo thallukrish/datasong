@@ -120,13 +120,25 @@ function addConcept(map, name, role = 'attribute') {
   if (!map.has(k)) map.set(k, { name:clean, role:text(role, 24) || 'attribute' });
 }
 
-export async function deriveDimensions({ question, client, model, usage, log }) {
-  const system = `Translate the query into an ORDERED ANSWER PLAN describing the semantic steps required to compute the user's result. The ordered steps are authoritative. Also return the concepts referenced by those steps, the analytical relationships that must hold among them, any derived calculations/ranking, and the observation grain. Do not choose workflows, states, entities, clusters, fields, or joins.
+export async function deriveDimensions({ question, client, model, usage, log, enterpriseContext = {}, processOverview = [] }) {
+  const system = `You are investigating an enterprise as a curious business-process debugger, not simply generating a report. The enterprise may operate in manufacturing, services, finance, or another domain. Use the supplied enterprise description and learned process overview to orient your investigation, without assuming the overview is complete or correct. Distinguish the user's question from a superficially similar metric; in particular, demand, available capacity, planned capacity, and actual output are not interchangeable.
 
-Return {"intent":"short","steps":[{"action":"semantic step needed to answer the query","requires":["canonical concept"],"relation":"optional relationship this step must establish"}],"dimensions":[{"name":"canonical concept","role":"measure|dimension|time|filter|attribute|derived"}],"relations":[{"from":"concept-or-grain","relation":"short semantic relationship","to":"concept-or-grain"}],"derived":[{"name":"derived result","expression":"short analytical expression","dependsOn":["canonical concept"]}],"grain":"short description of the observation grain"}.
+First identify the question's intent (description, calculation, comparison, causal explanation, or mixed). Translate it into an ORDERED, PROVISIONAL INVESTIGATION PLAN that actually answers the original question. For a "why" or troubleshooting question, establish the observed outcome and scope, formulate plausible competing explanations in relevant upstream/downstream business processes, and specify what business evidence would distinguish them. Follow handoffs and dependencies across processes rather than assuming the answer lies in a single entity. Do not assert that a hypothesis is true before evidence is found. If the question names specific orders, preserve their identity and the applicable period; do not silently turn order demand into available capacity. Include a step to reassess hypotheses when new evidence contradicts the initial plan.
 
-Steps should describe WHAT must be established, not implementation details. Example for growth: identify sales observations; associate each observation with product; associate that same observation with transaction/event time; associate it with region; aggregate at product x region x period; derive growth across periods; rank by growth. Every base concept referenced by a step, relation, or derived dependency must be represented as a searchable concept. Use transaction/event time rather than generic time when change over time is required.`;
-  const call = await modelJson(client, model, system, { question }, { maxTokens:760 });
+Return {"intent":"short","steps":[{"action":"semantic investigation step","requires":["canonical concept"],"relation":"optional relationship to establish"}],"dimensions":[{"name":"canonical concept","role":"measure|dimension|time|filter|attribute|derived"}],"relations":[{"from":"concept-or-grain","relation":"short semantic relationship","to":"concept-or-grain"}],"derived":[{"name":"derived result","expression":"short analytical expression","dependsOn":["canonical concept"]}],"grain":"short description of the observation grain"}.
+
+Steps describe WHAT must be established, not implementation details. For a calculation, include its correct inputs and grain; for a causal question, include the relevant outcomes, candidate constraints, process evidence, and the comparison needed to test explanations. Every base concept referenced by a step, relation, or derived dependency must be represented as a searchable concept. Do not choose workflows, states, entities, clusters, fields, or joins. The initial plan guides discovery and may need revision; it is not evidence that a cause exists.`;
+  const context = {
+    question,
+    enterprise:{
+      name:text(enterpriseContext?.name, 160),
+      description:text(enterpriseContext?.description, 3000)
+    },
+    learnedProcessOverview:arr(processOverview).slice(0, 40),
+    overviewIsIncomplete:true
+  };
+  log('query_v4_planning_context', { enterprise:context.enterprise, learnedProcessOverview:context.learnedProcessOverview });
+  const call = await modelJson(client, model, system, context, { maxTokens:1200 });
   addUsage(usage, call.usage);
 
   const rawDimensions = arr(call.parsed?.dimensions).slice(0, 16)
