@@ -92,7 +92,7 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       if (phase === 'plan') {
         const snapshot = explorer.snapshot();
         const workflows = arr(snapshot?.pass1Arcs).filter(isBusinessWorkflow);
-        const normalizeRepo = (value) => String(value || '').trim().replace(/\\/$/, '').toLowerCase();
+        const normalizeRepo = (value) => String(value || '').trim().replace(/\/$/, '').toLowerCase();
         const matchingProfile = normalizeRepo(req.body?.repoUrl) === normalizeRepo(snapshot.repoUrl);
         const enterpriseContext = matchingProfile ? {
           name:String(req.body?.enterpriseName || '').slice(0,160),
