@@ -135,12 +135,19 @@ function pruneUnconnectedEvidence(accepted, connectivity) {
   return [...new Set(reopened)];
 }
 
-export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], log = () => {} }) {
+export async function runSemanticBestFirstQueryV4({ question, client, model, graph, directory, workflows = [], enterpriseContext = {}, log = () => {} }) {
   const usage = { prompt:0, completion:0, total:0 };
   const index = buildGraphIndex(graph);
   const semanticHints = buildSemanticFieldHints(index.entities);
   const hierarchy = buildSemanticHierarchy(directory, index.entities);
-  const logicalRequest = await deriveDimensions({ question, client, model, usage, log });
+  // Give the planner an enterprise orientation, not a preselected query path.
+  // Workflow names/intents are learned hypotheses, not verified end-to-end coverage.
+  const processOverview = workflows.slice(0, 40).map((workflow) => ({
+    name:String(workflow?.title || workflow?.name || '').slice(0, 140),
+    intent:String(workflow?.businessIntent || workflow?.intent || '').slice(0, 180),
+    outcome:String(workflow?.outcome || '').slice(0, 180)
+  })).filter((workflow) => workflow.name);
+  const logicalRequest = await deriveDimensions({ question, client, model, usage, log, enterpriseContext, processOverview });
   const dimensions = logicalRequest.dimensions.map((item) => item.name);
   const accepted = new Map();
   const traversedJoins = new Map();
