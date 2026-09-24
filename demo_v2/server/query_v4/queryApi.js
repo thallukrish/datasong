@@ -86,6 +86,33 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       if (!['plan','explore'].includes(phase)) return res.status(400).json({ error:'Invalid query phase' });
       if (!question) return res.status(400).json({ error:'question is required' });
 
+      // Plan review needs only the already-learned workflow overview and the profile.
+      // Do not block it on schema catalog repair, entity-directory generation,
+      // or the subsequent workflow graph exploration.
+      if (phase === 'plan') {
+        const snapshot = explorer.snapshot();
+        const workflows = arr(snapshot?.pass1Arcs).filter(isBusinessWorkflow);
+        const normalizeRepo = (value) => String(value || '').trim().replace(/\\/$/, '').toLowerCase();
+        const matchingProfile = normalizeRepo(req.body?.repoUrl) === normalizeRepo(snapshot.repoUrl);
+        const enterpriseContext = matchingProfile ? {
+          name:String(req.body?.enterpriseName || '').slice(0,160),
+          description:String(req.body?.enterpriseDescription || '').slice(0,3000)
+        } : { name:'', description:'' };
+        append(queryLog, 'query_v4_plan_start', { question, repoUrl:snapshot.repoUrl || '', workflowCount:workflows.length });
+        console.log(`[lemap query-v4] preparing plan for: ${question} | workflows ${workflows.length}`);
+        const plan = await runSemanticBestFirstQueryV4({
+          question, client:queryClient, model:queryModel, workflows, enterpriseContext,
+          planningOnly:true, planningGuidance:String(req.body?.planningGuidance || '').slice(0,2000),
+          log:(type,payload)=>append(queryLog,type,payload)
+        });
+        const planId = randomUUID();
+        if (pendingPlans.size >= 100) pendingPlans.delete(pendingPlans.keys().next().value);
+        pendingPlans.set(planId, { question, repoUrl:snapshot.repoUrl, commit:snapshot.commit, queryPlan:plan.queryPlan });
+        append(queryLog, 'query_v4_plan_ready', { question, planId, stepCount:arr(plan.queryPlan?.steps).length });
+        console.log(`[lemap query-v4] plan ready | steps ${arr(plan.queryPlan?.steps).length}`);
+        return res.json({ status:'plan_review', planId, queryPlan:plan.queryPlan });
+      }
+
       // A persisted semantic map may have been loaded before the runtime source
       // schema catalog was prepared. Refresh/materialize it before taking the
       // immutable query snapshot so newly available framework/dependency edges
