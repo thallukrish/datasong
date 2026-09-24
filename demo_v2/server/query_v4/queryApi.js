@@ -94,6 +94,13 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       const { directory, file } = loadEntityDirectory({ dataRoot, repoUrl:snapshot.repoUrl || '' });
       if (!directory?.groups?.length) return res.json(uiProjection({ status:'needs_learning', nextStep:'The entity directory is unavailable; targeted learning is required.', learningRequest:{ version:1, status:'needs_learning', question, grain:'', plan:[], targets:[{ stepId:'BOOTSTRAP', action:'Discover and index query-relevant entity relationships', objective:question, missingConcepts:[], knownEntityRefs:[] }], evidenceRefs:[], missingDimensions:[] } }));
       const workflows = arr(snapshot?.pass1Arcs).filter(isBusinessWorkflow);
+      // Only use the profile for the repository currently loaded on the server.
+      const normalizeRepo = (value) => String(value || '').trim().replace(/\/$/, '').toLowerCase();
+      const matchingProfile = normalizeRepo(req.body?.repoUrl) === normalizeRepo(snapshot.repoUrl);
+      const enterpriseContext = matchingProfile ? {
+        name:String(req.body?.enterpriseName || '').slice(0,160),
+        description:String(req.body?.enterpriseDescription || '').slice(0,3000)
+      } : { name:'', description:'' };
 
       console.log(`\n[lemap query-v4] ${question}`);
       console.log(`[lemap query-v4] workflow-first semantic search over ${workflows.length} workflows and ${entityCount} entities`);
@@ -112,7 +119,7 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
         // Query V4 continues to own the plan and evidence assessment. A targeted
         // adapter learner must be registered before autoLearn can execute.
         runQuery:({question:currentQuestion}) => runSemanticBestFirstQueryV4({
-          question:currentQuestion, client:queryClient, model:queryModel, graph, directory, workflows,
+          question:currentQuestion, client:queryClient, model:queryModel, graph, directory, workflows, enterpriseContext,
           log:(type,payload)=>append(queryLog,type,payload)
         }),
         log:(type,payload)=>append(queryLog,type,payload)
