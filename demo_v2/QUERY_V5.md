@@ -74,13 +74,13 @@ Implemented:
 - map-version loop guard so an unresolved branch is not retried against unchanged evidence;
 - checkpoint after every causal edge and coarse pause/resume between edges;
 - reusable workflow-backed causal fragments with conservative structural reuse;
-- Query UI saved-investigation left rail, progress, causal/workflow/entity evidence, pause/resume, and targeted Learn handoff;
+- Query UI saved-investigation left rail, progress, rendered causal graph, per-edge workflow-stage graph, derived entity-relationship graph, pause/resume, and targeted Learn handoff;
 - structural completion stops when every required original causal edge is entity-connected.
 
 Still deliberately deferred or incomplete:
 - SQL/table execution and record-level causal proof;
 - fully automatic execution of Learn requests. V5 currently hands a precise missing construct to the existing Learn search UI, then resumes when the semantic map changes;
-- richer graph visualization and user editing of individual causal nodes/edges;
+- user editing of individual causal nodes/edges and richer interactive graph navigation;
 - stronger deterministic entity-connectivity validation across all entities in a matched stage subgraph;
 - choosing/training a local model for reusable causal-fragment matching.
 
