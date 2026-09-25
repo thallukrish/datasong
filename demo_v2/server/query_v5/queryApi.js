@@ -95,13 +95,23 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
       }
 
       const currentMapVersion=mapVersion(snapshot);
-      record={...record,status:'exploring',commit:snapshot.commit||record.commit,mapVersion:currentMapVersion};
+      record=store.save({...record,status:'exploring',commit:snapshot.commit||record.commit,mapVersion:currentMapVersion});
       const nodesById=new Map(arr(record.causalGraph?.nodes).map(n=>[n.id,n]));
       const edges=arr(record.causalGraph?.edges).map(e=>({...e}));
       const usage=record.usage||{prompt:0,completion:0,total:0};
       const learningRequests=[...arr(record.learningRequests)];
+      const checkpoint=()=>{
+        record=store.save({...record,causalGraph:{...record.causalGraph,edges},learningRequests:[...learningRequests],usage});
+        return record;
+      };
 
       for(const edge of edges){
+        const live=store.get(record.id);
+        if(live?.status==='paused'){
+          record=live;
+          append(logFile,'query_v5_paused',{investigationId:record.id,edgeId:edge.id});
+          break;
+        }
         if(edge.status==='entity_connected'||edge.status==='contradicted')continue;
         // Do not bounce Query ↔ Learn over the same unresolved branch when the
         // semantic map has not changed. Resume becomes meaningful after Learn
@@ -131,6 +141,7 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
               objective:`Find a workflow transition connecting "${nodesById.get(edge.from)?.label||edge.from}" to "${nodesById.get(edge.to)?.label||edge.to}" for hypothesis: ${edge.hypothesis}`,
               evidenceRequired:edge.evidenceRequired,status:'pending'});
           }
+          checkpoint();
           continue;
         }
         edge.status='workflow_supported';
@@ -147,6 +158,12 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
               objective:`Resolve entity/stage relationships for causal edge "${edge.hypothesis}"`,missing:entityGraph.missing,status:'pending'});
           }
         }
+        checkpoint();
+      }
+
+      if(record.status==='paused'){
+        append(logFile,'query_v5_exploration_complete',{investigationId:record.id,status:'paused',progress:progressOf(record),learningRequests:record.learningRequests,usage});
+        return res.json(publicRecord(record));
       }
 
       const graph={...record.causalGraph,edges};
