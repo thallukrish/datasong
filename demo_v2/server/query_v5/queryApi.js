@@ -16,8 +16,11 @@ function normRepo(v){ return String(v||'').trim().replace(/\/$/,'').toLowerCase(
 function workflowOverview(workflows){
   return arr(workflows).map(w=>({id:w.id,title:w.title,businessIntent:w.businessIntent,businessOutcome:w.businessOutcome||w.outcome})).slice(0,40);
 }
+function mapVersion(snapshot={}){
+  return String(snapshot?.mapPersistence?.savedAt || snapshot?.mapPersistence?.version || snapshot?.updatedAt || snapshot?.commit || 'unknown');
+}
 function edgeFingerprint(record,edge,kind,detail=''){
-  return key([record.question,record.repoUrl,record.commit,edge.id,edge.from,edge.to,kind,detail].join('|'));
+  return key([record.question,record.repoUrl,record.mapVersion,edge.id,edge.from,edge.to,kind,detail].join('|'));
 }
 function progressOf(record){
   const required=arr(record?.causalGraph?.edges).filter(e=>e.required!==false);
@@ -77,7 +80,7 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
           guidance:String(req.body?.planningGuidance||''),usage,log:(t,p)=>append(logFile,t,p)});
         const record=store.create({question,mode:plan.mode,repoUrl:snapshot.repoUrl||'',commit:snapshot.commit||'',
           observation:plan.observation,successCriterion:plan.successCriterion,causalGraph:plan.causalGraph,retrievalPlan:plan.retrievalPlan,
-          grain:plan.grain,notes:plan.notes,usage,enterpriseContext});
+          grain:plan.grain,notes:plan.notes,usage,enterpriseContext,mapVersion:mapVersion(snapshot)});
         append(logFile,'query_v5_plan_ready',{investigationId:record.id,mode:record.mode,edgeCount:arr(record.causalGraph?.edges).length});
         return res.json({status:'plan_review',investigation:publicRecord(record)});
       }
@@ -91,7 +94,8 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
         return res.json(publicRecord(record));
       }
 
-      record={...record,status:'exploring',commit:snapshot.commit||record.commit};
+      const currentMapVersion=mapVersion(snapshot);
+      record={...record,status:'exploring',commit:snapshot.commit||record.commit,mapVersion:currentMapVersion};
       const nodesById=new Map(arr(record.causalGraph?.nodes).map(n=>[n.id,n]));
       const edges=arr(record.causalGraph?.edges).map(e=>({...e}));
       const usage=record.usage||{prompt:0,completion:0,total:0};
@@ -99,6 +103,13 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
 
       for(const edge of edges){
         if(edge.status==='entity_connected'||edge.status==='contradicted')continue;
+        // Do not bounce Query ↔ Learn over the same unresolved branch when the
+        // semantic map has not changed. Resume becomes meaningful after Learn
+        // writes new evidence (or a future user-guidance revision changes it).
+        if(edge.status==='unresolved' && edge.lastMapVersion===currentMapVersion){
+          append(logFile,'query_v5_branch_unchanged',{edgeId:edge.id,mapVersion:currentMapVersion});
+          continue;
+        }
         const reusable=fragments.match(edge,nodesById,record.repoUrl);
         let workflowEvidence=[];
         if(reusable.length){
@@ -109,6 +120,7 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
           workflowEvidence=match.matches;
         }
         edge.workflowEvidence=workflowEvidence;
+        edge.lastMapVersion=currentMapVersion;
         const best=Math.max(...workflowEvidence.map(x=>Number(x.confidence||0)),0);
         if(!workflowEvidence.length||best<0.55){
           edge.status='unresolved';
