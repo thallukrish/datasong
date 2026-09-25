@@ -60,6 +60,32 @@ Show saved queries in a left panel with graph-construction progress, current bra
 
 Given the stated 12,000 units/month plant capability and specified orders, establish the scoped order/period and *planned versus actual* production obligation. Investigate as candidate, not predetermined, causal branches: component demand → availability/reservation → manufacturing readiness; work-centre scheduling/queues/downtime → execution; inspection/test → hold/rework/scrap → usable output; and links between those branches and MO completion. Trace actual corresponding workflows first; then derive the order/MO/workorder/workcentre, raw moves/procurement, and production/test/rework entity paths. Show what is structurally supported, which joins or workflow transitions need Learn, and which hypotheses cannot be completed. Do not confuse the plant's stated capacity with the affected orders' plan, or claim a measured cause before actual order-level data is queried.
 
+## Implementation checkpoint
+
+Initial V5 implementation is now present under `server/query_v5/` and is intentionally separate from V4.
+
+Implemented:
+- persisted investigation records under `data/query-runs-v5/investigations`;
+- debugging/retrieval/mixed classification and causal-graph planning;
+- user review/revision before exploration;
+- per-causal-edge matching to learned workflows and workflow stages;
+- entity graph derivation only from matched workflow-stage evidence;
+- explicit unresolved workflow-transition and entity-relationship Learn requests;
+- map-version loop guard so an unresolved branch is not retried against unchanged evidence;
+- checkpoint after every causal edge and coarse pause/resume between edges;
+- reusable workflow-backed causal fragments with conservative structural reuse;
+- Query UI saved-investigation left rail, progress, causal/workflow/entity evidence, pause/resume, and targeted Learn handoff;
+- structural completion stops when every required original causal edge is entity-connected.
+
+Still deliberately deferred or incomplete:
+- SQL/table execution and record-level causal proof;
+- fully automatic execution of Learn requests. V5 currently hands a precise missing construct to the existing Learn search UI, then resumes when the semantic map changes;
+- richer graph visualization and user editing of individual causal nodes/edges;
+- stronger deterministic entity-connectivity validation across all entities in a matched stage subgraph;
+- choosing/training a local model for reusable causal-fragment matching.
+
+V4 remains available as a baseline; the Query UI now uses V5 directly without replacing the V4 API.
+
 ## Implementation boundary
 
 Build V5 as a separate query mode/module, retaining V4's confidence, frontier exploration, workflow coherence and cross-entity relationship machinery where applicable, but replacing V4's flat dimension-coverage completion logic with graph-edge evidence and the explicit fulfillment contract. Implement in stages: persisted causal graph and review → workflow match/stage evidence → derived entity graph → bounded Learn interaction and graph revision → left-panel resume/rerun. No SQL execution in this phase.
