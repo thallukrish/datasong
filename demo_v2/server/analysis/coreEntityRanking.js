@@ -1,0 +1,231 @@
+const arr = (value) => Array.isArray(value) ? value : [];
+const key = (value) => String(value || '').trim().toLowerCase();
+
+export const WORKFLOW_CLASS_WEIGHTS = Object.freeze({
+  core_end_user: 1.00,
+  revenue_critical: 1.00,
+  core_business: 0.90,
+  operational: 0.75,
+  support: 0.45,
+  reporting: 0.30,
+  admin: 0.12,
+  configuration: 0.08,
+  technical: 0.00
+});
+
+const FUNCTIONAL_CLASSES = new Set(['core_end_user','revenue_critical','core_business','operational']);
+const SUPPORTING_CLASSES = new Set(['support','reporting']);
+const TECHNICAL_CLASSES = new Set(['admin','configuration','technical']);
+
+function workflowRole(priorityClass) {
+  const cls = key(priorityClass);
+  if (FUNCTIONAL_CLASSES.has(cls)) return 'functional';
+  if (SUPPORTING_CLASSES.has(cls)) return 'supporting';
+  if (TECHNICAL_CLASSES.has(cls)) return 'technical';
+  return 'unclassified';
+}
+
+function nodeMap(graph) {
+  return new Map(arr(graph).filter((node) => node?.id).map((node) => [node.id, node]));
+}
+
+function outgoing(node, nodes, relationship = '') {
+  return arr(node?.links)
+    .filter((link) => !relationship || link?.relationship === relationship)
+    .map((link) => ({ link, node:nodes.get(link?.nodeId) }))
+    .filter((item) => item.node);
+}
+
+function relationStrength(link = {}) {
+  const kind = key(link?.data?.relationshipKind);
+  if (kind === 'schema_fk' && arr(link?.data?.keyMaps).length) return 1;
+  if (kind === 'schema_fk') return 0.85;
+  if (kind === 'schema_reference') return 0.5;
+  return 0.65;
+}
+
+function uniqueEntityRelations(graph, nodes) {
+  const seen = new Set();
+  const relations = [];
+  for (const from of arr(graph).filter((node) => node?.type === 'entity')) {
+    for (const link of arr(from.links)) {
+      const to = nodes.get(link?.nodeId);
+      if (to?.type !== 'entity') continue;
+      const a = from.id < to.id ? from.id : to.id;
+      const b = from.id < to.id ? to.id : from.id;
+      const sig = `${a}|${b}|${key(link.relationship)}|${key(link?.data?.relationshipKind)}`;
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      relations.push({ from, to, link, strength:relationStrength(link) });
+    }
+  }
+  return relations;
+}
+
+function round(value) {
+  return Number(Number(value || 0).toFixed(3));
+}
+
+function classifyEntityRole(stats) {
+  const functional = stats.functionalWorkflowCount;
+  const supporting = stats.supportingWorkflowCount;
+  const technical = stats.technicalWorkflowCount;
+  const business = functional + supporting;
+  const stage = stats.businessStageCount;
+  const degree = stats.relationshipDegree;
+
+  if (functional > 0 && technical > 0 && technical / Math.max(1, functional + supporting + technical) >= 0.35) return 'mixed';
+  if (functional > 0) return 'functional';
+  if (supporting > 0) return 'supporting';
+
+  // A highly connected schema object with little/no direct business-stage use is
+  // structurally important but should not be mistaken for a core business object.
+  if (business === 0 && stage === 0 && degree >= 3) return 'helper';
+  if (technical > 0) return 'technical';
+  if (degree >= 2 && stage === 0) return 'helper';
+  return 'unclassified';
+}
+
+function roleMultiplier(role) {
+  switch (role) {
+    case 'functional': return 1.0;
+    case 'mixed': return 0.75;
+    case 'supporting': return 0.65;
+    case 'unclassified': return 0.45;
+    case 'helper': return 0.25;
+    case 'technical': return 0.10;
+    default: return 0.35;
+  }
+}
+
+export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
+  const nodes = nodeMap(graph);
+  const entities = arr(graph).filter((node) => node?.type === 'entity');
+  const workflows = arr(graph).filter((node) => node?.type === 'workflow');
+  const statsById = new Map(entities.map((entity) => [entity.id, {
+    entity:entity.name || entity.id,
+    entityId:entity.id,
+    description:String(entity?.data?.description || ''),
+    schemaResolved:entity?.data?.schemaResolved === true,
+    workflowIds:new Set(),
+    workflowTitles:new Set(),
+    functionalWorkflowCount:0,
+    supportingWorkflowCount:0,
+    technicalWorkflowCount:0,
+    unclassifiedWorkflowCount:0,
+    weightedWorkflowScore:0,
+    businessStageCount:0,
+    stageRefs:new Set(),
+    relationshipDegree:0,
+    evidencedRelationshipDegree:0,
+    relationshipStrength:0,
+    crossWorkflowNeighbourCount:0,
+    neighbourIds:new Set()
+  }]));
+
+  const workflowEntities = new Map();
+  for (const workflow of workflows) {
+    const cls = key(workflow?.data?.priorityClass);
+    const role = workflowRole(cls);
+    const weight = WORKFLOW_CLASS_WEIGHTS[cls] ?? 0.35;
+    const used = outgoing(workflow, nodes, 'uses entity').filter((item) => item.node.type === 'entity').map((item) => item.node);
+    const usedIds = new Set(used.map((entity) => entity.id));
+    workflowEntities.set(workflow.id, usedIds);
+
+    for (const entity of used) {
+      const stats = statsById.get(entity.id);
+      if (!stats) continue;
+      stats.workflowIds.add(workflow.id);
+      stats.workflowTitles.add(workflow.name || workflow.id);
+      stats.weightedWorkflowScore += weight;
+      if (role === 'functional') stats.functionalWorkflowCount += 1;
+      else if (role === 'supporting') stats.supportingWorkflowCount += 1;
+      else if (role === 'technical') stats.technicalWorkflowCount += 1;
+      else stats.unclassifiedWorkflowCount += 1;
+    }
+
+    const steps = outgoing(workflow, nodes, 'contains step').filter((item) => item.node.type === 'step').map((item) => item.node);
+    for (const step of steps) {
+      for (const item of outgoing(step, nodes, 'touches entity').filter((item) => item.node.type === 'entity')) {
+        const stats = statsById.get(item.node.id);
+        if (!stats) continue;
+        const stageRef = `${workflow.id}:${step.id}`;
+        if (stats.stageRefs.has(stageRef)) continue;
+        stats.stageRefs.add(stageRef);
+        if (role === 'functional' || role === 'supporting') stats.businessStageCount += 1;
+      }
+    }
+  }
+
+  const relations = uniqueEntityRelations(graph, nodes);
+  for (const rel of relations) {
+    for (const [self, other] of [[rel.from, rel.to], [rel.to, rel.from]]) {
+      const stats = statsById.get(self.id);
+      if (!stats) continue;
+      stats.relationshipDegree += 1;
+      stats.relationshipStrength += rel.strength;
+      if (rel.strength >= 0.85) stats.evidencedRelationshipDegree += 1;
+      stats.neighbourIds.add(other.id);
+    }
+  }
+
+  // Cross-workflow neighbours approximate business hand-offs. They are counted
+  // only when both entities participate in workflows and their workflow sets differ.
+  for (const stats of statsById.values()) {
+    const own = stats.workflowIds;
+    if (!own.size) continue;
+    for (const neighbourId of stats.neighbourIds) {
+      const neighbour = statsById.get(neighbourId);
+      if (!neighbour?.workflowIds?.size) continue;
+      const same = own.size === neighbour.workflowIds.size && [...own].every((id) => neighbour.workflowIds.has(id));
+      if (!same) stats.crossWorkflowNeighbourCount += 1;
+    }
+  }
+
+  const ranked = [...statsById.values()].map((stats) => {
+    const role = classifyEntityRole(stats);
+    const workflowScore = stats.weightedWorkflowScore * 3;
+    const stageScore = Math.min(stats.businessStageCount, 8) * 1.5;
+    const relationshipScore = stats.relationshipStrength * 1.25;
+    const handoffScore = Math.min(stats.crossWorkflowNeighbourCount, 8) * 1.5;
+    const schemaBonus = stats.schemaResolved ? 0.5 : 0;
+    const rawCoreScore = workflowScore + stageScore + relationshipScore + handoffScore + schemaBonus;
+    const coreScore = rawCoreScore * roleMultiplier(role);
+
+    const reasons = [];
+    if (stats.functionalWorkflowCount) reasons.push(`${stats.functionalWorkflowCount} functional workflow(s)`);
+    if (stats.supportingWorkflowCount) reasons.push(`${stats.supportingWorkflowCount} supporting workflow(s)`);
+    if (stats.technicalWorkflowCount) reasons.push(`${stats.technicalWorkflowCount} technical/admin workflow(s)`);
+    if (stats.businessStageCount) reasons.push(`${stats.businessStageCount} business workflow stage(s)`);
+    if (stats.relationshipDegree) reasons.push(`${stats.relationshipDegree} entity relationship(s)`);
+    if (stats.evidencedRelationshipDegree) reasons.push(`${stats.evidencedRelationshipDegree} strongly evidenced relationship(s)`);
+    if (stats.crossWorkflowNeighbourCount) reasons.push(`${stats.crossWorkflowNeighbourCount} cross-workflow neighbour(s)`);
+    if (role === 'helper') reasons.push('high schema connectivity relative to direct business workflow participation');
+
+    return {
+      entity:stats.entity,
+      entityId:stats.entityId,
+      role,
+      coreScore:round(coreScore),
+      rawCoreScore:round(rawCoreScore),
+      workflowScore:round(workflowScore),
+      stageScore:round(stageScore),
+      relationshipScore:round(relationshipScore),
+      handoffScore:round(handoffScore),
+      workflowCount:stats.workflowIds.size,
+      functionalWorkflowCount:stats.functionalWorkflowCount,
+      supportingWorkflowCount:stats.supportingWorkflowCount,
+      technicalWorkflowCount:stats.technicalWorkflowCount,
+      businessStageCount:stats.businessStageCount,
+      relationshipDegree:stats.relationshipDegree,
+      evidencedRelationshipDegree:stats.evidencedRelationshipDegree,
+      crossWorkflowNeighbourCount:stats.crossWorkflowNeighbourCount,
+      schemaResolved:stats.schemaResolved,
+      workflows:[...stats.workflowTitles].sort(),
+      description:stats.description,
+      reasons
+    };
+  }).sort((a,b) => b.coreScore - a.coreScore || b.functionalWorkflowCount - a.functionalWorkflowCount || b.relationshipDegree - a.relationshipDegree || a.entity.localeCompare(b.entity));
+
+  return ranked.slice(0, Math.max(0, Number(limit) || 0));
+}
