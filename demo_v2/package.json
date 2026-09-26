@@ -12,7 +12,8 @@
     "assess:acme:pass2": "node scripts/acme-pass2-handoff-assessment.js",
     "assess:acme:queries": "node scripts/acme-three-query-assessment.js",
     "test": "node --test",
-    "rank:core-entities": "node scripts/rank-core-entities.js"
+    "rank:core-entities": "node scripts/rank-core-entities.js",
+    "classify:workflow-roles": "node scripts/classify-workflow-roles.js"
   },
   "dependencies": {
     "express": "^5.1.0",
