@@ -42,6 +42,7 @@ console.table(ranked.map((item,index)=>({
   functional:item.functionalWorkflowCount,
   supporting:item.supportingWorkflowCount,
   technical:item.technicalWorkflowCount,
+  incidental:item.incidentalWorkflowCount||0,
   stages:item.businessStageCount,
   degree:item.relationshipDegree,
   evidenced:item.evidencedRelationshipDegree,
