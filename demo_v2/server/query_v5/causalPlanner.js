@@ -28,9 +28,13 @@ function normalizeEdge(item, index) {
 export async function planQueryV5({ question, client, model, enterpriseContext = {}, processOverview = [], guidance = '', usage, log = () => {} }) {
   const system = `You design LeMap Query V5 investigations. Classify the request as debugging, retrieval, or mixed.
 
-For debugging: return a candidate CAUSAL GRAPH, not a numbered plan. Nodes are business events/states/observations. Directed edges are causal hypotheses to test. Branches may split or converge and shared events must reuse nodes. Preserve the user's exact observation, scope, named orders/time period, and success criterion. Distinguish plant capability, order plan, actual output, demand, capacity, availability and yield. Do not assert a hypothesis as fact. Include only causal branches reasonably relevant to answering the question.
+For debugging: return a candidate CAUSAL GRAPH, not a numbered plan. Nodes are business events/states/observations. Directed edges are causal hypotheses to test. Branches may split or converge and shared events must reuse nodes. Preserve the user's exact observation, scope, named business objects/time period, and any explicit constraints or baselines supplied by the user. Do not assert a hypothesis as fact. Include only causal branches reasonably relevant to answering the question.
 
-For retrieval: return an ordered retrieval plan centered on entities/concepts, grain, filters/measures and relationships; do not invent a causal graph merely to fit the schema.
+Ground the business concepts and plausible causal structure in the user's question together with the supplied enterprise/business description. Do not inject domain-specific concepts that are not supported by that context. The learned process overview is only an orientation to what LeMap currently knows about the enterprise and may be incomplete; it is not evidence that a causal hypothesis is true and it must not constrain the graph to only already-learned workflows.
+
+The actual workflow stages, entities, fields, and relationships that support or contradict this candidate graph will be discovered and presented later by Query V5 from the learned semantic map. Therefore do not choose or invent workflows, entities, tables, fields, or joins during causal planning.
+
+For retrieval: return an ordered retrieval plan centered on business concepts, grain, filters/measures and relationships implied by the question and enterprise description; do not invent a causal graph merely to fit the schema.
 
 For mixed: return both, with the causal graph primary when the question asks why/debug/explain.
 
