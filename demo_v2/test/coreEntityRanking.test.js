@@ -55,3 +55,25 @@ test('cross-workflow neighbour raises handoff evidence', () => {
   assert.equal(ranked[0].crossWorkflowNeighbourCount,1);
   assert.equal(ranked[1].crossWorkflowNeighbourCount,1);
 });
+
+test('explicit workflow functionalRole overrides legacy priorityClass for ranking', () => {
+  const graph=[
+    node('wf1','workflow','Peripheral UI action',{priorityClass:'core_business',functionalRole:'incidental'},[
+      link('e1','uses entity'),link('s1','contains step')
+    ]),
+    node('s1','step','Open wizard',{},[link('e1','touches entity')]),
+    node('wf2','workflow','Primary operation',{priorityClass:'support',functionalRole:'core'},[
+      link('e2','uses entity'),link('s2','contains step')
+    ]),
+    node('s2','step','Run operation',{},[link('e2','touches entity'),link('e2b','touches entity'),link('e2c','touches entity')]),
+    node('e1','entity','ui.action',{}),
+    node('e2','entity','business.order',{}),
+    node('e2b','entity','business.line',{}),
+    node('e2c','entity','business.event',{})
+  ];
+  const ranked=rankCoreEntities(graph,{limit:10});
+  const byName=new Map(ranked.map(x=>[x.entity,x]));
+  assert.equal(byName.get('ui.action').incidentalWorkflowCount,1);
+  assert.equal(byName.get('business.order').functionalWorkflowCount,1);
+  assert.ok(byName.get('business.order').coreScore > byName.get('ui.action').coreScore);
+});
