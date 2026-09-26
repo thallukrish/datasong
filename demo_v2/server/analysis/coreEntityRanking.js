@@ -70,30 +70,36 @@ function classifyEntityRole(stats) {
   const functional = stats.functionalWorkflowCount;
   const supporting = stats.supportingWorkflowCount;
   const technical = stats.technicalWorkflowCount;
-  const business = functional + supporting;
+  const total = functional + supporting + technical + stats.unclassifiedWorkflowCount;
   const stage = stats.businessStageCount;
   const degree = stats.relationshipDegree;
+  const functionalShare = total ? functional / total : 0;
+  const technicalShare = total ? technical / total : 0;
 
-  if (functional > 0 && technical > 0 && technical / Math.max(1, functional + supporting + technical) >= 0.35) return 'mixed';
-  if (functional > 0) return 'functional';
+  // Functional requires repeated business use, or one functional workflow plus
+  // meaningful direct stage participation. One incidental workflow is not enough.
+  if (functional >= 2 && functionalShare >= 0.5 && stage >= 1) return 'functional';
+  if (functional >= 1 && stage >= 3 && technicalShare < 0.34) return 'functional';
+
+  if (functional > 0 && technical > 0 && technicalShare >= 0.34) return 'mixed';
+  if (supporting >= 1 && functional === 0 && technicalShare < 0.5) return 'supporting';
+  if (technical >= 1 && functional === 0 && supporting === 0) return 'technical';
+
+  // Highly connected objects with weak direct business participation are helpers.
+  if (stage === 0 && degree >= 3) return 'helper';
+  if (functional + supporting === 0 && degree >= 2) return 'helper';
   if (supporting > 0) return 'supporting';
-
-  // A highly connected schema object with little/no direct business-stage use is
-  // structurally important but should not be mistaken for a core business object.
-  if (business === 0 && stage === 0 && degree >= 3) return 'helper';
-  if (technical > 0) return 'technical';
-  if (degree >= 2 && stage === 0) return 'helper';
   return 'unclassified';
 }
 
 function roleMultiplier(role) {
   switch (role) {
     case 'functional': return 1.0;
-    case 'mixed': return 0.75;
-    case 'supporting': return 0.65;
-    case 'unclassified': return 0.45;
-    case 'helper': return 0.25;
-    case 'technical': return 0.10;
+    case 'mixed': return 0.60;
+    case 'supporting': return 0.50;
+    case 'unclassified': return 0.35;
+    case 'helper': return 0.15;
+    case 'technical': return 0.05;
     default: return 0.35;
   }
 }
@@ -184,12 +190,19 @@ export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
 
   const ranked = [...statsById.values()].map((stats) => {
     const role = classifyEntityRole(stats);
-    const workflowScore = stats.weightedWorkflowScore * 3;
-    const stageScore = Math.min(stats.businessStageCount, 8) * 1.5;
-    const relationshipScore = stats.relationshipStrength * 1.25;
-    const handoffScore = Math.min(stats.crossWorkflowNeighbourCount, 8) * 1.5;
+    // Workflow semantics dominate. Connectivity only refines the ranking.
+    const workflowScore = stats.weightedWorkflowScore * 5;
+    const stageScore = Math.min(stats.businessStageCount, 10) * 2;
+
+    // Raw degree can explode for generic ERP hub entities, so both connectivity
+    // signals are deliberately logarithmic and capped.
+    const relationshipScore = Math.min(Math.log2(1 + stats.relationshipDegree), 5) * 1.25;
+    const handoffScore = Math.min(Math.log2(1 + stats.crossWorkflowNeighbourCount), 4) * 1.5;
+
+    // Strongly evidenced FK relationships are useful, but only as a small bonus.
+    const evidenceBonus = Math.min(stats.evidencedRelationshipDegree, 5) * 0.75;
     const schemaBonus = stats.schemaResolved ? 0.5 : 0;
-    const rawCoreScore = workflowScore + stageScore + relationshipScore + handoffScore + schemaBonus;
+    const rawCoreScore = workflowScore + stageScore + relationshipScore + handoffScore + evidenceBonus + schemaBonus;
     const coreScore = rawCoreScore * roleMultiplier(role);
 
     const reasons = [];
@@ -212,6 +225,7 @@ export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
       stageScore:round(stageScore),
       relationshipScore:round(relationshipScore),
       handoffScore:round(handoffScore),
+      evidenceBonus:round(evidenceBonus),
       workflowCount:stats.workflowIds.size,
       functionalWorkflowCount:stats.functionalWorkflowCount,
       supportingWorkflowCount:stats.supportingWorkflowCount,
