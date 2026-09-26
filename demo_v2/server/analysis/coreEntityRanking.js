@@ -16,13 +16,22 @@ export const WORKFLOW_CLASS_WEIGHTS = Object.freeze({
 const FUNCTIONAL_CLASSES = new Set(['core_end_user','revenue_critical','core_business','operational']);
 const SUPPORTING_CLASSES = new Set(['support','reporting']);
 const TECHNICAL_CLASSES = new Set(['admin','configuration','technical']);
+const FUNCTIONAL_ROLE_WEIGHTS = Object.freeze({ core:1.00, supporting:0.40, incidental:0.08, technical:0.00 });
 
-function workflowRole(priorityClass) {
-  const cls = key(priorityClass);
-  if (FUNCTIONAL_CLASSES.has(cls)) return 'functional';
-  if (SUPPORTING_CLASSES.has(cls)) return 'supporting';
-  if (TECHNICAL_CLASSES.has(cls)) return 'technical';
-  return 'unclassified';
+function workflowSemantics(workflow) {
+  const explicit = key(workflow?.data?.functionalRole);
+  if (Object.hasOwn(FUNCTIONAL_ROLE_WEIGHTS, explicit)) {
+    return {
+      source:'functionalRole',
+      role:explicit === 'core' ? 'functional' : explicit,
+      weight:FUNCTIONAL_ROLE_WEIGHTS[explicit]
+    };
+  }
+  const cls = key(workflow?.data?.priorityClass);
+  if (FUNCTIONAL_CLASSES.has(cls)) return { source:'priorityClass', role:'functional', weight:WORKFLOW_CLASS_WEIGHTS[cls] ?? 0.75 };
+  if (SUPPORTING_CLASSES.has(cls)) return { source:'priorityClass', role:'supporting', weight:WORKFLOW_CLASS_WEIGHTS[cls] ?? 0.35 };
+  if (TECHNICAL_CLASSES.has(cls)) return { source:'priorityClass', role:'technical', weight:WORKFLOW_CLASS_WEIGHTS[cls] ?? 0 };
+  return { source:'fallback', role:'unclassified', weight:0.20 };
 }
 
 function nodeMap(graph) {
@@ -70,7 +79,7 @@ function classifyEntityRole(stats) {
   const functional = stats.functionalWorkflowCount;
   const supporting = stats.supportingWorkflowCount;
   const technical = stats.technicalWorkflowCount;
-  const total = functional + supporting + technical + stats.unclassifiedWorkflowCount;
+  const total = functional + supporting + technical + stats.incidentalWorkflowCount + stats.unclassifiedWorkflowCount;
   const stage = stats.businessStageCount;
   const degree = stats.relationshipDegree;
   const functionalShare = total ? functional / total : 0;
@@ -118,6 +127,7 @@ export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
     functionalWorkflowCount:0,
     supportingWorkflowCount:0,
     technicalWorkflowCount:0,
+    incidentalWorkflowCount:0,
     unclassifiedWorkflowCount:0,
     weightedWorkflowScore:0,
     businessStageCount:0,
@@ -131,9 +141,9 @@ export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
 
   const workflowEntities = new Map();
   for (const workflow of workflows) {
-    const cls = key(workflow?.data?.priorityClass);
-    const role = workflowRole(cls);
-    const weight = WORKFLOW_CLASS_WEIGHTS[cls] ?? 0.35;
+    const semantics = workflowSemantics(workflow);
+    const role = semantics.role;
+    const weight = semantics.weight;
     const used = outgoing(workflow, nodes, 'uses entity').filter((item) => item.node.type === 'entity').map((item) => item.node);
     const usedIds = new Set(used.map((entity) => entity.id));
     workflowEntities.set(workflow.id, usedIds);
@@ -147,6 +157,7 @@ export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
       if (role === 'functional') stats.functionalWorkflowCount += 1;
       else if (role === 'supporting') stats.supportingWorkflowCount += 1;
       else if (role === 'technical') stats.technicalWorkflowCount += 1;
+      else if (role === 'incidental') stats.incidentalWorkflowCount += 1;
       else stats.unclassifiedWorkflowCount += 1;
     }
 
@@ -208,7 +219,8 @@ export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
     const reasons = [];
     if (stats.functionalWorkflowCount) reasons.push(`${stats.functionalWorkflowCount} functional workflow(s)`);
     if (stats.supportingWorkflowCount) reasons.push(`${stats.supportingWorkflowCount} supporting workflow(s)`);
-    if (stats.technicalWorkflowCount) reasons.push(`${stats.technicalWorkflowCount} technical/admin workflow(s)`);
+    if (stats.technicalWorkflowCount) reasons.push(`${stats.technicalWorkflowCount} technical workflow(s)`);
+    if (stats.incidentalWorkflowCount) reasons.push(`${stats.incidentalWorkflowCount} incidental workflow(s)`);
     if (stats.businessStageCount) reasons.push(`${stats.businessStageCount} business workflow stage(s)`);
     if (stats.relationshipDegree) reasons.push(`${stats.relationshipDegree} entity relationship(s)`);
     if (stats.evidencedRelationshipDegree) reasons.push(`${stats.evidencedRelationshipDegree} strongly evidenced relationship(s)`);
@@ -230,6 +242,7 @@ export function rankCoreEntities(graph = [], { limit = 25 } = {}) {
       functionalWorkflowCount:stats.functionalWorkflowCount,
       supportingWorkflowCount:stats.supportingWorkflowCount,
       technicalWorkflowCount:stats.technicalWorkflowCount,
+      incidentalWorkflowCount:stats.incidentalWorkflowCount,
       businessStageCount:stats.businessStageCount,
       relationshipDegree:stats.relationshipDegree,
       evidencedRelationshipDegree:stats.evidencedRelationshipDegree,
