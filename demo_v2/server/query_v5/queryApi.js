@@ -92,7 +92,7 @@ export function registerQueryV5Api({ app, explorer, topology, queryClient, query
           guidance:String(req.body?.planningGuidance||''),usage,log:(t,p)=>append(logFile,t,p)
         });
         const record=store.create({question,mode:plan.mode,repoUrl:snapshot.repoUrl||'',commit:snapshot.commit||'',
-          observation:plan.observation,successCriterion:plan.successCriterion,causalGraph:plan.causalGraph,retrievalPlan:plan.retrievalPlan,
+          observation:plan.observation,successCriterion:plan.successCriterion,preconditions:plan.preconditions,causalGraph:plan.causalGraph,retrievalPlan:plan.retrievalPlan,
           grain:plan.grain,notes:plan.notes,usage,enterpriseContext,frameworkContext:grounding.framework,
           plannerGrounding:{coreWorkflows:grounding.learned.coreWorkflows,coreEntities:grounding.learned.coreEntities},
           mapVersion:mapVersion(snapshot)});
@@ -127,7 +127,7 @@ export function registerQueryV5Api({ app, explorer, topology, queryClient, query
           append(logFile,'query_v5_paused',{investigationId:record.id,edgeId:edge.id});
           break;
         }
-        if(edge.status==='entity_connected'||edge.status==='contradicted')continue;
+        if(edge.active===false||edge.status==='entity_connected'||edge.status==='contradicted')continue;
         // Do not bounce Query ↔ Learn over the same unresolved branch when the
         // semantic map has not changed. Resume becomes meaningful after Learn
         // writes new evidence (or a future user-guidance revision changes it).
