@@ -370,6 +370,7 @@ registerQueryApi({
 });
 
 registerQueryV2Api({
+  topology,
   app,
   explorer,
   queryClient,
