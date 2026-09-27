@@ -6,6 +6,7 @@ import { matchCausalEdgeToWorkflows } from './workflowMatcher.js';
 import { deriveEntityGraphForEdge } from './entityGraph.js';
 import { createInvestigationStore } from './investigationStore.js';
 import { createCausalFragmentStore } from './fragmentStore.js';
+import { buildPlannerGrounding } from './plannerGrounding.js';
 
 function isBusinessWorkflow(workflow) {
   const marks=[workflow?.classification,workflow?.qualification,workflow?.pathNature,workflow?.evidenceClassification].map(v=>String(v||'').toLowerCase());
@@ -37,7 +38,7 @@ function structuralComplete(record){
   return required.length>0 && required.every(e=>e.status==='entity_connected');
 }
 
-export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog=()=>{} }) {
+export function registerQueryV5Api({ app, explorer, topology, queryClient, queryModel, dataRoot, onLatestLog=()=>{} }) {
   const store=createInvestigationStore(dataRoot);
   const fragments=createCausalFragmentStore(dataRoot);
   const logsDir=path.join(dataRoot,'query-runs-v5');
@@ -76,11 +77,25 @@ export function registerQueryV5Api({ app, explorer, queryClient, queryModel, dat
         const question=String(req.body?.question||'').trim();
         if(!question)return res.status(400).json({error:'question is required'});
         const usage={prompt:0,completion:0,total:0};
-        const plan=await planQueryV5({question,client:queryClient,model:queryModel,enterpriseContext,processOverview:workflowOverview(workflows),
-          guidance:String(req.body?.planningGuidance||''),usage,log:(t,p)=>append(logFile,t,p)});
+        const grounding=buildPlannerGrounding({dataRoot,repoUrl:snapshot.repoUrl||'',topology});
+        append(logFile,'query_v5_grounding',{
+          framework:grounding.framework,
+          coreWorkflows:grounding.learned.coreWorkflows,
+          coreEntities:grounding.learned.coreEntities,
+          mapFound:grounding.learned.mapFound,
+          mapFile:grounding.learned.mapFile
+        });
+        const plan=await planQueryV5({
+          question,client:queryClient,model:queryModel,enterpriseContext,
+          frameworkContext:grounding.framework,learnedGrounding:grounding.learned,
+          processOverview:workflowOverview(workflows),
+          guidance:String(req.body?.planningGuidance||''),usage,log:(t,p)=>append(logFile,t,p)
+        });
         const record=store.create({question,mode:plan.mode,repoUrl:snapshot.repoUrl||'',commit:snapshot.commit||'',
           observation:plan.observation,successCriterion:plan.successCriterion,causalGraph:plan.causalGraph,retrievalPlan:plan.retrievalPlan,
-          grain:plan.grain,notes:plan.notes,usage,enterpriseContext,mapVersion:mapVersion(snapshot)});
+          grain:plan.grain,notes:plan.notes,usage,enterpriseContext,frameworkContext:grounding.framework,
+          plannerGrounding:{coreWorkflows:grounding.learned.coreWorkflows,coreEntities:grounding.learned.coreEntities},
+          mapVersion:mapVersion(snapshot)});
         append(logFile,'query_v5_plan_ready',{investigationId:record.id,mode:record.mode,edgeCount:arr(record.causalGraph?.edges).length});
         return res.json({status:'plan_review',investigation:publicRecord(record)});
       }
