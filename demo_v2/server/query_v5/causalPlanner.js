@@ -10,14 +10,25 @@ function normalizeNode(item, index) {
   };
 }
 
+function normalizePriority(value) {
+  const v=String(value||'').toLowerCase();
+  return ['high','medium','low'].includes(v)?v:'medium';
+}
+
 function normalizeEdge(item, index) {
+  const level=Math.max(1,Math.min(3,Number(item?.level||1)));
   return {
     id:text(item?.id || `e${index + 1}`, 60),
     from:text(item?.from, 60),
     to:text(item?.to, 60),
     hypothesis:text(item?.hypothesis, 260),
     evidenceRequired:arr(item?.evidenceRequired).map(v => text(v, 120)).filter(Boolean).slice(0,12),
-    required:item?.required !== false,
+    priority:normalizePriority(item?.priority),
+    investigationOrder:Math.max(1,Number(item?.investigationOrder||index+1)),
+    level,
+    parentHypothesisId:text(item?.parentHypothesisId,60),
+    active:item?.active !== false && level===1,
+    required:item?.required !== false && level===1,
     status:status(item?.status),
     workflowEvidence:[],
     entityEvidence:[],
@@ -28,7 +39,13 @@ function normalizeEdge(item, index) {
 export async function planQueryV5({ question, client, model, enterpriseContext = {}, frameworkContext = {}, learnedGrounding = {}, processOverview = [], guidance = '', usage, log = () => {} }) {
   const system = `You design LeMap Query V5 investigations. Classify the request as debugging, retrieval, or mixed.
 
-For debugging: return a candidate CAUSAL GRAPH, not a numbered plan. Nodes are business events/states/observations. Directed edges are causal hypotheses to test. Branches may split or converge and shared events must reuse nodes. Preserve the user's exact observation, scope, named business objects/time period, and any explicit constraints or baselines supplied by the user. Do not assert a hypothesis as fact. Include only causal branches reasonably relevant to answering the question.
+For debugging: return a candidate CAUSAL GRAPH, not a flat list of every plausible cause. Nodes are business events/states/observations. Directed edges are causal hypotheses to test. Branches may split or converge and shared events must reuse nodes. Preserve the user's exact observation, scope, named business objects/time period, and any explicit constraints or baselines supplied by the user. Do not assert a hypothesis as fact.
+
+Separate PRECONDITIONS from causal hypotheses. A precondition is something that must be true for the user's question or comparison to be meaningful, but which the user did not explicitly establish. For example, if full capacity can only be used when released demand is at least the stated capacity, express that as a precondition to verify rather than silently treating it as fact.
+
+For the causal graph, produce a small first investigation layer of the most important broad hypotheses, normally 3 to 5. Rank those primary hypotheses by investigation priority using high, medium, or low plus investigationOrder. Put narrower mechanisms under the relevant primary hypothesis as level-2 child hypotheses. Do not promote every detailed framework-specific mechanism to a primary branch. Child hypotheses are dormant initially and should have active=false and required=false. Primary level-1 hypotheses should have active=true and required=true.
+
+Prefer hypotheses whose resolution would eliminate or substantially narrow whole groups of downstream causes. The initial investigation should test broad discriminating branches before detailed mechanisms.
 
 Ground the business concepts and plausible causal structure in four layers:
 1. the user's question and explicit constraints/baselines,
@@ -49,8 +66,9 @@ For retrieval: return an ordered retrieval plan centered on business concepts, g
 For mixed: return both, with the causal graph primary when the question asks why/debug/explain.
 
 Return JSON:
-{"mode":"debugging|retrieval|mixed","observation":"what must be explained or retrieved","successCriterion":"when structural exploration may stop","causalGraph":{"nodes":[{"id":"n1","label":"","kind":"observation|event|state|constraint"}],"edges":[{"id":"e1","from":"n1","to":"n2","hypothesis":"","evidenceRequired":[""],"required":true}]},"retrievalPlan":[{"action":"","requires":[""],"relation":""}],"grain":"","notes":""}.
-Do not select workflows, entities, tables, fields or joins. The graph is a hypothesis structure for later evidence matching.`;
+{"mode":"debugging|retrieval|mixed","observation":"what must be explained or retrieved","successCriterion":"when structural exploration may stop","preconditions":[{"id":"p1","statement":"","whyRequired":"","evidenceRequired":[""]}],"causalGraph":{"nodes":[{"id":"n1","label":"","kind":"observation|event|state|constraint"}],"edges":[{"id":"e1","from":"n1","to":"n2","hypothesis":"","evidenceRequired":[""],"priority":"high|medium|low","investigationOrder":1,"level":1,"parentHypothesisId":"","active":true,"required":true}]},"retrievalPlan":[{"action":"","requires":[""],"relation":""}],"grain":"","notes":""}.
+Use level=1 for broad primary hypotheses and level=2 for narrower child mechanisms. Child hypotheses must reference their parentHypothesisId and be active=false, required=false.
+Do not select implementation tables, fields or joins. Framework entity names may appear only when they help describe a business concept, not as proof. The graph is a hypothesis structure for later evidence matching.`;
   const payload = {
     question,
     guidance:text(guidance, 2400),
@@ -89,6 +107,12 @@ Do not select workflows, entities, tables, fields or joins. The graph is a hypot
     mode:['debugging','retrieval','mixed'].includes(call.parsed?.mode) ? call.parsed.mode : 'debugging',
     observation:text(call.parsed?.observation || question, 500),
     successCriterion:text(call.parsed?.successCriterion, 500),
+    preconditions:arr(call.parsed?.preconditions).slice(0,8).map((item,index)=>({
+      id:text(item?.id||`p${index+1}`,60),
+      statement:text(item?.statement,320),
+      whyRequired:text(item?.whyRequired,320),
+      evidenceRequired:arr(item?.evidenceRequired).map(v=>text(v,120)).filter(Boolean).slice(0,10)
+    })).filter(item=>item.statement),
     causalGraph:{ nodes, edges },
     retrievalPlan:arr(call.parsed?.retrievalPlan).slice(0,16).map(item => ({
       action:text(item?.action,220),
