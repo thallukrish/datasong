@@ -7,12 +7,12 @@ import { registerQueryV4Api } from '../query_v4/queryApi.js';
 import { registerQueryV5Api } from '../query_v5/queryApi.js';
 import { runSemanticDfsQuery } from './queryEngine.js';
 
-export function registerQueryV2Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
+export function registerQueryV2Api({ app, explorer, topology, queryClient, queryModel, dataRoot, onLatestLog = () => {} }) {
   registerQueryV3Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog });
   console.log('[DataSong v2] QUERY V3: semantic best-first state search with global confidence frontier → /api/query-map-v3');
   registerQueryV4Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog });
   console.log('[DataSong v2] QUERY V4: parallel workflow + directory seeding → shared global frontier → /api/query-map-v4');
-  registerQueryV5Api({ app, explorer, queryClient, queryModel, dataRoot, onLatestLog });
+  registerQueryV5Api({ app, explorer, topology, queryClient, queryModel, dataRoot, onLatestLog });
   console.log('[DataSong v2] QUERY V5: persisted causal investigations → /api/query-map-v5');
 
   const queryRunPath = () => {
