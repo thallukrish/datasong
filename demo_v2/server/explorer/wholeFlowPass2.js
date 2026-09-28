@@ -126,6 +126,17 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const retry = attempt > 0;
       const prompt = retry ? `${args.dynamicPrompt}\nRETRY: return complete valid JSON only.` : args.dynamicPrompt;
+      if (this.state?.semanticProfile === 'code') {
+        await this.appendRunLog({
+          type: 'code_flow_semantic_input',
+          explorationStep: this.state.step,
+          retry,
+          timestamp: new Date().toISOString(),
+          arcId: this.pass1().activeArc()?.id || '',
+          branchIndex: args.observation?.canonical?.branchIndex ?? null,
+          executableFlow: args.observation?.canonical?.executableFlow || null
+        });
+      }
       const result = await this.callAndRecordAttempt({ dynamicPrompt: prompt, observation: args.observation, candidates: [], before: args.before, maxTokens: undefined, retry });
       try {
         const parsed = this.normalizeWholeFlowPass2(JSON.parse(result.raw), args.observation);
