@@ -153,3 +153,29 @@ Enterprise semantics may filter by business meaning.
 Code semantics admits all executable flow families and interprets them neutrally.
 
 Future profiles can reuse the same boundary, for example framework-specific Java semantics, Python package semantics, or other domain policies, without forking the deterministic call-path engine.
+
+
+## Experiment logging
+
+Learning interactions are written as JSON Lines under:
+
+```text
+demo_v2/data/runs/*.jsonl
+```
+
+For reproducible generic-code/SWE-Explore experiments the log records:
+
+- repository URL and exact commit
+- model
+- semantic profile
+- each model prompt
+- each raw model response
+- parsed semantic response
+- retries and parse failures
+- token usage and cumulative usage
+- semantic state before and after applied calls
+- exact compressed executable-flow/source-evidence package supplied to generic Pass 2
+
+Generic Pass 2 emits a `code_flow_semantic_input` event immediately before the corresponding model attempt. Its `executableFlow.codeEvidence` contains the bounded signatures, parameters as represented in signatures, function bodies, source locations and references used for semantic interpretation.
+
+This log is the primary artifact for diagnosing whether a SWE-Explore miss came from call-path construction, missing source evidence, semantic interpretation, or later issue-to-flow retrieval.
