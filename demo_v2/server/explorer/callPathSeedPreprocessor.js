@@ -82,7 +82,9 @@ export const withCallPathSeedPreprocessor = (Base) => class CallPathSeedPreproce
     const qualified = parsed.paths.filter((item) => codeMode
       ? item.classification === 'code_flow' && item.flowTitle
       : item.classification === 'business_flow' && item.confidence >= 0.55 && item.flowTitle && item.businessActor && item.businessIntent && item.completionCondition && item.businessOutcome);
-    const containment = this.deterministicContainment(qualified, byPath);
+    const containment = codeMode
+      ? qualified.map((item) => ({ item, signatures: this.clippedSignatures(byPath.get(item.pathId), item), containedBy: '', contains: [] }))
+      : this.deterministicContainment(qualified, byPath);
     const relationById = new Map(containment.map((entry) => [entry.item.pathId, entry]));
     state.deterministicContainment = containment.map((entry) => ({ pathId: entry.item.pathId, coherentFunctionCount: entry.signatures.length, containedBy: entry.containedBy, contains: entry.contains }));
 
@@ -124,7 +126,7 @@ export const withCallPathSeedPreprocessor = (Base) => class CallPathSeedPreproce
     state.seededArcIds = seeded.map((arc) => arc.id);
     state.status = 'complete';
     this.state.lastMessage = seeded.length
-      ? `Call-path preprocessing seeded ${seeded.length} maximal coherent business flow${seeded.length === 1 ? '' : 's'}; contained paths were attached deterministically.`
-      : 'Call-path preprocessing found no direct business-flow seed.';
+      ? (codeMode ? `Code semantics admitted ${seeded.length} executable flow${seeded.length === 1 ? '' : 's'} for whole-flow interpretation.` : `Call-path preprocessing seeded ${seeded.length} maximal coherent business flow${seeded.length === 1 ? '' : 's'}; contained paths were attached deterministically.`)
+      : (codeMode ? 'No executable code-flow seed was produced.' : 'Call-path preprocessing found no direct business-flow seed.');
   }
 };
