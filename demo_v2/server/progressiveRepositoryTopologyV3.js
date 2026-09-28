@@ -11,6 +11,10 @@ function isQualified(name) { return /[.#:/]/.test(String(name || '')); }
 
 export class ProgressiveRepositoryTopologyV3 extends ProgressiveRepositoryTopologyV2 {
   resolveOutboundReference(symbol, ref) {
+    if (ref?.targetSymbolId) {
+      const exact = this.symbolById.get(String(ref.targetSymbolId));
+      return exact ? [exact] : [];
+    }
     const name = String(ref?.name || '');
     const simple = String(ref?.simpleName || '');
     const indexed = this.nameIndex.get(lower(name)) || [];
