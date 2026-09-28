@@ -253,7 +253,7 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
         arc.opportunityScore = 0;
       } else if (flow.completed) {
         arc.closureState = 'needs_more_evidence';
-        arc.closureReason = 'path interpreted but insufficient business steps/entities/relationships were evidenced';
+        arc.closureReason = this.state?.semanticProfile === 'code' ? 'code flow interpreted but semantic detail is still sparse' : 'path interpreted but insufficient business steps/entities/relationships were evidenced';
         arc.progress = Math.min(Number(arc.progress || 0), 60);
         arc.status = 'unresolved';
         arc.opportunityScore = 0;
