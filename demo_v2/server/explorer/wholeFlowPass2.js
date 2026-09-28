@@ -48,7 +48,7 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
     const update = raw?.arcUpdate && typeof raw.arcUpdate === 'object' ? raw.arcUpdate : {};
     const normalized = this.normalizePass12({
       meaning: String(raw?.meaning || '').trim(),
-      evidenceClassification: 'business_use_case',
+      evidenceClassification: this.state?.semanticProfile === 'code' ? 'technical' : 'business_use_case',
       arcFits: arc ? [{
         arcId: arc.id,
         continuity: fit.continuity,
@@ -112,7 +112,10 @@ export const withWholeFlowPass2 = (Base) => class WholeFlowPass2Explorer extends
 
   async callModel(dynamicPrompt, maxTokens) {
     if (String(dynamicPrompt || '').startsWith('MODE pass2-whole-compressed-flow-v1')) {
-      return this.lightweightModelCall(PASS2_FLOW_SYSTEM, dynamicPrompt, 'PASS 2 WHOLE COMPRESSED FLOW INTERPRETER');
+      const system = this.state?.semanticProfile === 'code'
+        ? "You are LeMap's CODE-FLOW SEMANTIC INTERPRETER. You receive one complete deterministic compressed executable flow family. Explain the code behavior, data structures, effects, and relationships using only supplied evidence. Do not apply business-process filtering. Return strict compact JSON only."
+        : PASS2_FLOW_SYSTEM;
+      return this.lightweightModelCall(system, dynamicPrompt, this.state?.semanticProfile === 'code' ? 'CODE FLOW SEMANTIC INTERPRETER' : 'PASS 2 WHOLE COMPRESSED FLOW INTERPRETER');
     }
     return super.callModel(dynamicPrompt, maxTokens);
   }
