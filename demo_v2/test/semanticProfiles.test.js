@@ -43,3 +43,22 @@ test('enterprise arc remains the default qualification', () => {
   assert.equal(arc.qualification, 'business_use_case');
   assert.equal(arc.semanticKind, 'business_workflow');
 });
+
+
+test('generic code evidence can include source bodies for representative and alternate symbols', async () => {
+  const { RepositoryExplorer } = await import('../server/repositoryExplorer.js');
+  const topology = {
+    symbolById: new Map([
+      ['a', { id: 'a', name: 'parse', symbolKind: 'function', signature: 'function parse(input)', sourcePath: 'src/a.js', startLine: 1, endLine: 3, body: 'function parse(input) { return normalize(input); }', references: [{ name: 'normalize', relation: 'calls' }] }],
+      ['b', { id: 'b', name: 'normalize', symbolKind: 'function', signature: 'function normalize(input)', sourcePath: 'src/b.js', startLine: 1, endLine: 3, body: 'function normalize(input) { return input.trim(); }', references: [] }]
+    ])
+  };
+  const explorer = new RepositoryExplorer({ topology, dataRoot: '.', onState() {} });
+  explorer.setSemanticProfile('code');
+  const evidence = explorer.codeFlowEvidence({ symbolIds: ['a'], alternatives: [{ symbolIds: ['b'] }] });
+
+  assert.deepEqual(evidence.map((item) => item.symbolId), ['a', 'b']);
+  assert.match(evidence[0].signature, /input/);
+  assert.match(evidence[0].body, /normalize/);
+  assert.equal(evidence[1].sourcePath, 'src/b.js');
+});
