@@ -160,6 +160,23 @@ def resolve_attribute(rec, node, inferred):
             return module_defs.get(imp["module"], {}).get(attr)
     return None
 
+entry_targets = set()
+for mod, info in modules.items():
+    for node in info["tree"].body:
+        if not isinstance(node, ast.If):
+            continue
+        try:
+            test = ast.unparse(node.test).replace(" ", "")
+        except Exception:
+            test = ""
+        if test not in {"__name__=='__main__'", '"__main__"==__name__', "'__main__'==__name__"}:
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                target = resolve_name(mod, child.func.id)
+                if target:
+                    entry_targets.add((target["module"], target["qualified"]))
+
 symbols = []
 for rec in defs.values():
     node = rec["node"]
@@ -205,7 +222,8 @@ for rec in defs.values():
         "references": refs,
         "language": "python",
         "className": rec["class"],
-        "moduleName": rec["module"]
+        "moduleName": rec["module"],
+        "entryPoint": (rec["module"], rec["qualified"]) in entry_targets or (rec["class"] is None and rec["name"] == "main")
     })
 
 print(json.dumps({"version": 1, "symbols": symbols}, ensure_ascii=False))
