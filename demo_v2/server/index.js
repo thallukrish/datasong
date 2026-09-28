@@ -134,6 +134,7 @@ function uiState(snapshot = explorer.snapshot()) {
   }
   return {
     status: snapshot?.status || 'idle',
+    semanticProfile: snapshot?.semanticProfile || 'enterprise',
     repoUrl: snapshot?.repoUrl || '',
     commit: snapshot?.commit || '',
     stopRequested: !!snapshot?.stopRequested,
@@ -350,6 +351,7 @@ app.post('/api/explore', async (req, res) => {
   if (!repoUrl) return res.status(400).json({ error: 'repoUrl is required' });
   if (running) return res.status(409).json({ error: 'An exploration is already running' });
   running = true; res.status(202).json({ ok: true });
+  explorer.setSemanticProfile?.(String(req.body?.semanticProfile || 'enterprise'));
   explorer.run(repoUrl)
     .then((state) => console.log(`[DataSong v2] ${state.status} — ${state.lastMessage || 'exploration finished'}`))
     .catch((error) => { const state = explorer.snapshot(); state.status = 'error'; state.lastMessage = error.message; explorer.state = state; broadcast(state); console.error(`[DataSong v2] exploration failed: ${error.message}`); })
