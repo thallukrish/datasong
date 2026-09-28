@@ -27,12 +27,13 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
 
   async prepare(repoUrl) {
     const prep = await super.prepare(repoUrl);
-    await this.augmentPythonAstGraph();
+    const pythonAst = await this.augmentPythonAstGraph();
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
     this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
     this.callPathIndex = this.callPathIndexer.build();
     return {
       ...prep,
+      pythonAst,
       moquiEntitySchema: this.moquiEntitySchema,
       moquiXmlExecution: this.moquiXmlExecution,
       callPathIndex: {
@@ -50,7 +51,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
   async augmentPythonAstGraph() {
     const result = await analyzePythonRepository({ repoDir: this.repoDir, files: this.files });
     const pythonSymbols = Array.isArray(result?.symbols) ? result.symbols : [];
-    if (!pythonSymbols.length) return;
+    if (!pythonSymbols.length) return { version: Number(result?.version || 1), symbolCount: 0, resolvedCallCount: 0, unresolvedCallCount: 0 };
 
     const pythonPaths = new Set(pythonSymbols.map((symbol) => symbol.sourcePath));
     this.symbols = this.symbols.filter((symbol) => !pythonPaths.has(symbol.sourcePath));
@@ -75,6 +76,13 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         }
       }
     }
+    const pythonRefs = pythonSymbols.flatMap((symbol) => Array.isArray(symbol.references) ? symbol.references : []);
+    return {
+      version: Number(result?.version || 1),
+      symbolCount: pythonSymbols.length,
+      resolvedCallCount: pythonRefs.filter((ref) => ref.targetSymbolId).length,
+      unresolvedCallCount: pythonRefs.filter((ref) => !ref.targetSymbolId).length
+    };
   }
 
   entitySchema(name) {
