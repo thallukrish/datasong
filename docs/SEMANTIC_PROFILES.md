@@ -71,6 +71,41 @@ For generic code semantics, there is no equivalent business filter. Conceptually
 
 The existing scheduler/arc state is retained as execution infrastructure so persistence, resume, UI, coverage, branch follow-up, and map materialization continue to work.
 
+## Generic Pass 2 source evidence
+
+The call-path index is the traversal authority, but a generic software flow cannot be understood reliably from function names alone.
+
+For the `code` profile, LeMap therefore enriches each grouped flow family with bounded source evidence for every locally parsed symbol participating in the representative path and its grouped branch/alternate variants.
+
+The evidence package contains:
+
+```text
+symbol id
+function/method name
+symbol kind
+signature (including parsed parameter text)
+source path
+start/end lines
+bounded function body
+local references and relation types
+```
+
+The current parser already stores this information for JavaScript and Python symbols. Generic Pass 2 reuses that parser output; it does not perform another repository search or introduce another parser.
+
+The resulting interpretation path is:
+
+```text
+deterministic grouped call path
+→ collect source evidence for exactly the functions in that flow family
+→ whole-flow semantic interpretation
+→ optional semantic follow-up for materially ambiguous indexed branches
+→ semantic map
+```
+
+The indexed flow order remains authoritative. Function bodies enrich the meaning of the known path; the model must not use them to invent or wander into a different traversal.
+
+This is deliberately different from the older DFS-style Pass 2. The model does not decide which function to visit next. LeMap already knows the executable path and deterministically supplies the bounded vertical slice.
+
 ## SWE-Explore usage
 
 Create an enterprise/profile in the LeMap UI.
@@ -94,6 +129,7 @@ SWE-Explore repository
 → call-path indexing
 → branch/cycle merging
 → grouped flow families
+→ collect bounded function signatures, parameters, bodies and references for the indexed flow
 → code-flow semantic interpretation
 → flow/data-structure semantic map
 ```
