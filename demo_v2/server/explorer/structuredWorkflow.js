@@ -42,8 +42,35 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
       sourcePaths: uniq(grouped?.sourcePaths),
       entrySymbolId: grouped?.entrySymbolId || '',
       signatures: arr(grouped?.signatures),
-      entitySchemas
+      entitySchemas,
+      ...(this.state?.semanticProfile === 'code' ? { codeEvidence: this.codeFlowEvidence(grouped) } : {})
     };
+  }
+
+  codeFlowEvidence(grouped) {
+    if (this.state?.semanticProfile !== 'code' || !grouped) return [];
+    const ids = uniq(grouped.symbolIds);
+    const symbols = ids.map((id) => this.topology?.symbolById?.get(id)).filter(Boolean);
+    const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
+    const ordered = [];
+    for (const id of ids) {
+      const symbol = byId.get(id);
+      if (symbol && !ordered.includes(symbol)) ordered.push(symbol);
+    }
+    return ordered.map((symbol) => ({
+      symbolId: symbol.id,
+      name: symbol.name || '',
+      kind: symbol.symbolKind || '',
+      signature: text(symbol.signature, 500),
+      sourcePath: symbol.sourcePath || '',
+      startLine: Number(symbol.startLine || 0),
+      endLine: Number(symbol.endLine || 0),
+      body: text(symbol.body, 2800),
+      references: arr(symbol.references).slice(0, 40).map((ref) => ({
+        name: text(ref?.name, 180),
+        relation: text(ref?.relation, 80)
+      }))
+    }));
   }
 
   wholeFlowPrompt(observation) {
@@ -86,9 +113,11 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
         `RETURN ${JSON.stringify(contract)}`,
         'Rules:',
         '- Explain the supplied executable chain as software behavior. Do not apply enterprise or business-process filtering.',
+        '- CODE_EVIDENCE is deterministic source evidence for functions on this indexed flow. Use function signatures, parameters, bodies, references, and source locations to infer semantics.',
+        '- Follow EXECUTABLE_FLOW order as authoritative. CODE_EVIDENCE enriches meaning; it must not be used to invent a different traversal.',
         '- Preserve execution order and explain control flow, calls, transformations, mutations, IO, returns, and data movement when evidenced.',
         '- Treat classes, objects, parameters, return values, collections, records, files, and schemas as data structures/entities when materially useful.',
-        '- Do not invent behavior outside the supplied deterministic flow.',
+        '- Do not invent behavior outside the supplied deterministic flow or CODE_EVIDENCE.',
         '- Every admitted flow is worth semantic interpretation; technical code is not lower priority merely because it is technical.',
         '- unresolvedBranches is only for materially ambiguous supplied branches.',
         `- Valid unresolved branch indexes are 0..${Math.max(-1, branchCount - 1)}.`,
