@@ -509,7 +509,7 @@ export class SemanticExplorer {
     await fs.mkdir(runs, { recursive: true });
     const id = new Date().toISOString().replace(/[:.]/g, '-');
     this.runLogPath = path.join(runs, `${id}.jsonl`);
-    await this.appendRunLog({ type: 'run_start', timestamp: new Date().toISOString(), repoUrl: prep.repoUrl, commit: prep.commit, searchableFiles: prep.searchableFiles, model: this.modelName, contract: 'orientation-plus-semantic-bridge-v3' });
+    await this.appendRunLog({ type: 'run_start', timestamp: new Date().toISOString(), repoUrl: prep.repoUrl, commit: prep.commit, searchableFiles: prep.searchableFiles, model: this.modelName, semanticProfile: this.state?.semanticProfile || this.semanticProfile || 'enterprise', contract: 'orientation-plus-semantic-bridge-v3' });
   }
 
   async appendRunLog(record) {
