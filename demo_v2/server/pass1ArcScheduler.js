@@ -36,7 +36,7 @@ export class Pass1ArcScheduler {
   ensureArcIdentity(arc) {
     const scheduler = this.state().pass1Scheduler || this.ensureState();
     if (!arc.id) arc.id = `arc-${scheduler.nextArcNumber++}`;
-    arc.qualification = 'business_use_case';
+    if (!arc.qualification) arc.qualification = 'business_use_case';
     if (!Number.isFinite(Number(arc.progress))) arc.progress = 0;
     if (!Number.isFinite(Number(arc.opportunityScore))) arc.opportunityScore = 0;
     if (!Number.isFinite(Number(arc.lastScheduledStep))) arc.lastScheduledStep = 0;
@@ -143,7 +143,7 @@ export class Pass1ArcScheduler {
   }
 
   createArc(seed, observation) {
-    const qualifies = seed?.qualifiesAsBusinessUseCase === true || seed?.qualification === 'business_use_case' || seed?._admittedFromHypothesis === true;
+    const qualifies = seed?.qualifiesAsBusinessUseCase === true || ['business_use_case', 'code_flow'].includes(seed?.qualification) || seed?._admittedFromHypothesis === true;
     if (!qualifies) return this.createHypothesis(seed, observation);
 
     const title = text(seed?.title, 180);
@@ -155,6 +155,8 @@ export class Pass1ArcScheduler {
     }
     const arc = this.ensureArcIdentity({
       title,
+      qualification: seed?.qualification === 'code_flow' ? 'code_flow' : 'business_use_case',
+      semanticKind: seed?.semanticKind || (seed?.qualification === 'code_flow' ? 'code_flow' : 'business_workflow'),
       concept: text(seed?.concept || seed?.reason, 320),
       trigger: text(seed?.businessActor || seed?.trigger, 300),
       businessIntent: text(seed?.businessIntent || seed?.intent, 320),
@@ -308,7 +310,7 @@ export class Pass1ArcScheduler {
     const scheduler = this.ensureState();
     const step = Number(this.state().step || 0);
     const ranked = this.arcs()
-      .filter((arc) => arc.qualification === 'business_use_case')
+      .filter((arc) => ['business_use_case', 'code_flow'].includes(arc.qualification))
       .filter((arc) => arc.status !== 'broadly_complete' || Number(arc.opportunityScore || 0) >= 0.45)
       .map((arc) => {
         const age = Math.max(0, step - Number(arc.lastScheduledStep || 0));
