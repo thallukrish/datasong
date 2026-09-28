@@ -48,6 +48,54 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
 
   wholeFlowPrompt(observation) {
     const arc = this.pass1().activeArc();
+    if (this.state?.semanticProfile === 'code') {
+      const state = this.flowState(arc);
+      const flow = observation?.canonical?.executableFlow || {};
+      const branchCount = arr(flow?.flow?.branches).length;
+      const contract = {
+        meaning: 'brief technical interpretation of the complete executable flow or branch',
+        arcFit: { continuity: 1, coherence: 1, expectedGain: 1, reason: 'brief' },
+        arcUpdate: {
+          evidenceRole: 'major|supporting|trivial',
+          title: 'concise behavior name',
+          trigger: 'entry condition or invocation, if evidenced',
+          workflowSteps: [{
+            name: 'short code step name', description: 'what this part of the code does',
+            entities: ['in-memory or persistent data structures participating here'],
+            persistentObjects: ['persistent records/files/tables only when evidenced'],
+            effect: 'state, return value, mutation, IO, call, or control-flow effect',
+            sourcePath: 'best matching supplied source path, else empty'
+          }],
+          entityDetails: [{ name: 'data structure/type/object', description: 'role in this code flow', fields: [] }],
+          relationshipDetails: [{ from: 'source step/data structure', relation: 'code/data relationship', to: 'target', description: 'what connects them' }],
+          outcome: 'observable code-level result/effect',
+          persistentObjects: [],
+          externalEffects: [],
+          status: 'broadly_complete'
+        },
+        unresolvedBranches: [{ branchIndex: '0-based exact branch index', reason: 'why this branch needs a separate semantic pass' }],
+        flowAction: 'complete|inspect_branches'
+      };
+      return [
+        'MODE pass2-whole-compressed-flow-v1',
+        'SEMANTIC_PROFILE code',
+        'SCHEMA code-flow-semantics-v1',
+        `ACTIVE_FLOW ${JSON.stringify({ arcId: arc?.id || '', title: arc?.title || '', knownPurpose: arc?.businessIntent || '' })}`,
+        `EXECUTABLE_FLOW ${JSON.stringify(flow)}`,
+        `ALREADY_INTERPRETED_BRANCHES ${JSON.stringify(arr(state?.interpretedBranchIndexes))}`,
+        `RETURN ${JSON.stringify(contract)}`,
+        'Rules:',
+        '- Explain the supplied executable chain as software behavior. Do not apply enterprise or business-process filtering.',
+        '- Preserve execution order and explain control flow, calls, transformations, mutations, IO, returns, and data movement when evidenced.',
+        '- Treat classes, objects, parameters, return values, collections, records, files, and schemas as data structures/entities when materially useful.',
+        '- Do not invent behavior outside the supplied deterministic flow.',
+        '- Every admitted flow is worth semantic interpretation; technical code is not lower priority merely because it is technical.',
+        '- unresolvedBranches is only for materially ambiguous supplied branches.',
+        `- Valid unresolved branch indexes are 0..${Math.max(-1, branchCount - 1)}.`,
+        '- Never request repository search or arbitrary neighbors from this pass.',
+        '- Keep output compact but sufficiently descriptive to support later issue/query matching.'
+      ].join('\n');
+    }
     const state = this.flowState(arc);
     const flow = observation?.canonical?.executableFlow || {};
     const branchCount = arr(flow?.flow?.branches).length;
@@ -194,10 +242,11 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
       const interpreted = Number(flow.wholeFlowCalls || 0) > 0 || Number(flow.branchCalls || 0) > 0;
       if (!interpreted || !noPendingBranches) continue;
       const depth = this.evidenceDepth(arc);
-      flow.businessEvidenceDepth = depth;
+      flow.semanticEvidenceDepth = depth;
+      if (this.state?.semanticProfile !== 'code') flow.businessEvidenceDepth = depth;
       if (depth.sufficient && flow.completed) {
         arc.closureState = 'closed';
-        arc.closureReason = 'compressed path interpreted with sufficient business evidence';
+        arc.closureReason = this.state?.semanticProfile === 'code' ? 'compressed code flow interpreted with sufficient semantic evidence' : 'compressed path interpreted with sufficient business evidence';
         arc.closedAt = arc.closedAt || new Date().toISOString();
         arc.progress = 100;
         if (arc.status !== 'unresolved') arc.status = 'broadly_complete';
