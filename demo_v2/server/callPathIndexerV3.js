@@ -130,6 +130,8 @@ export class CallPathIndexerV3 extends CallPathIndexerV2 {
         return {
           pathId: path.id,
           functionCount: path.functionCount,
+          symbolIds: arr(path.symbolIds),
+          sourcePaths: arr(path.sourcePaths),
           signatures: path.signatures,
           normalizedFlowTokens: path.normalizedFlowTokens,
           relations: path.relations,
