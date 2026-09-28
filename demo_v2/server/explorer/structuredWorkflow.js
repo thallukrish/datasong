@@ -49,7 +49,7 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
 
   codeFlowEvidence(grouped) {
     if (this.state?.semanticProfile !== 'code' || !grouped) return [];
-    const ids = uniq(grouped.symbolIds);
+    const ids = uniq([...(arr(grouped.symbolIds)), ...arr(grouped.alternatives).flatMap((alt) => arr(alt?.symbolIds))]);
     const symbols = ids.map((id) => this.topology?.symbolById?.get(id)).filter(Boolean);
     const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
     const ordered = [];
@@ -65,7 +65,7 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
       sourcePath: symbol.sourcePath || '',
       startLine: Number(symbol.startLine || 0),
       endLine: Number(symbol.endLine || 0),
-      body: text(symbol.body, 2800),
+      body: String(symbol.body || '').slice(0, 2800),
       references: arr(symbol.references).slice(0, 40).map((ref) => ({
         name: text(ref?.name, 180),
         relation: text(ref?.relation, 80)
