@@ -314,6 +314,7 @@ export class CodeTopology {
     const name = `${symbol.name} ${symbol.sourcePath}`.toLowerCase();
     const incoming = (this.callers.get(symbol.id) || []).length;
     if (incoming === 0) score += 25;
+    if (symbol.entryPoint === true) score += 80;
     if (['transition', 'screen', 'service'].includes(symbol.symbolKind)) score += 35;
     if (/(route|handler|controller|screen|transition|service|process|submit|create|place|checkout|order|approve|import|export|run|execute)/.test(name)) score += 20;
     if (/(test|spec|mock|fixture|util|helper)/.test(name)) score -= 15;
