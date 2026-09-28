@@ -25,6 +25,25 @@ export const withInitialCallPathClassifier = (Base) => class InitialCallPathClas
 
   callPathPrompt() {
     const paths = this.topology.topCallPaths(10).map((path) => this.compactCallPath(path));
+    if (this.state?.semanticProfile === 'code') {
+      const contract = { summary: 'brief description of supplied executable flows', paths: [{
+        pathId: 'exact supplied pathId', classification: 'code_flow', confidence: 0,
+        flowTitle: 'concise software behavior name', businessIntent: 'technical purpose of the flow',
+        coherentThroughSignature: 'last compact token belonging to this coherent flow', reason: 'short evidence-based description'
+      }] };
+      return [
+        'MODE call-path-code-flow-seed-v1',
+        `RETURN_CONTRACT ${JSON.stringify(contract)}`,
+        'Rules:',
+        '- Every supplied executable path is eligible code behavior; do not filter paths for business importance.',
+        '- Use only supplied normalized executable structure.',
+        '- Name what the code does, not who a business actor is.',
+        '- External calls terminate known repository behavior; never invent their implementation.',
+        '- coherentThroughSignature must be an exact supplied compact token.',
+        '- Keep descriptions compact and classify every supplied path as code_flow.',
+        `DYNAMIC_EXECUTABLE_FLOW_CANDIDATES ${JSON.stringify(paths)}`
+      ].join('\n');
+    }
     return ['MODE call-path-business-seed-classification-v4', `RETURN_CONTRACT ${JSON.stringify(CONTRACT)}`, RULES, `DYNAMIC_EXECUTABLE_FLOW_CANDIDATES ${JSON.stringify(paths)}`].join('\n');
   }
 
@@ -38,6 +57,12 @@ export const withInitialCallPathClassifier = (Base) => class InitialCallPathClas
   }
 
   async callModel(dynamicPrompt, maxTokens) {
+    if (String(dynamicPrompt || '').startsWith('MODE call-path-code-flow-seed-v1')) {
+      return this.lightweightModelCall(
+        "You are LeMap's CODE-FLOW SEED NAMER. Describe every supplied executable flow neutrally as software behavior. Do not apply business-value filtering. Return strict compact JSON only.",
+        dynamicPrompt, 'CALL-PATH CODE-FLOW SEED NAMER V1'
+      );
+    }
     if (String(dynamicPrompt || '').startsWith('MODE call-path-business-seed-classification-v4')) {
       return this.lightweightModelCall(`You are lemap's CALL-PATH BUSINESS-FLOW SEED CLASSIFIER. You receive compact deterministic normalized executable flow structures from the supplied repository boundary. Do not reconstruct omitted source/XML details or infer implementations for external calls. Classify each coherent business flow and assign business priority. Return strict compact JSON only.`, dynamicPrompt, 'CALL-PATH BUSINESS-FLOW SEED CLASSIFIER V4');
     }
@@ -49,13 +74,30 @@ export const withInitialCallPathClassifier = (Base) => class InitialCallPathClas
     const byId = new Map(arr(raw?.paths).map((item) => [item?.pathId, item]));
     parsed.paths = arr(parsed.paths).map((item) => {
       const source = byId.get(item.pathId) || {};
+      if (this.state?.semanticProfile === 'code') {
+        return {
+          ...item,
+          classification: source.classification === 'code_flow' ? 'code_flow' : 'code_flow',
+          confidence: clamp01(source.confidence || 0.7),
+          flowTitle: text(source.flowTitle || item.flowTitle || item.pathId, 180),
+          businessActor: '',
+          businessIntent: text(source.businessIntent || source.reason, 280),
+          completionCondition: '',
+          businessOutcome: '',
+          coherentThroughSignature: text(source.coherentThroughSignature, 500),
+          reason: text(source.reason, 300),
+          businessPriority: 0,
+          priorityClass: 'technical',
+          priorityReason: ''
+        };
+      }
       return { ...item, businessPriority: clamp01(source.businessPriority), priorityClass: PRIORITY_CLASSES.has(source.priorityClass) ? source.priorityClass : (item.classification === 'technical' ? 'technical' : 'core_business'), priorityReason: text(source.priorityReason, 300) };
     });
     return parsed;
   }
 
   async getSemanticUpdate(args) {
-    if (!String(args.dynamicPrompt || '').startsWith('MODE call-path-business-seed-classification-v4')) return super.getSemanticUpdate(args);
+    if (!['MODE call-path-business-seed-classification-v4', 'MODE call-path-code-flow-seed-v1'].some((prefix) => String(args.dynamicPrompt || '').startsWith(prefix))) return super.getSemanticUpdate(args);
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const retry = attempt > 0;
