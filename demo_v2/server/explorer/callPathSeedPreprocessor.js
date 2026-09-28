@@ -11,7 +11,7 @@ const clamp01 = (value) => {
 export const withCallPathSeedPreprocessor = (Base) => class CallPathSeedPreprocessorExplorer extends Base {
   normalizeCallPathClassification(raw) {
     const known = new Set(this.topology.topCallPaths(10).map((path) => path.id));
-    const allowed = new Set(['business_flow', 'technical', 'uncertain']);
+    const allowed = new Set(['business_flow', 'code_flow', 'technical', 'uncertain']);
     return {
       _callPathPreprocess: true,
       summary: text(raw?.summary, 400),
@@ -78,7 +78,10 @@ export const withCallPathSeedPreprocessor = (Base) => class CallPathSeedPreproce
 
     state.classifications = parsed.paths;
     state.reviewedPathIds = parsed.paths.map((item) => item.pathId);
-    const qualified = parsed.paths.filter((item) => item.classification === 'business_flow' && item.confidence >= 0.55 && item.flowTitle && item.businessActor && item.businessIntent && item.completionCondition && item.businessOutcome);
+    const codeMode = this.state?.semanticProfile === 'code';
+    const qualified = parsed.paths.filter((item) => codeMode
+      ? item.classification === 'code_flow' && item.flowTitle
+      : item.classification === 'business_flow' && item.confidence >= 0.55 && item.flowTitle && item.businessActor && item.businessIntent && item.completionCondition && item.businessOutcome);
     const containment = this.deterministicContainment(qualified, byPath);
     const relationById = new Map(containment.map((entry) => [entry.item.pathId, entry]));
     state.deterministicContainment = containment.map((entry) => ({ pathId: entry.item.pathId, coherentFunctionCount: entry.signatures.length, containedBy: entry.containedBy, contains: entry.contains }));
@@ -94,7 +97,15 @@ export const withCallPathSeedPreprocessor = (Base) => class CallPathSeedPreproce
         continue;
       }
       const path = byPath.get(item.pathId);
-      const arc = this.pass1().createArc({ title: item.flowTitle, concept: item.reason, businessActor: item.businessActor, businessIntent: item.businessIntent, confidence: item.confidence, qualifiesAsBusinessUseCase: true, qualification: 'call_path_preprocessor' }, { id: path?.entrySymbolId || '', path: path?.sourcePaths?.[0] || '' });
+      const arc = this.pass1().createArc({
+        title: item.flowTitle, concept: item.reason,
+        businessActor: codeMode ? '' : item.businessActor,
+        businessIntent: item.businessIntent,
+        confidence: codeMode ? Math.max(0.5, item.confidence || 0) : item.confidence,
+        qualifiesAsBusinessUseCase: !codeMode,
+        qualification: codeMode ? 'code_flow' : 'business_use_case',
+        semanticKind: codeMode ? 'code_flow' : 'business_workflow'
+      }, { id: path?.entrySymbolId || '', path: path?.sourcePaths?.[0] || '' });
       if (!arc) continue;
       arc.callPathId = item.pathId;
       arc.callPathVariantIds = arr(path?.alternatives).map((alt) => alt.pathId);
