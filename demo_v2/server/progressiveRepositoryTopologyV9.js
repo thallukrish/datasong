@@ -1,6 +1,7 @@
 import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopologyV7.js';
 import { CallPathIndexerV3 } from './callPathIndexerV3.js';
 import { createMoquiAdapters } from './adapters/moqui/index.js';
+import { analyzePythonRepository } from './languages/python/adapter.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -26,6 +27,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
 
   async prepare(repoUrl) {
     const prep = await super.prepare(repoUrl);
+    await this.augmentPythonAstGraph();
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
     this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
     this.callPathIndex = this.callPathIndexer.build();
@@ -42,6 +44,37 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         topPaths: this.callPathIndex.topPaths
       }
     };
+  }
+
+
+  async augmentPythonAstGraph() {
+    const result = await analyzePythonRepository({ repoDir: this.repoDir, files: this.files });
+    const pythonSymbols = Array.isArray(result?.symbols) ? result.symbols : [];
+    if (!pythonSymbols.length) return;
+
+    const pythonPaths = new Set(pythonSymbols.map((symbol) => symbol.sourcePath));
+    this.symbols = this.symbols.filter((symbol) => !pythonPaths.has(symbol.sourcePath));
+    this.symbols.push(...pythonSymbols);
+
+    this.symbolById.clear();
+    this.nameIndex.clear();
+    this.callers.clear();
+    for (const symbol of this.symbols) {
+      this.symbolById.set(symbol.id, symbol);
+      for (const key of new Set([String(symbol.name || '').toLowerCase(), String(symbol.simpleName || '').toLowerCase()])) {
+        if (!key) continue;
+        if (!this.nameIndex.has(key)) this.nameIndex.set(key, []);
+        this.nameIndex.get(key).push(symbol.id);
+      }
+    }
+    for (const symbol of this.symbols) {
+      for (const ref of Array.isArray(symbol.references) ? symbol.references : []) {
+        for (const target of this.resolveOutboundReference(symbol, ref)) {
+          if (!this.callers.has(target.id)) this.callers.set(target.id, []);
+          this.callers.get(target.id).push({ sourceId: symbol.id, relation: ref.relation });
+        }
+      }
+    }
   }
 
   entitySchema(name) {
