@@ -179,3 +179,50 @@ For reproducible generic-code/SWE-Explore experiments the log records:
 Generic Pass 2 emits a `code_flow_semantic_input` event immediately before the corresponding model attempt. Its `executableFlow.codeEvidence` contains the bounded signatures, parameters as represented in signatures, function bodies, source locations and references used for semantic interpretation.
 
 This log is the primary artifact for diagnosing whether a SWE-Explore miss came from call-path construction, missing source evidence, semantic interpretation, or later issue-to-flow retrieval.
+
+
+## Python deterministic call graph
+
+Generic code semantics now has a Python-specific deterministic language adapter under:
+
+```text
+demo_v2/server/languages/python/
+  analyzer.py
+  adapter.js
+```
+
+The Python analyzer uses the standard-library `ast` parser. Python semantics stay in this adapter; CallPathIndexer and semantic Pass 2 remain language-neutral.
+
+Current deterministic Python support includes:
+
+- `def` and `async def`
+- classes and methods
+- `import module`
+- `from module import symbol`
+- direct local function calls
+- `self.method()` and `cls.method()`
+- local/imported class construction
+- simple assignment type inference such as `worker = Worker()`
+- calls such as `worker.run()`
+- local inheritance and inherited-method lookup
+- explicit `if __name__ == "__main__"` entry-point detection
+- recursion/cycles through the existing call-path machinery
+
+Resolved calls carry an exact `targetSymbolId`. The generic topology honors this target before any legacy name-based resolution. This prevents an AST-resolved Python call from degrading into repository-wide same-name guessing.
+
+The normalized boundary remains:
+
+```text
+Python source
+  -> Python AST adapter
+  -> normalized symbols + exact call edges
+  -> generic executable topology
+  -> CallPathIndexerV3
+  -> grouped flow families
+  -> generic whole-flow semantic Pass 2
+  -> persistent semantic map
+```
+
+Dynamic Python is intentionally outside the first implementation. Reflection, runtime monkey-patching, dynamic imports, arbitrary `getattr`, runtime-generated methods and dependency-injection behavior that cannot be proven statically remain unresolved boundaries rather than guessed edges.
+
+The learning run log records `pythonAst` statistics at `run_start`, including symbol count, resolved call count and unresolved call count. These statistics make it possible to distinguish a language-analysis failure from a later call-path, semantic-interpretation or retrieval failure.
