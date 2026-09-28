@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 function run(command, args, input) {
   return new Promise((resolve, reject) => {
@@ -24,7 +25,7 @@ export async function analyzePythonRepository({ repoDir, files }) {
   if (!pythonFiles.length) return { version: 1, symbols: [] };
 
   const script = new URL('./analyzer.py', import.meta.url);
-  const args = [script.pathname, repoDir];
+  const args = [fileURLToPath(script), repoDir];
   const input = JSON.stringify(pythonFiles);
   const commands = process.platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
   let lastError = null;
