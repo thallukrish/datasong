@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { MAP_VERSION, semanticObjectsFromGraph, workflowArcsFromGraph } from './mapPersistence.js';
+import { MAP_VERSION, normalizeLearnedGraph, semanticObjectsFromGraph, workflowArcsFromGraph } from './mapPersistence.js';
 
 const arr = (value) => Array.isArray(value) ? value : [];
 const clone = (value) => JSON.parse(JSON.stringify(value));
