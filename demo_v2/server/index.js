@@ -27,6 +27,7 @@ let latestQueryLogPath = '';
 const arr = (value) => Array.isArray(value) ? value : [];
 const compactText = (value, max = 320) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
 const uniq = (values) => [...new Set(arr(values).filter(Boolean).map(String))];
+const normRepo = (value) => String(value || '').trim().replace(/\/$/, '').toLowerCase();
 const STOP_WORDS = new Set(['a','an','and','are','as','at','be','by','for','from','how','in','is','it','last','of','on','or','the','to','was','what','when','where','which','why','with','want','know']);
 
 function words(value) {
@@ -358,6 +359,16 @@ app.post('/api/explore', async (req, res) => {
     .finally(() => { running = false; });
 });
 app.post('/api/stop', (_req, res) => { if (!running) return res.status(409).json({ error: 'No exploration is running' }); explorer.requestStop(); return res.json({ ok: true }); });
+app.post('/api/reset-semantic-map', (req, res) => {
+  if (running) return res.status(409).json({ error:'Stop learning before resetting the semantic map.' });
+  const repoUrl = String(req.body?.repoUrl || '').trim();
+  const snapshot = explorer.snapshot();
+  if (!repoUrl || normRepo(repoUrl) !== normRepo(snapshot?.repoUrl || '')) return res.status(409).json({ error:'Load this repository before resetting its semantic map.' });
+  const result = explorer.resetCurrentSemanticMap?.();
+  if (!result?.reset) return res.status(409).json({ error:'No loaded repository revision is available to reset.' });
+  broadcast(explorer.snapshot());
+  return res.json({ ok:true, repoUrl:result.repoUrl, commit:result.commit });
+});
 
 registerQueryApi({
   app,
