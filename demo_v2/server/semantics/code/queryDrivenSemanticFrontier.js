@@ -95,7 +95,22 @@ export function entryCandidates(groupedPaths = [], symbolById = new Map()) {
 
 export function lookaheadFromEntry(groupedPaths = [], symbolById = new Map(), entrySymbolId, depth = 3) {
   const forest = buildEntryFlowForest(groupedPaths);
-  const root = forest.get(entrySymbolId);
+  let root = forest.get(entrySymbolId);
+  if (!root) {
+    const local = new Map();
+    for (const { pathId, ids } of sequences(groupedPaths)) {
+      const offset = ids.indexOf(entrySymbolId);
+      if (offset < 0) continue;
+      let level = local;
+      for (let index = offset; index < ids.length; index += 1) {
+        const node = child(level, ids[index]);
+        if (pathId) node.pathIds.add(pathId);
+        if (index === ids.length - 1) node.terminal = true;
+        level = node.children;
+      }
+    }
+    root = local.get(entrySymbolId);
+  }
   return root ? previewNode(root, symbolById, Math.max(0, Number(depth) || 0)) : null;
 }
 
