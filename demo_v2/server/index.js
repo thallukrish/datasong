@@ -7,7 +7,6 @@ import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopology
 import { RepositoryExplorer } from './repositoryExplorer.js';
 import { registerQueryApi } from './queryApi.js';
 import { registerQueryV2Api } from './query_v2/queryApi.js';
-import { registerQueryV4Api } from './query_v4/queryApi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -153,8 +152,7 @@ function uiState(snapshot = explorer.snapshot()) {
     pass2WholeFlowByArc: flowState,
     pass1Arcs: arcs.map((arc) => arcDetail(arc, snapshot)),
     learningCoverage: coverageSummary(snapshot),
-    visibleBusinessArcIds: arcs.map((arc) => arc.id),
-    codeSemanticCount: Object.keys(snapshot?.codeBranchSemantics || {}).length + Object.keys(snapshot?.codeSymbolSemantics || {}).length
+    visibleBusinessArcIds: arcs.map((arc) => arc.id)
   };
 }
 function allGroupedPaths() {
@@ -396,15 +394,6 @@ registerQueryApi({
 });
 
 registerQueryV2Api({
-  app,
-  explorer,
-  queryClient,
-  queryModel,
-  dataRoot,
-  onLatestLog: (file) => { latestQueryLogPath = file; }
-});
-
-registerQueryV4Api({
   app,
   explorer,
   queryClient,
