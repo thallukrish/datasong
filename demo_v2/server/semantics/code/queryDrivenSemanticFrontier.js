@@ -79,16 +79,24 @@ function boundaryKind(symbol, structuralRoot) {
 export function entryCandidates(groupedPaths = [], symbolById = new Map()) {
   const forest = buildEntryFlowForest(groupedPaths);
   const rootIds = new Set(forest.keys());
+  const executableIds = new Set();
+  const pathIdsBySymbol = new Map();
+  for (const { pathId, ids } of sequences(groupedPaths)) {
+    for (const id of ids) {
+      executableIds.add(id);
+      if (!pathIdsBySymbol.has(id)) pathIdsBySymbol.set(id, new Set());
+      if (pathId) pathIdsBySymbol.get(id).add(pathId);
+    }
+  }
   const symbols = symbolById instanceof Map ? [...symbolById.values()] : [];
-  return symbols.filter((symbol) => symbol?.id).map((symbol) => {
-    const root = forest.get(symbol.id);
+  return symbols.filter((symbol) => symbol?.id && executableIds.has(symbol.id)).map((symbol) => {
     const boundary = boundaryKind(symbol, rootIds.has(symbol.id));
     return {
       ...symbolView(symbolById, symbol.id),
       structuralRoot:rootIds.has(symbol.id),
       boundaryKind:boundary.kind,
       boundaryPriority:boundary.priority,
-      pathIds:root ? [...root.pathIds] : []
+      pathIds:[...(pathIdsBySymbol.get(symbol.id) || [])]
     };
   }).sort((a,b) => b.boundaryPriority-a.boundaryPriority || b.pathIds.length-a.pathIds.length || a.name.localeCompare(b.name));
 }
