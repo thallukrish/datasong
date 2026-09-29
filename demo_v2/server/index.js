@@ -264,6 +264,15 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'public'), { etag: false, lastModified: false, setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); } }));
 
 app.get('/api/state', (_req, res) => { const snapshot = explorer.snapshot(); res.json(uiState(snapshot)); });
+app.post('/api/select-enterprise', (req, res) => {
+  if (running) return res.status(409).json({ error:'Stop learning before selecting another enterprise.' });
+  const repoUrl = String(req.body?.repoUrl || '').trim();
+  if (!repoUrl) return res.status(400).json({ error:'repoUrl is required' });
+  explorer.setSemanticProfile?.(String(req.body?.semanticProfile || 'enterprise'));
+  const result = explorer.activatePersistedMapForRepo?.(repoUrl);
+  broadcast(explorer.snapshot());
+  return res.json({ ok:true, loaded:!!result?.loaded, reason:result?.reason || '', repoUrl:result?.repoUrl || repoUrl, commit:result?.commit || '', savedAt:result?.savedAt || '' });
+});
 app.get('/api/workflow/:id', (req, res) => {
   const snapshot = explorer.snapshot();
   const arc = businessArcs(snapshot).find((item) => String(item.id) === String(req.params.id));
