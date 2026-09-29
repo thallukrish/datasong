@@ -508,7 +508,7 @@ The model scores candidates. LeMap owns the DFS stack, thresholds, visited state
 
 ### Lazy semantic learning
 
-Deterministic topology is available before semantic learning. When Query reaches an unlearned function, edge or region needed for scoring, it requests bounded local semantic annotation from Learn, persists that reusable annotation, and resumes the same search. Learn describes local meaning; it does not decide query relevance.
+Deterministic topology is available before semantic learning. When Query reaches an unlearned function, edge or region needed for scoring, it requests bounded local semantic annotation from Learn, persists that reusable annotation on the corresponding nodes, and resumes the same search. Learn describes node meaning; it does not decide query relevance.
 
 ### Inter-function and intra-function frontier
 
@@ -518,7 +518,7 @@ Large function bodies are deterministically partitioned from AST structure into 
 
 ### Query to Learn handshake
 
-Before Query scores a previously unseen code symbol, call edge or AST region, it invokes a local semantic learner. That learner receives only deterministic source evidence and identifiers, never the user's question. It persists reusable symbol, call-edge and region semantics against the repository revision. Query then scores those semantics against the unresolved plan steps. This keeps learned meaning query-independent while allowing a cold semantic map to grow only along paths demanded by real queries.
+Before Query scores a previously unseen code symbol, call edge or AST region, it invokes a local semantic learner. That learner receives only deterministic source evidence and identifiers, never the user's question. It persists reusable function and region semantics on graph nodes against the repository revision. Query then scores those semantics against the unresolved plan steps. This keeps learned meaning query-independent while allowing a cold semantic map to grow only along paths demanded by real queries.
 
 ### Final line localization
 
@@ -535,8 +535,8 @@ Query-v5 may reuse Query-v4 utilities for query-plan derivation, model JSON hand
 
 The semantic map has one canonical representation: an array of nodes. Structural and learned semantic information are not separate graphs or side dictionaries.
 
-Each node has an id, type, name, details and links. details.structural contains deterministic provenance such as source path, symbol id and source-line range. details.semantic contains query-independent learned meaning. links contains references to other node ids with the relationship carried on the link.
+Each node has an id, type, name, details and links. details.structural contains deterministic provenance such as source path, symbol id and source-line range. details.semantic contains query-independent learned meaning. links contains only references to connected node ids and the relationship: nodeId and relationship. All structural and semantic details belong to nodes, not links.
 
-Code functions and intra-function regions therefore use the same graph model as workflows, entities and other semantic objects. Typical code node types are function and function-region; typical structural relationships are calls, contains and contained-by. Semantic information may enrich those same links rather than creating a parallel edge store.
+Code functions and intra-function regions therefore use the same graph model as workflows, entities and other semantic objects. Typical code node types are function and function-region; typical structural relationships are calls, contains and contained-by. Links remain minimal references only. Semantic meaning belongs to the referred nodes; no semantic payload is stored on links.
 
 Query-v5 traverses this node graph. Deterministic topology materializes nodes and structural links lazily; Learn enriches the corresponding node/link semantic details; Query scores those graph nodes against unresolved plan steps.
