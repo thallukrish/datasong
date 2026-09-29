@@ -210,7 +210,7 @@ for rec in defs.values():
 
     signature = ("async " if isinstance(node, ast.AsyncFunctionDef) else "") + f"def {rec['qualified']}({params_text(node)}):"
     regions = []
-    region_index = 0
+    region_index_ref = [0]
 
     def add_regions(statements, parent_region_id=None):
         for child in statements:
@@ -241,9 +241,7 @@ for rec in defs.values():
             for nested in nested_lists:
                 add_regions(nested, region_id)
 
-    region_index_ref = [region_index]
     add_regions(node.body)
-    region_index = region_index_ref[0]
 
     symbols.append({
         "id": sid(rec["path"], rec["qualified"], node.lineno),
