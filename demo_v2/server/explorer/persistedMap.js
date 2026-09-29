@@ -100,6 +100,8 @@ export const withPersistedMap = (Base) => class PersistedMapExplorer extends Bas
       restored.pass1Arcs = [...completed, ...clone(arr(saved.learningProgress?.incompleteArcs)).filter((arc) => !completedIds.has(arc?.id))];
       restored.pass1Scheduler = { ...(restored.pass1Scheduler || {}), ...(saved.learningProgress?.scheduler || {}) };
       restored.scout = { ...(restored.scout || {}), ...(saved.learningProgress?.scout || {}) };
+      restored.codeBranchSemantics = clone(saved.learningProgress?.codeBranchSemantics || {});
+      restored.codeSymbolSemantics = clone(saved.learningProgress?.codeSymbolSemantics || {});
     } else return null;
     restored.repoUrl = saved.repoUrl; restored.commit = saved.commit; restored.status = 'complete'; restored.stopRequested = false;
     restored.currentArtifact = null; restored.frontier = []; restored.executionStack = [];
