@@ -9,14 +9,9 @@ const repoKey = (value) => String(value || '').trim().replace(/\/$/, '').toLower
 export const withPersistedMap = (Base) => class PersistedMapExplorer extends Base {
   constructor(args) {
     super(args);
-    const restored = this.loadMostRecentPersistedMap();
-    this.startupHydration = restored
-      ? Promise.resolve().then(() => this.hydratePersistedRuntime()).catch((error) => {
-          this.state.runtimeHydration = { status: 'error', error: error.message || String(error) };
-          console.warn(`[lemap startup] persisted-map runtime hydration failed: ${error.message || error}`);
-          return { hydrated: false, reason: 'error', error: error.message || String(error) };
-        })
-      : Promise.resolve({ hydrated: false, reason: 'no_persisted_map' });
+    // Server construction must be inert. Persisted semantic maps are repository
+    // scoped and are loaded only after an explicit repository action.
+    this.startupHydration = Promise.resolve({ hydrated:false, reason:'startup_inert' });
   }
 
   emptyState() {
