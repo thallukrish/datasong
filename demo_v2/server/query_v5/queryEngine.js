@@ -98,4 +98,3 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   log('query_v5_complete',{complete,unresolved:[...unresolved],fulfilled:localized,events,usage});
   return{answer,logicalRequest,complete,unresolved:[...unresolved],fulfilled:localized,events,investigation:{mode:'code-flow-dfs-v5',usage}};
 }
-}
