@@ -58,8 +58,9 @@ async function scoreCandidates({logicalRequest,unresolved,path,candidates,explor
   for(const row of arr(call.parsed?.c)){const state=byIndex.get(String(row?.i));if(!state||rejected.has(String(row?.i)))continue;out.push({state,scores:arr(row?.s).map(s=>({step:Number(s?.[0]),navigation:Number(s?.[1]||0),fulfillment:Number(s?.[2]||0)}))})}
   log('query_v5_score',{step,payload,result:out,usage:call.usage});onProgress({action:'SCORE',step,activePlanStep:activeStepOf(unresolved),path:path.map(x=>x.name),candidates:out.map(x=>({id:x.state.id,name:x.state.name,scores:x.scores}))});return out;
 }
-function recordFulfillment(scored, fulfilled) {
-  for(const item of scored)for(const s of item.scores)if(Number(s.fulfillment)>=FULFILLED){if(!fulfilled.has(s.step))fulfilled.set(s.step,[]);if(!fulfilled.get(s.step).some(x=>x.id===item.state.id))fulfilled.get(s.step).push(item.state)}
+function recordFulfillment(scored, fulfilled, unresolved) {
+  const active=activeStepOf(unresolved);if(active===undefined)return;
+  for(const item of scored)for(const s of item.scores)if(Number(s.step)===active&&Number(s.fulfillment)>=FULFILLED){if(!fulfilled.has(active))fulfilled.set(active,[]);if(!fulfilled.get(active).some(x=>x.id===item.state.id))fulfilled.get(active).push(item.state)}
 }
 function unresolvedSteps(count,fulfilled){return new Set(Array.from({length:count},(_,i)=>i).filter(i=>!fulfilled.has(i)))}
 
@@ -80,7 +81,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const seed=async()=>{
     const candidates=entries.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
     const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step,onProgress});
-    const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
+    const before=new Set(unresolved);recordFulfillment(scored,fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
     scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));if(!warm.length)return unresolved.size===0;
     stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});const event={step,action:'RESEED',state:warm[0].state.name,activePlanStep:activeStepOf(unresolved)};events.push(event);onProgress({...event,path:[warm[0].state.name]});return true;
   };
@@ -88,11 +89,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   if(!seeded&&unresolved.size)return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
   while(stack.length&&step<MAX_STEPS&&unresolved.size){
     const frame=stack.at(-1), current=frame.current, state=current.state, nav=scoreOf(current,unresolved);markVisited(state);
-    recordFulfillment([current],fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
+    recordFulfillment([current],fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
     const next=children(state,explorer,flowChildren).filter(x=>!visited.has(x.id));
     if(next.length){
       const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step,onProgress});
-      const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
+      const before=new Set(unresolved);recordFulfillment(scored,fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
       scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));
       if(warm.length&&nav-scoreOf(warm[0],unresolved)<=NAV_MAX_DROP){stack.push({path:[...frame.path,state],current:warm[0],alternatives:warm.slice(1),parentScore:nav});{const event={step,action:'DESCEND',from:state.name,to:warm[0].state.name,activePlanStep:activeStepOf(unresolved)};events.push(event);onProgress({...event,path:[...frame.path,state,warm[0].state].map(x=>x.name)});}continue}
     }
