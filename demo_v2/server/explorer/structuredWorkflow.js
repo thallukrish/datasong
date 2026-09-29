@@ -1,4 +1,4 @@
-import { mergeBranchSemantics } from '../semantics/code/queryDrivenSemanticFrontier.js';
+import { annotateLookahead, entryCandidates, lookaheadFromEntry, mergeBranchSemantics } from '../semantics/code/queryDrivenSemanticFrontier.js';
 const arr = (value) => Array.isArray(value) ? value : [];
 const uniq = (values) => [...new Set(arr(values).filter(Boolean).map(String))];
 const text = (value, max = 520) => {
@@ -47,6 +47,17 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
       entitySchemas,
       ...(this.state?.semanticProfile === 'code' ? { codeEvidence: this.codeFlowEvidence(grouped) } : {})
     };
+  }
+
+  codeSemanticEntryCandidates() {
+    const grouped = this.topology?.callPathIndex?.top?.(Number.MAX_SAFE_INTEGER) || [];
+    return entryCandidates(grouped, this.topology?.symbolById || new Map());
+  }
+
+  codeSemanticLookahead(entrySymbolId, depth = 3) {
+    const grouped = this.topology?.callPathIndex?.top?.(Number.MAX_SAFE_INTEGER) || [];
+    const preview = lookaheadFromEntry(grouped, this.topology?.symbolById || new Map(), entrySymbolId, depth);
+    return annotateLookahead(preview, this.state?.codeBranchSemantics || {});
   }
 
   codeFlowEvidence(grouped) {
