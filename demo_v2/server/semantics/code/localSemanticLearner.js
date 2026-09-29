@@ -33,7 +33,8 @@ export async function ensureLocalCodeSemantics({states,explorer,client,model,usa
   const call=await modelJson(client,model,LEARN_SYSTEM,{symbols,regions,branches:edges},{maxTokens:1200});addUsage(usage,call.usage);
   explorer.state.codeSymbolSemantics=mergeById(explorer.state.codeSymbolSemantics,call.parsed?.symbols,'symbolId');
   explorer.state.codeRegionSemantics=mergeById(explorer.state.codeRegionSemantics,call.parsed?.regions,'regionId');
-  explorer.state.codeBranchSemantics=mergeBranchSemantics(explorer.state.codeBranchSemantics,call.parsed?.branches);
+  const validBranches=arr(call.parsed?.branches).filter(x=>edges.some(e=>e.fromSymbolId===x?.fromSymbolId&&e.toSymbolId===x?.toSymbolId));
+  explorer.state.codeBranchSemantics=mergeBranchSemantics(explorer.state.codeBranchSemantics,validBranches);
   explorer.persistSemanticMap?.();
   log('code_local_semantics_learned',{symbols:arr(call.parsed?.symbols).length,regions:arr(call.parsed?.regions).length,branches:arr(call.parsed?.branches).length,usage:call.usage});
   return {learned:true,usage:call.usage};
