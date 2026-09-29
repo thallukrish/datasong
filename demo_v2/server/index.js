@@ -153,7 +153,8 @@ function uiState(snapshot = explorer.snapshot()) {
     pass2WholeFlowByArc: flowState,
     pass1Arcs: arcs.map((arc) => arcDetail(arc, snapshot)),
     learningCoverage: coverageSummary(snapshot),
-    visibleBusinessArcIds: arcs.map((arc) => arc.id)
+    visibleBusinessArcIds: arcs.map((arc) => arc.id),
+    queryV5Progress: snapshot?.queryV5Progress || null
   };
 }
 function allGroupedPaths() {
