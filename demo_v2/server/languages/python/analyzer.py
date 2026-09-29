@@ -209,6 +209,21 @@ for rec in defs.values():
                 seen_refs.add(key)
 
     signature = ("async " if isinstance(node, ast.AsyncFunctionDef) else "") + f"def {rec['qualified']}({params_text(node)}):"
+    regions = []
+    region_index = 0
+    for child in node.body:
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        region_index += 1
+        kind = type(child).__name__.lower()
+        regions.append({
+            "id": f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index}",
+            "kind": kind,
+            "startLine": getattr(child, "lineno", node.lineno),
+            "endLine": getattr(child, "end_lineno", getattr(child, "lineno", node.lineno)),
+            "body": source_segment(text, child)
+        })
+
     symbols.append({
         "id": sid(rec["path"], rec["qualified"], node.lineno),
         "name": rec["qualified"],
@@ -223,7 +238,8 @@ for rec in defs.values():
         "language": "python",
         "className": rec["class"],
         "moduleName": rec["module"],
-        "entryPoint": (rec["module"], rec["qualified"]) in entry_targets or (rec["class"] is None and rec["name"] == "main")
+        "entryPoint": (rec["module"], rec["qualified"]) in entry_targets or (rec["class"] is None and rec["name"] == "main"),
+        "regions": regions
     })
 
 print(json.dumps({"version": 1, "symbols": symbols}, ensure_ascii=False))
