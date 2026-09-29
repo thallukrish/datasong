@@ -3,6 +3,7 @@ import path from 'node:path';
 import { graphFromSemanticObjects } from '../explorer/mapPersistence.js';
 import { loadEntityDirectory } from '../entityDirectory.js';
 import { runSemanticBestFirstQueryV4 } from './queryEngine.js';
+import { runQueryDrivenCodeFlow } from './codeFlowQueryEngine.js';
 
 const arr = (value) => Array.isArray(value) ? value : [];
 
@@ -71,6 +72,31 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       if (!queryClient) return res.status(503).json({ error:'The reasoning service is not configured' });
       const question = String(req.body?.question || '').trim();
       if (!question) return res.status(400).json({ error:'question is required' });
+
+      const requestedProfile = String(req.body?.semanticProfile || explorer.state?.semanticProfile || 'enterprise');
+      if (requestedProfile === 'code') {
+        const repoUrl = String(req.body?.repoUrl || explorer.state?.repoUrl || '').trim();
+        console.log(\`\\n[lemap code-query] \${question}\`);
+        append(queryLog, 'code_query_start', { question, repoUrl, mode:'query-driven-code-learning' });
+        const raw = await runQueryDrivenCodeFlow({
+          question, repoUrl, explorer, client:queryClient, model:queryModel,
+          log:(type, payload) => append(queryLog, type, payload)
+        });
+        append(queryLog, 'code_query_response', raw);
+        const byId = explorer.topology?.symbolById || new Map();
+        return res.json({
+          answer:raw.answer || '',
+          dataView:null,
+          relevantEntities:[],
+          scenarios:arr(raw.evidence).map((item) => {
+            const symbol = byId.get(item?.symbolId);
+            return { scenario:symbol?.name || item?.symbolId || 'Code evidence', why:item?.why || '' };
+          }),
+          nextStep:raw.nextStep || '',
+          codeEvidence:raw.frontiers || [],
+          investigation:raw.investigation || {}
+        });
+      }
 
       // A persisted semantic map may have been loaded before the runtime source
       // schema catalog was prepared. Refresh/materialize it before taking the
