@@ -200,12 +200,12 @@ for rec in defs.values():
             target_id = sid(target["path"], target["qualified"], target["node"].lineno)
             key = ("calls", target_id)
             if key not in seen_refs:
-                refs.append({"name": display or target["qualified"], "simpleName": target["name"], "relation": "calls", "targetSymbolId": target_id, "resolution": "python_ast"})
+                refs.append({"name": display or target["qualified"], "simpleName": target["name"], "relation": "calls", "targetSymbolId": target_id, "resolution": "python_ast", "line": getattr(call, "lineno", 0), "endLine": getattr(call, "end_lineno", getattr(call, "lineno", 0))})
                 seen_refs.add(key)
         elif display:
             key = ("calls", display)
             if key not in seen_refs:
-                refs.append({"name": display, "simpleName": display.split(".")[-1], "relation": "calls", "resolution": "unresolved"})
+                refs.append({"name": display, "simpleName": display.split(".")[-1], "relation": "calls", "resolution": "unresolved", "line": getattr(call, "lineno", 0), "endLine": getattr(call, "end_lineno", getattr(call, "lineno", 0))})
                 seen_refs.add(key)
 
     signature = ("async " if isinstance(node, ast.AsyncFunctionDef) else "") + f"def {rec['qualified']}({params_text(node)}):"
