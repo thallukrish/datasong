@@ -475,3 +475,53 @@ Current query implementation:
 ```
 
 The continuing architectural goal remains source-agnostic: extend evidence acquisition/topology while keeping the semantic model and reconciliation boundary stable.
+
+
+---
+
+## 19. Query-v5: query-driven code-flow discovery
+
+Query-v5 treats executable flow as the primary relationship for code investigation. Persistent entity and PK/FK connectivity is deferred unless the query explicitly needs data/schema relationships. Functions in one workflow may read or mutate unrelated objects; their semantic relationship is established by executable flow, not by requiring those objects to be related.
+
+### Ordered plan and two independent scores
+
+The query is first converted into ordered plan steps. Every explored code state is scored separately for each unresolved step with two values:
+
+- navigation relevance — confidence that continuing through this state can lead to evidence for the step;
+- fulfillment — confidence that this function or AST region itself contains enough implementation context to satisfy the step.
+
+A high navigation score does not imply fulfillment. Fulfillment 1.0 is reserved for a state that contains sufficient implementation context for that plan step. A fulfilled step stops driving navigation but remains recorded as evidence.
+
+### Search policy
+
+Query-v5 uses confidence-guided depth-first exploration with explicit alternatives.
+
+DESCEND when navigation signal is above threshold and remains strong.
+
+BACKTRACK when signal decays; resume the strongest open local alternative.
+
+RESEED when no open alternative has adequate signal for remaining steps; rescore unvisited entry-rooted flow families against only those steps.
+
+The search terminates when every plan step has one or more fulfilled code states or the available deterministic topology is exhausted.
+
+The model scores candidates. LeMap owns the DFS stack, thresholds, visited state, alternatives, fulfilled-step ledger and reseeding.
+
+### Lazy semantic learning
+
+Deterministic topology is available before semantic learning. When Query reaches an unlearned function, edge or region needed for scoring, it requests bounded local semantic annotation from Learn, persists that reusable annotation, and resumes the same search. Learn describes local meaning; it does not decide query relevance.
+
+### Inter-function and intra-function frontier
+
+The same search abstraction spans entry to function to callee, and function to AST region to branch, loop, try or nested region.
+
+Large function bodies are deterministically partitioned from AST structure into source-backed regions. Query may descend into regions when function-level evidence is too broad to establish fulfillment.
+
+### Final line localization
+
+Navigation does not select final source lines. After all possible plan steps have been mapped to fulfilled functions or regions, a separate evidence-localization call is made per step using only the selected source bodies or regions. It returns exact line ranges and a short explanation of how those lines satisfy the step.
+
+The response is organized by query-plan step: fulfilled function or AST region, exact source line ranges, and evidence explanation.
+
+### Relationship to Query-v4
+
+Query-v5 may reuse Query-v4 utilities for query-plan derivation, model JSON handling, logging and generic score representations. It does not inherit Query-v4 entity/FK connectivity as the primary code-search policy. Query-v4 remains intact for the existing enterprise data-view query path.
