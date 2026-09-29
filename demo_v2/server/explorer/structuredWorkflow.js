@@ -1,3 +1,4 @@
+import { mergeBranchSemantics } from '../semantics/code/queryDrivenSemanticFrontier.js';
 const arr = (value) => Array.isArray(value) ? value : [];
 const uniq = (values) => [...new Set(arr(values).filter(Boolean).map(String))];
 const text = (value, max = 520) => {
@@ -20,7 +21,8 @@ const entityNamesIn = (value) => {
 export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer extends Base {
   emptyState() {
     const state = super.emptyState();
-    state.arcSchedulerVersion = 'structured-workflow-entity-schema-v29';
+    state.arcSchedulerVersion = 'structured-workflow-entity-schema-v30';
+    state.codeBranchSemantics = state.codeBranchSemantics || {};
     return state;
   }
 
@@ -95,6 +97,7 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
           }],
           entityDetails: [{ name: 'data structure/type/object', description: 'role in this code flow', fields: [] }],
           relationshipDetails: [{ from: 'source step/data structure', relation: 'code/data relationship', to: 'target', description: 'what connects them' }],
+          branchSemantics: [{ fromSymbolId: 'exact caller symbol id', toSymbolId: 'exact called symbol id', purpose: 'what taking this call branch achieves in the caller', effect: 'result/control/data effect', evidenceSourcePath: 'caller source path', evidenceStartLine: 0, evidenceEndLine: 0 }],
           outcome: 'observable code-level result/effect',
           persistentObjects: [],
           externalEffects: [],
@@ -116,6 +119,8 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
         '- CODE_EVIDENCE is deterministic source evidence for functions on this indexed flow. Use function signatures, parameters, bodies, references, and source locations to infer semantics.',
         '- Follow EXECUTABLE_FLOW order as authoritative. CODE_EVIDENCE enriches meaning; it must not be used to invent a different traversal.',
         '- Preserve execution order and explain control flow, calls, transformations, mutations, IO, returns, and data movement when evidenced.',
+        '- branchSemantics is local routing knowledge: for each evidenced caller→callee edge, explain what taking that call achieves in the caller. Use exact supplied symbol ids only.',
+        '- Ground branchSemantics in the caller body and preserve source path/line evidence when available. Do not assign query relevance; only describe the edge meaning.',
         '- Treat classes, objects, parameters, return values, collections, records, files, and schemas as data structures/entities when materially useful.',
         '- Do not invent behavior outside the supplied deterministic flow or CODE_EVIDENCE.',
         '- Every admitted flow is worth semantic interpretation; technical code is not lower priority merely because it is technical.',
@@ -213,6 +218,10 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
     const relationshipDetails = arr(update.relationshipDetails).map((rel) => ({
       from: text(rel?.from, 180), relation: text(rel?.relation, 180), to: text(rel?.to, 180), description: text(rel?.description, 520)
     })).filter((rel) => rel.from || rel.relation || rel.to);
+    const branchSemantics = arr(update.branchSemantics).map((edge) => ({
+      fromSymbolId:text(edge?.fromSymbolId, 240), toSymbolId:text(edge?.toSymbolId, 240), purpose:text(edge?.purpose, 520), effect:text(edge?.effect, 320),
+      evidenceSourcePath:text(edge?.evidenceSourcePath, 320), evidenceStartLine:Number(edge?.evidenceStartLine || 0), evidenceEndLine:Number(edge?.evidenceEndLine || 0)
+    })).filter((edge) => edge.fromSymbolId && edge.toSymbolId && edge.purpose);
 
     repaired.arcUpdate = {
       ...update,
@@ -229,7 +238,7 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
     };
 
     const parsed = super.normalizeWholeFlowPass2(repaired, observation);
-    parsed._structuredWorkflow = { trigger: text(update.trigger, 260), workflowSteps: steps, entityDetails, relationshipDetails };
+    parsed._structuredWorkflow = { trigger: text(update.trigger, 260), workflowSteps: steps, entityDetails, relationshipDetails, branchSemantics };
     return parsed;
   }
 
@@ -244,6 +253,10 @@ export const withStructuredWorkflow = (Base) => class StructuredWorkflowExplorer
     if (detail.workflowSteps.length) arc.workflowSteps = detail.workflowSteps;
     if (detail.entityDetails.length) arc.entityDetails = detail.entityDetails;
     if (detail.relationshipDetails.length) arc.relationshipDetails = detail.relationshipDetails;
+    if (this.state?.semanticProfile === 'code' && detail.branchSemantics.length) {
+      this.state.codeBranchSemantics = mergeBranchSemantics(this.state.codeBranchSemantics, detail.branchSemantics);
+      arc.branchSemantics = detail.branchSemantics;
+    }
     this.persistSemanticMap?.();
     return result;
   }
