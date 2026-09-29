@@ -58,6 +58,9 @@ export class RepositoryExplorer extends ExplorerWithCompactMapPersistence {
   emptyState() {
     const state = super.emptyState();
     state.semanticProfile = this.semanticProfile || 'enterprise';
+    state.codeSymbolSemantics = state.codeSymbolSemantics || {};
+    state.codeRegionSemantics = state.codeRegionSemantics || {};
+    state.codeBranchSemantics = state.codeBranchSemantics || {};
     return state;
   }
 
