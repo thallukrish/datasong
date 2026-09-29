@@ -1,5 +1,5 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
-import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
+import { entryCandidates, lookaheadFromEntry } from '../semantics/code/queryDrivenSemanticFrontier.js';
 import { ensureLocalCodeSemantics, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 
 export const NAV_MIN = 0.5;
@@ -9,10 +9,10 @@ const MAX_STEPS = 64;
 
 const SCORE_SYSTEM = `Score supplied code candidates against unresolved ordered query-plan steps. For each candidate and step return TWO independent scores: navigation confidence n means continuing through this candidate is likely to lead to the needed implementation; fulfillment f means THIS candidate itself contains enough implementation context to satisfy the step. f=1.0 is a hard completion signal and must be used only when the supplied source/semantics are sufficient for that step. Return {"c":[{"i":0,"s":[[stepIndex,n,f]]}],"r":[candidateIndex]}.`;
 const LOCALIZE_SYSTEM = `For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.`;
-const PLAN_SYSTEM = `Translate a software issue into a short ORDERED CODE INVESTIGATION PLAN. Each step must describe implementation behavior that must be located or explained in source code. Keep only steps that help diagnose or implement the issue. Do not use database language such as rows, grain, dimensions, measures, joins, or entities. Return {"intent":"short diagnosis goal","steps":[{"action":"what code behavior must be established","requires":["code concept or behavior"],"relation":"optional relationship to establish"}]}. Prefer 3-6 steps.`;
+const PLAN_SYSTEM = `Translate a software issue into a short ORDERED CODE INVESTIGATION PLAN using the supplied repository context and deterministic entry-flow previews.  Each step must describe implementation behavior that must be located or explained in source code. Keep only steps that help diagnose or implement the issue. Do not use database language such as rows, grain, dimensions, measures, joins, or entities. Return {"intent":"short diagnosis goal","steps":[{"action":"what code behavior must be established","requires":["code concept or behavior"],"relation":"optional relationship to establish"}]}. Prefer 3-6 steps.`;
 
-async function deriveCodePlan({question,client,model,usage,log}) {
-  const call=await modelJson(client,model,PLAN_SYSTEM,{question},{maxTokens:520});addUsage(usage,call.usage);
+async function deriveCodePlan({question,repositoryContext,client,model,usage,log}) {
+  const call=await modelJson(client,model,PLAN_SYSTEM,{question,repositoryContext},{maxTokens:620});addUsage(usage,call.usage);
   const steps=arr(call.parsed?.steps).slice(0,8).map(x=>({action:text(x?.action,220),requires:arr(x?.requires).map(v=>text(v,100)).filter(Boolean).slice(0,8),relation:text(x?.relation,180)})).filter(x=>x.action);
   const logicalRequest={baseIntent:text(call.parsed?.intent,220),intent:text(call.parsed?.intent,220),steps};
   log('query_v5_plan',{question,logicalRequest,usage:call.usage,cumulativeUsage:{...usage}});
@@ -68,8 +68,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const usage={prompt:0,completion:0,total:0}, events=[], fulfilled=new Map(); let step=0;
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();if(!wanted)throw new Error('Select a repository before querying code.');
   if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const expected=String(explorer.state?.commit||'').trim(),p=await explorer.topology.prepare(wanted),prepared=String(p?.commit||explorer.topology?.commit||'').trim();if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');explorer.state.repoUrl=wanted;explorer.state.commit=prepared;explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};}
-  const logicalRequest=await deriveCodePlan({question,client,model,usage,log});onProgress({action:'PLAN',plan:logicalRequest.steps,activePlanStep:0});
   const grouped=explorer.topology?.callPathIndex?.top?.(Number.MAX_SAFE_INTEGER)||[];
+  const entryPreview=entryCandidates(grouped,explorer.topology?.symbolById||new Map()).slice(0,12).map(entry=>lookaheadFromEntry(grouped,explorer.topology?.symbolById||new Map(),entry.symbolId,3)).filter(Boolean);
+  const repositoryContext={readme:text(explorer.topology?.repositoryReadme||'',5000),entryFlows:entryPreview};
+  const logicalRequest=await deriveCodePlan({question,repositoryContext,client,model,usage,log});onProgress({action:'PLAN',plan:logicalRequest.steps,activePlanStep:0});
   explorer.state.semanticProfile='code';
   const flowChildren=new Map();
   for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
