@@ -516,6 +516,10 @@ The same search abstraction spans entry to function to callee, and function to A
 
 Large function bodies are deterministically partitioned from AST structure into source-backed regions. Query may descend into regions when function-level evidence is too broad to establish fulfillment.
 
+### Query to Learn handshake
+
+Before Query scores a previously unseen code symbol, call edge or AST region, it invokes a local semantic learner. That learner receives only deterministic source evidence and identifiers, never the user's question. It persists reusable symbol, call-edge and region semantics against the repository revision. Query then scores those semantics against the unresolved plan steps. This keeps learned meaning query-independent while allowing a cold semantic map to grow only along paths demanded by real queries.
+
 ### Final line localization
 
 Navigation does not select final source lines. After all possible plan steps have been mapped to fulfilled functions or regions, a separate evidence-localization call is made per step using only the selected source bodies or regions. It returns exact line ranges and a short explanation of how those lines satisfy the step.
