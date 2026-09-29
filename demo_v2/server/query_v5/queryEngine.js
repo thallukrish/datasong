@@ -41,7 +41,7 @@ function children(state, explorer, flowChildren=null) {
 }
 async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step}) {
   await ensureLocalCodeSemantics({states:candidates,explorer,client,model,usage,log});
-  const payload={plan:arr(logicalRequest.steps).map((x,i)=>[i,x.action,x.requires,x.relation]),unresolved:[...unresolved],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer.state)||null])};
+  const payload={plan:arr(logicalRequest.steps).map((x,i)=>[i,x.action,x.requires,x.relation]),unresolved:[...unresolved],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer)||null])};
   const call=await modelJson(client,model,SCORE_SYSTEM,payload,{maxTokens:700});addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((x,i)=>[String(i),x])), rejected=new Set(arr(call.parsed?.r).map(String)), out=[];
   for(const row of arr(call.parsed?.c)){const state=byIndex.get(String(row?.i));if(!state||rejected.has(String(row?.i)))continue;out.push({state,scores:arr(row?.s).map(s=>({step:Number(s?.[0]),navigation:Number(s?.[1]||0),fulfillment:Number(s?.[2]||0)}))})}
