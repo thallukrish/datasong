@@ -232,9 +232,7 @@ function compactLearningProgress(state = {}) {
     scout: {
       reviewedCallPathIds: clone(arr(state.scout?.reviewedCallPathIds)),
       exhausted: !!state.scout?.exhausted
-    },
-    codeBranchSemantics: clone(state.codeBranchSemantics || {}),
-    codeSymbolSemantics: clone(state.codeSymbolSemantics || {})
+    }
   };
 }
 
@@ -277,8 +275,6 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
         this.state.pass1Arcs = [...completed, ...clone(arr(saved.learningProgress?.incompleteArcs)).filter((arc) => !completedIds.has(arc?.id))];
         this.state.pass1Scheduler = { ...(this.state.pass1Scheduler || {}), ...(saved.learningProgress?.scheduler || {}) };
         this.state.scout = { ...(this.state.scout || {}), ...(saved.learningProgress?.scout || {}) };
-        this.state.codeBranchSemantics = clone(saved.learningProgress?.codeBranchSemantics || {});
-        this.state.codeSymbolSemantics = clone(saved.learningProgress?.codeSymbolSemantics || {});
       } else return false;
       this.state.mapPersistence = { restored: true, savedAt: saved.savedAt || '', repoUrl: saved.repoUrl, commit: saved.commit, version: Number(saved.version || MAP_VERSION) };
       this.state.lastMessage = 'Loaded the existing learned semantic graph for this repository revision.';
