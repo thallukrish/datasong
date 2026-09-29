@@ -35,6 +35,29 @@ function symbolState(symbol, parent=null) {
 function regionStates(symbol, parentRegionId=null) {
   return arr(symbol?.regions).filter(r=>(r.parentRegionId||null)===(parentRegionId||null)).map(r=>({ id:r.id,type:'code_region',kind:r.kind||'',name:symbol.name+' ['+(r.kind||'region')+' '+r.startLine+'-'+r.endLine+']',symbolId:symbol.id,regionId:r.id,sourcePath:symbol.sourcePath||'',startLine:r.startLine,endLine:r.endLine,body:String(r.body||''),parent:parentRegionId||symbol.id,parentSymbolId:symbol.id }));
 }
+function topologyEntries(topology) {
+  const symbols=arr(topology?.symbols);
+  const explicit=symbols.filter(s=>s?.entryPoint===true);
+  const roots=explicit.length?explicit:symbols.filter(s=>!(topology?.callers?.get?.(s.id)||[]).length);
+  return [...roots].sort((a,b)=>(topology?.entryPriority?.(b)||0)-(topology?.entryPriority?.(a)||0)).slice(0,24);
+}
+function topologyLookahead(symbol,topology,depth=3,seen=new Set()) {
+  if(!symbol||seen.has(symbol.id))return null;
+  const nextSeen=new Set(seen);nextSeen.add(symbol.id);
+  const view={symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',sourcePath:symbol.sourcePath||'',startLine:Number(symbol.startLine||0),endLine:Number(symbol.endLine||0),entryPoint:!!symbol.entryPoint,children:[]};
+  if(depth<=0)return view;
+  view.children=arr(symbol.references).filter(r=>r.relation==='calls'&&r.targetSymbolId).map(r=>topology?.symbolById?.get?.(r.targetSymbolId)).filter(Boolean).map(s=>topologyLookahead(s,topology,depth-1,nextSeen)).filter(Boolean).slice(0,12);
+  return view;
+}
+function structuralRoots(grouped,topology) {
+  const indexed=entryCandidates(grouped,topology?.symbolById||new Map()).map(e=>topology?.symbolById?.get?.(e.symbolId)).filter(Boolean);
+  return indexed.length?indexed:topologyEntries(topology);
+}
+function structuralPreview(grouped,topology) {
+  const indexed=entryCandidates(grouped,topology?.symbolById||new Map());
+  if(indexed.length)return indexed.slice(0,12).map(entry=>lookaheadFromEntry(grouped,topology?.symbolById||new Map(),entry.symbolId,3)).filter(Boolean);
+  return topologyEntries(topology).slice(0,12).map(symbol=>topologyLookahead(symbol,topology,3)).filter(Boolean);
+}
 function directCallStates(symbol,state,symbolById){
   const region = state?.type==='code_region' ? {start:Number(state.startLine||0),end:Number(state.endLine||0)} : null;
   return arr(symbol?.references).filter(r=>r.relation==='calls'&&r.targetSymbolId&&(!region||((Number(r.line||r.startLine||0)>=region.start)&&(Number(r.line||r.startLine||0)<=region.end)))).map(r=>symbolById?.get?.(r.targetSymbolId)).filter(Boolean).map(s=>symbolState(s,symbol.id));
@@ -69,14 +92,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();if(!wanted)throw new Error('Select a repository before querying code.');
   if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const expected=String(explorer.state?.commit||'').trim(),p=await explorer.topology.prepare(wanted),prepared=String(p?.commit||explorer.topology?.commit||'').trim();if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');explorer.state.repoUrl=wanted;explorer.state.commit=prepared;explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};}
   const grouped=explorer.topology?.callPathIndex?.top?.(Number.MAX_SAFE_INTEGER)||[];
-  const entryPreview=entryCandidates(grouped,explorer.topology?.symbolById||new Map()).slice(0,12).map(entry=>lookaheadFromEntry(grouped,explorer.topology?.symbolById||new Map(),entry.symbolId,3)).filter(Boolean);
+  const entryPreview=structuralPreview(grouped,explorer.topology);
   const repositoryContext={readme:text(explorer.topology?.repositoryReadme||'',5000),entryFlows:entryPreview};
   const logicalRequest=await deriveCodePlan({question,repositoryContext,client,model,usage,log});onProgress({action:'PLAN',plan:logicalRequest.steps,activePlanStep:0});
   explorer.state.semanticProfile='code';
   const flowChildren=new Map();
   for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
-  const entries=entryCandidates(grouped,explorer.topology?.symbolById||new Map()).map(e=>explorer.topology.symbolById.get(e.symbolId)).filter(Boolean).map(e=>symbolState(e));
-  if(!entries.length)throw new Error('No indexed code-flow roots found.');
+  const entries=structuralRoots(grouped,explorer.topology).map(e=>symbolState(e));
+  if(!entries.length)throw new Error('No deterministic code roots found.');
   const visited=new Set(), stack=[];
   const markVisited=(state)=>{visited.add(state.id);};
   let unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
