@@ -62,8 +62,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   let unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
   const seed=async()=>{
     const candidates=entries.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
-    const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step});recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
-    scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,unresolved));if(!warm.length)return false;
+    const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step});
+    const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
+    scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));if(!warm.length)return unresolved.size===0;
     for(const item of scored) visited.add(item.state.id);
     stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});events.push({step,action:'RESEED',state:warm[0].state.name});return true;
   };
@@ -73,8 +74,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     recordFulfillment([current],fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
     const next=children(state,explorer).filter(x=>!visited.has(x.id));
     if(next.length){
-      const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step});recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
-      scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,unresolved));
+      const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step});
+      const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
+      scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));
       if(warm.length&&nav-scoreOf(warm[0],unresolved)<=NAV_MAX_DROP){stack.push({path:[...frame.path,state],current:warm[0],alternatives:warm.slice(1),parentScore:nav});events.push({step,action:'DESCEND',from:state.name,to:warm[0].state.name});continue}
     }
     let resumed=false;
