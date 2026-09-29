@@ -31,9 +31,12 @@ export function materializeCodeStructure(explorer,states=[]){
     if(state.type==='code_region'){
       const parentId=state.parent||state.symbolId;
       mergeLinks(node,[{nodeId:parentId,relationship:'contained-by',data:{relationshipKind:'structural'}}]);
-      const parent=graphNode(explorer,parentId);if(parent)mergeLinks(parent,[{nodeId:state.id,relationship:'contains',data:{relationshipKind:'structural'}}]);
+      let parent=graphNode(explorer,parentId);
+      if(!parent&&parentId===state.symbolId){const ps=symbolById?.get(state.symbolId);if(ps)parent=upsert(explorer,{id:ps.id,type:'function',name:ps.name,data:{details:{structural:{sourcePath:ps.sourcePath||'',startLine:Number(ps.startLine||0),endLine:Number(ps.endLine||0),symbolId:ps.id,kind:ps.kind||'',signature:ps.signature||''},semantic:{}}},links:[]});}
+      if(parent)mergeLinks(parent,[{nodeId:state.id,relationship:'contains',data:{relationshipKind:'structural'}}]);
     }else if(state.parentSymbolId&&state.parentSymbolId!==state.symbolId){
-      const parent=graphNode(explorer,state.parentSymbolId);
+      let parent=graphNode(explorer,state.parentSymbolId);
+      if(!parent){const ps=symbolById?.get(state.parentSymbolId);if(ps)parent=upsert(explorer,{id:ps.id,type:'function',name:ps.name,data:{details:{structural:{sourcePath:ps.sourcePath||'',startLine:Number(ps.startLine||0),endLine:Number(ps.endLine||0),symbolId:ps.id,kind:ps.kind||'',signature:ps.signature||''},semantic:{}}},links:[]});}
       if(parent)mergeLinks(parent,[{nodeId:state.id,relationship:'calls',data:{relationshipKind:'structural'}}]);
     }
   }
