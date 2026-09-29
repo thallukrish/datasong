@@ -76,3 +76,26 @@ test('repository explorer construction does not load or hydrate persisted semant
   assert.equal(prepares, 0);
   assert.deepEqual(await explorer.startupHydration, { hydrated:false, reason:'startup_inert' });
 });
+
+
+test('explicit enterprise selection activates persisted map without preparing topology', async () => {
+  const { RepositoryExplorer } = await import('../server/repositoryExplorer.js');
+  let prepares = 0;
+  const topology = { symbolById:new Map(), async prepare() { prepares += 1; return {}; } };
+  const explorer = new RepositoryExplorer({ topology, dataRoot: '.', onState() {} });
+  explorer.persistedMaps = () => [{
+    version:3,
+    repoUrl:'https://github.com/example/repo',
+    commit:'abc123',
+    savedAt:'2026-09-29T00:00:00.000Z',
+    graph:[],
+    learningProgress:{ incompleteArcs:[], scheduler:{}, scout:{} }
+  }];
+
+  const result = explorer.activatePersistedMapForRepo('https://github.com/example/repo');
+  assert.equal(result.loaded, true);
+  assert.equal(explorer.state.repoUrl, 'https://github.com/example/repo');
+  assert.equal(explorer.state.commit, 'abc123');
+  assert.equal(explorer.state.runtimeHydration.status, 'not_prepared');
+  assert.equal(prepares, 0);
+});
