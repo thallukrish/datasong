@@ -315,8 +315,9 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
       this.closeCompletedArcs(); this.enrichTraceability(); fs.mkdirSync(this.mapDirectory(), { recursive: true });
       const savedAt = new Date().toISOString();
       const semanticGraph = graphFromSemanticObjects(this.state.semanticObjects);
-      const codeIds = new Set(semanticGraph.map((node) => node.id));
-      const unifiedGraph = [...semanticGraph, ...clone(arr(this.state.learnedGraph)).filter((node) => node?.id && !codeIds.has(node.id))];
+      const learnedById = new Map(arr(this.state.learnedGraph).filter((node)=>node?.id).map((node)=>[node.id,clone(node)]));
+      for(const node of semanticGraph){const prior=learnedById.get(node.id);if(prior){node.data={...(prior.data||{}),...(node.data||{}),details:{...(prior.data?.details||{}),...(node.data?.details||{})}};const seen=new Set(arr(node.links).map((link)=>`${link.nodeId}|${link.relationship}`));for(const link of arr(prior.links))if(!seen.has(`${link.nodeId}|${link.relationship}`))node.links.push(link);}learnedById.delete(node.id);}
+      const unifiedGraph = [...semanticGraph, ...learnedById.values()];
       const learnedMap = { version: MAP_VERSION, repoUrl: this.state.repoUrl, commit: this.state.commit, savedAt, graph: normalizeLearnedGraph(unifiedGraph), learningProgress: compactLearningProgress(this.state) };
       writeSavedMap(this.mapFilePath(), learnedMap);
       this.state.mapPersistence = { restored: !!this._mapRestored, savedAt, repoUrl: this.state.repoUrl, commit: this.state.commit, version: MAP_VERSION };
