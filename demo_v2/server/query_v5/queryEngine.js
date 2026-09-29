@@ -7,7 +7,7 @@ export const NAV_MAX_DROP = 0.2;
 export const FULFILLED = 1.0;
 const MAX_STEPS = 64;
 
-const SCORE_SYSTEM = `Score supplied code candidates against unresolved ordered query-plan steps. For each candidate and step return TWO independent scores: navigation confidence n means continuing through this candidate is likely to lead to the needed implementation; fulfillment f means THIS candidate itself contains enough implementation context to satisfy the step. f=1.0 is a hard completion signal and must be used only when the supplied source/semantics are sufficient for that step. Return {"c":[{"i":0,"s":[[stepIndex,n,f]]}],"r":[candidateIndex]}.`;
+const SCORE_SYSTEM = `Score supplied code candidates against unresolved ordered query-plan steps. Candidate semantics may be absent for not-yet-learned nodes; in that case use the structural name, signature/source location and path only to estimate navigation. For each candidate and step return TWO independent scores: navigation confidence n means continuing through this candidate is likely to lead to the needed implementation; fulfillment f means THIS candidate itself contains enough learned implementation context to satisfy the step. NEVER return f=1.0 when candidate semantics are absent. f=1.0 is a hard completion signal and must be used only when supplied learned semantics are sufficient for that step. Return {"c":[{"i":0,"s":[[stepIndex,n,f]]}],"r":[candidateIndex]}.`;
 const LOCALIZE_SYSTEM = `For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.`;
 const PLAN_SYSTEM = `Translate a software issue into a short ORDERED CODE INVESTIGATION PLAN using the supplied repository context and deterministic entry-flow previews.  Each step must describe implementation behavior that must be located or explained in source code. Keep only steps that help diagnose or implement the issue. Do not use database language such as rows, grain, dimensions, measures, joins, or entities. Return {"intent":"short diagnosis goal","steps":[{"action":"what code behavior must be established","requires":["code concept or behavior"],"relation":"optional relationship to establish"}]}. Prefer 3-6 steps.`;
 
@@ -74,8 +74,7 @@ function children(state, explorer, flowChildren=null) {
   return [];
 }
 async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step,onProgress=()=>{}}) {
-  await ensureLocalCodeSemantics({states:candidates,path,explorer,client,model,usage,log,onProgress});
-  const payload={plan:arr(logicalRequest.steps).map((x,i)=>[i,x.action,x.requires,x.relation]),unresolved:[...unresolved],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer)||null])};
+  const payload={plan:arr(logicalRequest.steps).map((x,i)=>[i,x.action,x.requires,x.relation]),unresolved:[...unresolved],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer)||null,(explorer.topology?.symbolById?.get(x.symbolId)?.signature||'')])};
   const call=await modelJson(client,model,SCORE_SYSTEM,payload,{maxTokens:700});addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((x,i)=>[String(i),x])), rejected=new Set(arr(call.parsed?.r).map(String)), out=[];
   for(const row of arr(call.parsed?.c)){const state=byIndex.get(String(row?.i));if(!state||rejected.has(String(row?.i)))continue;out.push({state,scores:arr(row?.s).map(s=>({step:Number(s?.[0]),navigation:Number(s?.[1]||0),fulfillment:Number(s?.[2]||0)}))})}
@@ -114,7 +113,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   if(!seeded&&unresolved.size)return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
   while(stack.length&&step<MAX_STEPS&&unresolved.size){
     const frame=stack.at(-1), current=frame.current, state=current.state, nav=scoreOf(current,unresolved);markVisited(state);
-    recordFulfillment([current],fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
+    await ensureLocalCodeSemantics({states:[state],path:frame.path,explorer,client,model,usage,log,onProgress});
+    const rescored=await scoreCandidates({logicalRequest,unresolved,path:frame.path,candidates:[state],explorer,client,model,usage,log,step:++step,onProgress});
+    if(rescored.length)frame.current=rescored[0];
+    recordFulfillment(rescored.length?rescored:[current],fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
     const next=children(state,explorer,flowChildren).filter(x=>!visited.has(x.id));
     if(next.length){
       const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step,onProgress});
