@@ -6,6 +6,7 @@ export const NAV_MIN = 0.5;
 export const NAV_MAX_DROP = 0.2;
 export const FULFILLED = 1.0;
 const MAX_STEPS = 64;
+const ENTRY_BATCH_SIZE = 20;
 
 const SCORE_SYSTEM = `Score supplied code candidates ONLY against the single active ordered query-plan step. Candidate semantics may be absent for not-yet-learned nodes; in that case use structural name, signature, source location and path only to estimate navigation. For each candidate return navigation confidence n, meaning continuing through this candidate is likely to lead to the needed implementation, and fulfillment f, meaning THIS candidate itself contains enough learned implementation context to satisfy the active step. NEVER return f=1.0 when candidate semantics are absent. f=1.0 is a hard completion signal and must be used only when supplied learned semantics are sufficient for the active step. Return {"c":[{"i":0,"n":0.0,"f":0.0}],"r":[candidateIndex]}.`;
 const LOCALIZE_SYSTEM = `For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.`;
@@ -78,17 +79,28 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   explorer.state.semanticProfile='code';
   const flowChildren=new Map();
   for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
-  const entries=entryCandidates(grouped,explorer.topology?.symbolById||new Map()).map(e=>explorer.topology.symbolById.get(e.symbolId)).filter(Boolean).map(e=>symbolState(e));
+  const rankedEntries=entryCandidates(grouped,explorer.topology?.symbolById||new Map());
+  const entries=rankedEntries.map(e=>explorer.topology.symbolById.get(e.symbolId)).filter(Boolean).map(e=>symbolState(e));
   if(!entries.length)throw new Error('Prepared call-path index contains no entry roots.');
   const visited=new Set(), stack=[];
   const markVisited=(state)=>{visited.add(state.id);};
   let unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
   const seed=async()=>{
-    const candidates=entries.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
-    const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step,onProgress});
-    const before=new Set(unresolved);recordFulfillment(scored,fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
-    scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));if(!warm.length)return unresolved.size===0;
-    stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});const event={step,action:'RESEED',state:warm[0].state.name,activePlanStep:activeStepOf(unresolved)};events.push(event);onProgress({...event,path:[warm[0].state.name]});return true;
+    const remaining=entries.filter(x=>!visited.has(x.id));if(!remaining.length)return false;
+    for(let offset=0;offset<remaining.length;offset+=ENTRY_BATCH_SIZE){
+      const candidates=remaining.slice(offset,offset+ENTRY_BATCH_SIZE);
+      for(const candidate of candidates)markVisited(candidate);
+      const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step,onProgress});
+      const before=new Set(unresolved);recordFulfillment(scored,fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
+      scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));
+      const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));
+      const batchEvent={step,action:'ENTRY_BATCH',batch:Math.floor(offset/ENTRY_BATCH_SIZE)+1,start:offset,count:candidates.length,bestNavigation:scored.length?scoreOf(scored[0],unresolved):0,activePlanStep:activeStepOf(unresolved)};
+      events.push(batchEvent);onProgress(batchEvent);
+      if(!warm.length){if(!unresolved.size)return true;continue}
+      stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});
+      const event={step,action:'RESEED',state:warm[0].state.name,activePlanStep:activeStepOf(unresolved)};events.push(event);onProgress({...event,path:[warm[0].state.name]});return true;
+    }
+    return unresolved.size===0;
   };
   const seeded=await seed();
   if(!seeded&&unresolved.size)return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
