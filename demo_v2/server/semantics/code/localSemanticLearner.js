@@ -1,7 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../../query_v2/modelJson.js';
 import { materializeCodeStructure, applyCodeSemantics, semanticDetails } from './codeGraph.js';
 
-const LEARN_SYSTEM = \`Learn query-independent LOCAL code semantics for newly expanded code nodes. The ordered flowContext contains only semantics already learned for predecessor nodes on the execution path. Use it only to understand how execution arrived at the new node. Do not answer a user query, infer query relevance, or rewrite predecessor semantics. For each supplied new function or function-region, describe the logic performed by that node in this execution context. Return {"symbols":[{"symbolId":"","purpose":"","effect":""}],"regions":[{"regionId":"","purpose":"","effect":""}]} using only exact supplied IDs.\`;
+const LEARN_SYSTEM = `Learn query-independent LOCAL code semantics for newly expanded code nodes. The ordered flowContext contains only semantics already learned for predecessor nodes on the execution path. Use it only to understand how execution arrived at the new node. Do not answer a user query, infer query relevance, or rewrite predecessor semantics. For each supplied new function or function-region, describe the logic performed by that node in this execution context. Return {"symbols":[{"symbolId":"","purpose":"","effect":""}],"regions":[{"regionId":"","purpose":"","effect":""}]} using only exact supplied IDs.`;
 
 export function codeSemanticForState(state,explorer){return semanticDetails(explorer,state)}
 
