@@ -226,3 +226,53 @@ Python source
 Dynamic Python is intentionally outside the first implementation. Reflection, runtime monkey-patching, dynamic imports, arbitrary `getattr`, runtime-generated methods and dependency-injection behavior that cannot be proven statically remain unresolved boundaries rather than guessed edges.
 
 The learning run log records `pythonAst` statistics at `run_start`, including symbol count, resolved call count and unresolved call count. These statistics make it possible to distinguish a language-analysis failure from a later call-path, semantic-interpretation or retrieval failure.
+
+
+## Query-driven semantic map construction
+
+Generic code learning is now intended to grow from query demand rather than require exhaustive semantic interpretation of every indexed vertical call path.
+
+The deterministic call-path index remains the topology authority. Its vertical slices are reorganized into an entry-rooted flow forest for semantic routing. Entry is plural and framework/language dependent: CLI commands, HTTP/API handlers, UI events, message/event consumers, scheduled jobs, public library APIs, tests, and other deterministically evidenced invocation roots may all seed a flow family.
+
+The semantic layer adds local routing knowledge to deterministic edges:
+
+```text
+caller A
+  -> B : semantic purpose of taking B from A
+  -> C : semantic purpose of taking C from A
+  -> D : semantic purpose of taking D from A
+```
+
+These annotations describe what the call achieves in its caller. They do not assign global importance or query relevance. Query-time scoring owns relevance because it changes with the issue.
+
+Generic Pass 2 therefore persists `branchSemantics` keyed by exact deterministic `fromSymbolId -> toSymbolId`, including source path and line provenance when evidenced.
+
+The code semantic frontier can expose bounded lookahead, normally two or three call levels:
+
+```text
+query / issue
+-> deterministic entry candidates
+-> semantic preview of outgoing branches + 2-3 level lookahead
+-> query scores branches against its ordered answer/issue plan
+-> expand the strongest branch
+-> add/persist semantic annotations for the newly exposed region
+-> return to query
+-> continue best-first; backtrack when signal weakens
+```
+
+This creates three knowledge resolutions:
+
+```text
+deterministic topology
+-> cheap/local semantic routing annotations
+-> deep semantic interpretation where query evidence demands it
+```
+
+CallPathIndexer is therefore not the semantic-learning unit. It supplies deterministic end-to-end vertical slices and shared topology. Semantic knowledge is persisted against reusable nodes/edges/regions so converging flows can reuse already learned downstream meaning instead of paying to reinterpret the same subflow.
+
+When the semantic map is empty, Query should request an initial bounded semantic frontier from deterministic entry candidates rather than fail because no learned workflow exists. Learn returns that frontier to Query. Query then chooses which branches deserve deeper semantic expansion. This clean-map query loop is the next integration point for `query_v4`.
+
+Implementation:
+- `server/semantics/code/queryDrivenSemanticFrontier.js` reconstructs entry-rooted flow families from grouped indexed paths, provides bounded lookahead, and attaches persisted edge semantics.
+- `structuredWorkflow.js` asks code Pass 2 for exact caller-to-callee branch semantics and persists them in `state.codeBranchSemantics`.
+- `codeSemanticEntryCandidates()` and `codeSemanticLookahead(entrySymbolId, depth)` expose the deterministic/semantic frontier to Query without forcing whole-repository semantic learning.
