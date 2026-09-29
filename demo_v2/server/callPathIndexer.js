@@ -6,6 +6,20 @@ const EXECUTABLE_RELATIONS = new Set([
 function arr(value) { return Array.isArray(value) ? value : []; }
 function text(value) { return String(value || '').trim(); }
 
+function sourceRoleForPath(sourcePath) {
+  const value = String(sourcePath || '').replace(/\\/g, '/').toLowerCase();
+  const parts = value.split('/').filter(Boolean);
+  const base = parts.at(-1) || '';
+  const testDir = parts.some((part) => ['test', 'tests', '__tests__', 'spec', 'specs'].includes(part));
+  const testFile = /^(test[_-].+|.+[_-]test)\.[^.]+$/.test(base)
+    || /\.(test|spec)\.[^.]+$/.test(base);
+  return testDir || testFile ? 'test' : 'source';
+}
+
+function sourceRole(symbol) {
+  return text(symbol?.sourceRole) || sourceRoleForPath(symbol?.sourcePath);
+}
+
 export class CallPathIndexer {
   constructor(topology, { executableRelations = EXECUTABLE_RELATIONS } = {}) {
     this.topology = topology;
@@ -28,9 +42,17 @@ export class CallPathIndexer {
     const indegree = new Map(symbols.map((symbol) => [symbol.id, 0]));
 
     for (const symbol of symbols) {
+      if (!symbol.sourceRole) symbol.sourceRole = sourceRole(symbol);
       const edges = this.internalEdges(symbol).filter((edge) => byId.has(edge.target.id));
       outgoing.set(symbol.id, edges);
-      for (const edge of edges) indegree.set(edge.target.id, (indegree.get(edge.target.id) || 0) + 1);
+      for (const edge of edges) {
+        // Cross-domain calls remain traversable, but do not redefine roots.
+        // A test calling a library/API function must not stop that source
+        // function from being a structural source root.
+        if (sourceRole(symbol) === sourceRole(edge.target)) {
+          indegree.set(edge.target.id, (indegree.get(edge.target.id) || 0) + 1);
+        }
+      }
     }
 
     const roots = symbols
