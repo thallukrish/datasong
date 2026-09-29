@@ -71,7 +71,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step});
     const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
     scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));if(!warm.length)return unresolved.size===0;
-    for(const item of scored) seededEntries.add(item.state.id);
+    for(const item of warm) seededEntries.add(item.state.id);
     stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});events.push({step,action:'RESEED',state:warm[0].state.name});return true;
   };
   const seeded=await seed();
