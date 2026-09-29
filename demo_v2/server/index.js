@@ -7,6 +7,7 @@ import { ProgressiveRepositoryTopologyV9 } from './progressiveRepositoryTopology
 import { RepositoryExplorer } from './repositoryExplorer.js';
 import { registerQueryApi } from './queryApi.js';
 import { registerQueryV2Api } from './query_v2/queryApi.js';
+import { registerQueryV5Api } from './query_v5/queryApi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -394,6 +395,15 @@ registerQueryApi({
 });
 
 registerQueryV2Api({
+  app,
+  explorer,
+  queryClient,
+  queryModel,
+  dataRoot,
+  onLatestLog: (file) => { latestQueryLogPath = file; }
+});
+
+registerQueryV5Api({
   app,
   explorer,
   queryClient,
