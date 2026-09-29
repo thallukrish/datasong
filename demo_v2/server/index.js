@@ -269,8 +269,10 @@ app.post('/api/select-enterprise', (req, res) => {
   if (running) return res.status(409).json({ error:'Stop learning before selecting another enterprise.' });
   const repoUrl = String(req.body?.repoUrl || '').trim();
   if (!repoUrl) return res.status(400).json({ error:'repoUrl is required' });
-  explorer.setSemanticProfile?.(String(req.body?.semanticProfile || 'enterprise'));
+  const semanticProfile = String(req.body?.semanticProfile || 'enterprise');
+  explorer.setSemanticProfile?.(semanticProfile);
   const result = explorer.activatePersistedMapForRepo?.(repoUrl);
+  explorer.setSemanticProfile?.(semanticProfile);
   broadcast(explorer.snapshot());
   return res.json({ ok:true, loaded:!!result?.loaded, reason:result?.reason || '', repoUrl:result?.repoUrl || repoUrl, commit:result?.commit || '', savedAt:result?.savedAt || '' });
 });
