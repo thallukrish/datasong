@@ -211,19 +211,38 @@ for rec in defs.values():
     signature = ("async " if isinstance(node, ast.AsyncFunctionDef) else "") + f"def {rec['qualified']}({params_text(node)}):"
     regions = []
     region_index = 0
-    for child in node.body:
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        region_index += 1
-        kind = type(child).__name__.lower()
-        regions.append({
-            "id": f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index}",
-            "kind": kind,
-            "startLine": getattr(child, "lineno", node.lineno),
-            "endLine": getattr(child, "end_lineno", getattr(child, "lineno", node.lineno)),
-            "body": source_segment(text, child),
-            "parentRegionId": None
-        })
+
+    def add_regions(statements, parent_region_id=None):
+        nonlocal region_index
+        for child in statements:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            region_index += 1
+            region_id = f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index}"
+            kind = type(child).__name__.lower()
+            regions.append({
+                "id": region_id,
+                "kind": kind,
+                "startLine": getattr(child, "lineno", node.lineno),
+                "endLine": getattr(child, "end_lineno", getattr(child, "lineno", node.lineno)),
+                "body": source_segment(text, child),
+                "parentRegionId": parent_region_id
+            })
+            nested_lists = []
+            for field in ("body", "orelse", "finalbody"):
+                value = getattr(child, field, None)
+                if isinstance(value, list) and value:
+                    nested_lists.append(value)
+            for handler in getattr(child, "handlers", []) or []:
+                if getattr(handler, "body", None):
+                    nested_lists.append(handler.body)
+            for case in getattr(child, "cases", []) or []:
+                if getattr(case, "body", None):
+                    nested_lists.append(case.body)
+            for nested in nested_lists:
+                add_regions(nested, region_id)
+
+    add_regions(node.body)
 
     symbols.append({
         "id": sid(rec["path"], rec["qualified"], node.lineno),
