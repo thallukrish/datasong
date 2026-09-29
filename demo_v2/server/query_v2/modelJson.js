@@ -45,17 +45,18 @@ function parseJson(value) {
 }
 
 async function createCompletion(client, model, messages, maxTokens) {
-  return client.chat.completions.create({
+  const request={
     model,
     messages,
     response_format:{ type:'json_object' },
     thinking:{ type:'disabled' },
-    temperature:0,
-    max_tokens:maxTokens
-  });
+    temperature:0
+  };
+  if(Number.isFinite(Number(maxTokens))&&Number(maxTokens)>0)request.max_tokens=Number(maxTokens);
+  return client.chat.completions.create(request);
 }
 
-export async function modelJson(client, model, system, payload, { maxTokens = 1200 } = {}) {
+export async function modelJson(client, model, system, payload, { maxTokens } = {}) {
   const baseMessages = [
     { role:'system', content:`Return compact JSON only. ${system}` },
     { role:'user', content:JSON.stringify(payload) }
