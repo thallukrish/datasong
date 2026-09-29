@@ -82,14 +82,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const rankedEntries=entryCandidates(grouped,explorer.topology?.symbolById||new Map());
   const entries=rankedEntries.map(e=>explorer.topology.symbolById.get(e.symbolId)).filter(Boolean).map(e=>symbolState(e));
   if(!entries.length)throw new Error('Prepared call-path index contains no entry roots.');
-  const visited=new Set(), stack=[];
+  const visited=new Set(), entryTriedByStep=new Map(), stack=[];
   const markVisited=(state)=>{visited.add(state.id);};
   let unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
   const seed=async()=>{
-    const remaining=entries.filter(x=>!visited.has(x.id));if(!remaining.length)return false;
+    const activeStep=activeStepOf(unresolved);if(activeStep===undefined)return true;
+    if(!entryTriedByStep.has(activeStep))entryTriedByStep.set(activeStep,new Set());
+    const tried=entryTriedByStep.get(activeStep);
+    const remaining=entries.filter(x=>!visited.has(x.id)&&!tried.has(x.id));if(!remaining.length)return false;
     for(let offset=0;offset<remaining.length;offset+=ENTRY_BATCH_SIZE){
       const candidates=remaining.slice(offset,offset+ENTRY_BATCH_SIZE);
-      for(const candidate of candidates)markVisited(candidate);
+      for(const candidate of candidates)tried.add(candidate.id);
       const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step,onProgress});
       const before=new Set(unresolved);recordFulfillment(scored,fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
       scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));
