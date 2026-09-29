@@ -67,7 +67,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const usage={prompt:0,completion:0,total:0}, events=[], fulfilled=new Map(); let step=0;
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();if(!wanted)throw new Error('Select a repository before querying code.');
   if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const expected=String(explorer.state?.commit||'').trim(),p=await explorer.topology.prepare(wanted),prepared=String(p?.commit||explorer.topology?.commit||'').trim();if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');explorer.state.repoUrl=wanted;explorer.state.commit=prepared;explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};}
-  const grouped=explorer.topology?.callPathIndex?.top?.(Number.MAX_SAFE_INTEGER)||[];
+  const grouped=explorer.topology?.topCallPaths?.(Number.MAX_SAFE_INTEGER)||[];
   if(!grouped.length)throw new Error('Prepared call-path index contains no code-flow paths.');
   const entryPreview=entryCandidates(grouped,explorer.topology?.symbolById||new Map()).slice(0,12).map(entry=>lookaheadFromEntry(grouped,explorer.topology?.symbolById||new Map(),entry.symbolId,3)).filter(Boolean);
   const repositoryContext={readme:text(explorer.topology?.repositoryReadme||'',5000),entryFlows:entryPreview};
