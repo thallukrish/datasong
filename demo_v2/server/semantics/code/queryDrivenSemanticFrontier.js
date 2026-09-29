@@ -55,10 +55,42 @@ function previewNode(node, symbolById, depth) {
   return view;
 }
 
+function boundaryKind(symbol, structuralRoot) {
+  const role = String(symbol?.sourceRole || 'source');
+  const explicitKind = String(symbol?.entryKind || symbol?.boundaryKind || '').toLowerCase();
+  const name = String(symbol?.simpleName || symbol?.name || '').split('.').at(-1) || '';
+  const explicit = !!symbol?.entryPoint || name === 'main' || explicitKind === 'main' || explicitKind === 'cli';
+  const external = ['api','route','ui_event','event','callback','job','handler','command'].some((kind) => explicitKind.includes(kind));
+  const publicApi = role !== 'test' && name && !name.startsWith('_');
+  if (role === 'test') {
+    if (explicit) return { kind:'test_explicit', priority:200 };
+    if (external) return { kind:'test_external', priority:150 };
+    if (publicApi) return { kind:'test_public_api', priority:100 };
+    if (structuralRoot) return { kind:'test_structural_root', priority:50 };
+    return { kind:'test_other', priority:0 };
+  }
+  if (explicit) return { kind:'explicit_entry', priority:700 };
+  if (external) return { kind:'external_boundary', priority:600 };
+  if (publicApi) return { kind:'public_api', priority:500 };
+  if (structuralRoot) return { kind:'structural_root', priority:400 };
+  return { kind:'other_callable', priority:300 };
+}
+
 export function entryCandidates(groupedPaths = [], symbolById = new Map()) {
   const forest = buildEntryFlowForest(groupedPaths);
-  return [...forest.values()].map((node) => previewNode(node, symbolById, 0))
-    .sort((a, b) => Number(b.entryPoint) - Number(a.entryPoint) || b.pathIds.length - a.pathIds.length || a.name.localeCompare(b.name));
+  const rootIds = new Set(forest.keys());
+  const symbols = symbolById instanceof Map ? [...symbolById.values()] : [];
+  return symbols.filter((symbol) => symbol?.id).map((symbol) => {
+    const root = forest.get(symbol.id);
+    const boundary = boundaryKind(symbol, rootIds.has(symbol.id));
+    return {
+      ...symbolView(symbolById, symbol.id),
+      structuralRoot:rootIds.has(symbol.id),
+      boundaryKind:boundary.kind,
+      boundaryPriority:boundary.priority,
+      pathIds:root ? [...root.pathIds] : []
+    };
+  }).sort((a,b) => b.boundaryPriority-a.boundaryPriority || b.pathIds.length-a.pathIds.length || a.name.localeCompare(b.name));
 }
 
 export function lookaheadFromEntry(groupedPaths = [], symbolById = new Map(), entrySymbolId, depth = 3) {
