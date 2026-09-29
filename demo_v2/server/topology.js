@@ -278,6 +278,9 @@ export class CodeTopology {
       if (!text) continue;
       const extracted = extractCodeSymbols(text, rel);
       for (const symbol of extracted) {
+        // CodeTopology only emits executable code/workflow constructs. Other
+        // semantic nodes added by higher layers must opt into executability.
+        symbol.executable = true;
         symbol.references = collectReferences(symbol);
         this.symbols.push(symbol);
         this.symbolById.set(symbol.id, symbol);
