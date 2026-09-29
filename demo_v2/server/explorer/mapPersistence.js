@@ -269,6 +269,7 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
         }
       } else if (Number(saved?.version || 0) === MAP_VERSION && Array.isArray(saved.graph)) {
         const normalizedGraph = normalizeLearnedGraph(saved.graph);
+        this.state.learnedGraph = normalizedGraph;
         this.state.semanticObjects = semanticObjectsFromGraph(normalizedGraph);
         const completed = workflowArcsFromGraph(normalizedGraph);
         const completedIds = new Set(completed.map((arc) => arc.id));
