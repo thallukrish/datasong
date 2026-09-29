@@ -1,5 +1,5 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
-import { deriveDimensions } from '../query_v4/scorer.js';
+import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
 import { ensureLocalCodeSemantics, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 
 export const NAV_MIN = 0.5;
@@ -9,11 +9,22 @@ const MAX_STEPS = 64;
 
 const SCORE_SYSTEM = `Score supplied code candidates against unresolved ordered query-plan steps. For each candidate and step return TWO independent scores: navigation confidence n means continuing through this candidate is likely to lead to the needed implementation; fulfillment f means THIS candidate itself contains enough implementation context to satisfy the step. f=1.0 is a hard completion signal and must be used only when the supplied source/semantics are sufficient for that step. Return {"c":[{"i":0,"s":[[stepIndex,n,f]]}],"r":[candidateIndex]}.`;
 const LOCALIZE_SYSTEM = `For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.`;
+const PLAN_SYSTEM = `Translate a software issue into a short ORDERED CODE INVESTIGATION PLAN. Each step must describe implementation behavior that must be located or explained in source code. Keep only steps that help diagnose or implement the issue. Do not use database language such as rows, grain, dimensions, measures, joins, or entities. Return {"intent":"short diagnosis goal","steps":[{"action":"what code behavior must be established","requires":["code concept or behavior"],"relation":"optional relationship to establish"}]}. Prefer 3-6 steps.`;
 
+async function deriveCodePlan({question,client,model,usage,log}) {
+  const call=await modelJson(client,model,PLAN_SYSTEM,{question},{maxTokens:520});addUsage(usage,call.usage);
+  const steps=arr(call.parsed?.steps).slice(0,8).map(x=>({action:text(x?.action,220),requires:arr(x?.requires).map(v=>text(v,100)).filter(Boolean).slice(0,8),relation:text(x?.relation,180)})).filter(x=>x.action);
+  const logicalRequest={baseIntent:text(call.parsed?.intent,220),intent:text(call.parsed?.intent,220),steps};
+  log('query_v5_plan',{question,logicalRequest,usage:call.usage,cumulativeUsage:{...usage}});
+  return logicalRequest;
+}
+
+function activeStepOf(unresolved) { return [...unresolved].sort((a,b)=>a-b)[0]; }
 function scoreOf(item, unresolved) {
-  let best=0;
-  for(const s of arr(item?.scores)) if(unresolved.has(Number(s.step))) best=Math.max(best,Number(s.navigation||0));
-  return best;
+  const active=activeStepOf(unresolved);
+  if(active===undefined)return 0;
+  const hit=arr(item?.scores).find(s=>Number(s.step)===active);
+  return Number(hit?.navigation||0);
 }
 function fulfilledNow(item, unresolved){
   return arr(item?.scores).some(s=>unresolved.has(Number(s.step))&&Number(s.fulfillment)>=FULFILLED);
@@ -39,39 +50,39 @@ function children(state, explorer, flowChildren=null) {
   if(state.type==='code_region') { const allowed=flowChildren?.get?.(state.symbolId)||null; const calls=directCallStates(symbol,state,explorer.topology.symbolById).filter(s=>!allowed||allowed.has(s.symbolId)); return [...calls,...regionStates(symbol,state.regionId)]; }
   return [];
 }
-async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step}) {
-  await ensureLocalCodeSemantics({states:candidates,path,explorer,client,model,usage,log});
+async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step,onProgress=()=>{}}) {
+  await ensureLocalCodeSemantics({states:candidates,path,explorer,client,model,usage,log,onProgress});
   const payload={plan:arr(logicalRequest.steps).map((x,i)=>[i,x.action,x.requires,x.relation]),unresolved:[...unresolved],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer)||null])};
   const call=await modelJson(client,model,SCORE_SYSTEM,payload,{maxTokens:700});addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((x,i)=>[String(i),x])), rejected=new Set(arr(call.parsed?.r).map(String)), out=[];
   for(const row of arr(call.parsed?.c)){const state=byIndex.get(String(row?.i));if(!state||rejected.has(String(row?.i)))continue;out.push({state,scores:arr(row?.s).map(s=>({step:Number(s?.[0]),navigation:Number(s?.[1]||0),fulfillment:Number(s?.[2]||0)}))})}
-  log('query_v5_score',{step,payload,result:out,usage:call.usage});return out;
+  log('query_v5_score',{step,payload,result:out,usage:call.usage});onProgress({action:'SCORE',step,activePlanStep:activeStepOf(unresolved),path:path.map(x=>x.name),candidates:out.map(x=>({id:x.state.id,name:x.state.name,scores:x.scores}))});return out;
 }
 function recordFulfillment(scored, fulfilled) {
   for(const item of scored)for(const s of item.scores)if(Number(s.fulfillment)>=FULFILLED){if(!fulfilled.has(s.step))fulfilled.set(s.step,[]);if(!fulfilled.get(s.step).some(x=>x.id===item.state.id))fulfilled.get(s.step).push(item.state)}
 }
 function unresolvedSteps(count,fulfilled){return new Set(Array.from({length:count},(_,i)=>i).filter(i=>!fulfilled.has(i)))}
 
-export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model,log=()=>{}}){
+export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model,log=()=>{},onProgress=()=>{}}){
   const usage={prompt:0,completion:0,total:0}, events=[], fulfilled=new Map(); let step=0;
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();if(!wanted)throw new Error('Select a repository before querying code.');
   if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const expected=String(explorer.state?.commit||'').trim(),p=await explorer.topology.prepare(wanted),prepared=String(p?.commit||explorer.topology?.commit||'').trim();if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');explorer.state.repoUrl=wanted;explorer.state.commit=prepared;explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};}
-  const logicalRequest=await deriveDimensions({question,client,model,usage,log});
+  const logicalRequest=await deriveCodePlan({question,client,model,usage,log});onProgress({action:'PLAN',plan:logicalRequest.steps,activePlanStep:0});
   const grouped=explorer.topology?.callPathIndex?.top?.(Number.MAX_SAFE_INTEGER)||[];
   explorer.state.semanticProfile='code';
   const flowChildren=new Map();
   for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
-  const entries=arr(explorer.codeSemanticEntryCandidates?.()).map(e=>symbolState(explorer.topology.symbolById.get(e.symbolId)||e));
-  if(!entries.length)throw new Error('No deterministic code entry points found.');
+  const entries=entryCandidates(grouped,explorer.topology?.symbolById||new Map()).map(e=>explorer.topology.symbolById.get(e.symbolId)).filter(Boolean).map(e=>symbolState(e));
+  if(!entries.length)throw new Error('No indexed code-flow roots found.');
   const visited=new Set(), stack=[];
   const markVisited=(state)=>{visited.add(state.id);};
   let unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
   const seed=async()=>{
     const candidates=entries.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
-    const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step});
+    const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step,onProgress});
     const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
     scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));if(!warm.length)return unresolved.size===0;
-    stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});events.push({step,action:'RESEED',state:warm[0].state.name});return true;
+    stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});const event={step,action:'RESEED',state:warm[0].state.name,activePlanStep:activeStepOf(unresolved)};events.push(event);onProgress({...event,path:[warm[0].state.name]});return true;
   };
   const seeded=await seed();
   if(!seeded&&unresolved.size)return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
@@ -80,15 +91,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     recordFulfillment([current],fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
     const next=children(state,explorer,flowChildren).filter(x=>!visited.has(x.id));
     if(next.length){
-      const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step});
+      const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step,onProgress});
       const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
       scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));
-      if(warm.length&&nav-scoreOf(warm[0],unresolved)<=NAV_MAX_DROP){stack.push({path:[...frame.path,state],current:warm[0],alternatives:warm.slice(1),parentScore:nav});events.push({step,action:'DESCEND',from:state.name,to:warm[0].state.name});continue}
+      if(warm.length&&nav-scoreOf(warm[0],unresolved)<=NAV_MAX_DROP){stack.push({path:[...frame.path,state],current:warm[0],alternatives:warm.slice(1),parentScore:nav});{const event={step,action:'DESCEND',from:state.name,to:warm[0].state.name,activePlanStep:activeStepOf(unresolved)};events.push(event);onProgress({...event,path:[...frame.path,state,warm[0].state].map(x=>x.name)});}continue}
     }
     let resumed=false;
-    while(stack.length){const top=stack.at(-1);if(top.alternatives.length){top.current=top.alternatives.shift();events.push({step,action:'BACKTRACK',to:top.current.state.name});resumed=true;break}stack.pop()}
+    while(stack.length){const top=stack.at(-1);if(top.alternatives.length){top.current=top.alternatives.shift();{const event={step,action:'BACKTRACK',to:top.current.state.name,activePlanStep:activeStepOf(unresolved)};events.push(event);onProgress({...event,path:[...top.path,top.current.state].map(x=>x.name)});}resumed=true;break}stack.pop()}
     if(!resumed){if(!(await seed()))break}
   }
+  onProgress({action:'SEARCH_COMPLETE',activePlanStep:activeStepOf(unresolved),unresolved:[...unresolved]});
   const localized=[];
   for(const [planStep,states] of fulfilled){const call=await modelJson(client,model,LOCALIZE_SYSTEM,{step:logicalRequest.steps[planStep],evidence:states.map(s=>({id:s.id,symbolId:s.symbolId,sourcePath:s.sourcePath,startLine:s.startLine,endLine:s.endLine,body:s.body}))},{maxTokens:420});addUsage(usage,call.usage);localized.push({planStep,step:logicalRequest.steps[planStep],states:states.map(s=>s.name),ranges:arr(call.parsed?.ranges)})}
   const complete=unresolved.size===0;
