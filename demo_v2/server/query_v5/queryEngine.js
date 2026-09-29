@@ -28,11 +28,12 @@ function directCallStates(symbol,state,symbolById){
   const region = state?.type==='code_region' ? {start:Number(state.startLine||0),end:Number(state.endLine||0)} : null;
   return arr(symbol?.references).filter(r=>r.relation==='calls'&&r.targetSymbolId&&(!region||((Number(r.line||r.startLine||0)>=region.start)&&(Number(r.line||r.startLine||0)<=region.end)))).map(r=>symbolById?.get?.(r.targetSymbolId)).filter(Boolean).map(s=>symbolState(s,symbol.id));
 }
-function children(state, explorer) {
+function children(state, explorer, flowChildren=null) {
   const symbol=explorer.topology?.symbolById?.get(state.symbolId);
   if(!symbol)return [];
   if(state.type==='code_symbol'){
-    const calls=directCallStates(symbol,state,explorer.topology.symbolById);
+    const allowed=flowChildren?.get?.(state.symbolId)||null;
+    const calls=directCallStates(symbol,state,explorer.topology.symbolById).filter(s=>!allowed||allowed.has(s.symbolId));
     return [...calls,...regionStates(symbol)];
   }
   if(state.type==='code_region') return [...directCallStates(symbol,state,explorer.topology.symbolById),...regionStates(symbol,state.regionId)];
@@ -56,6 +57,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();if(!wanted)throw new Error('Select a repository before querying code.');
   if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const expected=String(explorer.state?.commit||'').trim(),p=await explorer.topology.prepare(wanted),prepared=String(p?.commit||explorer.topology?.commit||'').trim();if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');explorer.state.repoUrl=wanted;explorer.state.commit=prepared;explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};}
   const logicalRequest=await deriveDimensions({question,client,model,usage,log});
+  const grouped=explorer.topology?.callPathIndex?.top?.(Number.MAX_SAFE_INTEGER)||[];
+  const flowChildren=new Map();
+  for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
   const entries=arr(explorer.codeSemanticEntryCandidates?.()).map(e=>symbolState(explorer.topology.symbolById.get(e.symbolId)||e));
   if(!entries.length)throw new Error('No deterministic code entry points found.');
   const visited=new Set(), stack=[];
@@ -73,7 +77,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   while(stack.length&&step<MAX_STEPS&&unresolved.size){
     const frame=stack.at(-1), current=frame.current, state=current.state, nav=scoreOf(current,unresolved);visited.add(state.id);
     recordFulfillment([current],fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
-    const next=children(state,explorer).filter(x=>!visited.has(x.id));
+    const next=children(state,explorer,flowChildren).filter(x=>!visited.has(x.id));
     if(next.length){
       const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step});
       const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
