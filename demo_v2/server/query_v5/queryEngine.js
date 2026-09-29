@@ -96,7 +96,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const repositoryContext={readme:text(explorer.topology?.repositoryReadme||'',5000),entryFlows:entryPreview};
   const logicalRequest=await deriveCodePlan({question,repositoryContext,client,model,usage,log});onProgress({action:'PLAN',plan:logicalRequest.steps,activePlanStep:0});
   explorer.state.semanticProfile='code';
-  const flowChildren=new Map();
+  const flowChildren=grouped.length?new Map():null;
   for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
   const entries=structuralRoots(grouped,explorer.topology).map(e=>symbolState(e));
   if(!entries.length)throw new Error('No deterministic code roots found.');
