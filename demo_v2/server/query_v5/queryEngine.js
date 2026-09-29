@@ -64,19 +64,19 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const entries=arr(explorer.codeSemanticEntryCandidates?.()).map(e=>symbolState(explorer.topology.symbolById.get(e.symbolId)||e));
   if(!entries.length)throw new Error('No deterministic code entry points found.');
   const visited=new Set(), stack=[];
+  const markVisited=(state)=>{visited.add(state.id);};
   let unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
   const seed=async()=>{
     const candidates=entries.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
     const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step});
     const before=new Set(unresolved);recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
     scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,before));if(!warm.length)return unresolved.size===0;
-    for(const item of scored) visited.add(item.state.id);
     stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});events.push({step,action:'RESEED',state:warm[0].state.name});return true;
   };
   const seeded=await seed();
   if(!seeded&&unresolved.size)return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
   while(stack.length&&step<MAX_STEPS&&unresolved.size){
-    const frame=stack.at(-1), current=frame.current, state=current.state, nav=scoreOf(current,unresolved);visited.add(state.id);
+    const frame=stack.at(-1), current=frame.current, state=current.state, nav=scoreOf(current,unresolved);markVisited(state);
     recordFulfillment([current],fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
     const next=children(state,explorer,flowChildren).filter(x=>!visited.has(x.id));
     if(next.length){
