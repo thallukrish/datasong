@@ -129,7 +129,7 @@ export class SemanticFunctionTopology extends BoundaryAwareTopology {
     };
   }
 
-  addSemanticFunction({ sourcePath, name, symbolKind, line = 1, body = '', signature = '', value = undefined, semanticType = '' }) {
+  addSemanticFunction({ sourcePath, name, symbolKind, line = 1, body = '', signature = '', value = undefined, semanticType = '', executable = true }) {
     const id = semanticId(sourcePath, name, line);
     if (this.symbolById.has(id)) return this.symbolById.get(id);
     const symbol = {
@@ -142,7 +142,8 @@ export class SemanticFunctionTopology extends BoundaryAwareTopology {
       startLine: line,
       endLine: line + Math.max(0, body.split(/\r?\n/).length - 1),
       body: body.slice(0, MAX_SYNTHETIC_BODY),
-      references: []
+      references: [],
+      executable: executable === true
     };
     if (value !== undefined) symbol.semanticValue = value;
     symbol.semanticType = semanticType || symbolKind;
@@ -171,7 +172,8 @@ export class SemanticFunctionTopology extends BoundaryAwareTopology {
         line: entry.line || 1,
         signature: `${name}() -> value`,
         body: `returns ${scalarText(entry.value)}`,
-        value: entry.value
+        value: entry.value,
+        executable: false
       });
       this.configNodeByKey.set(`${sourcePath}:${entry.path}`.toLowerCase(), node.id);
       this.configNodeByKey.set(`${base}:${entry.path}`.toLowerCase(), node.id);
@@ -221,7 +223,8 @@ export class SemanticFunctionTopology extends BoundaryAwareTopology {
         line: lineNumberAt(text, match.index),
         signature: `${name}() -> value`,
         body: `returns ${raw}`,
-        value: raw
+        value: raw,
+        executable: false
       });
     }
   }
@@ -264,7 +267,7 @@ export class SemanticFunctionTopology extends BoundaryAwareTopology {
       let node = this.symbols.find((s) => s.name === name);
       if (!node) node = this.addSemanticFunction({
         sourcePath: '$environment', name, symbolKind: 'environment_value', semanticType: 'value_function',
-        signature: `${name}() -> environment value`, body: 'returns deployment/runtime environment value'
+        signature: `${name}() -> environment value`, body: 'returns deployment/runtime environment value', executable: false
       });
       addRef(refs, node.name, 'configured_by', { explicit: true });
     }
