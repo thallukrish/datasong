@@ -276,3 +276,12 @@ Implementation:
 - `server/semantics/code/queryDrivenSemanticFrontier.js` reconstructs entry-rooted flow families from grouped indexed paths, provides bounded lookahead, and attaches persisted edge semantics.
 - `structuredWorkflow.js` asks code Pass 2 for exact caller-to-callee branch semantics and persists them in `state.codeBranchSemantics`.
 - `codeSemanticEntryCandidates()` and `codeSemanticLookahead(entrySymbolId, depth)` expose the deterministic/semantic frontier to Query without forcing whole-repository semantic learning.
+
+
+### Resetting learned semantics
+
+The Profiles enterprise list exposes a reset control for the selected, loaded repository. Reset removes semantic workflows, semantic objects, branch annotations, scheduler/scout semantic progress, and other learned state for the loaded commit. It intentionally keeps the repository cache, language-analysis output held by the runtime topology, and deterministic call-path index available.
+
+The reset endpoint is `POST /api/reset-semantic-map`. It is blocked while learning is running and requires the requested repository to match the currently loaded runtime. The UI asks for confirmation before invoking it.
+
+This reset is the starting condition for cold query-driven learning experiments: deterministic topology exists, semantic knowledge is empty, and Query must request semantic expansion instead of depending on a pre-learned map.
