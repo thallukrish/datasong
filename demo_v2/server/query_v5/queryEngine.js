@@ -7,8 +7,8 @@ export const NAV_MAX_DROP = 0.2;
 export const FULFILLED = 1.0;
 const MAX_STEPS = 64;
 
-const SCORE_SYSTEM = \`Score supplied code candidates against unresolved ordered query-plan steps. For each candidate and step return TWO independent scores: navigation confidence n means continuing through this candidate is likely to lead to the needed implementation; fulfillment f means THIS candidate itself contains enough implementation context to satisfy the step. f=1.0 is a hard completion signal and must be used only when the supplied source/semantics are sufficient for that step. Return {"c":[{"i":0,"s":[[stepIndex,n,f]]}],"r":[candidateIndex]}.\`;
-const LOCALIZE_SYSTEM = \`For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.\`;
+const SCORE_SYSTEM = `Score supplied code candidates against unresolved ordered query-plan steps. For each candidate and step return TWO independent scores: navigation confidence n means continuing through this candidate is likely to lead to the needed implementation; fulfillment f means THIS candidate itself contains enough implementation context to satisfy the step. f=1.0 is a hard completion signal and must be used only when the supplied source/semantics are sufficient for that step. Return {"c":[{"i":0,"s":[[stepIndex,n,f]]}],"r":[candidateIndex]}.`;
+const LOCALIZE_SYSTEM = `For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.`;
 
 function scoreOf(item, unresolved) {
   let best=0;
