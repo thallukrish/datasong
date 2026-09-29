@@ -48,12 +48,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const logicalRequest=await deriveDimensions({question,client,model,usage,log});
   const entries=arr(explorer.codeSemanticEntryCandidates?.()).map(e=>symbolState(explorer.topology.symbolById.get(e.symbolId)||e));
   if(!entries.length)throw new Error('No deterministic code entry points found.');
-  const visited=new Set(), rootsRemaining=[...entries], stack=[];
+  const visited=new Set(), stack=[];
   let unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
   const seed=async()=>{
-    const candidates=rootsRemaining.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
+    const candidates=entries.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
     const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,client,model,usage,log,step:++step});recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
     scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN);if(!warm.length)return false;
+    for(const item of scored) visited.add(item.state.id);
     stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});events.push({step,action:'RESEED',state:warm[0].state.name});return true;
   };
   if(!(await seed()))return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
