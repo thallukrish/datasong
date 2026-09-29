@@ -54,7 +54,7 @@ function unresolvedSteps(count,fulfilled){return new Set(Array.from({length:coun
 export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model,log=()=>{}}){
   const usage={prompt:0,completion:0,total:0}, events=[], fulfilled=new Map(); let step=0;
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();if(!wanted)throw new Error('Select a repository before querying code.');
-  if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const p=await explorer.topology.prepare(wanted);explorer.state.repoUrl=wanted;explorer.state.commit=String(p?.commit||explorer.topology?.commit||'');}
+  if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const expected=String(explorer.state?.commit||'').trim(),p=await explorer.topology.prepare(wanted),prepared=String(p?.commit||explorer.topology?.commit||'').trim();if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');explorer.state.repoUrl=wanted;explorer.state.commit=prepared;explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};}
   const logicalRequest=await deriveDimensions({question,client,model,usage,log});
   const entries=arr(explorer.codeSemanticEntryCandidates?.()).map(e=>symbolState(explorer.topology.symbolById.get(e.symbolId)||e));
   if(!entries.length)throw new Error('No deterministic code entry points found.');
