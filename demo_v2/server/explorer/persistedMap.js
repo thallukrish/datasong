@@ -93,9 +93,10 @@ export const withPersistedMap = (Base) => class PersistedMapExplorer extends Bas
     if (Number(saved.version || 0) === 2 && saved.semanticState) {
       restored = clone(saved.semanticState);
     } else if (Number(saved.version || 0) === MAP_VERSION && Array.isArray(saved.graph)) {
+      const normalizedGraph = normalizeLearnedGraph(saved.graph);
       restored = this.emptyState();
-      restored.semanticObjects = semanticObjectsFromGraph(saved.graph);
-      const completed = workflowArcsFromGraph(saved.graph);
+      restored.semanticObjects = semanticObjectsFromGraph(normalizedGraph);
+      const completed = workflowArcsFromGraph(normalizedGraph);
       const completedIds = new Set(completed.map((arc) => arc.id));
       restored.pass1Arcs = [...completed, ...clone(arr(saved.learningProgress?.incompleteArcs)).filter((arc) => !completedIds.has(arc?.id))];
       restored.pass1Scheduler = { ...(restored.pass1Scheduler || {}), ...(saved.learningProgress?.scheduler || {}) };
