@@ -518,7 +518,7 @@ Large function bodies are deterministically partitioned from AST structure into 
 
 ### Query to Learn handshake
 
-Before Query scores a previously unseen code symbol, call edge or AST region, it invokes a local semantic learner. That learner receives only deterministic source evidence and identifiers, never the user's question. It persists reusable function and region semantics on graph nodes against the repository revision. Query then scores those semantics against the unresolved plan steps. This keeps learned meaning query-independent while allowing a cold semantic map to grow only along paths demanded by real queries.
+Before Query scores a previously unseen function or AST region, it invokes a local semantic learner. Learn receives the ordered semantic summaries already learned for predecessor nodes on the current execution path, plus source code only for the newly expanded function or region. It never receives the user's question or query-plan scores. The predecessor summaries provide compressed flow context so the new node is annotated as part of the execution flow rather than as isolated code. Learn persists the new reusable semantics on graph nodes against the repository revision. Query then scores those semantics against the unresolved plan steps. This keeps learned meaning query-independent while allowing a cold semantic map to grow only along paths demanded by real queries.
 
 ### Final line localization
 
