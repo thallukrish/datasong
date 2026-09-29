@@ -36,7 +36,7 @@ function children(state, explorer, flowChildren=null) {
     const calls=directCallStates(symbol,state,explorer.topology.symbolById).filter(s=>!allowed||allowed.has(s.symbolId));
     return [...calls,...regionStates(symbol)];
   }
-  if(state.type==='code_region') return [...directCallStates(symbol,state,explorer.topology.symbolById),...regionStates(symbol,state.regionId)];
+  if(state.type==='code_region') { const allowed=flowChildren?.get?.(state.symbolId)||null; const calls=directCallStates(symbol,state,explorer.topology.symbolById).filter(s=>!allowed||allowed.has(s.symbolId)); return [...calls,...regionStates(symbol,state.regionId)]; }
   return [];
 }
 async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step}) {
