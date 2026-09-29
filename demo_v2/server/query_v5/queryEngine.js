@@ -21,14 +21,19 @@ function symbolState(symbol, parent=null) {
 function regionStates(symbol, parentRegionId=null) {
   return arr(symbol?.regions).filter(r=>(r.parentRegionId||null)===(parentRegionId||null)).map(r=>({ id:r.id,type:'code_region',kind:r.kind||'',name:symbol.name+' ['+(r.kind||'region')+' '+r.startLine+'-'+r.endLine+']',symbolId:symbol.id,regionId:r.id,sourcePath:symbol.sourcePath||'',startLine:r.startLine,endLine:r.endLine,body:String(r.body||''),parent:parentRegionId||symbol.id,parentSymbolId:symbol.id }));
 }
+function directCallStates(symbol,state){
+  const region = state?.type==='code_region' ? {start:Number(state.startLine||0),end:Number(state.endLine||0)} : null;
+  return arr(symbol?.references).filter(r=>r.relation==='calls'&&r.targetSymbolId&&(!region||((Number(r.line||r.startLine||0)>=region.start)&&(Number(r.line||r.startLine||0)<=region.end)))).map(r=>symbol._symbolById?.get?.(r.targetSymbolId)).filter(Boolean).map(s=>symbolState(s,symbol.id));
+}
 function children(state, explorer) {
   const symbol=explorer.topology?.symbolById?.get(state.symbolId);
   if(!symbol)return [];
   if(state.type==='code_symbol'){
-    const calls=arr(symbol.references).filter(r=>r.relation==='calls'&&r.targetSymbolId).map(r=>explorer.topology.symbolById.get(r.targetSymbolId)).filter(Boolean).map(s=>symbolState(s,state.symbolId));
+    symbol._symbolById=explorer.topology.symbolById;
+    const calls=directCallStates(symbol,state);
     return [...calls,...regionStates(symbol)];
   }
-  if(state.type==='code_region') return regionStates(symbol,state.regionId);
+  if(state.type==='code_region') { symbol._symbolById=explorer.topology.symbolById; return [...directCallStates(symbol,state),...regionStates(symbol,state.regionId)]; }
   return [];
 }
 async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step}) {
