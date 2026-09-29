@@ -285,3 +285,8 @@ The Profiles enterprise list exposes a reset control for the selected, loaded re
 The reset endpoint is `POST /api/reset-semantic-map`. It is blocked while learning is running and requires the requested repository to match the currently loaded runtime. The UI asks for confirmation before invoking it.
 
 This reset is the starting condition for cold query-driven learning experiments: deterministic topology exists, semantic knowledge is empty, and Query must request semantic expansion instead of depending on a pre-learned map.
+
+
+### Inert server startup
+
+Constructing the repository explorer must not select, restore, hydrate, repair, cluster, or semantically enrich any persisted map. Server startup is repository-neutral and performs no model calls. Persisted maps remain discoverable on disk but become active only after an explicit repository action. This prevents the most recently saved enterprise map from doing semantic work merely because DataSong was started, and makes cold query-driven experiments reproducible.
