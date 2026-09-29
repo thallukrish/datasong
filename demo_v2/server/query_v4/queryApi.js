@@ -76,7 +76,7 @@ export function registerQueryV4Api({ app, explorer, queryClient, queryModel, dat
       const requestedProfile = String(req.body?.semanticProfile || explorer.state?.semanticProfile || 'enterprise');
       if (requestedProfile === 'code') {
         const repoUrl = String(req.body?.repoUrl || explorer.state?.repoUrl || '').trim();
-        console.log(\`\\n[lemap code-query] \${question}\`);
+        console.log('\n[lemap code-query] ' + question);
         append(queryLog, 'code_query_start', { question, repoUrl, mode:'query-driven-code-learning' });
         const raw = await runQueryDrivenCodeFlow({
           question, repoUrl, explorer, client:queryClient, model:queryModel,
