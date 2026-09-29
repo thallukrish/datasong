@@ -62,3 +62,17 @@ test('generic code evidence can include source bodies for representative and alt
   assert.match(evidence[0].body, /normalize/);
   assert.equal(evidence[1].sourcePath, 'src/b.js');
 });
+
+
+test('repository explorer construction does not load or hydrate persisted semantic maps', async () => {
+  const { RepositoryExplorer } = await import('../server/repositoryExplorer.js');
+  let prepares = 0;
+  const topology = { symbolById:new Map(), async prepare() { prepares += 1; return {}; } };
+  const explorer = new RepositoryExplorer({ topology, dataRoot: '.', onState() {} });
+
+  assert.equal(explorer.state?.repoUrl || '', '');
+  assert.equal((explorer.state?.pass1Arcs || []).length, 0);
+  assert.equal(Object.keys(explorer.state?.semanticObjects || {}).length, 0);
+  assert.equal(prepares, 0);
+  assert.deepEqual(await explorer.startupHydration, { hydrated:false, reason:'startup_inert' });
+});
