@@ -213,12 +213,11 @@ for rec in defs.values():
     region_index = 0
 
     def add_regions(statements, parent_region_id=None):
-        nonlocal region_index
         for child in statements:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
-            region_index += 1
-            region_id = f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index}"
+            region_index_ref[0] += 1
+            region_id = f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index_ref[0]}"
             kind = type(child).__name__.lower()
             regions.append({
                 "id": region_id,
@@ -242,7 +241,9 @@ for rec in defs.values():
             for nested in nested_lists:
                 add_regions(nested, region_id)
 
+    region_index_ref = [region_index]
     add_regions(node.body)
+    region_index = region_index_ref[0]
 
     symbols.append({
         "id": sid(rec["path"], rec["qualified"], node.lineno),
