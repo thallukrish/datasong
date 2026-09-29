@@ -24,7 +24,7 @@ export async function ensureLocalCodeSemantics({states,path=[],explorer,client,m
   }
   if(!symbols.length&&!regions.length)return{learned:false,reused:requested.length};
   onProgress({action:'LEARN_START',path:arr(path).map(x=>x.name),nodes:[...symbols.map(x=>({id:x.symbolId,name:x.name||x.symbolId})),...regions.map(x=>({id:x.regionId,name:x.regionId}))]});
-  const call=await modelJson(client,model,LEARN_SYSTEM,{flowContext,newNodes:{symbols,regions}},{maxTokens:1200});addUsage(usage,call.usage);
+  const call=await modelJson(client,model,LEARN_SYSTEM,{flowContext,newNodes:{symbols,regions}});addUsage(usage,call.usage);
   applyCodeSemantics(explorer,{symbols:call.parsed?.symbols,regions:call.parsed?.regions});
   explorer.persistSemanticMap?.();
   log('code_local_semantics_learned',{contextNodeIds:flowContext.map(x=>x.id),symbols:arr(call.parsed?.symbols).length,regions:arr(call.parsed?.regions).length,usage:call.usage});
