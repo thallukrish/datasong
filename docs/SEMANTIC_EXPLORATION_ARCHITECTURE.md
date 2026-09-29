@@ -529,3 +529,14 @@ The response is organized by query-plan step: fulfilled function or AST region, 
 ### Relationship to Query-v4
 
 Query-v5 may reuse Query-v4 utilities for query-plan derivation, model JSON handling, logging and generic score representations. It does not inherit Query-v4 entity/FK connectivity as the primary code-search policy. Query-v4 remains intact for the existing enterprise data-view query path.
+
+
+### Canonical graph invariant
+
+The semantic map has one canonical representation: an array of nodes. Structural and learned semantic information are not separate graphs or side dictionaries.
+
+Each node has an id, type, name, details and links. details.structural contains deterministic provenance such as source path, symbol id and source-line range. details.semantic contains query-independent learned meaning. links contains references to other node ids with the relationship carried on the link.
+
+Code functions and intra-function regions therefore use the same graph model as workflows, entities and other semantic objects. Typical code node types are function and function-region; typical structural relationships are calls, contains and contained-by. Semantic information may enrich those same links rather than creating a parallel edge store.
+
+Query-v5 traverses this node graph. Deterministic topology materializes nodes and structural links lazily; Learn enriches the corresponding node/link semantic details; Query scores those graph nodes against unresolved plan steps.
