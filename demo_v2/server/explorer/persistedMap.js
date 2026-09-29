@@ -139,6 +139,28 @@ export const withPersistedMap = (Base) => class PersistedMapExplorer extends Bas
     return { reset:true, repoUrl, commit, deletedFile:!!file };
   }
 
+  activatePersistedMapForRepo(repoUrl) {
+    const wanted = repoKey(repoUrl);
+    if (!wanted) return { loaded:false, reason:'missing_repo' };
+    const saved = this.persistedMaps().find((item) => repoKey(item.repoUrl) === wanted);
+    if (!saved) {
+      const fresh = super.emptyState();
+      this.state = { ...fresh, repoUrl:String(repoUrl || '').trim(), status:'complete', lastMessage:'No persisted semantic map exists for this repository.' };
+      this._mapRestoreAttempted = false;
+      this._mapRestored = false;
+      this._stoppedByUser = false;
+      super.emit?.();
+      return { loaded:false, reason:'no_persisted_map', repoUrl:this.state.repoUrl };
+    }
+    const snapshot = this.installPersistedMap(saved);
+    // Activation is deliberately read-only: do not prepare topology, repair
+    // schemas, cluster directories, persist, or invoke a model.
+    this.state.runtimeHydration = { status:'not_prepared', repoUrl:saved.repoUrl, commit:saved.commit };
+    this.state.lastMessage = 'Loaded persisted semantic map. Repository runtime has not been prepared.';
+    super.emit?.();
+    return { loaded:true, repoUrl:saved.repoUrl, commit:saved.commit, savedAt:saved.savedAt || '', snapshot };
+  }
+
   loadMostRecentPersistedMap() { const saved = this.persistedMaps()[0]; return saved ? this.installPersistedMap(saved) : null; }
   loadLatestPersistedMapForRepo(repoUrl) { const wanted = String(repoUrl || '').trim(); if (!wanted) return null; const saved = this.persistedMaps().find((item) => String(item.repoUrl || '').trim() === wanted); return saved ? this.installPersistedMap(saved) : null; }
 };
