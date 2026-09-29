@@ -86,6 +86,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   }
   const localized=[];
   for(const [planStep,states] of fulfilled){const call=await modelJson(client,model,LOCALIZE_SYSTEM,{step:logicalRequest.steps[planStep],evidence:states.map(s=>({id:s.id,symbolId:s.symbolId,sourcePath:s.sourcePath,startLine:s.startLine,endLine:s.endLine,body:s.body}))},{maxTokens:420});addUsage(usage,call.usage);localized.push({planStep,step:logicalRequest.steps[planStep],states:states.map(s=>s.name),ranges:arr(call.parsed?.ranges)})}
-  const complete=unresolved.size===0;log('query_v5_complete',{complete,unresolved:[...unresolved],fulfilled:localized,events,usage});
-  return{answer:complete?'All query-plan steps were located in the code flow.':'Code search ended with unresolved query-plan steps.',logicalRequest,complete,unresolved:[...unresolved],fulfilled:localized,events,investigation:{mode:'code-flow-dfs-v5',usage}};
+  const complete=unresolved.size===0;
+  const stepResults=arr(logicalRequest.steps).map((planStep,index)=>({index,step:planStep,fulfilled:localized.find(x=>x.planStep===index)||null}));
+  const answer=stepResults.map(x=>x.fulfilled
+    ? ('Step '+(x.index+1)+': '+(x.step.action||x.step.requires||'plan step')+'\n'+x.fulfilled.ranges.map(r=>(r.symbolId||x.fulfilled.states.join(', '))+' '+r.startLine+'-'+r.endLine+(r.why?' — '+r.why:'')).join('\n'))
+    : ('Step '+(x.index+1)+': unresolved — '+(x.step.action||x.step.requires||'plan step'))).join('\n\n');
+  log('query_v5_complete',{complete,unresolved:[...unresolved],fulfilled:localized,events,usage});
+  return{answer,logicalRequest,complete,unresolved:[...unresolved],fulfilled:localized,events,investigation:{mode:'code-flow-dfs-v5',usage}};
+}
 }
