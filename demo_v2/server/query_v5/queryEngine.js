@@ -68,7 +68,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     for(const item of scored) visited.add(item.state.id);
     stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});events.push({step,action:'RESEED',state:warm[0].state.name});return true;
   };
-  if(!(await seed()))return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
+  const seeded=await seed();
+  if(!seeded&&unresolved.size)return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
   while(stack.length&&step<MAX_STEPS&&unresolved.size){
     const frame=stack.at(-1), current=frame.current, state=current.state, nav=scoreOf(current,unresolved);visited.add(state.id);
     recordFulfillment([current],fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
