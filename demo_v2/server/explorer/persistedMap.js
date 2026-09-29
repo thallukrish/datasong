@@ -114,6 +114,36 @@ export const withPersistedMap = (Base) => class PersistedMapExplorer extends Bas
     return this.snapshot();
   }
 
+  resetCurrentSemanticMap() {
+    const repoUrl = String(this.state?.repoUrl || '').trim();
+    const commit = String(this.state?.commit || '').trim();
+    if (!repoUrl || !commit) return { reset:false, reason:'no_loaded_revision' };
+
+    const file = this.mapFilePath?.(repoUrl, commit) || '';
+    if (file && fs.existsSync(file)) fs.unlinkSync(file);
+
+    const fresh = super.emptyState();
+    this.state = {
+      ...fresh,
+      repoUrl,
+      commit,
+      semanticProfile:this.state?.semanticProfile || fresh.semanticProfile || 'enterprise',
+      status:'complete',
+      stopRequested:false,
+      currentArtifact:null,
+      frontier:[],
+      executionStack:[],
+      runtimeHydration:{ status:'ready', repoUrl, commit },
+      mapPersistence:{ restored:false, savedAt:'', repoUrl, commit, version:MAP_VERSION },
+      lastMessage:'Semantic map reset. Deterministic repository topology and call-path index remain available.'
+    };
+    this._mapRestoreAttempted = true;
+    this._mapRestored = false;
+    this._stoppedByUser = false;
+    super.emit?.();
+    return { reset:true, repoUrl, commit, deletedFile:!!file };
+  }
+
   loadMostRecentPersistedMap() { const saved = this.persistedMaps()[0]; return saved ? this.installPersistedMap(saved) : null; }
   loadLatestPersistedMapForRepo(repoUrl) { const wanted = String(repoUrl || '').trim(); if (!wanted) return null; const saved = this.persistedMaps().find((item) => String(item.repoUrl || '').trim() === wanted); return saved ? this.installPersistedMap(saved) : null; }
 };
