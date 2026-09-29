@@ -36,7 +36,7 @@ export class CallPathIndexer {
 
   build() {
     this.reset();
-    const symbols = arr(this.topology?.symbols).filter((symbol) => symbol?.id);
+    const symbols = arr(this.topology?.symbols).filter((symbol) => symbol?.id && symbol?.executable === true);
     const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
     const outgoing = new Map();
     const indegree = new Map(symbols.map((symbol) => [symbol.id, 0]));
