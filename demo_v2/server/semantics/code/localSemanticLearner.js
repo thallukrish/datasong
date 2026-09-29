@@ -13,7 +13,7 @@ function learnedFlowContext(path,explorer){
   }).filter(Boolean);
 }
 
-export async function ensureLocalCodeSemantics({states,path=[],explorer,client,model,usage,log=()=>{}}){
+export async function ensureLocalCodeSemantics({states,path=[],explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
   const requested=arr(states).filter(Boolean);materializeCodeStructure(explorer,[...arr(path),...requested]);
   const flowContext=learnedFlowContext(path,explorer),symbols=[],regions=[];
   for(const state of requested){
@@ -23,9 +23,11 @@ export async function ensureLocalCodeSemantics({states,path=[],explorer,client,m
     else if(state.type!=='code_region'&&!learned)symbols.push({symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',sourcePath:symbol.sourcePath||'',startLine:symbol.startLine,endLine:symbol.endLine,body:text(symbol.body,3200)});
   }
   if(!symbols.length&&!regions.length)return{learned:false,reused:requested.length};
+  onProgress({action:'LEARN_START',path:arr(path).map(x=>x.name),nodes:[...symbols.map(x=>({id:x.symbolId,name:x.name||x.symbolId})),...regions.map(x=>({id:x.regionId,name:x.regionId}))]});
   const call=await modelJson(client,model,LEARN_SYSTEM,{flowContext,newNodes:{symbols,regions}},{maxTokens:1200});addUsage(usage,call.usage);
   applyCodeSemantics(explorer,{symbols:call.parsed?.symbols,regions:call.parsed?.regions});
   explorer.persistSemanticMap?.();
   log('code_local_semantics_learned',{contextNodeIds:flowContext.map(x=>x.id),symbols:arr(call.parsed?.symbols).length,regions:arr(call.parsed?.regions).length,usage:call.usage});
+  onProgress({action:'LEARN_DONE',path:arr(path).map(x=>x.name),nodeIds:[...arr(call.parsed?.symbols).map(x=>x.symbolId),...arr(call.parsed?.regions).map(x=>x.regionId)]});
   return{learned:true,reusedContext:flowContext.length,usage:call.usage};
 }
