@@ -15,6 +15,9 @@ function scoreOf(item, unresolved) {
   for(const s of arr(item?.scores)) if(unresolved.has(Number(s.step))) best=Math.max(best,Number(s.navigation||0));
   return best;
 }
+function fulfilledNow(item, unresolved){
+  return arr(item?.scores).some(s=>unresolved.has(Number(s.step))&&Number(s.fulfillment)>=FULFILLED);
+}
 function symbolState(symbol, parent=null) {
   return { id:symbol.id, type:'code_symbol', name:symbol.name, symbolId:symbol.id, sourcePath:symbol.sourcePath||'', startLine:symbol.startLine||0, endLine:symbol.endLine||0, body:String(symbol.body||''), parent, parentSymbolId:parent };
 }
@@ -60,7 +63,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const seed=async()=>{
     const candidates=entries.filter(x=>!visited.has(x.id));if(!candidates.length)return false;
     const scored=await scoreCandidates({logicalRequest,unresolved,path:[],candidates,explorer,client,model,usage,log,step:++step});recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
-    scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN);if(!warm.length)return false;
+    scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,unresolved));if(!warm.length)return false;
     for(const item of scored) visited.add(item.state.id);
     stack.push({path:[],current:warm[0],alternatives:warm.slice(1),parentScore:null});events.push({step,action:'RESEED',state:warm[0].state.name});return true;
   };
@@ -71,7 +74,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     const next=children(state,explorer).filter(x=>!visited.has(x.id));
     if(next.length){
       const scored=await scoreCandidates({logicalRequest,unresolved,path:[...frame.path,state],candidates:next,explorer,client,model,usage,log,step:++step});recordFulfillment(scored,fulfilled);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);
-      scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN);
+      scored.sort((a,b)=>scoreOf(b,unresolved)-scoreOf(a,unresolved));const warm=scored.filter(x=>scoreOf(x,unresolved)>=NAV_MIN||fulfilledNow(x,unresolved));
       if(warm.length&&nav-scoreOf(warm[0],unresolved)<=NAV_MAX_DROP){stack.push({path:[...frame.path,state],current:warm[0],alternatives:warm.slice(1),parentScore:nav});events.push({step,action:'DESCEND',from:state.name,to:warm[0].state.name});continue}
     }
     let resumed=false;
