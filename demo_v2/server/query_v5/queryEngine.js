@@ -7,12 +7,12 @@ export const NAV_MAX_DROP = 0.2;
 export const FULFILLED = 1.0;
 const MAX_STEPS = 64;
 
-const SCORE_SYSTEM = `Score supplied code candidates against unresolved ordered query-plan steps. Candidate semantics may be absent for not-yet-learned nodes; in that case use the structural name, signature/source location and path only to estimate navigation. For each candidate and step return TWO independent scores: navigation confidence n means continuing through this candidate is likely to lead to the needed implementation; fulfillment f means THIS candidate itself contains enough learned implementation context to satisfy the step. NEVER return f=1.0 when candidate semantics are absent. f=1.0 is a hard completion signal and must be used only when supplied learned semantics are sufficient for that step. Return {"c":[{"i":0,"s":[[stepIndex,n,f]]}],"r":[candidateIndex]}.`;
+const SCORE_SYSTEM = `Score supplied code candidates ONLY against the single active ordered query-plan step. Candidate semantics may be absent for not-yet-learned nodes; in that case use structural name, signature, source location and path only to estimate navigation. For each candidate return navigation confidence n, meaning continuing through this candidate is likely to lead to the needed implementation, and fulfillment f, meaning THIS candidate itself contains enough learned implementation context to satisfy the active step. NEVER return f=1.0 when candidate semantics are absent. f=1.0 is a hard completion signal and must be used only when supplied learned semantics are sufficient for the active step. Return {"c":[{"i":0,"n":0.0,"f":0.0}],"r":[candidateIndex]}.`;
 const LOCALIZE_SYSTEM = `For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.`;
 const PLAN_SYSTEM = `Translate a software issue into a short ORDERED CODE INVESTIGATION PLAN using the supplied repository context and deterministic entry-flow previews.  Each step must describe implementation behavior that must be located or explained in source code. Keep only steps that help diagnose or implement the issue. Do not use database language such as rows, grain, dimensions, measures, joins, or entities. Return {"intent":"short diagnosis goal","steps":[{"action":"what code behavior must be established","requires":["code concept or behavior"],"relation":"optional relationship to establish"}]}. Prefer 3-6 steps.`;
 
 async function deriveCodePlan({question,repositoryContext,client,model,usage,log}) {
-  const call=await modelJson(client,model,PLAN_SYSTEM,{question,repositoryContext},{maxTokens:620});addUsage(usage,call.usage);
+  const call=await modelJson(client,model,PLAN_SYSTEM,{question,repositoryContext});addUsage(usage,call.usage);
   const steps=arr(call.parsed?.steps).slice(0,8).map(x=>({action:text(x?.action,220),requires:arr(x?.requires).map(v=>text(v,100)).filter(Boolean).slice(0,8),relation:text(x?.relation,180)})).filter(x=>x.action);
   const logicalRequest={baseIntent:text(call.parsed?.intent,220),intent:text(call.parsed?.intent,220),steps};
   log('query_v5_plan',{question,logicalRequest,usage:call.usage,cumulativeUsage:{...usage}});
@@ -51,10 +51,13 @@ function children(state, explorer, flowChildren=null) {
   return [];
 }
 async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step,onProgress=()=>{}}) {
-  const payload={plan:arr(logicalRequest.steps).map((x,i)=>[i,x.action,x.requires,x.relation]),unresolved:[...unresolved],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer)||null,(explorer.topology?.symbolById?.get(x.symbolId)?.signature||'')])};
-  const call=await modelJson(client,model,SCORE_SYSTEM,payload,{maxTokens:700});addUsage(usage,call.usage);
+  const activeStep=activeStepOf(unresolved);
+  if(activeStep===undefined)return[];
+  const planStep=logicalRequest.steps[activeStep];
+  const payload={activeStep:[activeStep,planStep?.action||'',arr(planStep?.requires),planStep?.relation||''],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer)||null,(explorer.topology?.symbolById?.get(x.symbolId)?.signature||'')])};
+  const call=await modelJson(client,model,SCORE_SYSTEM,payload);addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((x,i)=>[String(i),x])), rejected=new Set(arr(call.parsed?.r).map(String)), out=[];
-  for(const row of arr(call.parsed?.c)){const state=byIndex.get(String(row?.i));if(!state||rejected.has(String(row?.i)))continue;out.push({state,scores:arr(row?.s).map(s=>({step:Number(s?.[0]),navigation:Number(s?.[1]||0),fulfillment:Number(s?.[2]||0)}))})}
+  for(const row of arr(call.parsed?.c)){const state=byIndex.get(String(row?.i));if(!state||rejected.has(String(row?.i)))continue;out.push({state,scores:[{step:activeStep,navigation:Number(row?.n||0),fulfillment:Number(row?.f||0)}]})}
   log('query_v5_score',{step,payload,result:out,usage:call.usage});onProgress({action:'SCORE',step,activePlanStep:activeStepOf(unresolved),path:path.map(x=>x.name),candidates:out.map(x=>({id:x.state.id,name:x.state.name,scores:x.scores}))});return out;
 }
 function recordFulfillment(scored, fulfilled, unresolved) {
@@ -108,7 +111,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   }
   onProgress({action:'SEARCH_COMPLETE',activePlanStep:activeStepOf(unresolved),unresolved:[...unresolved]});
   const localized=[];
-  for(const [planStep,states] of fulfilled){const call=await modelJson(client,model,LOCALIZE_SYSTEM,{step:logicalRequest.steps[planStep],evidence:states.map(s=>({id:s.id,symbolId:s.symbolId,sourcePath:s.sourcePath,startLine:s.startLine,endLine:s.endLine,body:s.body}))},{maxTokens:420});addUsage(usage,call.usage);localized.push({planStep,step:logicalRequest.steps[planStep],states:states.map(s=>s.name),ranges:arr(call.parsed?.ranges)})}
+  for(const [planStep,states] of fulfilled){const call=await modelJson(client,model,LOCALIZE_SYSTEM,{step:logicalRequest.steps[planStep],evidence:states.map(s=>({id:s.id,symbolId:s.symbolId,sourcePath:s.sourcePath,startLine:s.startLine,endLine:s.endLine,body:s.body}))});addUsage(usage,call.usage);localized.push({planStep,step:logicalRequest.steps[planStep],states:states.map(s=>s.name),ranges:arr(call.parsed?.ranges)})}
   const complete=unresolved.size===0;
   const stepResults=arr(logicalRequest.steps).map((planStep,index)=>({index,step:planStep,fulfilled:localized.find(x=>x.planStep===index)||null}));
   const answer=stepResults.map(x=>x.fulfilled
