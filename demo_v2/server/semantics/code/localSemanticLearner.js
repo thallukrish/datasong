@@ -24,7 +24,7 @@ export async function ensureLocalCodeSemantics({states,explorer,client,model,usa
     }else if(!explorer.state.codeSymbolSemantics?.[state.symbolId]){
       symbols.push({symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',sourcePath:symbol.sourcePath||'',startLine:symbol.startLine,endLine:symbol.endLine,body:text(symbol.body,3200)});
     }
-    if(state.parentSymbolId&&state.parentSymbolId!==state.symbolId){
+    if(state.type==='code_symbol'&&state.parentSymbolId&&state.parentSymbolId!==state.symbolId){
       const key=branchSemanticKey(state.parentSymbolId,state.symbolId);
       if(!explorer.state.codeBranchSemantics?.[key])edges.push({fromSymbolId:state.parentSymbolId,toSymbolId:state.symbolId});
     }
