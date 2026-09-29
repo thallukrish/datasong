@@ -129,7 +129,8 @@ export class CanonicalSemanticTopology extends SemanticFunctionTopology {
               line: 1,
               signature: `$json.${base}.${logicalPath}() -> object`,
               body: '',
-              value: entry
+              value: entry,
+              executable: false
             });
             node.canonicalSeed = { kind: 'json_object', objectPath: logicalPath, fields: Object.keys(entry).slice(0, 30) };
           }
