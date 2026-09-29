@@ -221,7 +221,8 @@ for rec in defs.values():
             "kind": kind,
             "startLine": getattr(child, "lineno", node.lineno),
             "endLine": getattr(child, "end_lineno", getattr(child, "lineno", node.lineno)),
-            "body": source_segment(text, child)
+            "body": source_segment(text, child),
+            "parentRegionId": None
         })
 
     symbols.append({
