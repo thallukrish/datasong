@@ -13,6 +13,7 @@ const MAX_SYMBOL_BODY_CHARS = 2600;
 const MAX_NEIGHBORS = 18;
 const MAX_SEARCH_RESULTS = 12;
 const MAX_ENTRY_SYMBOLS = 24;
+const MAX_README_CHARS = 5000;
 
 function normalizeRepoUrl(repoUrl) {
   return String(repoUrl || '').trim().replace(/\/$/, '');
@@ -227,6 +228,7 @@ export class CodeTopology {
     this.symbolById = new Map();
     this.nameIndex = new Map();
     this.callers = new Map();
+    this.repositoryReadme = '';
   }
 
   async prepare(repoUrl) {
@@ -247,6 +249,8 @@ export class CodeTopology {
     this.commit = (await git.revparse(['HEAD'])).trim();
     const tracked = (await git.raw(['ls-files'])).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
     this.files = tracked.filter(extensionLooksCode);
+    const readmeRel = tracked.find((rel) => /^readme(?:\.[^/]+)?$/i.test(rel));
+    this.repositoryReadme = readmeRel ? (await fs.readFile(path.join(this.repoDir, readmeRel), 'utf8').catch(() => '')).slice(0, MAX_README_CHARS) : '';
 
     await this.buildSymbolGraph();
 
@@ -255,7 +259,8 @@ export class CodeTopology {
       commit: this.commit,
       searchableFiles: this.files.length,
       searchableSymbols: this.symbols.length,
-      root: this.repositoryOrientation()
+      root: this.repositoryOrientation(),
+      readme: this.repositoryReadme
     };
   }
 
