@@ -248,6 +248,7 @@ for rec in defs.values():
         "name": rec["qualified"],
         "simpleName": rec["name"],
         "symbolKind": "method" if rec["class"] else "function",
+        "executable": True,
         "signature": signature,
         "sourcePath": rec["path"],
         "startLine": node.lineno,
