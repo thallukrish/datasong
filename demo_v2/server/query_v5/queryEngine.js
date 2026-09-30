@@ -43,6 +43,28 @@ function symbolState(symbol, parent=null) {
   return { id:symbol.id, type:'code_symbol', name:symbol.name, symbolId:symbol.id, sourcePath:symbol.sourcePath||'', startLine:symbol.startLine||0, endLine:symbol.endLine||0, body:String(symbol.body||''), parent, parentSymbolId:parent };
 }
 
+function externalBoundaryState(boundary){
+  return {
+    id:boundary.id,
+    type:'code_external',
+    name:boundary.qualifiedName||boundary.name||boundary.localName||boundary.id,
+    symbolId:'',
+    sourcePath:boundary.sourcePath||'',
+    startLine:Number(boundary.startLine||0),
+    endLine:Number(boundary.endLine||boundary.startLine||0),
+    body:'',
+    parent:null,
+    parentSymbolId:null,
+    importModule:boundary.importModule||'',
+    importName:boundary.importName||'',
+    qualifiedName:boundary.qualifiedName||boundary.name||'',
+    callText:'',
+    keywordArgs:[],
+    reExported:!!boundary.reExported,
+    boundaryKind:boundary.kind||'external-symbol'
+  };
+}
+
 function directCallStates(symbol,state,symbolById){
   const region = state?.type==='code_region' ? {start:Number(state.startLine||0),end:Number(state.endLine||0)} : null;
   return arr(symbol?.references)
@@ -378,8 +400,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     .map((entry)=>explorer.topology.symbolById.get(entry.symbolId))
     .filter(Boolean)
     .map((symbol)=>symbolState(symbol));
-  const entries=sourceEntries.length?sourceEntries:testEntries;
-  if(!entries.length)throw new Error('Prepared call-path index contains no entry roots.');
+  const externalEntries=arr(explorer.topology?.externalSymbols)
+    .map(externalBoundaryState);
+  const entries=[...(sourceEntries.length?sourceEntries:testEntries),...externalEntries];
+  if(!entries.length)throw new Error('Prepared repository contains no code entry roots or external API boundaries.');
 
   const visited=new Set(),entryTried=new Set(),stack=[],ledger=new Map(),nextFactId={value:1};
   let finalExplanation='',finalEvidence=[],rollingHypothesis='';
