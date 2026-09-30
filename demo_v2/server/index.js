@@ -174,7 +174,7 @@ function uiState(snapshot = explorer.snapshot()) {
     pass1Arcs: arcs.map((arc) => arcDetail(arc, snapshot)),
     learningCoverage: coverageSummary(snapshot),
     visibleBusinessArcIds: arcs.map((arc) => arc.id),
-    codeMap: snapshot?.semanticProfile === 'code' ? codeMap(snapshot) : { nodes:[], learnedCount:0 },
+    codeMap: codeMap(snapshot),
     queryV5Progress: snapshot?.queryV5Progress || null
   };
 }
