@@ -97,6 +97,27 @@ function ledgerEvidenceStates(ledger){
   return dedupeStates([...ledger.values()].filter(fact=>fact.status==='supported').flatMap(fact=>fact.supportStates||[]));
 }
 
+const FACT_STOP_WORDS=new Set(['a','an','and','are','as','at','be','because','by','for','from','in','is','it','of','on','or','that','the','this','to','with']);
+function factTokens(value){
+  return new Set(String(value||'').toLowerCase().replace(/[^a-z0-9_]+/g,' ').split(/\s+/).filter(token=>token.length>1&&!FACT_STOP_WORDS.has(token)));
+}
+function sameSupportWindow(a=[],b=[]){
+  const left=new Set(arr(a).map(state=>state?.id).filter(Boolean));
+  const right=new Set(arr(b).map(state=>state?.id).filter(Boolean));
+  if(!left.size||!right.size)return false;
+  for(const id of left)if(right.has(id))return true;
+  return false;
+}
+function substantiallySameFact(left,right){
+  const a=factTokens(left),b=factTokens(right);
+  if(!a.size||!b.size)return false;
+  let overlap=0;
+  for(const token of a)if(b.has(token))overlap+=1;
+  const containment=overlap/Math.min(a.size,b.size);
+  const jaccard=overlap/(a.size+b.size-overlap);
+  return containment>=0.8&&jaccard>=0.55;
+}
+
 function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],supportStates=[],nextFactId}){
   for(const id of arr(disputes).map(String)){const fact=ledger.get(id);if(fact)fact.status='disputed'}
   for(const id of arr(resolutions).map(String)){const fact=ledger.get(id);if(fact)fact.status='supported'}
@@ -104,7 +125,10 @@ function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],sup
   if(!boundSupport.length)return;
   for(const value of arr(additions)){
     const factText=text(value,420);if(!factText)continue;
-    const existing=[...ledger.values()].find(fact=>fact.text.toLowerCase()===factText.toLowerCase());
+    const existing=[...ledger.values()].find((fact)=>
+      fact.text.toLowerCase()===factText.toLowerCase()||
+      (sameSupportWindow(fact.supportStates,boundSupport)&&substantiallySameFact(fact.text,factText))
+    );
     if(existing){
       existing.status='supported';
       existing.supportStates=dedupeStates([...(existing.supportStates||[]),...boundSupport]);
