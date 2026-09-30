@@ -394,17 +394,22 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const rankedEntries=entryCandidates(grouped,explorer.topology?.symbolById||new Map());
   const sourceEntries=rankedEntries
     .filter((entry)=>!String(entry.boundaryKind||'').startsWith('test_'))
-    .map((entry)=>explorer.topology.symbolById.get(entry.symbolId))
-    .filter(Boolean)
-    .map((symbol)=>symbolState(symbol));
+    .map((entry)=>({entry,state:explorer.topology.symbolById.get(entry.symbolId)}))
+    .filter((item)=>item.state)
+    .map((item)=>({state:symbolState(item.state),priority:Number(item.entry.boundaryPriority||0)}));
   const testEntries=rankedEntries
     .filter((entry)=>String(entry.boundaryKind||'').startsWith('test_'))
-    .map((entry)=>explorer.topology.symbolById.get(entry.symbolId))
-    .filter(Boolean)
-    .map((symbol)=>symbolState(symbol));
+    .map((entry)=>({entry,state:explorer.topology.symbolById.get(entry.symbolId)}))
+    .filter((item)=>item.state)
+    .map((item)=>({state:symbolState(item.state),priority:Number(item.entry.boundaryPriority||0)}));
   const externalEntries=arr(explorer.topology?.externalSymbols)
-    .map(externalBoundaryState);
-  const entries=[...(sourceEntries.length?sourceEntries:testEntries),...externalEntries];
+    .map((boundary)=>({
+      state:externalBoundaryState(boundary),
+      priority:boundary?.reExported?650:(boundary?.kind==='external-call'?450:250)
+    }));
+  const pool=[...(sourceEntries.length?sourceEntries:testEntries),...externalEntries]
+    .sort((a,b)=>b.priority-a.priority||String(a.state.name||'').localeCompare(String(b.state.name||'')));
+  const entries=pool.map((item)=>item.state);
   if(!entries.length)throw new Error('Prepared repository contains no code entry roots or external API boundaries.');
 
   const visited=new Set(),entryTried=new Set(),stack=[],ledger=new Map(),nextFactId={value:1};
