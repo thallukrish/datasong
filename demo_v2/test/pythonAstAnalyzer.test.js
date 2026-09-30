@@ -113,3 +113,37 @@ class Settings:
   assert.match(fieldCall?.callText || '', /Field\(default=['"]x['"], initial=/);
 });
 
+test('Python AST analyzer resolves absolute imports and calls through re-exported external symbols', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-reexport-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.mkdir(path.join(root, 'pkg'));
+  await fs.mkdir(path.join(root, 'tests'));
+  await fs.writeFile(path.join(root, 'pkg', '__init__.py'), `
+from pydantic.fields import Field
+__all__ = ["Field"]
+`);
+  await fs.writeFile(path.join(root, 'tests', 'test_fields.py'), `
+from pkg import Field
+
+class Settings:
+    value = Field(default="x", initial=lambda: "y")
+`);
+
+  const result = await analyzePythonRepository({
+    repoDir: root,
+    files: ['pkg/__init__.py', 'tests/test_fields.py']
+  });
+
+  const call = (result.externalSymbols || []).find((item) =>
+    item.kind === 'external-call' &&
+    item.sourcePath === 'tests/test_fields.py' &&
+    item.callText?.includes('initial=')
+  );
+
+  assert.equal(call?.qualifiedName, 'pydantic.fields.Field');
+  assert.equal(call?.viaModule, 'pkg');
+  assert.ok(call?.targetExternalId);
+  assert.deepEqual(call?.keywordArgs, ['default', 'initial']);
+});
+
