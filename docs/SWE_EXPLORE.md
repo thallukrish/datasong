@@ -105,3 +105,14 @@ a41edc7bf5302f2ea327943c0c48c532b12009bc
 Use that snapshot. Do not run the benchmark against current xarray or the repaired commit.
 
 Run LeMap only from the issue and repository snapshot. Compare its returned ranked regions with SWE-Explore ground truth afterward.
+
+## Local batch run
+
+With the DataSong v2 server running:
+
+```powershell
+cd demo_v2
+node scripts/swe-explore-runner.js benchmarks/swe-explore-python.jsonl swe-explore-results.jsonl
+```
+
+The runner sends only the issue, repository URL and pinned pre-fix commit to Query v5. It writes one result row containing final ranked regions plus LeMap diagnostics. Ground truth is joined only afterward for scoring.
