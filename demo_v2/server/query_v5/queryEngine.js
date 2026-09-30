@@ -182,7 +182,7 @@ async function classifyRequest({question,client,model,usage,log}){
   return mode;
 }
 
-export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model,log=()=>{},onProgress=()=>{}}){
+export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explorer,client,model,log=()=>{},onProgress=()=>{}}){
   const usage={prompt:0,completion:0,total:0},events=[];let step=0;
   const diagnosticState={
     learnedNodeIds:new Set(),
@@ -262,11 +262,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();
   if(!wanted)throw new Error('Select a repository before querying code.');
 
-  if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){
-    const expected=String(explorer.state?.commit||'').trim();
+  const requestedCommit=String(repoCommit||'').trim();
+  const loadedCommit=String(explorer.state?.commit||'').trim();
+  const revisionMismatch=requestedCommit&&(!loadedCommit||!loadedCommit.toLowerCase().startsWith(requestedCommit.toLowerCase()));
+  if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted||revisionMismatch){
+    explorer.topology.targetCommit=requestedCommit;
     const preparedResult=await explorer.topology.prepare(wanted);
     const prepared=String(preparedResult?.commit||explorer.topology?.commit||'').trim();
-    if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');
+    if(requestedCommit&&!prepared.toLowerCase().startsWith(requestedCommit.toLowerCase()))throw new Error('Prepared repository revision does not match the requested Query v5 commit.');
     explorer.state.repoUrl=wanted;
     explorer.state.commit=prepared;
     explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};
