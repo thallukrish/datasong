@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { MAP_VERSION, graphFromSemanticObjects } from './mapPersistence.js';
+import { MAP_VERSION, graphFromSemanticObjects, normalizeLearnedGraph } from './mapPersistence.js';
 import { compactPersistedMap, compactLearningProgress } from './compactMapFormat.js';
 
 function writeAtomic(file, value) {
@@ -24,12 +24,51 @@ export const withCompactMapPersistence = (Base) => class CompactMapPersistenceEx
       this.enrichTraceability?.();
       fs.mkdirSync(this.mapDirectory(), { recursive: true });
       const savedAt = new Date().toISOString();
+      const semanticGraph = graphFromSemanticObjects(this.state.semanticObjects);
+      const learnedGraph = Array.isArray(this.state.learnedGraph)
+        ? this.state.learnedGraph.filter((node) => node?.id).map((node) => JSON.parse(JSON.stringify(node)))
+        : [];
+      const unifiedById = new Map(learnedGraph.map((node) => [node.id, node]));
+
+      for (const node of semanticGraph) {
+        const prior = unifiedById.get(node.id);
+        if (!prior) {
+          unifiedById.set(node.id, node);
+          continue;
+        }
+        node.data = {
+          ...(prior.data || {}),
+          ...(node.data || {}),
+          details: {
+            ...(prior.data?.details || {}),
+            ...(node.data?.details || {}),
+            structural: {
+              ...(prior.data?.details?.structural || {}),
+              ...(node.data?.details?.structural || {})
+            },
+            semantic: {
+              ...(prior.data?.details?.semantic || {}),
+              ...(node.data?.details?.semantic || {})
+            }
+          }
+        };
+        const seen = new Set((node.links || []).map((link) => `${link.nodeId}|${link.relationship}`));
+        for (const link of prior.links || []) {
+          const key = `${link.nodeId}|${link.relationship}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            node.links.push(link);
+          }
+        }
+        unifiedById.set(node.id, node);
+      }
+
       const raw = {
         version: MAP_VERSION,
         repoUrl: this.state.repoUrl,
         commit: this.state.commit,
         savedAt,
-        graph: graphFromSemanticObjects(this.state.semanticObjects),
+        graph: normalizeLearnedGraph([...unifiedById.values()]),
         learningProgress: compactLearningProgress(this.state)
       };
       const learnedMap = compactPersistedMap(raw);
