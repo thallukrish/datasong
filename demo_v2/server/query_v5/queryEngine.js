@@ -400,6 +400,38 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       break;
     }
 
+    if(mode==='causal'&&decision.causeClosed){
+      const closedText=decision.closedCause||decision.hypothesis||'Current function establishes one causal component of the issue.';
+      const existing=[...ledger.values()].find((fact)=>fact.text.toLowerCase()===closedText.toLowerCase());
+      if(existing){
+        existing.status='supported';
+        existing.supportStates=dedupeStates([...(existing.supportStates||[]),...arr(learned.window?.states)]);
+      }else{
+        const id='F'+nextFactId.value++;
+        ledger.set(id,{id,text:closedText,status:'supported',supportStates:dedupeStates(arr(learned.window?.states))});
+      }
+      const event={step,action:'CAUSE_CLOSED',state:state.name,cause:closedText,hypothesis:decision.hypothesis};
+      events.push(event);emit({...event,path:path.map(x=>x.name),facts:ledgerView(ledger)});
+
+      stack.pop();
+      let resumed=false;
+      while(stack.length){
+        const top=stack.at(-1);
+        if(top.alternatives.length){
+          top.current=top.alternatives.shift();
+          const backtrack={step,action:'BACKTRACK',to:top.current.state.name,hypothesis:decision.hypothesis};
+          events.push(backtrack);emit({...backtrack,path:[...top.path,top.current.state].map(x=>x.name)});
+          resumed=true;
+          break;
+        }
+        stack.pop();
+      }
+      if(!resumed){
+        if(!(await seed()))break;
+      }
+      continue;
+    }
+
     const warm=decision.picks;
     if(warm.length){
       stack.push({path,current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
