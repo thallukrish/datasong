@@ -246,7 +246,7 @@ The model makes one compact decision from the currently visible evidence.
 {
   "x": 0,
   "h": "current evidence-backed hypothesis",
-  "a": [["new established fact", [evidenceSlot]]],
+  "a": ["new established fact"],
   "d": [factId],
   "p": [[candidateIndex, navigationConfidence]]
 }
@@ -257,11 +257,14 @@ Where:
 - `x = 1` means the accumulated supported facts plus current semantic evidence directly explain the issue and exploration must stop.
 - `x = 0` means more evidence is required.
 - `h` is the current branch hypothesis. When `x = 1`, it is the concise causal explanation.
-- `a` adds newly established facts and cites the supplied evidence slots that support them.
+- `a` adds newly established facts as plain sentences. LeMap automatically binds those facts to the current semantic window.
 - `d` marks previously established fact IDs as disputed when newly observed evidence contradicts them.
 - `p` contains at most three branches worth exploring next.
 
 The model receives the current ledger on every decision. A disputed fact cannot be used as support for `x = 1` until later evidence resolves or replaces it.
+
+The model never returns evidence-slot IDs for facts. During traversal there is one current semantic window, so LeMap deterministically attaches every accepted fact to that window. During entry selection, where multiple independent windows are being compared, no facts are added to the ledger.
+
 
 Candidates omitted from `p` are not selected.
 
@@ -342,7 +345,8 @@ Localize   final supporting evidence → exact source ranges
 8. Learned semantics are persisted and reused across queries.
 9. Wrong or exhausted paths cause backtracking, not goal rewriting.
 10. Evidence-backed facts survive backtracking; only branch hypotheses roll back.
-11. Contradictions dispute facts rather than silently deleting them.
-12. Query classifies the request once as causal or query mode and keeps that objective stable.
-13. Causal-mode branch scores measure causal continuation, not generic relevance.
-14. Deterministic graph relationships are never delegated to the model.
+11. Fact-to-evidence binding is deterministic in LeMap; the model returns fact sentences, not evidence-slot IDs.
+12. Contradictions dispute facts rather than silently deleting them.
+13. Query classifies the request once as causal or query mode and keeps that objective stable.
+14. Causal-mode branch scores measure causal continuation, not generic relevance.
+15. Deterministic graph relationships are never delegated to the model.
