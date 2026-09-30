@@ -2,7 +2,6 @@ import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 
-export const NAV_MIN = 0.5;
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
 const WINDOW_DEPTH = 3;
@@ -226,7 +225,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
         return true;
       }
 
-      const warm=decision.picks.filter(item=>item.score>=NAV_MIN);
+      const warm=decision.picks;
       if(!warm.length)continue;
 
       stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
@@ -268,7 +267,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
       break;
     }
 
-    const warm=decision.picks.filter(item=>item.score>=NAV_MIN);
+    const warm=decision.picks;
     if(warm.length){
       stack.push({path,current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
       const event={step,action:'DESCEND',from:state.name,to:warm[0].state.name,hypothesis:decision.hypothesis};
