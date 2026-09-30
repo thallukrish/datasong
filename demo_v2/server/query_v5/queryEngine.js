@@ -143,7 +143,7 @@ async function decide({
   };
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
   const displayPath=currentState?[...path,currentState]:path;
-  emit({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
+  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
   return result;
 }
 
