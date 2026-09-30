@@ -63,7 +63,9 @@ function externalBoundaryState(boundary){
     reExported:!!boundary.reExported,
     boundaryKind:boundary.kind||'external-symbol',
     scopeKind:boundary.scopeKind||'',
-    scopeName:boundary.scopeName||''
+    scopeName:boundary.scopeName||'',
+    targetExternalId:boundary.targetExternalId||'',
+    viaModule:boundary.viaModule||''
   };
 }
 
@@ -405,7 +407,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const externalEntries=arr(explorer.topology?.externalSymbols)
     .map((boundary)=>({
       state:externalBoundaryState(boundary),
-      priority:boundary?.reExported?650:(boundary?.kind==='external-call'?450:250)
+      priority:boundary?.reExported?650:(boundary?.kind==='external-call'?(arr(boundary?.keywordArgs).length?600:450):250)
     }));
   const pool=[...(sourceEntries.length?sourceEntries:testEntries),...externalEntries]
     .sort((a,b)=>b.priority-a.priority||String(a.state.name||'').localeCompare(String(b.state.name||'')));
