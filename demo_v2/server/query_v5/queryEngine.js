@@ -251,6 +251,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     convergenceStep:diagnosticState.convergenceStep,
     exploredRegions:diagnosticState.exploredRegions
   });
+  const sweExploreView=(ranges=[])=>({
+    regions:arr(ranges).map((range,index)=>({
+      rank:index+1,
+      path:range.sourcePath||range.path||'',
+      start:Number(range.startLine||range.start||0),
+      end:Number(range.endLine||range.end||0)
+    })).filter(region=>region.path&&region.start>0&&region.end>=region.start)
+  });
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();
   if(!wanted)throw new Error('Select a repository before querying code.');
 
@@ -331,7 +339,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   };
 
   const seeded=await seed();
-  if(!seeded){const diag=diagnostics();log('query_v5_diagnostics',diag);return {answer:'No learned entry flow produced a usable continuation.',mode,complete:false,explained:false,hypothesis:'',events,usage,diagnostics:diag};}
+  if(!seeded){const diag=diagnostics();log('query_v5_diagnostics',diag);return {answer:'No learned entry flow produced a usable continuation.',mode,complete:false,explained:false,hypothesis:'',events,usage,diagnostics:diag,sweExplore:sweExploreView([])};}
 
   while(!finalExplanation&&stack.length&&step<MAX_STEPS){
     const frame=stack.at(-1),state=frame.current.state;
@@ -393,7 +401,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:stack.at(-1)?.hypothesis||''});
     log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
     const diag=diagnostics();log('query_v5_diagnostics',diag);
-    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
@@ -402,5 +410,5 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const answer=finalExplanation+(locations?'\n\n'+locations:'');
   log('query_v5_complete',{complete:true,mode,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage});
   const diag=diagnostics();log('query_v5_diagnostics',diag);
-  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage,diagnostics:diag,investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
 }
