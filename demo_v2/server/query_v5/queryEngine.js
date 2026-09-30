@@ -26,6 +26,12 @@ h is always the best rolling hypothesis from all evidence seen so far. It may de
 
 p is [[candidateIndex,causalScore]] for at most 3 continuations, where causalScore means how likely following that branch is to complete an unresolved causal explanation. Do not invent missing evidence. Return {"x":0,"k":0,"g":"","h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 
+const CAUSAL_COMPLETE_SYSTEM = `Decide whether the accumulated supported causal evidence now explains the whole reported software issue. The issue may contain multiple distinct or related parts. q is the original issue, f is the cumulative evidence ledger as [factId,status,text], and h is the rolling hypothesis.
+
+Return x=1 only if the supported evidence collectively explains every material failure described by the issue. If one or more parts remain unexplained, return x=0. h must summarize the best cumulative explanation and, when incomplete, identify the unresolved remainder without inventing facts.
+
+Return {"x":0,"h":""} only.`;
+
 const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. h is the current answer hypothesis.
 
 At every position ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. During entry selection leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
@@ -190,6 +196,14 @@ async function localizeExplanation({question,explanation,evidenceStates,client,m
   }
   log('query_v5_localize',{explanation,ranges,usage:call.usage});
   return ranges;
+}
+
+async function assessCausalCompleteness({question,hypothesis,ledger,client,model,usage,log,step}) {
+  const call=await modelJson(client,model,CAUSAL_COMPLETE_SYSTEM,{q:question,h:hypothesis||'',f:ledgerView(ledger)});
+  addUsage(usage,call.usage);
+  const result={explained:Number(call.parsed?.x||0)===1,hypothesis:text(call.parsed?.h||hypothesis||'',900)};
+  log('query_v5_causal_completeness',{step,payload:{q:question,h:hypothesis||'',f:ledgerView(ledger)},modelResponse:call.parsed,result,usage:call.usage});
+  return result;
 }
 
 async function classifyRequest({question,client,model,usage,log}){
@@ -414,6 +428,15 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       }
       const event={step,action:'CAUSE_CLOSED',state:state.name,cause:closedText,hypothesis:decision.hypothesis};
       events.push(event);emit({...event,path:path.map(x=>x.name),facts:ledgerView(ledger)});
+
+      const completeness=await assessCausalCompleteness({question,hypothesis:rollingHypothesis,ledger,client,model,usage,log,step});
+      rollingHypothesis=completeness.hypothesis||rollingHypothesis;
+      emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:rollingHypothesis,explained:completeness.explained});
+      if(completeness.explained){
+        finalExplanation=rollingHypothesis||closedText;
+        finalEvidence=ledgerEvidenceStates(ledger);
+        break;
+      }
 
       stack.pop();
       let resumed=false;
