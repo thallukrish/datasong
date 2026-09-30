@@ -120,6 +120,26 @@ function arcDetail(arc, snapshot) {
   };
 }
 function businessArcs(snapshot) { return arr(snapshot?.pass1Arcs).filter(isBusinessArc); }
+function codeMap(snapshot) {
+  const nodes=arr(snapshot?.learnedGraph).map((node)=>{
+    const structural=node?.data?.details?.structural||{};
+    const semantic=node?.data?.details?.semantic||{};
+    return {
+      id:String(node?.id||''),
+      type:String(node?.type||''),
+      name:compactText(node?.name,180),
+      sourcePath:compactText(structural.sourcePath,320),
+      startLine:Number(structural.startLine||0),
+      endLine:Number(structural.endLine||0),
+      signature:compactText(structural.signature,260),
+      purpose:compactText(semantic.purpose,420),
+      effect:compactText(semantic.effect,420),
+      learned:semantic.learned===true,
+      links:arr(node?.links).map((link)=>({nodeId:String(link?.nodeId||''),relationship:String(link?.relationship||'')})).filter((link)=>link.nodeId)
+    };
+  }).filter((node)=>node.id);
+  return {nodes,learnedCount:nodes.filter((node)=>node.learned).length};
+}
 function uiState(snapshot = explorer.snapshot()) {
   const arcs = businessArcs(snapshot);
   const flowState = {};
@@ -154,6 +174,7 @@ function uiState(snapshot = explorer.snapshot()) {
     pass1Arcs: arcs.map((arc) => arcDetail(arc, snapshot)),
     learningCoverage: coverageSummary(snapshot),
     visibleBusinessArcIds: arcs.map((arc) => arc.id),
+    codeMap: snapshot?.semanticProfile === 'code' ? codeMap(snapshot) : { nodes:[], learnedCount:0 },
     queryV5Progress: snapshot?.queryV5Progress || null
   };
 }
