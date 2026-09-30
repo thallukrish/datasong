@@ -238,18 +238,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     onProgress(event);
   };
   const diagnostics=()=>({
-    llmTokens:{...usage},
-    semanticNodesLearned:diagnosticState.learnedNodeIds.size,
-    uniqueNodesExplored:diagnosticState.exploredNodeIds.size,
-    functionsTraversed:diagnosticState.traversedNodeIds.size,
-    traversedRegions:diagnosticState.traversedRegions,
+    tokens:usage.total,
+    learned:diagnosticState.learnedNodeIds.size,
+    explored:diagnosticState.exploredNodeIds.size,
+    traversed:diagnosticState.traversedNodeIds.size,
+    steps:step,
     backtracks:diagnosticState.backtracks,
-    descents:diagnosticState.descents,
     reseeds:diagnosticState.reseeds,
-    decisionSteps:step,
-    firstFactStep:diagnosticState.firstFactStep,
-    convergenceStep:diagnosticState.convergenceStep,
-    exploredRegions:diagnosticState.exploredRegions
+    firstFact:diagnosticState.firstFactStep,
+    convergedAt:diagnosticState.convergenceStep,
+    path:diagnosticState.traversedRegions.map(x=>x.name).filter(Boolean).join(' > ')
   });
   const sweExploreView=(ranges=[])=>({
     regions:arr(ranges).map((range,index)=>({
