@@ -1,6 +1,6 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
-import { entryCandidates, lookaheadFromEntry } from '../semantics/code/queryDrivenSemanticFrontier.js';
-import { ensureLocalCodeSemantics, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
+import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
+import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 
 export const NAV_MIN = 0.5;
 export const NAV_MAX_DROP = 0.2;
@@ -8,7 +8,7 @@ export const FULFILLED = 1.0;
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
 
-const SCORE_SYSTEM = `Score supplied code candidates ONLY against the single active ordered query-plan step. Candidate semantics may be absent for not-yet-learned nodes; in that case use structural name, signature, source location and path only to estimate navigation. For each candidate return navigation confidence n, meaning continuing through this candidate is likely to lead to the needed implementation, and fulfillment f, meaning THIS candidate itself contains enough learned implementation context to satisfy the active step. NEVER return f=1.0 when candidate semantics are absent. f=1.0 is a hard completion signal and must be used only when supplied learned semantics are sufficient for the active step. Return {"c":[{"i":0,"n":0.0,"f":0.0}],"r":[candidateIndex]}.`;
+const SCORE_SYSTEM = `Choose up to 3 candidates most useful for the single active investigation step. Reason from the supplied learned semantic path and each candidate's learned local semantic lookahead. n is navigation confidence from 0 to 1. f is 1 only when the candidate ROOT node's own learned purpose/effect already satisfies the active step, otherwise 0. Return {"p":[[candidateIndex,n,f]]}.`;
 const LOCALIZE_SYSTEM = `For one fulfilled query-plan step, identify exact source line ranges from ONLY the supplied selected function/AST-region evidence. Return {"ranges":[{"symbolId":"","startLine":0,"endLine":0,"why":""}]}.`;
 const PLAN_SYSTEM = `Translate a software issue into a short ORDERED CODE INVESTIGATION PLAN using the supplied repository context and deterministic entry-flow previews.  Each step must describe implementation behavior that must be located or explained in source code. Keep only steps that help diagnose or implement the issue. Do not use database language such as rows, grain, dimensions, measures, joins, or entities. Return {"intent":"short diagnosis goal","steps":[{"action":"what code behavior must be established","requires":["code concept or behavior"],"relation":"optional relationship to establish"}]}. Prefer 3-6 steps.`;
 
@@ -51,15 +51,38 @@ function children(state, explorer, flowChildren=null) {
   if(state.type==='code_region') { const allowed=flowChildren?.get?.(state.symbolId)||null; const calls=directCallStates(symbol,state,explorer.topology.symbolById).filter(s=>!allowed||allowed.has(s.symbolId)); return [...calls,...regionStates(symbol,state.regionId)]; }
   return [];
 }
+function semanticNodeView(state,explorer){
+  const semantic=codeSemanticForState(state,explorer)||{};
+  return [state.name,text(semantic.purpose||'',260),text(semantic.effect||'',220)];
+}
+
+function semanticWindowView(rootState,window,explorer){
+  const stateById=new Map(arr(window?.states).map(state=>[state.id,state]));
+  const childrenById=new Map();
+  for(const link of arr(window?.links)){if(!childrenById.has(link.from))childrenById.set(link.from,[]);childrenById.get(link.from).push(link.to)}
+  const visit=(id,seen=new Set())=>{
+    const state=stateById.get(id);if(!state)return null;
+    const nextSeen=new Set(seen);nextSeen.add(id);
+    const children=arr(childrenById.get(id)).filter(childId=>!nextSeen.has(childId)).map(childId=>visit(childId,nextSeen)).filter(Boolean);
+    return [...semanticNodeView(state,explorer),children];
+  };
+  return visit(rootState.id)||[...semanticNodeView(rootState,explorer),[]];
+}
+
 async function scoreCandidates({logicalRequest,unresolved,path,candidates,explorer,client,model,usage,log,step,onProgress=()=>{}}) {
   const activeStep=activeStepOf(unresolved);
   if(activeStep===undefined)return[];
+  const windows=[];
+  for(const candidate of candidates){
+    const learned=await ensureLocalSemanticWindow({state:candidate,path,depth:3,explorer,client,model,usage,log,onProgress});
+    windows.push(learned.window);
+  }
   const planStep=logicalRequest.steps[activeStep];
-  const payload={activeStep:[activeStep,planStep?.action||'',arr(planStep?.requires),planStep?.relation||''],path:path.map(x=>x.name),candidates:candidates.map((x,i)=>[i,x.name,x.type,x.sourcePath,x.startLine,x.endLine,codeSemanticForState(x,explorer)||null,(explorer.topology?.symbolById?.get(x.symbolId)?.signature||'')])};
+  const payload={s:[activeStep,planStep?.action||'',arr(planStep?.requires),planStep?.relation||''],p:path.map(state=>semanticNodeView(state,explorer)),c:candidates.map((state,index)=>[index,semanticWindowView(state,windows[index],explorer)])};
   const call=await modelJson(client,model,SCORE_SYSTEM,payload);addUsage(usage,call.usage);
-  const byIndex=new Map(candidates.map((x,i)=>[String(i),x])), rejected=new Set(arr(call.parsed?.r).map(String)), out=[];
-  for(const row of arr(call.parsed?.c)){const state=byIndex.get(String(row?.i));if(!state||rejected.has(String(row?.i)))continue;out.push({state,scores:[{step:activeStep,navigation:Number(row?.n||0),fulfillment:Number(row?.f||0)}]})}
-  log('query_v5_score',{step,payload,result:out,usage:call.usage});onProgress({action:'SCORE',step,activePlanStep:activeStepOf(unresolved),path:path.map(x=>x.name),candidates:out.map(x=>({id:x.state.id,name:x.state.name,scores:x.scores}))});return out;
+  const byIndex=new Map(candidates.map((state,index)=>[String(index),state])),out=[];
+  for(const row of arr(call.parsed?.p)){const state=byIndex.get(String(row?.[0]));if(!state)continue;out.push({state,scores:[{step:activeStep,navigation:Number(row?.[1]||0),fulfillment:Number(row?.[2]||0)}]})}
+  log('query_v5_score',{step,payload,modelResponse:call.parsed,result:out,usage:call.usage});onProgress({action:'SCORE',step,activePlanStep:activeStepOf(unresolved),path:path.map(x=>x.name),candidates:out.map(x=>({id:x.state.id,name:x.state.name,scores:x.scores}))});return out;
 }
 function recordFulfillment(scored, fulfilled, unresolved) {
   const active=activeStepOf(unresolved);if(active===undefined)return;
@@ -73,14 +96,18 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted){const expected=String(explorer.state?.commit||'').trim(),p=await explorer.topology.prepare(wanted),prepared=String(p?.commit||explorer.topology?.commit||'').trim();if(expected&&prepared&&expected!==prepared)throw new Error('Selected semantic map revision does not match the repository revision prepared for Query v5.');explorer.state.repoUrl=wanted;explorer.state.commit=prepared;explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};}
   const grouped=explorer.topology?.topCallPaths?.(Number.MAX_SAFE_INTEGER)||[];
   if(!grouped.length)throw new Error('Prepared call-path index contains no code-flow paths.');
-  const entryPreview=entryCandidates(grouped,explorer.topology?.symbolById||new Map()).slice(0,12).map(entry=>lookaheadFromEntry(grouped,explorer.topology?.symbolById||new Map(),entry.symbolId,3)).filter(Boolean);
-  const repositoryContext={readme:text(explorer.topology?.repositoryReadme||'',5000),entryFlows:entryPreview};
-  const logicalRequest=await deriveCodePlan({question,repositoryContext,client,model,usage,log});onProgress({action:'PLAN',plan:logicalRequest.steps,activePlanStep:0});
   explorer.state.semanticProfile='code';
-  const flowChildren=new Map();
-  for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
   const rankedEntries=entryCandidates(grouped,explorer.topology?.symbolById||new Map());
   const entries=rankedEntries.map(e=>explorer.topology.symbolById.get(e.symbolId)).filter(Boolean).map(e=>symbolState(e));
+  const entryPreview=[];
+  for(const entry of entries.slice(0,12)){
+    const learned=await ensureLocalSemanticWindow({state:entry,path:[],depth:3,explorer,client,model,usage,log,onProgress});
+    entryPreview.push(semanticWindowView(entry,learned.window,explorer));
+  }
+  const repositoryContext={readme:text(explorer.topology?.repositoryReadme||'',5000),entryFlows:entryPreview};
+  const logicalRequest=await deriveCodePlan({question,repositoryContext,client,model,usage,log});onProgress({action:'PLAN',plan:logicalRequest.steps,activePlanStep:0});
+  const flowChildren=new Map();
+  for(const g of grouped)for(const v of [g,...arr(g?.alternatives)]){const ids=arr(v?.symbolIds);for(let i=0;i<ids.length-1;i++){if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());flowChildren.get(ids[i]).add(ids[i+1]);}}
   if(!entries.length)throw new Error('Prepared call-path index contains no entry roots.');
   const visited=new Set(), entryTriedByStep=new Map(), stack=[];
   const markVisited=(state)=>{visited.add(state.id);};
@@ -109,7 +136,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   if(!seeded&&unresolved.size)return {answer:'No entry point had adequate signal for the query plan.',logicalRequest,fulfilled:[],events,usage};
   while(stack.length&&step<MAX_STEPS&&unresolved.size){
     const frame=stack.at(-1), current=frame.current, state=current.state, nav=scoreOf(current,unresolved);markVisited(state);
-    await ensureLocalCodeSemantics({states:[state],path:frame.path,explorer,client,model,usage,log,onProgress});
     const rescored=await scoreCandidates({logicalRequest,unresolved,path:frame.path,candidates:[state],explorer,client,model,usage,log,step:++step,onProgress});
     if(rescored.length)frame.current=rescored[0];
     recordFulfillment(rescored.length?rescored:[current],fulfilled,unresolved);unresolved=unresolvedSteps(logicalRequest.steps.length,fulfilled);if(!unresolved.size)break;
