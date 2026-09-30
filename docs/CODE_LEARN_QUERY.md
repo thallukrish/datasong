@@ -58,6 +58,66 @@ If A is the current position and the depth is 3, Learn ensures the reachable nod
 
 When Query later moves to C or E, Learn expands three levels from that new position and learns only newly exposed nodes. Previously learned semantics are reused.
 
+## Investigation mode
+
+Query first classifies the request once for the whole investigation:
+
+```text
+reported bug / failure / regression / wrong behavior
+→ causal mode
+
+descriptive code question
+→ query mode
+```
+
+The mode remains stable across traversal, backtracking and reseeding.
+
+### Causal mode
+
+For a reported issue, branch scoring is causal rather than topical.
+
+The model asks:
+
+```text
+Could the behavior represented by the traversed path
+actually produce the reported issue?
+```
+
+A candidate score means:
+
+```text
+How likely is following this branch to complete
+a causal explanation of the reported behavior?
+```
+
+Code that is merely related to configuration, validation, testing or surrounding infrastructure should not be preferred unless execution through that code could itself participate in the failure mechanism.
+
+At each frontier, the model reasons over:
+
+```text
+original issue
++ cumulative supported facts
++ complete traversed semantic path
++ current learned semantic window
++ candidate continuations
+```
+
+The issue closes only when that combined evidence forms a coherent causal mechanism capable of producing the reported behavior.
+
+### Query mode
+
+For descriptive code questions, no root cause is required.
+
+The model instead asks:
+
+```text
+Does this traversed path help answer the question?
+```
+
+Candidate scores mean how likely a continuation is to complete the answer.
+
+The traversal, semantic window, evidence ledger and backtracking machinery are otherwise shared between both modes.
+
 ## Query is an evidence chase, not a fixed plan
 
 Query does not create a fixed list of steps that must later be fulfilled.
@@ -130,10 +190,14 @@ This prevents repeated rediscovery while still allowing the investigation to cha
 
 ## Stop condition
 
-At every meaningful position Query asks:
+At every meaningful position Query asks according to its fixed reasoning mode:
 
 ```text
-Does the evidence seen so far explain the issue?
+causal mode
+Does the complete traversed evidence establish a mechanism that could cause the reported issue?
+
+query mode
+Does the complete traversed evidence answer the code question?
 ```
 
 If yes, exploration stops immediately.
@@ -203,7 +267,7 @@ Candidates omitted from `p` are not selected.
 
 There is no absolute navigation-score cutoff. If the model returns ranked candidates, LeMap follows the strongest one and preserves the remaining returned candidates as alternatives. If the model returns no candidate, LeMap backtracks or advances to the next entry batch.
 
-The model must not claim `x = 1` merely because a branch is plausible. The evidence must establish the causal mechanism described by the issue.
+In causal mode, the model must not claim `x = 1` merely because a branch is plausible or topically related. The traversed path and supported facts must establish a causal mechanism that could produce the reported behavior. In query mode, `x = 1` means the accumulated evidence directly answers the question.
 
 ## Entry exploration
 
@@ -279,4 +343,6 @@ Localize   final supporting evidence → exact source ranges
 9. Wrong or exhausted paths cause backtracking, not goal rewriting.
 10. Evidence-backed facts survive backtracking; only branch hypotheses roll back.
 11. Contradictions dispute facts rather than silently deleting them.
-12. Deterministic graph relationships are never delegated to the model.
+12. Query classifies the request once as causal or query mode and keeps that objective stable.
+13. Causal-mode branch scores measure causal continuation, not generic relevance.
+14. Deterministic graph relationships are never delegated to the model.
