@@ -85,3 +85,31 @@ def build():
   assert.match(ref?.callText || '', /Field\(default=['"]x['"], initial=/);
 });
 
+test('Python AST analyzer preserves re-exported external symbols and class-body external calls', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-api-boundary-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'main.py'), `
+from pydantic.fields import Field
+
+__all__ = ["Field", "Settings"]
+
+class Settings:
+    name = Field(default="x", initial=lambda: "y")
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
+  const external = result.externalSymbols || [];
+  const importedField = external.find((item) => item.kind === 'external-symbol' && item.localName === 'Field');
+  const fieldCall = external.find((item) => item.kind === 'external-call' && item.qualifiedName === 'pydantic.fields.Field');
+
+  assert.equal(importedField?.reExported, true);
+  assert.equal(importedField?.importModule, 'pydantic.fields');
+  assert.equal(importedField?.importName, 'Field');
+
+  assert.equal(fieldCall?.scopeKind, 'class-body');
+  assert.equal(fieldCall?.scopeName, 'Settings');
+  assert.deepEqual(fieldCall?.keywordArgs, ['default', 'initial']);
+  assert.match(fieldCall?.callText || '', /Field\(default=['"]x['"], initial=/);
+});
+
