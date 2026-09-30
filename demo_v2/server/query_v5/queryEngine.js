@@ -361,7 +361,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       currentState:state,
       currentWindow:learned.window,
       candidates:next,
-      explorer,client,model,usage,log,step:++step,onProgress
+      explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
     applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
