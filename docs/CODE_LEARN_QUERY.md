@@ -201,6 +201,8 @@ The model receives the current ledger on every decision. A disputed fact cannot 
 
 Candidates omitted from `p` are not selected.
 
+There is no absolute navigation-score cutoff. If the model returns ranked candidates, LeMap follows the strongest one and preserves the remaining returned candidates as alternatives. If the model returns no candidate, LeMap backtracks or advances to the next entry batch.
+
 The model must not claim `x = 1` merely because a branch is plausible. The evidence must establish the causal mechanism described by the issue.
 
 ## Entry exploration
