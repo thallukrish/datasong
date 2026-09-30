@@ -8,19 +8,19 @@ const WINDOW_DEPTH = 3;
 
 const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the user reports a bug, failure, regression, incorrect behavior, unexpected result, or asks what caused/why something went wrong. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. Return {"mode":"causal"} or {"mode":"query"} only.`;
 
-const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics only. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s contains numbered semantic evidence slots. h is the current branch hypothesis.
+const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics only. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. h is the current branch hypothesis.
 
 Reason causally, not by topical relevance. At every position ask whether the behavior represented by the full traversed path plus supported facts could actually produce the observed issue. Rank candidate continuations by how plausibly they continue that causal chain toward the failure mechanism. Tests, config helpers, validators, or similarly related code should score low or be omitted unless execution through them could itself cause the reported behavior.
 
-Add explicit behavior established by the supplied semantic evidence to a as [factText,[supportSlotIds]]. Do not wait until the final root cause before recording facts. Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId].
+When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. Do not wait until the final root cause before recording facts. During entry selection, where several independent windows are being compared and no current traversal window exists, leave a empty. Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId].
 
 Set x=1 only when the supported ledger facts plus the traversed semantic path establish a coherent causal mechanism that could produce the reported behavior. h must then state that causal mechanism concisely. Otherwise x=0 and h is the current evidence-backed causal hypothesis.
 
 p is [[candidateIndex,causalScore]] for at most 3 continuations, where causalScore means "how likely is following this branch to complete a causal explanation of the reported issue?", not generic relevance. Do not invent missing evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 
-const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s contains numbered semantic evidence slots. h is the current answer hypothesis.
+const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. h is the current answer hypothesis.
 
-At every position ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. Add explicit behavior established by supplied semantic evidence to a as [factText,[supportSlotIds]]. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
+At every position ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. During entry selection leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
 
 Set x=1 only when the supported facts plus traversed semantic path directly answer the question. Then h is the concise answer. Otherwise x=0 and h is the current evidence-backed answer hypothesis. p is [[candidateIndex,relevanceScore]] for at most 3 continuations. Do not invent missing evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
@@ -83,22 +83,21 @@ function ledgerEvidenceStates(ledger){
   return dedupeStates([...ledger.values()].filter(fact=>fact.status==='supported').flatMap(fact=>fact.supportStates||[]));
 }
 
-function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],slotStates,nextFactId}){
+function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],supportStates=[],nextFactId}){
   for(const id of arr(disputes).map(String)){const fact=ledger.get(id);if(fact)fact.status='disputed'}
   for(const id of arr(resolutions).map(String)){const fact=ledger.get(id);if(fact)fact.status='supported'}
-  for(const row of arr(additions)){
-    const factText=text(row?.[0]||'',420);if(!factText)continue;
-    const slots=arr(row?.[1]).map(Number).filter(Number.isInteger);
-    const supportStates=dedupeStates(slots.flatMap(slot=>arr(slotStates.get(slot))));
-    if(!supportStates.length)continue;
+  const boundSupport=dedupeStates(supportStates);
+  if(!boundSupport.length)return;
+  for(const value of arr(additions)){
+    const factText=text(value,420);if(!factText)continue;
     const existing=[...ledger.values()].find(fact=>fact.text.toLowerCase()===factText.toLowerCase());
     if(existing){
       existing.status='supported';
-      existing.supportStates=dedupeStates([...(existing.supportStates||[]),...supportStates]);
+      existing.supportStates=dedupeStates([...(existing.supportStates||[]),...boundSupport]);
       continue;
     }
     const id='F'+nextFactId.value++;
-    ledger.set(id,{id,text:factText,status:'supported',supportStates});
+    ledger.set(id,{id,text:factText,status:'supported',supportStates:boundSupport});
   }
 }
 
@@ -137,10 +136,10 @@ async function decide({
     explained:Number(call.parsed?.x||0)===1,
     hypothesis:text(call.parsed?.h||hypothesis||'',900),
     picks,
-    additions:arr(call.parsed?.a),
+    additions:currentState?arr(call.parsed?.a):[],
     disputes:arr(call.parsed?.d),
     resolutions:arr(call.parsed?.r),
-    slotStates
+    supportStates:currentState&&currentWindow?dedupeStates(arr(currentWindow.states)):[]
   };
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
   const displayPath=currentState?[...path,currentState]:path;
@@ -236,7 +235,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
       }
 
       const decision=await decide({question,mode,hypothesis:'',ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress});
-      applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,slotStates:decision.slotStates,nextFactId});
+      applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
       onProgress({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
       const batchEvent={step,action:'ENTRY_BATCH',batch:Math.floor(offset/ENTRY_BATCH_SIZE)+1,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,hypothesis:decision.hypothesis,explained:decision.explained};
       events.push(batchEvent);onProgress(batchEvent);
@@ -286,7 +285,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
       explorer,client,model,usage,log,step:++step,onProgress
     });
 
-    applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,slotStates:decision.slotStates,nextFactId});
+    applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
     onProgress({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
 
     if(decision.explained){
