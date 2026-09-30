@@ -7,7 +7,7 @@ const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
 const WINDOW_DEPTH = 3;
 
-const DECIDE_SYSTEM = `Investigate the supplied software issue from learned code semantics only. The original issue never changes. h is the current evidence-backed hypothesis. Set x=1 only when the supplied semantic evidence directly explains the causal mechanism of the issue; then h must be the concise explanation and exploration stops. Otherwise set x=0, update h to the best hypothesis supported by current evidence, and choose at most 3 candidate branches worth exploring next. p is [[candidateIndex,navigationConfidence]]. e is optional and contains candidate indexes whose windows support x=1 when there is no current position. Do not invent missing evidence. Return {"x":0,"h":"","p":[[0,0.0]],"e":[]}. `;
+const DECIDE_SYSTEM = `Investigate the supplied software issue or code query from learned semantics only. The original request never changes. h is the current evidence-backed hypothesis. Set x=1 only when the supplied semantic evidence is sufficient to directly answer or explain the request; for a defect report this requires the causal mechanism, not merely a plausible branch. Then h must be the concise answer/explanation and exploration stops. Otherwise set x=0, update h to the best hypothesis supported by current evidence, and choose at most 3 candidate branches worth exploring next. p is [[candidateIndex,navigationConfidence]]. If x=1 while w is null, e MUST contain the candidate indexes whose semantic windows support the answer. Do not invent missing evidence. Return {"x":0,"h":"","p":[[0,0.0]],"e":[]}.`;
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
 
 function symbolState(symbol, parent=null) {
@@ -173,8 +173,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
       events.push(batchEvent);onProgress(batchEvent);
 
       if(decision.explained){
-        const indexes=decision.evidenceIndexes.length?decision.evidenceIndexes:(decision.picks.length?[candidates.indexOf(decision.picks[0].state)]:[0]);
-        finalExplanation=decision.hypothesis;
+        if(!decision.evidenceIndexes.length){
+          log('query_v5_invalid_explanation',{step,reason:'entry explanation omitted evidence indexes'});
+          continue;
+        }
+        const indexes=decision.evidenceIndexes.filter(index=>index>=0&&index<windows.length);
+        if(!indexes.length)continue;
+        finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
         finalEvidence=dedupeStates(indexes.flatMap(index=>arr(windows[index]?.states)));
         return true;
       }
@@ -212,7 +217,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     });
 
     if(decision.explained){
-      finalExplanation=decision.hypothesis;
+      finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
       finalEvidence=dedupeStates([...path,...arr(learned.window?.states)]);
       break;
     }
