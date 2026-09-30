@@ -44,6 +44,8 @@ The current working query path is:
 demo_v2/server/query_v4/*
 ```
 
+The code-semantic profile also has a separate Query-v5 path documented in `docs/CODE_LEARN_QUERY.md`. Its Learn stage is query-independent and maintains a lazily expanded three-level semantic execution window for code traversal.
+
 The current working learning/persistence path is centered under:
 
 ```text
