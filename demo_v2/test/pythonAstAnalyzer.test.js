@@ -60,3 +60,28 @@ test('Python AST analyzer resolves module and from imports without global same-n
   assert.ok(main.references.some((ref) => ref.targetSymbolId === utilParse.id));
   assert.ok(!main.references.some((ref) => ref.targetSymbolId === otherParse.id));
 });
+
+test('Python AST analyzer preserves imported external calls with call-site context', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-external-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'main.py'), `
+from pydantic.fields import Field
+
+def build():
+    return Field(default="x", initial=lambda: "y")
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
+  const build = (result.symbols || []).find((symbol) => symbol.name === 'build');
+  const ref = build?.references.find((item) => item.name === 'Field');
+
+  assert.equal(ref?.resolution, 'external_import');
+  assert.equal(ref?.external, true);
+  assert.equal(ref?.importModule, 'pydantic.fields');
+  assert.equal(ref?.importName, 'Field');
+  assert.equal(ref?.qualifiedName, 'pydantic.fields.Field');
+  assert.deepEqual(ref?.keywordArgs, ['default', 'initial']);
+  assert.match(ref?.callText || '', /Field\(default=['"]x['"], initial=/);
+});
+
