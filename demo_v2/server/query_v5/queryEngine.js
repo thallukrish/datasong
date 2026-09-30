@@ -187,6 +187,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   const diagnosticState={
     learnedNodeIds:new Set(),
     exploredNodeIds:new Set(),
+    traversedNodeIds:new Set(),
+    traversedRegions:[],
     exploredRegions:[],
     backtracks:0,
     descents:0,
@@ -212,6 +214,20 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
       diagnosticState.exploredRegions.push(regionForState(state,kind,atStep));
     }
   };
+  const recordTraversed=(state,atStep=step)=>{
+    if(!state?.id||diagnosticState.traversedNodeIds.has(state.id))return;
+    diagnosticState.traversedNodeIds.add(state.id);
+    diagnosticState.traversedRegions.push({
+      order:diagnosticState.traversedRegions.length+1,
+      step:atStep,
+      id:state.id,
+      symbolId:state.symbolId||'',
+      name:state.name||'',
+      path:state.sourcePath||'',
+      start:Number(state.startLine||0),
+      end:Number(state.endLine||0)
+    });
+  };
   const emit=(event={})=>{
     if(event.action==='LEARN_DONE')for(const id of arr(event.nodeIds))diagnosticState.learnedNodeIds.add(String(id));
     if(event.action==='BACKTRACK')diagnosticState.backtracks+=1;
@@ -225,7 +241,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     llmTokens:{...usage},
     semanticNodesLearned:diagnosticState.learnedNodeIds.size,
     uniqueNodesExplored:diagnosticState.exploredNodeIds.size,
-    functionsTraversed:diagnosticState.exploredRegions.filter(x=>x.kind==='traversed').length,
+    functionsTraversed:diagnosticState.traversedNodeIds.size,
+    traversedRegions:diagnosticState.traversedRegions,
     backtracks:diagnosticState.backtracks,
     descents:diagnosticState.descents,
     reseeds:diagnosticState.reseeds,
@@ -321,7 +338,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     visited.add(state.id);
 
     const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress:emit});
-    recordExplored([state],'traversed',step);
+    recordTraversed(state,step);
     recordExplored(arr(learned.window?.states),'semantic_window',step);
     const path=[...frame.path,state];
     const next=callChildren(state,explorer,flowChildren).filter(child=>!visited.has(child.id));
