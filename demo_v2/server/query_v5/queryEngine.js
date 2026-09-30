@@ -52,16 +52,18 @@ function externalBoundaryState(boundary){
     sourcePath:boundary.sourcePath||'',
     startLine:Number(boundary.startLine||0),
     endLine:Number(boundary.endLine||boundary.startLine||0),
-    body:'',
+    body:String(boundary.callText||''),
     parent:null,
     parentSymbolId:null,
     importModule:boundary.importModule||'',
     importName:boundary.importName||'',
     qualifiedName:boundary.qualifiedName||boundary.name||'',
-    callText:'',
-    keywordArgs:[],
+    callText:String(boundary.callText||''),
+    keywordArgs:arr(boundary.keywordArgs),
     reExported:!!boundary.reExported,
-    boundaryKind:boundary.kind||'external-symbol'
+    boundaryKind:boundary.kind||'external-symbol',
+    scopeKind:boundary.scopeKind||'',
+    scopeName:boundary.scopeName||''
   };
 }
 
