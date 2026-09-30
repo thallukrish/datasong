@@ -1,7 +1,11 @@
 import { addUsage, arr, modelJson, text } from '../../query_v2/modelJson.js';
 import { materializeCodeStructure, applyCodeSemantics, semanticDetails } from './codeGraph.js';
 
-const LEARN_SYSTEM = `Learn query-independent semantics for the supplied local execution window. flowContext contains only already-learned predecessor semantics. newNodes contains raw code only for nodes whose semantics are still unknown, plus deterministic call relationships inside the local window. Describe what each supplied function or function-region does and its execution effect. Do not answer a user query, infer query relevance, rank branches, or rewrite predecessor semantics. Return one semantic result for every supplied new node as {"symbols":[{"symbolId":"","purpose":"","effect":""}],"regions":[{"regionId":"","purpose":"","effect":""}]} using only exact supplied IDs.`;
+const LEARN_SYSTEM = `Learn query-independent semantics for the supplied local execution window. flowContext contains only already-learned predecessor semantics. newNodes contains raw repository code plus deterministic call relationships, and may also contain terminal externalCalls for imported APIs whose implementation is outside the repository.
+
+Describe what each supplied function, function-region, or external call does and its execution effect. For externalCalls, use only the supplied import identity and call-site syntax. Explain the local meaning of invoking that imported API here; do not invent or claim knowledge of the dependency implementation beyond what the import name and call syntax support. External calls are terminal boundaries, not repository code to traverse.
+
+Do not answer a user query, infer query relevance, rank branches, or rewrite predecessor semantics. Return one semantic result for every supplied new node as {"symbols":[{"symbolId":"","purpose":"","effect":""}],"regions":[{"regionId":"","purpose":"","effect":""}],"externalCalls":[{"externalId":"","purpose":"","effect":""}]} using only exact supplied IDs.`;
 
 export function codeSemanticForState(state,explorer){return semanticDetails(explorer,state)}
 
@@ -17,10 +21,43 @@ function stateForSymbol(symbol,parentSymbolId=null){
   return {id:symbol.id,type:'code_symbol',name:symbol.name,symbolId:symbol.id,sourcePath:symbol.sourcePath||'',startLine:symbol.startLine||0,endLine:symbol.endLine||0,body:String(symbol.body||''),parent:parentSymbolId,parentSymbolId};
 }
 
+function externalStateForRef(symbol,ref){
+  const line=Number(ref?.line||ref?.startLine||0),endLine=Number(ref?.endLine||line);
+  const qualified=String(ref?.qualifiedName||ref?.name||ref?.simpleName||'external');
+  return {
+    id:`external-call:${symbol.id}:${line}:${qualified}`,
+    type:'code_external',
+    name:qualified,
+    symbolId:'',
+    sourcePath:symbol.sourcePath||'',
+    startLine:line,
+    endLine,
+    body:String(ref?.callText||ref?.name||''),
+    parent:symbol.id,
+    parentSymbolId:symbol.id,
+    importModule:String(ref?.importModule||''),
+    importName:String(ref?.importName||ref?.simpleName||''),
+    qualifiedName:qualified,
+    callText:String(ref?.callText||''),
+    keywordArgs:arr(ref?.keywordArgs)
+  };
+}
+
 function directCallStates(state,explorer){
+  if(state?.type==='code_external')return[];
   const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
   const region=state?.type==='code_region'?{start:Number(state.startLine||0),end:Number(state.endLine||0)}:null;
-  return arr(symbol.references).filter(ref=>ref?.relation==='calls'&&ref?.targetSymbolId&&(!region||(Number(ref.line||ref.startLine||0)>=region.start&&Number(ref.line||ref.startLine||0)<=region.end))).map(ref=>explorer.topology?.symbolById?.get(ref.targetSymbolId)).filter(Boolean).map(target=>stateForSymbol(target,symbol.id));
+  const inRegion=(ref)=>!region||(Number(ref.line||ref.startLine||0)>=region.start&&Number(ref.line||ref.startLine||0)<=region.end);
+  const out=[];
+  for(const ref of arr(symbol.references).filter(ref=>ref?.relation==='calls'&&inRegion(ref))){
+    if(ref?.targetSymbolId){
+      const target=explorer.topology?.symbolById?.get(ref.targetSymbolId);
+      if(target)out.push(stateForSymbol(target,symbol.id));
+    }else if(ref?.external&&ref?.resolution==='external_import'){
+      out.push(externalStateForRef(symbol,ref));
+    }
+  }
+  return out;
 }
 
 export function collectLocalSemanticWindow({state,explorer,depth=3}){
@@ -40,20 +77,24 @@ export function collectLocalSemanticWindow({state,explorer,depth=3}){
 
 export async function ensureLocalCodeSemantics({states,path=[],links=[],explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
   const requested=arr(states).filter(Boolean);materializeCodeStructure(explorer,[...arr(path),...requested]);
-  const flowContext=learnedFlowContext(path,explorer),symbols=[],regions=[];
+  const flowContext=learnedFlowContext(path,explorer),symbols=[],regions=[],externalCalls=[];
   for(const state of requested){
-    const symbol=explorer.topology?.symbolById?.get(state.symbolId);if(!symbol)continue;
     const learned=!!semanticDetails(explorer,state)?.learned;
+    if(state.type==='code_external'){
+      if(!learned)externalCalls.push({externalId:state.id,name:state.name,sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:text(state.callText||state.body,1200),keywordArgs:arr(state.keywordArgs)});
+      continue;
+    }
+    const symbol=explorer.topology?.symbolById?.get(state.symbolId);if(!symbol)continue;
     if(state.type==='code_region'&&!learned)regions.push({regionId:state.regionId,symbolId:state.symbolId,kind:state.kind||'',sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,body:text(state.body,3200)});
     else if(state.type!=='code_region'&&!learned)symbols.push({symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',sourcePath:symbol.sourcePath||'',startLine:symbol.startLine,endLine:symbol.endLine,body:text(symbol.body,3200)});
   }
-  if(!symbols.length&&!regions.length)return{learned:false,reused:requested.length};
-  onProgress({action:'LEARN_START',path:arr(path).map(x=>x.name),nodes:[...symbols.map(x=>({id:x.symbolId,name:x.name||x.symbolId})),...regions.map(x=>({id:x.regionId,name:x.regionId}))]});
-  const call=await modelJson(client,model,LEARN_SYSTEM,{flowContext,newNodes:{symbols,regions,links:arr(links)}});addUsage(usage,call.usage);
-  applyCodeSemantics(explorer,{symbols:call.parsed?.symbols,regions:call.parsed?.regions});
+  if(!symbols.length&&!regions.length&&!externalCalls.length)return{learned:false,reused:requested.length};
+  onProgress({action:'LEARN_START',path:arr(path).map(x=>x.name),nodes:[...symbols.map(x=>({id:x.symbolId,name:x.name||x.symbolId})),...regions.map(x=>({id:x.regionId,name:x.regionId})),...externalCalls.map(x=>({id:x.externalId,name:x.qualifiedName||x.name||x.externalId}))]});
+  const call=await modelJson(client,model,LEARN_SYSTEM,{flowContext,newNodes:{symbols,regions,externalCalls,links:arr(links)}});addUsage(usage,call.usage);
+  applyCodeSemantics(explorer,{symbols:call.parsed?.symbols,regions:call.parsed?.regions,externalCalls:call.parsed?.externalCalls});
   explorer.persistSemanticMap?.();
-  log('code_local_semantics_learned',{contextNodeIds:flowContext.map(x=>x.id),symbols:arr(call.parsed?.symbols).length,regions:arr(call.parsed?.regions).length,usage:call.usage});
-  onProgress({action:'LEARN_DONE',path:arr(path).map(x=>x.name),nodeIds:[...arr(call.parsed?.symbols).map(x=>x.symbolId),...arr(call.parsed?.regions).map(x=>x.regionId)]});
+  log('code_local_semantics_learned',{contextNodeIds:flowContext.map(x=>x.id),symbols:arr(call.parsed?.symbols).length,regions:arr(call.parsed?.regions).length,externalCalls:arr(call.parsed?.externalCalls).length,usage:call.usage});
+  onProgress({action:'LEARN_DONE',path:arr(path).map(x=>x.name),nodeIds:[...arr(call.parsed?.symbols).map(x=>x.symbolId),...arr(call.parsed?.regions).map(x=>x.regionId),...arr(call.parsed?.externalCalls).map(x=>x.externalId)]});
   return{learned:true,reusedContext:flowContext.length,usage:call.usage};
 }
 
