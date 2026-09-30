@@ -315,10 +315,47 @@ export const withMapPersistence = (Base) => class MapPersistenceExplorer extends
       this.closeCompletedArcs(); this.enrichTraceability(); fs.mkdirSync(this.mapDirectory(), { recursive: true });
       const savedAt = new Date().toISOString();
       const semanticGraph = graphFromSemanticObjects(this.state.semanticObjects);
-      const learnedById = new Map(arr(this.state.learnedGraph).filter((node)=>node?.id).map((node)=>[node.id,clone(node)]));
-      for(const node of semanticGraph){const prior=learnedById.get(node.id);if(prior){node.data={...(prior.data||{}),...(node.data||{}),details:{...(prior.data?.details||{}),...(node.data?.details||{})}};const seen=new Set(arr(node.links).map((link)=>`${link.nodeId}|${link.relationship}`));for(const link of arr(prior.links))if(!seen.has(`${link.nodeId}|${link.relationship}`))node.links.push(link);}learnedById.delete(node.id);}
-      const unifiedGraph = [...semanticGraph, ...learnedById.values()];
-      const learnedMap = { version: MAP_VERSION, repoUrl: this.state.repoUrl, commit: this.state.commit, savedAt, graph: normalizeLearnedGraph(unifiedGraph), learningProgress: compactLearningProgress(this.state) };
+      const learnedGraph = arr(this.state.learnedGraph).filter((node)=>node?.id).map((node)=>clone(node));
+      const semanticById = new Map(semanticGraph.map((node)=>[node.id,node]));
+      const unifiedById = new Map();
+
+      // The canonical code-semantic graph is learnedGraph. Persist it first so
+      // Query v5 code learning survives even when semanticObjects is empty.
+      for(const node of learnedGraph) unifiedById.set(node.id,node);
+
+      // Enterprise semanticObjects may contain additional nodes/links. Merge
+      // them without discarding structural/semantic details already learned
+      // on canonical code nodes.
+      for(const node of semanticGraph){
+        const prior=unifiedById.get(node.id);
+        if(!prior){ unifiedById.set(node.id,node); continue; }
+        node.data={
+          ...(prior.data||{}),
+          ...(node.data||{}),
+          details:{
+            ...(prior.data?.details||{}),
+            ...(node.data?.details||{}),
+            structural:{
+              ...(prior.data?.details?.structural||{}),
+              ...(node.data?.details?.structural||{})
+            },
+            semantic:{
+              ...(prior.data?.details?.semantic||{}),
+              ...(node.data?.details?.semantic||{})
+            }
+          }
+        };
+        const seen=new Set(arr(node.links).map((link)=>`${link.nodeId}|${link.relationship}`));
+        for(const link of arr(prior.links)){
+          const key=`${link.nodeId}|${link.relationship}`;
+          if(!seen.has(key)){ seen.add(key); node.links.push(link); }
+        }
+        unifiedById.set(node.id,node);
+      }
+
+      const unifiedGraph=[...unifiedById.values()];
+      const persistedGraph=normalizeLearnedGraph(unifiedGraph);
+      const learnedMap = { version: MAP_VERSION, repoUrl: this.state.repoUrl, commit: this.state.commit, savedAt, graph: persistedGraph, learningProgress: compactLearningProgress(this.state) };
       writeSavedMap(this.mapFilePath(), learnedMap);
       this.state.mapPersistence = { restored: !!this._mapRestored, savedAt, repoUrl: this.state.repoUrl, commit: this.state.commit, version: MAP_VERSION };
     } catch (error) { console.warn(`[lemap] could not persist semantic map: ${error.message}`); }
