@@ -321,7 +321,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   if(!entries.length)throw new Error('Prepared call-path index contains no entry roots.');
 
   const visited=new Set(),entryTried=new Set(),stack=[],ledger=new Map(),nextFactId={value:1};
-  let finalExplanation='',finalEvidence=[];
+  let finalExplanation='',finalEvidence=[],rollingHypothesis='';
 
   const seed=async()=>{
     const remaining=entries.filter(state=>!visited.has(state.id)&&!entryTried.has(state.id));
@@ -338,7 +338,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         windows.push(learned.window);
       }
 
-      const decision=await decide({question,mode,hypothesis:'',ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit});
+      const decision=await decide({question,mode,hypothesis:rollingHypothesis,ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit});
+      rollingHypothesis=decision.hypothesis||rollingHypothesis;
       applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
       emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
       const batchEvent={step,action:'ENTRY_BATCH',batch:Math.floor(offset/ENTRY_BATCH_SIZE)+1,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,hypothesis:decision.hypothesis,explained:decision.explained};
@@ -391,8 +392,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
+    rollingHypothesis=decision.hypothesis||rollingHypothesis;
     applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
-    emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
+    emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:rollingHypothesis,explained:decision.explained});
 
     if(decision.explained){
       finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
@@ -458,10 +460,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   }
 
   if(!finalExplanation){
-    emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:stack.at(-1)?.hypothesis||''});
-    log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
+    emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||''});
+    log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
     const diag=diagnostics();log('query_v5_diagnostics',diag);
-    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the full cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
