@@ -219,6 +219,72 @@ def external_call_info(mod, call, display):
         "keywordArgs": keywords
     }
 
+def iter_scope_calls(node):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        return
+    if isinstance(node, ast.ClassDef):
+        for deco in node.decorator_list:
+            yield from iter_scope_calls(deco)
+        for base in node.bases:
+            yield from iter_scope_calls(base)
+        for keyword in node.keywords:
+            yield from iter_scope_calls(keyword.value)
+        for child in node.body:
+            yield from iter_scope_calls(child)
+        return
+    if isinstance(node, ast.Call):
+        yield node
+    for child in ast.iter_child_nodes(node):
+        yield from iter_scope_calls(child)
+
+for mod, info in modules.items():
+    seen_external_scope_calls = set()
+    for top in info["tree"].body:
+        if isinstance(top, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        scope_name = top.name if isinstance(top, ast.ClassDef) else "<module>"
+        for call in iter_scope_calls(top):
+            display = ""
+            if isinstance(call.func, ast.Name):
+                display = call.func.id
+                target = resolve_name(mod, display)
+            elif isinstance(call.func, ast.Attribute):
+                try:
+                    display = ast.unparse(call.func)
+                except Exception:
+                    display = call.func.attr
+                target = None
+            else:
+                target = None
+            if target or not display:
+                continue
+            external = external_call_info(mod, call, display)
+            if not external:
+                continue
+            line = getattr(call, "lineno", 0)
+            key = (info["path"], scope_name, line, external["qualifiedName"])
+            if key in seen_external_scope_calls:
+                continue
+            seen_external_scope_calls.add(key)
+            external_symbols.append({
+                "id": f"external-call:{info['path']}#{quote(scope_name, safe='')}@{line}:{quote(external['qualifiedName'], safe='')}",
+                "localName": display,
+                "name": external["qualifiedName"],
+                "simpleName": display.split(".")[-1],
+                "importModule": external["importModule"],
+                "importName": external["importName"],
+                "qualifiedName": external["qualifiedName"],
+                "sourcePath": info["path"],
+                "startLine": line,
+                "endLine": getattr(call, "end_lineno", line),
+                "reExported": False,
+                "kind": "external-call",
+                "scopeKind": "class-body" if isinstance(top, ast.ClassDef) else "module-body",
+                "scopeName": scope_name,
+                "callText": external["callText"],
+                "keywordArgs": external["keywordArgs"]
+            })
+
 def infer_instances(rec):
     inferred = {}
     for node in ast.walk(rec["node"]):
