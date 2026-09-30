@@ -9,6 +9,7 @@ The older documents remain useful design history and deeper notes:
 - `docs/SEMANTIC_EXPLORATION_ARCHITECTURE.md` describes the source-agnostic evidence-world and semantic-exploration principles.
 - `demo_v2/ARCHITECTURE.md` describes the concrete Scout / deterministic call-path / Pass-1 / Pass-2 learning architecture.
 - `demo_v2/PASS1_BUSINESS_ARC_DISCOVERY.md` contains additional detail on Pass-1 arc discovery.
+- `docs/CODE_LEARN_QUERY.md` defines the query-independent three-level code-semantic Learn window and the Query-v5 semantic traversal contract.
 
 This document connects those ideas into one system-level view and records the current implementation boundaries.
 
