@@ -143,7 +143,7 @@ async function decide({
   };
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
   const displayPath=currentState?[...path,currentState]:path;
-  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
+  emit({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
   return result;
 }
 
@@ -184,6 +184,56 @@ async function classifyRequest({question,client,model,usage,log}){
 
 export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model,log=()=>{},onProgress=()=>{}}){
   const usage={prompt:0,completion:0,total:0},events=[];let step=0;
+  const diagnosticState={
+    learnedNodeIds:new Set(),
+    exploredNodeIds:new Set(),
+    exploredRegions:[],
+    backtracks:0,
+    descents:0,
+    reseeds:0,
+    firstFactStep:null,
+    convergenceStep:null
+  };
+  const regionForState=(state,kind='traversed',atStep=step)=>({
+    order:diagnosticState.exploredRegions.length+1,
+    step:atStep,
+    kind,
+    id:state?.id||'',
+    symbolId:state?.symbolId||'',
+    name:state?.name||'',
+    path:state?.sourcePath||'',
+    start:Number(state?.startLine||0),
+    end:Number(state?.endLine||0)
+  });
+  const recordExplored=(states,kind='semantic_window',atStep=step)=>{
+    for(const state of dedupeStates(states)){
+      if(!state?.id||diagnosticState.exploredNodeIds.has(state.id))continue;
+      diagnosticState.exploredNodeIds.add(state.id);
+      diagnosticState.exploredRegions.push(regionForState(state,kind,atStep));
+    }
+  };
+  const emit=(event={})=>{
+    if(event.action==='LEARN_DONE')for(const id of arr(event.nodeIds))diagnosticState.learnedNodeIds.add(String(id));
+    if(event.action==='BACKTRACK')diagnosticState.backtracks+=1;
+    if(event.action==='DESCEND')diagnosticState.descents+=1;
+    if(event.action==='RESEED')diagnosticState.reseeds+=1;
+    if(event.action==='FACTS'&&diagnosticState.firstFactStep===null&&arr(event.facts).length)diagnosticState.firstFactStep=step;
+    if(event.action==='EXPLAINED'&&diagnosticState.convergenceStep===null)diagnosticState.convergenceStep=step;
+    onProgress(event);
+  };
+  const diagnostics=()=>({
+    llmTokens:{...usage},
+    semanticNodesLearned:diagnosticState.learnedNodeIds.size,
+    uniqueNodesExplored:diagnosticState.exploredNodeIds.size,
+    functionsTraversed:diagnosticState.exploredRegions.filter(x=>x.kind==='traversed').length,
+    backtracks:diagnosticState.backtracks,
+    descents:diagnosticState.descents,
+    reseeds:diagnosticState.reseeds,
+    decisionSteps:step,
+    firstFactStep:diagnosticState.firstFactStep,
+    convergenceStep:diagnosticState.convergenceStep,
+    exploredRegions:diagnosticState.exploredRegions
+  });
   const wanted=String(repoUrl||explorer.state?.repoUrl||'').trim();
   if(!wanted)throw new Error('Select a repository before querying code.');
 
@@ -198,7 +248,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   }
 
   const mode=await classifyRequest({question,client,model,usage,log});
-  onProgress({action:'MODE',mode});
+  emit({action:'MODE',mode});
 
   const grouped=explorer.topology?.topCallPaths?.(Number.MAX_SAFE_INTEGER)||[];
   if(!grouped.length)throw new Error('Prepared call-path index contains no code-flow paths.');
@@ -230,15 +280,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
 
       const windows=[];
       for(const candidate of candidates){
-        const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress});
+        const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress:emit});
+        recordExplored(arr(learned.window?.states),'entry_window',step);
         windows.push(learned.window);
       }
 
-      const decision=await decide({question,mode,hypothesis:'',ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress});
+      const decision=await decide({question,mode,hypothesis:'',ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit});
       applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
-      onProgress({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
+      emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
       const batchEvent={step,action:'ENTRY_BATCH',batch:Math.floor(offset/ENTRY_BATCH_SIZE)+1,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,hypothesis:decision.hypothesis,explained:decision.explained};
-      events.push(batchEvent);onProgress(batchEvent);
+      events.push(batchEvent);emit(batchEvent);
 
       if(decision.explained){
         const supported=ledgerEvidenceStates(ledger);
@@ -256,20 +307,22 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
 
       stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
       const event={step,action:'RESEED',state:warm[0].state.name,hypothesis:decision.hypothesis};
-      events.push(event);onProgress({...event,path:[warm[0].state.name]});
+      events.push(event);emit({...event,path:[warm[0].state.name]});
       return true;
     }
     return false;
   };
 
   const seeded=await seed();
-  if(!seeded)return {answer:'No learned entry flow produced a usable continuation.',mode,complete:false,explained:false,hypothesis:'',events,usage};
+  if(!seeded){const diag=diagnostics();log('query_v5_diagnostics',diag);return {answer:'No learned entry flow produced a usable continuation.',mode,complete:false,explained:false,hypothesis:'',events,usage,diagnostics:diag};}
 
   while(!finalExplanation&&stack.length&&step<MAX_STEPS){
     const frame=stack.at(-1),state=frame.current.state;
     visited.add(state.id);
 
-    const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress});
+    const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress:emit});
+    recordExplored([state],'traversed',step);
+    recordExplored(arr(learned.window?.states),'semantic_window',step);
     const path=[...frame.path,state];
     const next=callChildren(state,explorer,flowChildren).filter(child=>!visited.has(child.id));
 
@@ -286,7 +339,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     });
 
     applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
-    onProgress({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
+    emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
 
     if(decision.explained){
       finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
@@ -298,7 +351,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     if(warm.length){
       stack.push({path,current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
       const event={step,action:'DESCEND',from:state.name,to:warm[0].state.name,hypothesis:decision.hypothesis};
-      events.push(event);onProgress({...event,path:[...path,warm[0].state].map(x=>x.name)});
+      events.push(event);emit({...event,path:[...path,warm[0].state].map(x=>x.name)});
       continue;
     }
 
@@ -308,7 +361,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
       if(top.alternatives.length){
         top.current=top.alternatives.shift();
         const event={step,action:'BACKTRACK',to:top.current.state.name,hypothesis:top.hypothesis};
-        events.push(event);onProgress({...event,path:[...top.path,top.current.state].map(x=>x.name)});
+        events.push(event);emit({...event,path:[...top.path,top.current.state].map(x=>x.name)});
         resumed=true;
         break;
       }
@@ -320,15 +373,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
   }
 
   if(!finalExplanation){
-    onProgress({action:'SEARCH_COMPLETE',explained:false,hypothesis:stack.at(-1)?.hypothesis||''});
+    emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:stack.at(-1)?.hypothesis||''});
     log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
-    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+    const diag=diagnostics();log('query_v5_diagnostics',diag);
+    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
   }
 
-  onProgress({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
-  const ranges=await localizeExplanation({question,explanation:finalExplanation,evidenceStates:finalEvidence,client,model,usage,log});
+  emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
+  const ranges=(await localizeExplanation({question,explanation:finalExplanation,evidenceStates:finalEvidence,client,model,usage,log})).map((range,index)=>({...range,rank:index+1}));
   const locations=ranges.map(range=>`${range.sourcePath}#${range.name} ${range.startLine}-${range.endLine}${range.why?' — '+range.why:''}`).join('\n');
   const answer=finalExplanation+(locations?'\n\n'+locations:'');
   log('query_v5_complete',{complete:true,mode,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage});
-  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage,investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+  const diag=diagnostics();log('query_v5_diagnostics',diag);
+  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage,diagnostics:diag,investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
 }
