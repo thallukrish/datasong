@@ -81,7 +81,7 @@ export async function ensureLocalCodeSemantics({states,path=[],links=[],explorer
   for(const state of requested){
     const learned=!!semanticDetails(explorer,state)?.learned;
     if(state.type==='code_external'){
-      if(!learned)externalCalls.push({externalId:state.id,name:state.name,sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:text(state.callText||state.body,1200),keywordArgs:arr(state.keywordArgs)});
+      if(!learned)externalCalls.push({externalId:state.id,name:state.name,sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:text(state.callText||state.body,1200),keywordArgs:arr(state.keywordArgs),reExported:!!state.reExported,boundaryKind:state.boundaryKind||'external-call'});
       continue;
     }
     const symbol=explorer.topology?.symbolById?.get(state.symbolId);if(!symbol)continue;
