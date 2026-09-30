@@ -36,20 +36,24 @@ The exploration algorithm must not receive SWE-Explore ground truth.
 
 Each Query v5 result also exposes a `diagnostics` block. This is for LeMap development only and is not a replacement for SWE-Explore metrics.
 
-Recorded diagnostics:
+Recorded diagnostics are intentionally compact:
 
-- total LLM prompt, completion and total tokens
-- semantic nodes newly learned during the query
-- unique nodes exposed through semantic windows
-- functions actually traversed
-- ordered traversed regions
-- ordered semantic-window regions read
-- number of descents
-- number of backtracks
-- number of reseeds
-- number of Query decision steps
-- first step at which an evidence fact entered the ledger
-- convergence step
+```json
+{
+  "tokens": 1234,
+  "learned": 18,
+  "explored": 27,
+  "traversed": 4,
+  "steps": 6,
+  "backtracks": 1,
+  "reseeds": 0,
+  "firstFact": 2,
+  "convergedAt": 6,
+  "path": "merge > merge_core > merge_attrs"
+}
+```
+
+Detailed decision and learning events remain in the normal Query v5 JSONL log when deeper debugging is needed.
 
 SWE-Explore ground truth can be joined after the run to derive diagnostic values such as first core-region hit. Ground truth must never be supplied to Query itself.
 
