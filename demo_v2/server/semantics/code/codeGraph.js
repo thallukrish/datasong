@@ -22,7 +22,25 @@ export function graphNode(explorer,id){return index(explorer).get(id)||null}
 export function materializeCodeStructure(explorer,states=[]){
   const symbolById=explorer.topology?.symbolById;
   for(const state of arr(states)){
-    const symbol=symbolById?.get(state.symbolId);if(!symbol)continue;
+    const symbol=symbolById?.get(state.symbolId);
+    if(state.type==='code_external'){
+      const node=upsert(explorer,{
+        id:state.id,type:'external-call',name:state.name,
+        data:{details:{structural:{sourcePath:state.sourcePath||'',startLine:Number(state.startLine||0),endLine:Number(state.endLine||state.startLine||0),symbolId:state.symbolId||'',kind:'external-call',signature:'',importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:state.callText||'',keywordArgs:arr(state.keywordArgs)},semantic:{}}},
+        links:[]
+      });
+      if(state.parentSymbolId){
+        let parent=graphNode(explorer,state.parentSymbolId);
+        if(!parent){
+          const ps=symbolById?.get(state.parentSymbolId);
+          if(ps)parent=upsert(explorer,{id:ps.id,type:'function',name:ps.name,data:{details:{structural:{sourcePath:ps.sourcePath||'',startLine:Number(ps.startLine||0),endLine:Number(ps.endLine||0),symbolId:ps.id,kind:ps.kind||'',signature:ps.signature||''},semantic:{}}},links:[]});
+        }
+        if(parent)mergeLinks(parent,[{nodeId:state.id,relationship:'calls'}]);
+        mergeLinks(node,[{nodeId:state.parentSymbolId,relationship:'called-by'}]);
+      }
+      continue;
+    }
+    if(!symbol)continue;
     const node=upsert(explorer,{
       id:state.id,type:state.type==='code_region'?'function-region':'function',name:state.name,
       data:{details:{structural:{sourcePath:state.sourcePath||symbol.sourcePath||'',startLine:Number(state.startLine||symbol.startLine||0),endLine:Number(state.endLine||symbol.endLine||0),symbolId:state.symbolId,regionId:state.regionId||'',kind:state.kind||symbol.kind||'',signature:symbol.signature||''},semantic:{}}},
@@ -43,9 +61,10 @@ export function materializeCodeStructure(explorer,states=[]){
   return graph(explorer);
 }
 
-export function applyCodeSemantics(explorer,{symbols=[],regions=[]}={}){
+export function applyCodeSemantics(explorer,{symbols=[],regions=[],externalCalls=[]}={}){
   for(const item of arr(symbols)){const node=graphNode(explorer,item.symbolId);if(node)node.data.details.semantic={...(node.data.details.semantic||{}),purpose:item.purpose||'',effect:item.effect||'',learned:true}}
   for(const item of arr(regions)){const node=graphNode(explorer,item.regionId);if(node)node.data.details.semantic={...(node.data.details.semantic||{}),purpose:item.purpose||'',effect:item.effect||'',learned:true}}
+  for(const item of arr(externalCalls)){const node=graphNode(explorer,item.externalId);if(node)node.data.details.semantic={...(node.data.details.semantic||{}),purpose:item.purpose||'',effect:item.effect||'',learned:true}}
 }
 
 export function semanticDetails(explorer,state){return graphNode(explorer,state?.id)?.data?.details?.semantic||null}
