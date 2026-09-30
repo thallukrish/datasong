@@ -1,9 +1,8 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
-import { ensureLocalSemanticWindow, collectLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
+import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 
 export const NAV_MIN = 0.5;
-export const NAV_MAX_DROP = 0.2;
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
 const WINDOW_DEPTH = 3;
@@ -70,7 +69,7 @@ async function decide({
     h:hypothesis||'',
     e:path.map(state=>semanticNodeView(state,explorer)),
     w:currentState&&currentWindow?semanticWindowView(currentState,currentWindow,explorer):null,
-    c:candidates.map((state,index)=>[index,semanticWindowView(state,candidateWindows[index],explorer)])
+    c:candidates.map((state,index)=>currentState?[index,semanticNodeView(state,explorer)]:[index,semanticWindowView(state,candidateWindows[index],explorer)])
   };
   const call=await modelJson(client,model,DECIDE_SYSTEM,payload);addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((state,index)=>[String(index),state]));
@@ -87,7 +86,8 @@ async function decide({
     evidenceIndexes:arr(call.parsed?.e).map(Number).filter(Number.isInteger)
   };
   log('query_v5_decision',{step,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),evidenceIndexes:result.evidenceIndexes},usage:call.usage});
-  onProgress({action:'DECIDE',step,hypothesis:result.hypothesis,explained:result.explained,path:path.map(x=>x.name),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
+  const displayPath=currentState?[...path,currentState]:path;
+  onProgress({action:'DECIDE',step,hypothesis:result.hypothesis,explained:result.explained,path:displayPath.map(x=>x.name),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
   return result;
 }
 
@@ -200,16 +200,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress});
     const path=[...frame.path,state];
     const next=callChildren(state,explorer,flowChildren).filter(child=>!visited.has(child.id));
-    const candidateWindows=next.map(child=>collectLocalSemanticWindow({state:child,explorer,depth:Math.max(0,WINDOW_DEPTH-1)}));
 
     const decision=await decide({
       question,
       hypothesis:frame.hypothesis,
-      path,
+      path:frame.path,
       currentState:state,
       currentWindow:learned.window,
       candidates:next,
-      candidateWindows,
       explorer,client,model,usage,log,step:++step,onProgress
     });
 
@@ -220,7 +218,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,explorer,client,model
     }
 
     const warm=decision.picks.filter(item=>item.score>=NAV_MIN);
-    if(warm.length&&frame.current.score-warm[0].score<=NAV_MAX_DROP){
+    if(warm.length){
       stack.push({path,current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
       const event={step,action:'DESCEND',from:state.name,to:warm[0].state.name,hypothesis:decision.hypothesis};
       events.push(event);onProgress({...event,path:[...path,warm[0].state].map(x=>x.name)});
