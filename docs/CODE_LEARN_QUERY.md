@@ -2,13 +2,13 @@
 
 This document defines the code-semantic Learn / Query contract used by the code semantic profile and Query v5.
 
-The governing split is simple:
+The governing split is:
 
-> Learn builds query-independent semantic understanding. Query consumes that semantic map and decides where to explore.
+> Learn builds reusable query-independent semantic understanding. Query follows that evidence until it explains the issue.
 
 ## Learn
 
-Learn never receives the user question, query plan, relevance criteria, or desired answer.
+Learn never receives the user issue, query hypothesis, relevance criteria or desired answer.
 
 Given a function or function-region, Learn expands a local execution window through the next three call levels.
 
@@ -21,50 +21,92 @@ current node + next 3 call levels
         ↓
 learn semantics only for nodes not already learned
         ↓
-persist semantic details on those nodes
+persist semantic details
 ```
 
 The structural graph remains authoritative for symbol identity, source coordinates, calls, containment, branches and traversal.
 
-The model is used only to add query-independent semantic details such as:
+The model adds reusable semantic details such as:
 
 ```text
 purpose
 effect
 ```
 
-Already learned predecessor semantics may be supplied as execution context. They explain how execution arrived at the local window. They must not turn Learn into query-relative interpretation.
+Already learned predecessor semantics may be supplied only as execution context. Learn must not:
 
-Learn must not:
-
-- answer the user's query
-- see the query plan
+- see the user issue
+- see or create a query plan
 - score relevance
-- rank branches
-- change meaning according to the current investigation
+- rank query branches
+- change meaning for the current investigation
 
 A learned node is reusable by every later query.
 
 ## Rolling semantic window
 
-Lazy learning means LeMap does not semantically learn the whole repository up front.
+Lazy learning does not mean learning one node at a time and it does not mean learning the whole repository.
 
-Instead it maintains a learned semantic window around the area being explored.
+LeMap maintains a learned semantic window around the current execution position.
 
 ```text
 A → B → C → D
         └→ E → F
 ```
 
-If the active function is A and the window depth is 3, Learn ensures the reachable nodes inside that local window have semantic details.
+If A is the current position and the depth is 3, Learn ensures the reachable nodes inside that local window have semantic details.
 
-When exploration later moves to C or E, Learn again expands three levels from that function and learns only the newly exposed nodes.
+When Query later moves to C or E, Learn expands three levels from that new position and learns only newly exposed nodes. Previously learned semantics are reused.
 
-Previously learned semantics are reused rather than regenerated.
+## Query is an evidence chase, not a fixed plan
 
-## Query
+Query does not create a fixed list of steps that must later be fulfilled.
 
-Query owns the investigation state, not Learn.
+The initial evidence is limited, so any multi-step plan created up front would be a guess beyond what LeMap has actually seen.
+
+Instead Query maintains a rolling hypothesis from the evidence available so far.
+
+```text
+issue
+  ↓
+learned semantic evidence
+  ↓
+current hypothesis
+  ↓
+choose the most useful branch
+  ↓
+LeMap moves there
+  ↓
+Learn extends the 3-level semantic window
+  ↓
+more evidence
+  ↓
+update hypothesis
+  ↓
+repeat
+```
+
+The hypothesis follows the evidence while continually asking whether that evidence now explains the original issue.
+
+The original issue is immutable. The hypothesis may change as evidence grows.
+
+## Stop condition
+
+At every meaningful position Query asks:
+
+```text
+Does the evidence seen so far explain the issue?
+```
+
+If yes, exploration stops immediately.
+
+There is no requirement to complete an initial set of plan steps.
+
+If the issue is not yet explained, Query chooses the strongest semantic continuation.
+
+If no useful continuation exists at the current position, LeMap backtracks to a preserved alternative. If the current entry flow is exhausted, LeMap reseeds from another entry candidate.
+
+## Responsibility split
 
 LeMap internally keeps:
 
@@ -80,93 +122,103 @@ call edges
 AST containment
 ```
 
-The query model does not need those coordinates for branch selection.
-
-The query model receives a semantic projection:
+The query model sees a semantic projection:
 
 ```text
-active ordered plan step
+original issue
+current hypothesis
 learned semantic path
-learned semantic lookahead for candidate branches
+learned local semantic window
+candidate semantic branches
 ```
 
-A candidate semantic view contains the function name plus its learned purpose/effect and the learned semantic lookahead rooted at that candidate.
+Source paths, line numbers and internal symbol IDs are not needed for branch selection.
 
-Source path, line numbers and internal symbol IDs remain inside LeMap.
+They remain available inside LeMap for deterministic traversal and final localization.
 
-## Query loop
+## Query decision contract
 
-```text
-semantic entry windows
-        ↓
-Query scores the active plan step
-        ↓
-choose strongest semantic branch
-        ↓
-LeMap moves structural position
-        ↓
-Learn ensures next 3 levels are semantically learned
-        ↓
-Query sees refreshed semantic lookahead
-        ↓
-repeat / backtrack / reseed
-```
-
-Query can therefore reason over meaning while LeMap performs deterministic navigation.
-
-## Initial map
-
-When relevant entry nodes have not yet been learned, LeMap first asks Learn to populate their three-level semantic windows.
-
-For planning and entry scoring, Query then sees those learned semantic windows rather than raw source coordinates.
-
-Entry candidates are still ordered deterministically by LeMap. Query evaluates them in bounded batches and can request later batches when earlier ones have inadequate semantic signal.
-
-## Scoring contract
-
-Scoring is intentionally compact.
-
-Input is limited to:
-
-```text
-active step
-semantic path
-candidate semantic windows
-```
-
-The model returns only the strongest few candidates:
+The model makes one compact decision from the currently visible evidence.
 
 ```json
-{"p":[[candidateIndex,navigationConfidence,fulfillment]]}
+{
+  "x": 0,
+  "h": "current evidence-backed hypothesis",
+  "p": [[candidateIndex, navigationConfidence]]
+}
 ```
 
-Candidates omitted from the response are not selected.
+Where:
 
-Navigation means the semantic branch is useful to continue exploring.
+- `x = 1` means the supplied semantic evidence directly explains the issue and exploration must stop.
+- `x = 0` means more evidence is required.
+- `h` is the current evidence-backed hypothesis. When `x = 1`, it is the concise causal explanation.
+- `p` contains at most three branches worth exploring next.
 
-Fulfillment is a hard signal and applies only when the candidate root node's own learned purpose/effect already establishes the active plan step. Lookahead semantics help navigation but do not by themselves mark the root fulfilled.
+Candidates omitted from `p` are not selected.
+
+The model must not claim `x = 1` merely because a branch is plausible. The evidence must establish the causal mechanism described by the issue.
+
+## Entry exploration
+
+Entry candidates are ordered deterministically by LeMap.
+
+For each bounded entry batch, Learn first ensures each candidate has its three-level semantic window. Query then evaluates those semantic windows against the issue.
+
+If one window already explains the issue, Query stops.
+
+Otherwise Query chooses the strongest entry branch. Later entry batches are considered only when earlier evidence is inadequate or exhausted.
+
+## Branch exploration
+
+After Query selects a branch:
+
+```text
+selected function
+        ↓
+Learn ensures next 3 levels
+        ↓
+Query sees refreshed semantic window
+        ↓
+update hypothesis
+        ↓
+stop if explained
+        ↓
+otherwise select next branch
+```
+
+Only the selected position causes the semantic window to extend farther. Query does not need to eagerly learn three additional levels from every sibling before choosing among them.
+
+## Backtracking and hypothesis state
+
+LeMap owns backtracking.
+
+A hypothesis derived on a dead branch must not leak into an alternative branch. LeMap therefore restores the hypothesis associated with the earlier structural position when it backtracks.
+
+This keeps the investigation evidence-driven and prevents a discarded path from reshaping later reasoning.
 
 ## Localization
 
-Source coordinates and raw code are still retained by LeMap.
+Once semantic evidence explains the issue, LeMap uses its retained structural coordinates and raw code to localize the exact supporting source ranges.
 
-They are used when exact evidence must be localized after a plan step is semantically fulfilled.
-
-This preserves the separation:
+This is a separate task from semantic navigation:
 
 ```text
-Learn      raw code + deterministic local structure → reusable semantics
-Query      semantic map → exploration decision
+Learn      raw code + local structure → reusable semantics
+Query      issue + semantics → hypothesis / next branch / stop
 LeMap      structural state → traversal and backtracking
-Localize   selected evidence → exact source ranges
+Localize   final supporting evidence → exact source ranges
 ```
 
 ## Invariants
 
 1. Learn is query-independent.
-2. Query should not score an unlearned frontier node.
-3. Query reasons primarily over learned semantics, not repository coordinates.
-4. LeMap keeps the structural path and branch state internally.
-5. The semantic window extends lazily by three call levels from the supplied function or region.
-6. Learned semantics are persisted and reused across queries.
-7. Deterministic graph relationships are never delegated to the model.
+2. Query reasons over learned semantics rather than repository coordinates.
+3. Query has no fixed plan that must be completed.
+4. The original issue remains fixed while the hypothesis follows evidence.
+5. Query stops as soon as the evidence explains the issue.
+6. LeMap keeps structural path, alternatives and source coordinates internally.
+7. The semantic window extends lazily by three call levels from the selected position.
+8. Learned semantics are persisted and reused across queries.
+9. Wrong or exhausted paths cause backtracking, not goal rewriting.
+10. Deterministic graph relationships are never delegated to the model.
