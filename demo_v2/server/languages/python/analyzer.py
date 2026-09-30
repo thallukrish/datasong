@@ -42,6 +42,26 @@ module_defs = {}
 class_defs = {}
 class_bases = {}
 imports = {}
+external_symbols = []
+
+def exported_names(tree):
+    out = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(target, ast.Name) and target.id == "__all__" for target in targets):
+            continue
+        value = getattr(node, "value", None)
+        if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            for item in value.elts:
+                if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                    out.add(item.value)
+    return out
+
+def external_symbol_id(source_path, local_name, imported_module, imported_name, line):
+    qualified = ".".join([part for part in [imported_module, imported_name] if part])
+    return f"external:{source_path}#{quote(local_name, safe='')}@{line}:{quote(qualified, safe='')}"
 
 def params_text(node):
     try:
@@ -53,6 +73,7 @@ for mod, info in modules.items():
     module_defs[mod] = {}
     class_defs[mod] = {}
     imports[mod] = {}
+    module_exports = exported_names(info["tree"])
     for node in info["tree"].body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             q = node.name
@@ -70,7 +91,23 @@ for mod, info in modules.items():
                     class_defs[mod][node.name][child.name] = rec
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                imports[mod][alias.asname or alias.name.split(".")[0]] = {"kind": "module", "module": alias.name}
+                local_name = alias.asname or alias.name.split(".")[0]
+                imports[mod][local_name] = {"kind": "module", "module": alias.name, "line": getattr(node, "lineno", 0)}
+                if alias.name not in modules:
+                    external_symbols.append({
+                        "id": external_symbol_id(info["path"], local_name, alias.name, "", getattr(node, "lineno", 0)),
+                        "localName": local_name,
+                        "name": alias.name,
+                        "simpleName": local_name,
+                        "importModule": alias.name,
+                        "importName": "",
+                        "qualifiedName": alias.name,
+                        "sourcePath": info["path"],
+                        "startLine": getattr(node, "lineno", 0),
+                        "endLine": getattr(node, "end_lineno", getattr(node, "lineno", 0)),
+                        "reExported": local_name in module_exports,
+                        "kind": "external-module"
+                    })
         elif isinstance(node, ast.ImportFrom):
             level = int(node.level or 0)
             base_parts = mod.split(".")[:-1]
@@ -80,7 +117,27 @@ for mod, info in modules.items():
             for alias in node.names:
                 if alias.name == "*":
                     continue
-                imports[mod][alias.asname or alias.name] = {"kind": "symbol", "module": imported_mod, "name": alias.name}
+                local_name = alias.asname or alias.name
+                imports[mod][local_name] = {"kind": "symbol", "module": imported_mod, "name": alias.name, "line": getattr(node, "lineno", 0)}
+                internal_symbol = (
+                    alias.name in module_defs.get(imported_mod, {}) or
+                    alias.name in class_defs.get(imported_mod, {})
+                )
+                if imported_mod not in modules and not internal_symbol:
+                    external_symbols.append({
+                        "id": external_symbol_id(info["path"], local_name, imported_mod, alias.name, getattr(node, "lineno", 0)),
+                        "localName": local_name,
+                        "name": local_name,
+                        "simpleName": local_name,
+                        "importModule": imported_mod,
+                        "importName": alias.name,
+                        "qualifiedName": ".".join([part for part in [imported_mod, alias.name] if part]),
+                        "sourcePath": info["path"],
+                        "startLine": getattr(node, "lineno", 0),
+                        "endLine": getattr(node, "end_lineno", getattr(node, "lineno", 0)),
+                        "reExported": local_name in module_exports,
+                        "kind": "external-symbol"
+                    })
 
 def class_record(mod, class_name):
     return class_defs.get(mod, {}).get(class_name)
@@ -304,4 +361,4 @@ for rec in defs.values():
         "regions": regions
     })
 
-print(json.dumps({"version": 1, "symbols": symbols}, ensure_ascii=False))
+print(json.dumps({"version": 2, "symbols": symbols, "externalSymbols": external_symbols}, ensure_ascii=False))
