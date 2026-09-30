@@ -90,6 +90,44 @@ The hypothesis follows the evidence while continually asking whether that eviden
 
 The original issue is immutable. The hypothesis may change as evidence grows.
 
+
+## Evidence ledger
+
+Query keeps a cumulative evidence ledger separate from the current branch hypothesis.
+
+The ledger contains facts that have been established from learned semantic evidence:
+
+```text
+issue
+  ↓
+established facts       ← cumulative across branches
+  ↓
+current hypothesis      ← branch-local and disposable
+  ↓
+current semantic window
+```
+
+Backtracking restores the earlier branch hypothesis, but it does not erase supported facts.
+
+A fact may move through these states:
+
+```text
+supported
+→ reinforced
+
+or
+
+supported
+→ disputed
+→ resolved by later evidence
+```
+
+Contradicting evidence must never silently delete an earlier fact. It marks that fact disputed until later evidence resolves the contradiction.
+
+The ledger is query-local. It is not written into Learn semantics merely because one investigation established it.
+
+This prevents repeated rediscovery while still allowing the investigation to change direction.
+
 ## Stop condition
 
 At every meaningful position Query asks:
@@ -144,16 +182,22 @@ The model makes one compact decision from the currently visible evidence.
 {
   "x": 0,
   "h": "current evidence-backed hypothesis",
+  "a": [["new established fact", [evidenceSlot]]],
+  "d": [factId],
   "p": [[candidateIndex, navigationConfidence]]
 }
 ```
 
 Where:
 
-- `x = 1` means the supplied semantic evidence directly explains the issue and exploration must stop.
+- `x = 1` means the accumulated supported facts plus current semantic evidence directly explain the issue and exploration must stop.
 - `x = 0` means more evidence is required.
-- `h` is the current evidence-backed hypothesis. When `x = 1`, it is the concise causal explanation.
+- `h` is the current branch hypothesis. When `x = 1`, it is the concise causal explanation.
+- `a` adds newly established facts and cites the supplied evidence slots that support them.
+- `d` marks previously established fact IDs as disputed when newly observed evidence contradicts them.
 - `p` contains at most three branches worth exploring next.
+
+The model receives the current ledger on every decision. A disputed fact cannot be used as support for `x = 1` until later evidence resolves or replaces it.
 
 Candidates omitted from `p` are not selected.
 
@@ -189,13 +233,23 @@ otherwise select next branch
 
 Only the selected position causes the semantic window to extend farther. Query does not need to eagerly learn three additional levels from every sibling before choosing among them.
 
-## Backtracking and hypothesis state
+## Backtracking, memory and hypothesis state
 
 LeMap owns backtracking.
 
 A hypothesis derived on a dead branch must not leak into an alternative branch. LeMap therefore restores the hypothesis associated with the earlier structural position when it backtracks.
 
-This keeps the investigation evidence-driven and prevents a discarded path from reshaping later reasoning.
+The cumulative evidence ledger is different. Supported facts remain available after backtracking because they were established from observed evidence, not from the branch hypothesis.
+
+```text
+backtrack
+→ restore earlier hypothesis
+→ preserve supported facts
+→ preserve disputed facts as disputed
+→ explore alternative branch with accumulated evidence
+```
+
+This is the anti-wandering memory of Query.
 
 ## Localization
 
@@ -221,4 +275,6 @@ Localize   final supporting evidence → exact source ranges
 7. The semantic window extends lazily by three call levels from the selected position.
 8. Learned semantics are persisted and reused across queries.
 9. Wrong or exhausted paths cause backtracking, not goal rewriting.
-10. Deterministic graph relationships are never delegated to the model.
+10. Evidence-backed facts survive backtracking; only branch hypotheses roll back.
+11. Contradictions dispute facts rather than silently deleting them.
+12. Deterministic graph relationships are never delegated to the model.
