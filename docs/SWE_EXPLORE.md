@@ -96,4 +96,12 @@ xarray/core/merge.py
 xarray/tests/test_merge.py
 ```
 
+For this SWE-bench instance, PR 4629 fixes issue 4627 and the pre-fix base commit is:
+
+```text
+a41edc7bf5302f2ea327943c0c48c532b12009bc
+```
+
+Use that snapshot. Do not run the benchmark against current xarray or the repaired commit.
+
 Run LeMap only from the issue and repository snapshot. Compare its returned ranked regions with SWE-Explore ground truth afterward.
