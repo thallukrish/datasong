@@ -103,6 +103,7 @@ for mod, info in modules.items():
                         "importName": "",
                         "qualifiedName": alias.name,
                         "sourcePath": info["path"],
+                        "moduleName": mod,
                         "startLine": getattr(node, "lineno", 0),
                         "endLine": getattr(node, "end_lineno", getattr(node, "lineno", 0)),
                         "reExported": local_name in module_exports,
@@ -135,11 +136,17 @@ for mod, info in modules.items():
                         "importName": alias.name,
                         "qualifiedName": ".".join([part for part in [imported_mod, alias.name] if part]),
                         "sourcePath": info["path"],
+                        "moduleName": mod,
                         "startLine": getattr(node, "lineno", 0),
                         "endLine": getattr(node, "end_lineno", getattr(node, "lineno", 0)),
                         "reExported": local_name in module_exports,
                         "kind": "external-symbol"
                     })
+
+external_export_by_module_name = {}
+for item in external_symbols:
+    if item.get("reExported") and item.get("moduleName") and item.get("localName"):
+        external_export_by_module_name[(item["moduleName"], item["localName"])] = item
 
 def class_record(mod, class_name):
     return class_defs.get(mod, {}).get(class_name)
@@ -189,13 +196,23 @@ def external_call_info(mod, call, display):
     qualified = display
     imported_module = ""
     imported_name = ""
+    target_external_id = ""
+    via_module = ""
     if isinstance(call.func, ast.Name):
         imp = imports.get(mod, {}).get(call.func.id)
         if imp:
             if imp["kind"] == "symbol":
                 imported_module = imp["module"]
                 imported_name = imp["name"]
-                qualified = ".".join([part for part in [imported_module, imported_name] if part])
+                reexport = external_export_by_module_name.get((imported_module, imported_name))
+                if reexport:
+                    via_module = imported_module
+                    imported_module = reexport.get("importModule", imported_module)
+                    imported_name = reexport.get("importName", imported_name)
+                    qualified = reexport.get("qualifiedName") or ".".join([part for part in [imported_module, imported_name] if part])
+                    target_external_id = reexport.get("id", "")
+                else:
+                    qualified = ".".join([part for part in [imported_module, imported_name] if part])
             elif imp["kind"] == "module":
                 imported_module = imp["module"]
                 qualified = imported_module
@@ -218,7 +235,9 @@ def external_call_info(mod, call, display):
         "importName": imported_name,
         "qualifiedName": qualified,
         "callText": call_text,
-        "keywordArgs": keywords
+        "keywordArgs": keywords,
+        "targetExternalId": target_external_id,
+        "viaModule": via_module
     }
 
 def iter_scope_calls(node):
@@ -284,7 +303,9 @@ for mod, info in modules.items():
                 "scopeKind": "class-body" if isinstance(top, ast.ClassDef) else "module-body",
                 "scopeName": scope_name,
                 "callText": external["callText"],
-                "keywordArgs": external["keywordArgs"]
+                "keywordArgs": external["keywordArgs"],
+                "targetExternalId": external.get("targetExternalId", ""),
+                "viaModule": external.get("viaModule", "")
             })
 
 def infer_instances(rec):
