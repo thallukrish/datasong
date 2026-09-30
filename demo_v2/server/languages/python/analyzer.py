@@ -110,10 +110,12 @@ for mod, info in modules.items():
                     })
         elif isinstance(node, ast.ImportFrom):
             level = int(node.level or 0)
-            base_parts = mod.split(".")[:-1]
-            if level:
-                base_parts = base_parts[:max(0, len(base_parts) - level + 1)]
-            imported_mod = ".".join([*base_parts, node.module or ""]).strip(".")
+            if level == 0:
+                imported_mod = str(node.module or "").strip(".")
+            else:
+                package_parts = mod.split(".")[:-1]
+                base_parts = package_parts[:max(0, len(package_parts) - level + 1)]
+                imported_mod = ".".join([*base_parts, node.module or ""]).strip(".")
             for alias in node.names:
                 if alias.name == "*":
                     continue
