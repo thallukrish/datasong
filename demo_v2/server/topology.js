@@ -229,6 +229,7 @@ export class CodeTopology {
     this.nameIndex = new Map();
     this.callers = new Map();
     this.repositoryReadme = '';
+    this.targetCommit = '';
   }
 
   async prepare(repoUrl) {
@@ -236,17 +237,25 @@ export class CodeTopology {
     await fs.mkdir(this.cacheRoot, { recursive: true });
     this.repoDir = path.join(this.cacheRoot, repoKey(this.repoUrl));
     const gitDir = path.join(this.repoDir, '.git');
+    const requestedCommit = String(this.targetCommit || '').trim();
     if (!(await safeStat(gitDir))) {
       await fs.rm(this.repoDir, { recursive: true, force: true });
       await simpleGit().clone(this.repoUrl, this.repoDir, ['--depth', '1']);
+    }
+
+    const git = simpleGit(this.repoDir);
+    if (requestedCommit) {
+      await git.fetch(['origin', requestedCommit, '--depth', '1']);
+      await git.reset(['--hard', 'FETCH_HEAD']);
     } else {
-      const git = simpleGit(this.repoDir);
       await git.fetch(['origin', '--depth', '1']);
       await git.reset(['--hard', 'FETCH_HEAD']);
     }
 
-    const git = simpleGit(this.repoDir);
     this.commit = (await git.revparse(['HEAD'])).trim();
+    if (requestedCommit && !this.commit.toLowerCase().startsWith(requestedCommit.toLowerCase())) {
+      throw new Error(`Prepared revision ${this.commit} does not match requested commit ${requestedCommit}.`);
+    }
     const tracked = (await git.raw(['ls-files'])).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
     this.files = tracked.filter(extensionLooksCode);
     const readmeRel = tracked.find((rel) => /^readme(?:\.[^/]+)?$/i.test(rel));
