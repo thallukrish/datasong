@@ -108,13 +108,33 @@ function sameSupportWindow(a=[],b=[]){
   for(const id of left)if(right.has(id))return true;
   return false;
 }
-function substantiallySameFact(left,right){
+function supportRangesOverlap(a=[],b=[]){
+  for(const left of arr(a)){
+    if(!left?.symbolId)continue;
+    const ls=Number(left.startLine||0),le=Number(left.endLine||left.startLine||0);
+    if(!ls||!le)continue;
+    for(const right of arr(b)){
+      if(right?.symbolId!==left.symbolId)continue;
+      const rs=Number(right.startLine||0),re=Number(right.endLine||right.startLine||0);
+      if(!rs||!re)continue;
+      if(ls<=re&&rs<=le)return true;
+    }
+  }
+  return false;
+}
+function factSimilarity(left,right){
   const a=factTokens(left),b=factTokens(right);
-  if(!a.size||!b.size)return false;
+  if(!a.size||!b.size)return {containment:0,jaccard:0};
   let overlap=0;
   for(const token of a)if(b.has(token))overlap+=1;
-  const containment=overlap/Math.min(a.size,b.size);
-  const jaccard=overlap/(a.size+b.size-overlap);
+  return {
+    containment:overlap/Math.min(a.size,b.size),
+    jaccard:overlap/(a.size+b.size-overlap)
+  };
+}
+function substantiallySameFact(left,right,{rangeOverlap=false}={}){
+  const {containment,jaccard}=factSimilarity(left,right);
+  if(rangeOverlap)return containment>=0.65&&jaccard>=0.4;
   return containment>=0.8&&jaccard>=0.55;
 }
 
@@ -125,10 +145,13 @@ function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],sup
   if(!boundSupport.length)return;
   for(const value of arr(additions)){
     const factText=text(value,420);if(!factText)continue;
-    const existing=[...ledger.values()].find((fact)=>
-      fact.text.toLowerCase()===factText.toLowerCase()||
-      (sameSupportWindow(fact.supportStates,boundSupport)&&substantiallySameFact(fact.text,factText))
-    );
+    const existing=[...ledger.values()].find((fact)=>{
+      if(fact.text.toLowerCase()===factText.toLowerCase())return true;
+      const sameWindow=sameSupportWindow(fact.supportStates,boundSupport);
+      if(!sameWindow)return false;
+      const rangeOverlap=supportRangesOverlap(fact.supportStates,boundSupport);
+      return substantiallySameFact(fact.text,factText,{rangeOverlap});
+    });
     if(existing){
       existing.status='supported';
       existing.supportStates=dedupeStates([...(existing.supportStates||[]),...boundSupport]);
