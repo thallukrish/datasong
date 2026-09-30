@@ -26,7 +26,7 @@ export function materializeCodeStructure(explorer,states=[]){
     if(state.type==='code_external'){
       const node=upsert(explorer,{
         id:state.id,type:'external-call',name:state.name,
-        data:{details:{structural:{sourcePath:state.sourcePath||'',startLine:Number(state.startLine||0),endLine:Number(state.endLine||state.startLine||0),symbolId:state.symbolId||'',kind:'external-call',signature:'',importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:state.callText||'',keywordArgs:arr(state.keywordArgs)},semantic:{}}},
+        data:{details:{structural:{sourcePath:state.sourcePath||'',startLine:Number(state.startLine||0),endLine:Number(state.endLine||state.startLine||0),symbolId:state.symbolId||'',kind:state.boundaryKind||'external-call',signature:'',importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:state.callText||'',keywordArgs:arr(state.keywordArgs),reExported:!!state.reExported,scopeKind:state.scopeKind||'',scopeName:state.scopeName||''},semantic:{}}},
         links:[]
       });
       if(state.parentSymbolId){
