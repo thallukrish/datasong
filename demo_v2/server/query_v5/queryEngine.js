@@ -8,15 +8,23 @@ const WINDOW_DEPTH = 3;
 
 const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the user reports a bug, failure, regression, incorrect behavior, unexpected result, or asks what caused/why something went wrong. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. Return {"mode":"causal"} or {"mode":"query"} only.`;
 
-const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics only. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. h is the current branch hypothesis.
+const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics and the current function body when supplied. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. h is the rolling evidence-backed hypothesis.
 
-Reason causally, not by topical relevance. At every position ask whether the behavior represented by the full traversed path plus supported facts could actually produce the observed issue. Rank candidate continuations by how plausibly they continue that causal chain toward the failure mechanism. Tests, config helpers, validators, or similarly related code should score low or be omitted unless execution through them could itself cause the reported behavior.
+Reason causally, not by topical relevance. The issue may contain multiple distinct or related failure components. Do not require one hypothesis to explain every component at once. A strong hypothesis may close one part of the issue while other parts remain unresolved.
 
-When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. Do not wait until the final root cause before recording facts. During entry selection, where several independent windows are being compared and no current traversal window exists, leave a empty. Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId].
+At every current function ask in this order:
+1. Can this function itself, based on its semantics and b, concretely cause the whole issue or one identifiable part of it?
+2. If yes and no downstream call is needed to establish that mechanism, set k=1 and put the concise closed cause in g. Do not continue into child calls merely because they exist.
+3. Set x=1 only when the cumulative supported evidence, including any already closed causes in f, explains the whole reported issue. Otherwise x=0 and continue investigating unresolved parts.
+4. Only rank child continuations when further execution is actually needed to establish an unresolved cause.
 
-Set x=1 only when the supported ledger facts plus the traversed semantic path establish a coherent causal mechanism that could produce the reported behavior. h must then state that causal mechanism concisely. Otherwise x=0 and h is the current evidence-backed causal hypothesis.
+Tests, config helpers, validators, or similarly related code should score low or be omitted unless execution through them could itself cause the reported behavior.
 
-p is [[candidateIndex,causalScore]] for at most 3 continuations, where causalScore means "how likely is following this branch to complete a causal explanation of the reported issue?", not generic relevance. Do not invent missing evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
+When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. If k=1, also include the closed causal statement in a so it becomes durable evidence. Do not return evidence IDs or slot IDs. During entry selection, where several independent windows are being compared and no current function body exists, leave a empty and set k=0. Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId].
+
+h is always the best rolling hypothesis from all evidence seen so far. It may describe one solved component plus unresolved remainder. g is only the cause closed at the current function.
+
+p is [[candidateIndex,causalScore]] for at most 3 continuations, where causalScore means how likely following that branch is to complete an unresolved causal explanation. Do not invent missing evidence. Return {"x":0,"k":0,"g":"","h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 
 const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. h is the current answer hypothesis.
 
@@ -121,6 +129,13 @@ async function decide({
     h:hypothesis||'',
     f:ledgerView(ledger),
     s:slots,
+    b:currentState?{
+      name:currentState.name,
+      sourcePath:currentState.sourcePath,
+      startLine:Number(currentState.startLine||0),
+      endLine:Number(currentState.endLine||0),
+      body:text(currentState.body||'',4200)
+    }:null,
     c:candidates.map((state,index)=>currentState?[index,semanticNodeView(state,explorer)]:[index,index])
   };
   const system=mode==='causal'?CAUSAL_DECIDE_SYSTEM:QUERY_DECIDE_SYSTEM;
@@ -134,6 +149,8 @@ async function decide({
   picks.sort((a,b)=>b.score-a.score);
   const result={
     explained:Number(call.parsed?.x||0)===1,
+    causeClosed:currentState&&Number(call.parsed?.k||0)===1,
+    closedCause:text(call.parsed?.g||'',700),
     hypothesis:text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:currentState?arr(call.parsed?.a):[],
@@ -141,9 +158,9 @@ async function decide({
     resolutions:arr(call.parsed?.r),
     supportStates:currentState&&currentWindow?dedupeStates(arr(currentWindow.states)):[]
   };
-  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
+  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
   const displayPath=currentState?[...path,currentState]:path;
-  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
+  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
   return result;
 }
 
