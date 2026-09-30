@@ -125,6 +125,43 @@ def resolve_name(mod, name):
             return resolve_method(imp["module"], imp["name"], "__init__")
     return None
 
+def external_call_info(mod, call, display):
+    imp = None
+    qualified = display
+    imported_module = ""
+    imported_name = ""
+    if isinstance(call.func, ast.Name):
+        imp = imports.get(mod, {}).get(call.func.id)
+        if imp:
+            if imp["kind"] == "symbol":
+                imported_module = imp["module"]
+                imported_name = imp["name"]
+                qualified = ".".join([part for part in [imported_module, imported_name] if part])
+            elif imp["kind"] == "module":
+                imported_module = imp["module"]
+                qualified = imported_module
+    elif isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+        imp = imports.get(mod, {}).get(call.func.value.id)
+        if imp and imp["kind"] == "module":
+            imported_module = imp["module"]
+            imported_name = call.func.attr
+            qualified = f"{imported_module}.{call.func.attr}"
+    if not imp:
+        return None
+    try:
+        call_text = ast.unparse(call)
+    except Exception:
+        call_text = display
+    keywords = [kw.arg for kw in call.keywords if kw.arg]
+    return {
+        "external": True,
+        "importModule": imported_module,
+        "importName": imported_name,
+        "qualifiedName": qualified,
+        "callText": call_text,
+        "keywordArgs": keywords
+    }
+
 def infer_instances(rec):
     inferred = {}
     for node in ast.walk(rec["node"]):
@@ -203,9 +240,14 @@ for rec in defs.values():
                 refs.append({"name": display or target["qualified"], "simpleName": target["name"], "relation": "calls", "targetSymbolId": target_id, "resolution": "python_ast", "line": getattr(call, "lineno", 0), "endLine": getattr(call, "end_lineno", getattr(call, "lineno", 0))})
                 seen_refs.add(key)
         elif display:
-            key = ("calls", display)
+            external = external_call_info(rec["module"], call, display)
+            line = getattr(call, "lineno", 0)
+            key = ("calls", display, line)
             if key not in seen_refs:
-                refs.append({"name": display, "simpleName": display.split(".")[-1], "relation": "calls", "resolution": "unresolved", "line": getattr(call, "lineno", 0), "endLine": getattr(call, "end_lineno", getattr(call, "lineno", 0))})
+                ref = {"name": display, "simpleName": display.split(".")[-1], "relation": "calls", "resolution": "external_import" if external else "unresolved", "line": line, "endLine": getattr(call, "end_lineno", line)}
+                if external:
+                    ref.update(external)
+                refs.append(ref)
                 seen_refs.add(key)
 
     signature = ("async " if isinstance(node, ast.AsyncFunctionDef) else "") + f"def {rec['qualified']}({params_text(node)}):"
