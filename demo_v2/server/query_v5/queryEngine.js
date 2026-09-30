@@ -290,7 +290,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   }
 
   const rankedEntries=entryCandidates(grouped,explorer.topology?.symbolById||new Map());
-  const entries=rankedEntries.map(entry=>explorer.topology.symbolById.get(entry.symbolId)).filter(Boolean).map(symbol=>symbolState(symbol));
+  const sourceEntries=rankedEntries
+    .filter((entry)=>!String(entry.boundaryKind||'').startsWith('test_'))
+    .map((entry)=>explorer.topology.symbolById.get(entry.symbolId))
+    .filter(Boolean)
+    .map((symbol)=>symbolState(symbol));
+  const testEntries=rankedEntries
+    .filter((entry)=>String(entry.boundaryKind||'').startsWith('test_'))
+    .map((entry)=>explorer.topology.symbolById.get(entry.symbolId))
+    .filter(Boolean)
+    .map((symbol)=>symbolState(symbol));
+  const entries=sourceEntries.length?sourceEntries:testEntries;
   if(!entries.length)throw new Error('Prepared call-path index contains no entry roots.');
 
   const visited=new Set(),entryTried=new Set(),stack=[],ledger=new Map(),nextFactId={value:1};
