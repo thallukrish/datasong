@@ -382,6 +382,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   emit({action:'MODE',mode});
 
   const entrySelection=await selectCodeEntries({question,mode,topology:explorer.topology,client,model,usage,log});
+  const bestEntry=entrySelection.candidates[0];
+  console.log(`[entry-search] ${entrySelection.plan.strategy} patterns=${entrySelection.plan.patterns.length} hits=${entrySelection.hits.length} candidates=${entrySelection.candidates.length}${bestEntry?` best=${bestEntry.sourcePath}#${bestEntry.name||bestEntry.symbolId||bestEntry.externalId||'match'}:${bestEntry.startLine}`:''}`);
   emit({action:'ENTRY_SELECTION',strategy:entrySelection.plan.strategy,reason:entrySelection.plan.reason,patterns:entrySelection.plan.patterns,candidates:entrySelection.candidates.map(item=>({name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,score:item.score,test:item.test}))});
 
   const grouped=explorer.topology?.topCallPaths?.(Number.MAX_SAFE_INTEGER)||[];
