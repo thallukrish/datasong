@@ -170,10 +170,11 @@ def build():
   );
   const condition = (result.constructs || []).find((item) => item.constructType === 'condition');
 
-  assert.equal(result.version, 3);
+  assert.equal(result.version, 4);
   assert.equal(call?.parentFunction, 'build');
   assert.deepEqual(call?.keywordArgs, ['default', 'initial']);
   assert.match(call?.snippet || '', /Field\(default=['"]x['"], initial=/);
+  assert.match(call?.canonicalSnippet || '', /Field\(default=['"]x['"], initial=/);
   assert.match(condition?.snippet || '', /if value is not None/);
 });
 
@@ -210,4 +211,25 @@ test('CodeTopology reuses complete construct index snapshots by commit', async (
 
   assert.equal(topology.constructIndexMeta?.reused, false);
   assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Other'));
+});
+
+
+test('Python AST canonical snippet normalizes spacing while preserving original source snippet', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-spacing-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'main.py'), `
+from pydantic import Field
+
+def build():
+    return Field ( initial = "x" )
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
+  const call = (result.constructs || []).find((item) => item.constructType === 'call' && item.name === 'Field');
+
+  assert.equal(call?.name, 'Field');
+  assert.deepEqual(call?.keywordArgs, ['initial']);
+  assert.match(call?.snippet || '', /Field \( initial = "x" \)/);
+  assert.equal(call?.canonicalSnippet, "Field(initial='x')");
 });
