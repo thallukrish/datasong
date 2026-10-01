@@ -9,15 +9,16 @@ const WINDOW_DEPTH = 3;
 
 const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the user reports a bug, failure, regression, incorrect behavior, unexpected result, or asks what caused/why something went wrong. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. Return {"mode":"causal"} or {"mode":"query"} only.`;
 
-const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics and the current function body when supplied. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. h is the rolling evidence-backed hypothesis.
+const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics and the current function body when supplied. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. m is an optional regex-selected source region inside the current function, including the matched source and its learned semantics. h is the rolling evidence-backed hypothesis.
 
 Reason causally, not by topical relevance. The issue may contain multiple distinct or related failure components. Do not require one hypothesis to explain every component at once. A strong hypothesis may close one part of the issue while other parts remain unresolved.
 
 At every current function ask in this order:
-1. Can this function itself, based on its semantics and b, concretely cause the whole issue or one identifiable part of it?
-2. If yes and no downstream call is needed to establish that mechanism, set k=1 and put the concise closed cause in g. Do not continue into child calls merely because they exist.
-3. Set x=1 only when the cumulative supported evidence, including any already closed causes in f, explains the whole reported issue. Otherwise x=0 and continue investigating unresolved parts.
-4. Only rank child continuations when further execution is actually needed to establish an unresolved cause.
+1. If m exists, examine that highlighted matched region first, together with its surrounding learned semantics and b. Then ask whether this function itself can concretely cause the whole issue or one identifiable part of it.
+2. Can this function itself, based on its semantics and b, concretely cause the whole issue or one identifiable part of it?
+3. If yes and no downstream call is needed to establish that mechanism, set k=1 and put the concise closed cause in g. Do not continue into child calls merely because they exist.
+4. Set x=1 only when the cumulative supported evidence, including any already closed causes in f, explains the whole reported issue. Otherwise x=0 and continue investigating unresolved parts.
+5. Only rank child continuations when further execution is actually needed to establish an unresolved cause.
 
 Tests, config helpers, validators, or similarly related code should score low or be omitted unless execution through them could itself cause the reported behavior.
 
@@ -42,6 +43,34 @@ const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and ra
 
 function symbolState(symbol, parent=null) {
   return { id:symbol.id, type:'code_symbol', name:symbol.name, symbolId:symbol.id, sourcePath:symbol.sourcePath||'', startLine:symbol.startLine||0, endLine:symbol.endLine||0, body:String(symbol.body||''), parent, parentSymbolId:parent };
+}
+
+function regexMatchRegion(symbol,candidate){
+  const matches=arr(candidate?.matches).filter(match=>Number(match?.line||0)>0);
+  if(!symbol||!matches.length)return null;
+  const matchStart=Math.min(...matches.map(match=>Number(match.line)));
+  const matchEnd=Math.max(...matches.map(match=>Number(match.line)));
+  const start=Math.max(Number(symbol.startLine||matchStart),matchStart-2);
+  const end=Math.min(Number(symbol.endLine||matchEnd),matchEnd+2);
+  const bodyLines=String(symbol.body||'').split(/\r?\n/);
+  const offset=Math.max(0,start-Number(symbol.startLine||start));
+  const count=Math.max(1,end-start+1);
+  const body=bodyLines.slice(offset,offset+count).join('\n');
+  return {
+    id:`regex-region:${symbol.id}:${start}:${end}`,
+    regionId:`regex-region:${symbol.id}:${start}:${end}`,
+    type:'code_region',
+    name:`${symbol.name} [regex match]`,
+    symbolId:symbol.id,
+    sourcePath:symbol.sourcePath||'',
+    startLine:start,
+    endLine:end,
+    body,
+    parent:symbol.id,
+    parentSymbolId:symbol.id,
+    kind:'regex-match',
+    matchedLines:matches.map(match=>({line:Number(match.line),text:String(match.text||''),pattern:String(match.pattern||'')}))
+  };
 }
 
 function externalBoundaryState(boundary){
@@ -107,7 +136,13 @@ function semanticWindowView(rootState,window,explorer){
       .filter(Boolean);
     return [...semanticNodeView(state,explorer),children];
   };
-  return visit(rootState.id)||[...semanticNodeView(rootState,explorer),[]];
+  const tree=visit(rootState.id)||[...semanticNodeView(rootState,explorer),[]];
+  const highlights=arr(window?.highlights).map(region=>({
+    name:region.name,
+    source:arr(region.matchedLines).map(match=>[match.line,match.text,match.pattern]),
+    semantic:semanticNodeView(region,explorer)
+  }));
+  return highlights.length?[...tree,{regexMatches:highlights}]:tree;
 }
 
 function dedupeStates(states=[]){
@@ -216,6 +251,14 @@ async function decide({
       endLine:Number(currentState.endLine||0),
       body:text(currentState.body||'',4200)
     }:null,
+    m:currentState&&currentWindow?.highlights?.length?arr(currentWindow.highlights).map(region=>({
+      name:region.name,
+      sourcePath:region.sourcePath,
+      startLine:Number(region.startLine||0),
+      endLine:Number(region.endLine||0),
+      matchedLines:arr(region.matchedLines),
+      semantic:semanticNodeView(region,explorer)
+    })):[],
     c:candidates.map((state,index)=>currentState?[index,semanticNodeView(state,explorer)]:[index,index])
   };
   const system=mode==='causal'?CAUSAL_DECIDE_SYSTEM:QUERY_DECIDE_SYSTEM;
@@ -421,7 +464,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const selectedEntries=dedupeStates(entrySelection.candidates.map((candidate)=>{
     if(candidate.symbolId){
       const symbol=explorer.topology.symbolById.get(candidate.symbolId);
-      return symbol?symbolState(symbol):null;
+      if(!symbol)return null;
+      const state=symbolState(symbol);
+      const matchRegion=regexMatchRegion(symbol,candidate);
+      if(matchRegion)state.regexMatchRegion=matchRegion;
+      return state;
     }
     if(candidate.externalId){
       const boundary=externalById.get(String(candidate.externalId));
@@ -451,7 +498,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
       const windows=[];
       for(const candidate of candidates){
-        const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress:emit});
+        const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,highlightRegions:candidate.regexMatchRegion?[candidate.regexMatchRegion]:[],explorer,client,model,usage,log,onProgress:emit});
         recordExplored(arr(learned.window?.states),'entry_window',step);
         windows.push(learned.window);
       }
@@ -493,7 +540,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const frame=stack.at(-1),state=frame.current.state;
     visited.add(state.id);
 
-    const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress:emit});
+    const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,highlightRegions:state.regexMatchRegion?[state.regexMatchRegion]:[],explorer,client,model,usage,log,onProgress:emit});
     recordTraversed(state,step);
     recordExplored(arr(learned.window?.states),'semantic_window',step);
     const path=[...frame.path,state];
