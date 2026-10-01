@@ -147,3 +147,31 @@ class Settings:
   assert.deepEqual(call?.keywordArgs, ['default', 'initial']);
 });
 
+
+
+test('Python AST analyzer emits searchable construct metadata for calls and conditions', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-construct-index-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'main.py'), `
+from pydantic.fields import Field
+
+def build():
+    value = Field(default="x", initial=lambda: "y")
+    if value is not None:
+        return value
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
+  const call = (result.constructs || []).find((item) =>
+    item.constructType === 'call' &&
+    item.name === 'Field'
+  );
+  const condition = (result.constructs || []).find((item) => item.constructType === 'condition');
+
+  assert.equal(result.version, 3);
+  assert.equal(call?.parentFunction, 'build');
+  assert.deepEqual(call?.keywordArgs, ['default', 'initial']);
+  assert.match(call?.snippet || '', /Field\(default=['"]x['"], initial=/);
+  assert.match(condition?.snippet || '', /if value is not None/);
+});
