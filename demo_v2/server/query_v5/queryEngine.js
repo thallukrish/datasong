@@ -1,6 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
+import { selectCodeEntries } from './codeEntrySelector.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
@@ -380,6 +381,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const mode=await classifyRequest({question,client,model,usage,log});
   emit({action:'MODE',mode});
 
+  const entrySelection=await selectCodeEntries({question,mode,topology:explorer.topology,client,model,usage,log});
+  emit({action:'ENTRY_SELECTION',strategy:entrySelection.plan.strategy,reason:entrySelection.plan.reason,patterns:entrySelection.plan.patterns,candidates:entrySelection.candidates.map(item=>({name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,score:item.score,test:item.test}))});
+
   const grouped=explorer.topology?.topCallPaths?.(Number.MAX_SAFE_INTEGER)||[];
   if(!grouped.length)throw new Error('Prepared call-path index contains no code-flow paths.');
   explorer.state.semanticProfile='code';
@@ -411,17 +415,35 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     }));
   const pool=[...(sourceEntries.length?sourceEntries:testEntries),...externalEntries]
     .sort((a,b)=>b.priority-a.priority||String(a.state.name||'').localeCompare(String(b.state.name||'')));
-  const entries=pool.map((item)=>item.state);
+  const externalById=new Map(arr(explorer.topology?.externalSymbols).map(boundary=>[String(boundary?.id||''),boundary]));
+  const selectedEntries=dedupeStates(entrySelection.candidates.map((candidate)=>{
+    if(candidate.symbolId){
+      const symbol=explorer.topology.symbolById.get(candidate.symbolId);
+      return symbol?symbolState(symbol):null;
+    }
+    if(candidate.externalId){
+      const boundary=externalById.get(String(candidate.externalId));
+      return boundary?externalBoundaryState(boundary):null;
+    }
+    return null;
+  }).filter(Boolean));
+  const selectedIds=new Set(selectedEntries.map(state=>state.id));
+  const fallbackEntries=pool.map((item)=>item.state).filter(state=>!selectedIds.has(state.id));
+  const entryTiers=selectedEntries.length?[selectedEntries,fallbackEntries]:[fallbackEntries];
+  const entries=entryTiers.flat();
   if(!entries.length)throw new Error('Prepared repository contains no code entry roots or external API boundaries.');
 
   const visited=new Set(),entryTried=new Set(),stack=[],ledger=new Map(),nextFactId={value:1};
   let finalExplanation='',finalEvidence=[],rollingHypothesis='';
 
   const seed=async()=>{
-    const remaining=entries.filter(state=>!visited.has(state.id)&&!entryTried.has(state.id));
-    if(!remaining.length)return false;
+    let batchNumber=0;
+    for(const tier of entryTiers){
+      const remaining=tier.filter(state=>!visited.has(state.id)&&!entryTried.has(state.id));
+      if(!remaining.length)continue;
 
-    for(let offset=0;offset<remaining.length;offset+=ENTRY_BATCH_SIZE){
+      for(let offset=0;offset<remaining.length;offset+=ENTRY_BATCH_SIZE){
+      batchNumber+=1;
       const candidates=remaining.slice(offset,offset+ENTRY_BATCH_SIZE);
       for(const candidate of candidates)entryTried.add(candidate.id);
 
@@ -436,7 +458,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       rollingHypothesis=decision.hypothesis||rollingHypothesis;
       applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
       emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
-      const batchEvent={step,action:'ENTRY_BATCH',batch:Math.floor(offset/ENTRY_BATCH_SIZE)+1,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,hypothesis:decision.hypothesis,explained:decision.explained};
+      const batchEvent={step,action:'ENTRY_BATCH',batch:batchNumber,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,hypothesis:decision.hypothesis,explained:decision.explained};
       events.push(batchEvent);emit(batchEvent);
 
       if(decision.explained){
@@ -457,6 +479,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const event={step,action:'RESEED',state:warm[0].state.name,hypothesis:decision.hypothesis};
       events.push(event);emit({...event,path:[warm[0].state.name]});
       return true;
+      }
     }
     return false;
   };
