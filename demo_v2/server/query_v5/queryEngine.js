@@ -34,9 +34,9 @@ Return x=1 only if the supported evidence collectively explains every material f
 
 Return {"x":0,"h":""} only.`;
 
-const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. h is the current answer hypothesis.
+const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. m is an optional regex-selected source region inside the current function, including the matched source and its learned semantics. h is the current answer hypothesis.
 
-At every position ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. During entry selection leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
+At every position, if m exists examine that highlighted matched region first, then ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. During entry selection leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
 
 Set x=1 only when the supported facts plus traversed semantic path directly answer the question. Then h is the concise answer. Otherwise x=0 and h is the current evidence-backed answer hypothesis. p is [[candidateIndex,relevanceScore]] for at most 3 continuations. Do not invent missing evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
@@ -45,32 +45,38 @@ function symbolState(symbol, parent=null) {
   return { id:symbol.id, type:'code_symbol', name:symbol.name, symbolId:symbol.id, sourcePath:symbol.sourcePath||'', startLine:symbol.startLine||0, endLine:symbol.endLine||0, body:String(symbol.body||''), parent, parentSymbolId:parent };
 }
 
-function regexMatchRegion(symbol,candidate){
+function regexMatchRegions(symbol,candidate){
   const matches=arr(candidate?.matches).filter(match=>Number(match?.line||0)>0);
-  if(!symbol||!matches.length)return null;
-  const matchStart=Math.min(...matches.map(match=>Number(match.line)));
-  const matchEnd=Math.max(...matches.map(match=>Number(match.line)));
-  const start=Math.max(Number(symbol.startLine||matchStart),matchStart-2);
-  const end=Math.min(Number(symbol.endLine||matchEnd),matchEnd+2);
+  if(!symbol||!matches.length)return [];
+  const byLine=new Map();
+  for(const match of matches){
+    const line=Number(match.line);
+    if(!byLine.has(line))byLine.set(line,[]);
+    byLine.get(line).push({line,text:String(match.text||''),pattern:String(match.pattern||'')});
+  }
   const bodyLines=String(symbol.body||'').split(/\r?\n/);
-  const offset=Math.max(0,start-Number(symbol.startLine||start));
-  const count=Math.max(1,end-start+1);
-  const body=bodyLines.slice(offset,offset+count).join('\n');
-  return {
-    id:`regex-region:${symbol.id}:${start}:${end}`,
-    regionId:`regex-region:${symbol.id}:${start}:${end}`,
-    type:'code_region',
-    name:`${symbol.name} [regex match]`,
-    symbolId:symbol.id,
-    sourcePath:symbol.sourcePath||'',
-    startLine:start,
-    endLine:end,
-    body,
-    parent:symbol.id,
-    parentSymbolId:symbol.id,
-    kind:'regex-match',
-    matchedLines:matches.map(match=>({line:Number(match.line),text:String(match.text||''),pattern:String(match.pattern||'')}))
-  };
+  return [...byLine.entries()].sort((a,b)=>a[0]-b[0]).map(([line,matchedLines])=>{
+    const start=Math.max(Number(symbol.startLine||line),line-2);
+    const end=Math.min(Number(symbol.endLine||line),line+2);
+    const offset=Math.max(0,start-Number(symbol.startLine||start));
+    const count=Math.max(1,end-start+1);
+    const regionId=`regex-region:${symbol.id}:${line}`;
+    return {
+      id:regionId,
+      regionId,
+      type:'code_region',
+      name:`${symbol.name} [regex match @ ${line}]`,
+      symbolId:symbol.id,
+      sourcePath:symbol.sourcePath||'',
+      startLine:start,
+      endLine:end,
+      body:bodyLines.slice(offset,offset+count).join('\n'),
+      parent:symbol.id,
+      parentSymbolId:symbol.id,
+      kind:'regex-match',
+      matchedLines
+    };
+  });
 }
 
 function externalBoundaryState(boundary){
@@ -466,8 +472,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const symbol=explorer.topology.symbolById.get(candidate.symbolId);
       if(!symbol)return null;
       const state=symbolState(symbol);
-      const matchRegion=regexMatchRegion(symbol,candidate);
-      if(matchRegion)state.regexMatchRegion=matchRegion;
+      const matchRegions=regexMatchRegions(symbol,candidate);
+      if(matchRegions.length)state.regexMatchRegions=matchRegions;
       return state;
     }
     if(candidate.externalId){
@@ -498,7 +504,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
       const windows=[];
       for(const candidate of candidates){
-        const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,highlightRegions:candidate.regexMatchRegion?[candidate.regexMatchRegion]:[],explorer,client,model,usage,log,onProgress:emit});
+        const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,highlightRegions:arr(candidate.regexMatchRegions),explorer,client,model,usage,log,onProgress:emit});
         recordExplored(arr(learned.window?.states),'entry_window',step);
         windows.push(learned.window);
       }
@@ -540,7 +546,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const frame=stack.at(-1),state=frame.current.state;
     visited.add(state.id);
 
-    const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,highlightRegions:state.regexMatchRegion?[state.regexMatchRegion]:[],explorer,client,model,usage,log,onProgress:emit});
+    const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,highlightRegions:arr(state.regexMatchRegions),explorer,client,model,usage,log,onProgress:emit});
     recordTraversed(state,step);
     recordExplored(arr(learned.window?.states),'semantic_window',step);
     const path=[...frame.path,state];
