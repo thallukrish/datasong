@@ -292,72 +292,147 @@ Learn current region + next 3 call levels
 normal Query exploration
 ```
 
-### Regex code search
+### Structural code search
 
-When the issue suggests a recognizable code construct, the model may request regex-based code search before semantic traversal.
+For supported languages, entry selection uses an adapter-built structural code index before falling back to raw regex search.
 
-The model emits a small bounded set of regular expressions to grep the repository code. The repository language/file extensions are supplied as context so the model can shape those regexes according to the syntax of the codebase without requiring a language-specific search DSL.
+The language adapter parses the repository once during preparation and emits searchable code-construct records. Each record keeps source coordinates and the exact code snippet, together with structural metadata derived from the language parser.
 
-The contract is intentionally minimal:
+For Python, the initial construct vocabulary includes:
+
+```text
+class
+function
+loop
+condition
+call
+import
+assignment
+return
+exception
+decorator
+```
+
+A construct record may contain metadata such as:
+
+```text
+constructType
+name
+module
+qualifiedName
+parentFunction
+parentClass
+keywordArgs
+sourcePath
+startLine
+endLine
+snippet
+```
+
+The model never receives hundreds or thousands of raw construct rows.
+
+Instead LeMap first supplies a compact index summary:
+
+```text
+construct counts
++ searchable fields
++ compact facets for useful metadata values
+```
+
+For example, a repository may contain thousands of calls. The model can select the `call` slice and narrow it using regex over metadata fields such as call name, module, keyword arguments or snippet text.
 
 ```text
 issue / question
-+ repository language
         ↓
-model generates regex for that language
+LeMap exposes structural index summary
         ↓
-LeMap greps the codebase
+model chooses construct type + regex metadata filters
+        ↓
+LeMap filters the index deterministically
+        ↓
+few matching code snippets remain
+        ↓
+model selects candidate function / region
 ```
 
-The regexes must resemble the source code being searched and respect the supplied language syntax. Natural-language search terms or paraphrases of the issue are not used as entry-search patterns.
+Filters inside one structural search are ANDed. Multiple structural searches are ORed.
 
-LeMap performs the regex scan deterministically over tracked code files. The implementation is cross-platform Node filesystem search rather than a dependency on platform-specific `grep`, `findstr` or shell behavior.
+The model should use vocabulary already present in the issue when it provides a strong anchor. Facets exist only to discover repository-specific vocabulary when the issue itself is insufficient.
 
-Search results retain:
+This lets the model reason in terms of code structure without requiring a language-specific query DSL. The parser remains language-specific, while the search contract stays generic:
 
-- source path and line
-- matched text and regex
-- enclosing executable symbol when known
-- matching external boundary when known
-- test/production classification
+```text
+construct = call
+name regex = ...
+snippet regex = ...
+```
 
-Matching results are grouped into candidate functions or function-regions and ranked before exploration. Production code receives preference over test/spec/fixture/mock paths unless the strongest structural evidence exists in tests.
+The regular expressions apply only to indexed metadata fields. They are not expected to parse the source language.
 
-Regex search only narrows the candidate set. It does not infer causality or answer the issue.
+### Faceted refinement
 
-For each selected candidate, LeMap maps each regex hit to the enclosing function and creates a small contained function-region around each matched source line. Multiple distant matches in the same function remain separate highlighted regions rather than being merged into one large span. Learn runs exactly as it does for a normal Query-selected function: it semantically annotates the enclosing function, annotates the highlighted matched region, and expands the enclosing function through its normal next-three-call-level window.
+If a construct category contains hundreds or thousands of entries, LeMap does not send those entries to the model. It sends counts and compact facets instead.
 
-The highlighted region preserves the exact matched line(s), regex pattern(s), and surrounding source lines so Query can see why this function was selected. The enclosing function remains the traversal root, so any calls in that function still receive the normal three-level lookahead.
+Conceptually:
 
-After Learn, the regex-discovered seed is no longer treated specially. It is passed to Query as the current function with:
+```text
+calls = 4872
+
+searchable fields
+name
+module
+qualifiedName
+parentFunction
+parentClass
+keywordArgs
+snippet
+
+facets
+name: ...
+module: ...
+```
+
+The model can then request a narrow deterministic search. Only the resulting small candidate set is exposed for selection.
+
+The first implementation performs this in one model decision by providing the summary and facets together. The contract also allows iterative refinement later if one-shot filtering is insufficient.
+
+### Regex source fallback
+
+If no structural index is available for the repository language, LeMap may fall back to syntax-aware regex search over raw source.
+
+Raw regex search is therefore a compatibility fallback rather than the preferred entry-selection mechanism.
+
+### From structural match to Learn
+
+Every structural-index match already carries an exact source snippet and line range.
+
+LeMap maps each match to the enclosing function and creates a small contained function-region around the matched source. Multiple distant matches in the same function remain separate highlighted regions.
+
+Learn then runs exactly as it does for a normal Query-selected function:
+
+```text
+selected enclosing function
++ highlighted matched region(s)
++ normal next-three-call-level window
+        ↓
+Learn
+```
+
+The highlighted region preserves the exact matched construct and its surrounding source so Query can see why the function was selected.
+
+After Learn, structural discovery is finished. The enclosing function is passed to Query as the current seed with:
+
 - enclosing-function semantics
 - highlighted matched-region semantics
-- exact matched source span
+- exact matched source
 - normal three-level lookahead semantics
+- current function body when Query evaluates the seed
 
-Query may immediately conclude that the highlighted code plus the current function body is sufficient to close the cause. If not, exploration continues normally from that seed.
+Query may close the cause immediately if the highlighted code and current body are sufficient. Otherwise it continues normal causal or relevance exploration.
 
-```text
-issue / question
-        ↓
-model generates language-syntax-aware regex
-        ↓
-LeMap scans source and narrows candidate regions
-        ↓
-model selects candidate function
-        ↓
-LeMap highlights matched source region inside that function
-        ↓
-Learn annotates function + highlighted region + next 3 call levels
-        ↓
-selected learned function becomes current Query seed
-        ↓
-Query checks highlighted evidence and current body first
-        ↓
-stop if sufficient, otherwise normal causal / relevance exploration
-```
+The invariant is:
 
-A matched function or region does not become a permanent repository root.
+> Structural search changes how the starting function is discovered. It does not change Learn or Query semantics.
 
 ### Root-entry fallback
 
@@ -453,6 +528,9 @@ Localize   final supporting evidence → exact source ranges
 14. Causal-mode branch scores measure causal continuation, not generic relevance.
 15. Deterministic graph relationships are never delegated to the model.
 16. Entry selection may localize likely source regions before traversal, but causality/relevance is still established only by the normal semantic exploration.
-17. Pattern-selected regions are temporary query entry points; they do not redefine repository roots or Learn semantics.
-18. Regex discovery changes only how the starting function is found. Once selected, the enclosing function follows the same Learn and Query lifecycle as any normal Query-selected function.
-19. The regex-matched source span remains attached as highlighted semantic evidence while the enclosing function drives the normal three-level call lookahead.
+17. Adapter-built structural indexes are the preferred localization mechanism for supported languages; raw-source regex is a fallback.
+18. The model sees construct counts, searchable fields and compact facets rather than bulk construct rows.
+19. Structural-search regexes filter indexed metadata fields; they are not responsible for parsing source syntax.
+20. Selected structural regions are temporary query entry points; they do not redefine repository roots or Learn semantics.
+21. Structural discovery changes only how the starting function is found. Once selected, the enclosing function follows the same Learn and Query lifecycle as any normal Query-selected function.
+22. The matched source span remains attached as highlighted semantic evidence while the enclosing function drives the normal three-level call lookahead.
