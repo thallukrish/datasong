@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeEntrySelectionPlan, scanRepositoryPatterns, rankPatternEntryHits } from '../server/query_v5/codeEntrySelector.js';
+import { normalizeEntrySelectionPlan, scanRepositoryPatterns, scanConstructIndex, constructIndexSummary, rankPatternEntryHits } from '../server/query_v5/codeEntrySelector.js';
 
 test('entry selection accepts regex code searches and rejects literal grep terms', () => {
   const plan=normalizeEntrySelectionPlan({
@@ -53,4 +53,38 @@ test('regex code entry selection maps structural matches to enclosing symbols an
   }finally{
     await fs.rm(repoDir,{recursive:true,force:true});
   }
+});
+
+
+test('structural entry search filters AST construct metadata before candidate ranking', () => {
+  const topology={
+    symbols:[
+      {id:'prod',name:'build_setting',sourcePath:'src/config.py',startLine:1,endLine:5},
+      {id:'test',name:'test_setting',sourcePath:'tests/test_config.py',startLine:1,endLine:5}
+    ],
+    externalSymbols:[],
+    constructIndex:[
+      {constructType:'call',name:'Field',sourcePath:'src/config.py',startLine:3,endLine:3,snippet:'value = Field(default=None)',parentFunction:'build_setting',keywordArgs:['default']},
+      {constructType:'call',name:'Field',sourcePath:'tests/test_config.py',startLine:3,endLine:3,snippet:'value = Field(default=None, initial=True)',parentFunction:'test_setting',keywordArgs:['default','initial']},
+      {constructType:'condition',name:'',sourcePath:'src/config.py',startLine:4,endLine:4,snippet:'if value is None:',parentFunction:'build_setting'}
+    ]
+  };
+  const summary=constructIndexSummary(topology.constructIndex);
+  const plan=normalizeEntrySelectionPlan({
+    strategy:'structured_search',
+    searches:[{
+      construct:'call',
+      weight:5,
+      filters:[
+        {field:'name',regex:'^Field$'},
+        {field:'keywordArgs',regex:'^initial$'}
+      ]
+    }]
+  },summary);
+  assert.equal(plan.strategy,'structured_search');
+  const hits=scanConstructIndex({topology,searches:plan.searches});
+  assert.equal(hits.length,1);
+  assert.equal(hits[0].sourcePath,'tests/test_config.py');
+  assert.equal(hits[0].symbolId,'test');
+  assert.match(hits[0].text,/Field\(default=None, initial=True\)/);
 });
