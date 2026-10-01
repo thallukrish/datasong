@@ -236,6 +236,7 @@ export class CodeTopology {
     this.constructIndex = [];
     this.constructIndexVersion = 0;
     this.constructIndexMeta = null;
+    this.pythonAnalysis = null;
   }
 
   async prepare(repoUrl) {
@@ -350,9 +351,11 @@ export class CodeTopology {
         meta.commit === this.commit &&
         Number(meta.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
         Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
-        Array.isArray(payload?.constructs);
+        Array.isArray(payload?.constructs) &&
+        payload?.analysis && typeof payload.analysis === 'object';
       if (!valid) return false;
       this.constructIndex = payload.constructs;
+      this.pythonAnalysis = payload.analysis;
       this.constructIndexVersion = Number(meta.analyzerVersion || 0);
       this.constructIndexMeta = { ...meta, cachePath, reused: true };
       return true;
@@ -361,7 +364,7 @@ export class CodeTopology {
     }
   }
 
-  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[] }={}) {
+  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[], analysis=null }={}) {
     const cachePath = this.constructIndexCachePath(language);
     if (!cachePath) return;
     const metadata = {
@@ -377,7 +380,7 @@ export class CodeTopology {
     };
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
     const tempPath = `${cachePath}.${process.pid}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs }), 'utf8');
+    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs, analysis }), 'utf8');
     await fs.rename(tempPath, cachePath);
     this.constructIndexMeta = { ...metadata, cachePath, reused: false };
   }
@@ -386,6 +389,7 @@ export class CodeTopology {
     this.constructIndex = [];
     this.constructIndexVersion = 0;
     this.constructIndexMeta = null;
+    this.pythonAnalysis = null;
     const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
     if (!pythonFiles.length) return;
 
@@ -393,13 +397,15 @@ export class CodeTopology {
 
     try {
       const analyzed = await analyzePythonRepository({ repoDir: this.repoDir, files: pythonFiles });
+      this.pythonAnalysis = analyzed;
       this.constructIndex = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
       this.constructIndexVersion = Number(analyzed?.version || 0);
       if (this.constructIndexVersion !== PYTHON_ANALYZER_VERSION) return;
       await this.persistConstructIndexSnapshot({
         language:'python',
         analyzerVersion:this.constructIndexVersion,
-        constructs:this.constructIndex
+        constructs:this.constructIndex,
+        analysis:analyzed
       });
     } catch (error) {
       // Structural entry indexing is an optimization. Repository preparation and
@@ -407,6 +413,7 @@ export class CodeTopology {
       this.constructIndex = [];
       this.constructIndexVersion = 0;
       this.constructIndexMeta = null;
+      this.pythonAnalysis = null;
     }
   }
 
