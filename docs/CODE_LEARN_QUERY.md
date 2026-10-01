@@ -325,7 +325,17 @@ Matching results are grouped into candidate functions or function-regions and ra
 
 Regex search only narrows the candidate set. It does not infer causality or answer the issue.
 
-For each selected candidate, the model identifies the enclosing function or meaningful region containing the matched code. Learn semantically annotates that function/region and expands its normal next-three-call-level window. Those learned regions then become temporary seeds for the existing Query exploration.
+For each selected candidate, LeMap maps the regex hit to the enclosing function and also creates a small contained function-region around the matched source span. Learn runs exactly as it does for a normal Query-selected function: it semantically annotates the enclosing function, annotates the highlighted matched region, and expands the enclosing function through its normal next-three-call-level window.
+
+The highlighted region preserves the exact matched line(s), regex pattern(s), and surrounding source lines so Query can see why this function was selected. The enclosing function remains the traversal root, so any calls in that function still receive the normal three-level lookahead.
+
+After Learn, the regex-discovered seed is no longer treated specially. It is passed to Query as the current function with:
+- enclosing-function semantics
+- highlighted matched-region semantics
+- exact matched source span
+- normal three-level lookahead semantics
+
+Query may immediately conclude that the highlighted code plus the current function body is sufficient to close the cause. If not, exploration continues normally from that seed.
 
 ```text
 issue / question
@@ -334,13 +344,17 @@ model generates language-syntax-aware regex
         ↓
 LeMap scans source and narrows candidate regions
         ↓
-model selects candidate function / region
+model selects candidate function
         ↓
-Learn annotates region + next 3 call levels
+LeMap highlights matched source region inside that function
         ↓
-selected learned region becomes temporary seed
+Learn annotates function + highlighted region + next 3 call levels
         ↓
-normal causal / relevance exploration
+selected learned function becomes current Query seed
+        ↓
+Query checks highlighted evidence and current body first
+        ↓
+stop if sufficient, otherwise normal causal / relevance exploration
 ```
 
 A matched function or region does not become a permanent repository root.
@@ -361,10 +375,11 @@ This keeps Learn and the normal query traversal unchanged:
 
 ```text
 pattern match
-→ enclosing function / region
-→ Learn local three-level semantic window
-→ Query causal/relevance decision
-→ descend / backtrack using existing machinery
+→ enclosing function + highlighted matched region
+→ Learn function + highlighted region + three-level semantic window
+→ pass enclosing function to Query as current seed
+→ Query checks matched evidence/body for immediate closure
+→ otherwise descend / backtrack using existing machinery
 ```
 
 If one window already explains the issue, Query stops. Otherwise Query chooses the strongest continuation and preserves alternatives exactly as before.
@@ -439,3 +454,5 @@ Localize   final supporting evidence → exact source ranges
 15. Deterministic graph relationships are never delegated to the model.
 16. Entry selection may localize likely source regions before traversal, but causality/relevance is still established only by the normal semantic exploration.
 17. Pattern-selected regions are temporary query entry points; they do not redefine repository roots or Learn semantics.
+18. Regex discovery changes only how the starting function is found. Once selected, the enclosing function follows the same Learn and Query lifecycle as any normal Query-selected function.
+19. The regex-matched source span remains attached as highlighted semantic evidence while the enclosing function drives the normal three-level call lookahead.
