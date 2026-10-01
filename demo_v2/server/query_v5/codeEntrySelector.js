@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 
-const ENTRY_SELECT_SYSTEM = 'Choose how LeMap should find promising starting points before code-flow exploration. Use "pattern_search" when the issue/question contains concrete source signatures that can be searched directly, such as API/function names, exception/warning text, keyword arguments, metadata keys, decorators, annotations, constants, config keys, table/field names, or distinctive code fragments. Use "root_entries" when the request is primarily about end-to-end behavior or a flow and there is no useful source signature. For pattern_search, return a small set of source-code patterns that a grep-like repository scan should look for. Prefer precise literals. Regex is allowed only when it materially improves the search. Do not include natural-language paraphrases that are unlikely to occur in source. Return {"strategy":"pattern_search|root_entries","reason":"","patterns":[{"pattern":"","kind":"literal|regex","weight":1}]}. Use at most 8 patterns. weight is 1..5.';
+const ENTRY_SELECT_SYSTEM = 'Choose how LeMap should find promising starting points before code-flow exploration. Use "pattern_search" when the issue/question suggests recognizable CODE STRUCTURE that can be searched directly. The repository language is supplied in the payload. For pattern_search, generate only regular expressions that resemble valid source constructs in that language. Search for syntax-shaped code such as calls, keyword arguments, function/class declarations, decorators/annotations, assignments, member access, literals inside code expressions, or other concrete constructs. Do NOT search natural-language warning/error prose, English paraphrases, or bare vocabulary tokens. Do NOT return a bare identifier such as "Field"; search the construct, for example "\\bField\\s*\\(" or "\\bField\\s*\\([^)]*\\binitial\\s*=". Regex search is only candidate localization; it must not infer causality. Use "root_entries" when the request is primarily about end-to-end behavior or there is no useful code-shaped signature. Return {"strategy":"pattern_search|root_entries","reason":"","patterns":[{"pattern":"","kind":"regex","weight":1}]}. Use at most 8 patterns. weight is 1..5.';
 
 const MAX_PATTERNS = 8;
 const MAX_HITS = 80;
@@ -17,9 +17,10 @@ function normalizedPatterns(items=[]){
   for(const item of arr(items).slice(0,MAX_PATTERNS)){
     const pattern=String(item?.pattern||'').trim();
     if(!pattern||pattern.length>180)continue;
-    const kind=String(item?.kind||'literal').toLowerCase()==='regex'?'regex':'literal';
+    const kind=String(item?.kind||'regex').toLowerCase();
+    if(kind!=='regex')continue;
     const weight=Math.max(1,Math.min(5,Number(item?.weight||1)));
-    out.push({pattern,kind,weight});
+    out.push({pattern,kind:'regex',weight});
   }
   return out;
 }
@@ -31,11 +32,7 @@ export function normalizeEntrySelectionPlan(parsed={}){
 }
 
 function matcherFor(spec){
-  if(spec.kind==='regex'){
-    try{return new RegExp(spec.pattern,'i')}catch{return null}
-  }
-  const needle=spec.pattern.toLowerCase();
-  return {test:(value)=>String(value||'').toLowerCase().includes(needle)};
+  try{return new RegExp(spec.pattern,'i')}catch{return null}
 }
 
 function enclosingSymbol(topology,sourcePath,line){
@@ -104,7 +101,8 @@ export function rankPatternEntryHits(hits=[]){
 }
 
 export async function selectCodeEntries({question,mode,topology,client,model,usage,log=()=>{}}){
-  const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question,mode});addUsage(usage,call.usage);
+  const languages=[...new Set(arr(topology?.files).map(file=>path.extname(String(file||'')).toLowerCase()).filter(Boolean))].slice(0,12);
+  const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question,mode,languages});addUsage(usage,call.usage);
   const plan=normalizeEntrySelectionPlan(call.parsed||{});
   if(plan.strategy!=='pattern_search'){
     log('query_v5_entry_selection',{plan,hits:[],candidates:[],usage:call.usage});
