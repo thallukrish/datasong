@@ -99,8 +99,9 @@ export async function ensureLocalCodeSemantics({states,path=[],links=[],explorer
 }
 
 
-export async function ensureLocalSemanticWindow({state,path=[],depth=3,explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
+export async function ensureLocalSemanticWindow({state,path=[],depth=3,highlightRegions=[],explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
   const window=collectLocalSemanticWindow({state,explorer,depth});
-  const result=await ensureLocalCodeSemantics({states:window.states,path,links:window.links,explorer,client,model,usage,log,onProgress});
-  return{...result,window};
+  const highlights=arr(highlightRegions).filter(Boolean);
+  const result=await ensureLocalCodeSemantics({states:[...window.states,...highlights],path,links:window.links,explorer,client,model,usage,log,onProgress});
+  return{...result,window:{...window,highlights}};
 }
