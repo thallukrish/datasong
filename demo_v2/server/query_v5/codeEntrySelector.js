@@ -87,7 +87,9 @@ function fieldMatchQuality(row,filter){
   let matcher;
   try{matcher=new RegExp(filter.regex,'i')}catch{return null}
   const raw=row?.[filter.field];
-  const values=Array.isArray(raw)?raw:[raw];
+  const values=filter.field==='snippet'
+    ? [raw,row?.canonicalSnippet]
+    : Array.isArray(raw)?raw:[raw];
   let best=null;
   for(const value of values){
     const candidate=String(value??'');
