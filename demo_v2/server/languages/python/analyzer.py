@@ -400,6 +400,10 @@ for mod, info in modules.items():
             parent_function = next((scope for scope in reversed(scope_stack) if scope["kind"] == "function"), None)
             parent_class = next((scope for scope in reversed(scope_stack) if scope["kind"] == "class"), None)
             snippet = source_segment(text, node)
+            try:
+                canonical_snippet = ast.unparse(node)
+            except Exception:
+                canonical_snippet = snippet
             record = {
                 "constructType": ctype,
                 "name": name or construct_name(node),
@@ -407,6 +411,7 @@ for mod, info in modules.items():
                 "startLine": getattr(node, "lineno", 0),
                 "endLine": getattr(node, "end_lineno", getattr(node, "lineno", 0)),
                 "snippet": snippet,
+                "canonicalSnippet": canonical_snippet,
                 "parentFunction": parent_function["name"] if parent_function else "",
                 "parentClass": parent_class["name"] if parent_class else "",
                 "moduleName": mod
@@ -540,4 +545,4 @@ for rec in defs.values():
         "regions": regions
     })
 
-print(json.dumps({"version": 3, "symbols": symbols, "externalSymbols": external_symbols, "constructs": constructs}, ensure_ascii=False))
+print(json.dumps({"version": 4, "symbols": symbols, "externalSymbols": external_symbols, "constructs": constructs}, ensure_ascii=False))
