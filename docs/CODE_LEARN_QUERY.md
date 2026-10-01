@@ -294,7 +294,20 @@ normal Query exploration
 
 ### Structural index lifecycle
 
-The structural code index is prepared when a repository revision is added or prepared, before Query uses it.
+The structural code index is prepared when a repository profile is saved or its revision is changed, before Learn or Query uses it.
+
+Repository indexing is not a Learn operation. Saving the repository profile triggers repository preparation directly:
+
+```text
+Profiles
+→ Save repository / revision
+→ resolve branch or commit
+→ prepare repository topology
+→ build or reuse structural construct index
+→ mark repository revision ready
+```
+
+Learn does not own this lifecycle. Learn consumes an already prepared repository revision and its structural index.
 
 The cache identity is revision-based rather than branch-name-based:
 
@@ -323,7 +336,7 @@ reuse snapshot                 run language adapter indexing
 repository is query-ready
 ```
 
-Switching branches or revisions resolves the new commit first. If that commit already has a complete compatible index, LeMap reuses it immediately. Otherwise LeMap builds and persists an index for that commit.
+Switching branches or revisions through Profile Save resolves the new commit first. The revision field may contain either a branch name or a commit SHA. If the resolved commit already has a complete compatible index, LeMap reuses it immediately. Otherwise LeMap builds and persists an index for that commit.
 
 Indexes are stored as complete logical snapshots per commit. Query never needs to replay a chain of branch deltas.
 
@@ -597,3 +610,4 @@ Localize   final supporting evidence → exact source ranges
 23. Structural indexes are cached by exact commit SHA, not by mutable branch name.
 24. A cached index is reusable only when commit, schema version, analyzer version and completion status match.
 25. Incremental indexing may optimize construction later, but Query always consumes a complete logical snapshot for the selected commit.
+26. Saving a repository profile triggers repository preparation and structural indexing; Learn does not initiate the indexing lifecycle.
