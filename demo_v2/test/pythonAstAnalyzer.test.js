@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { analyzePythonRepository } from '../server/languages/python/adapter.js';
+import { CodeTopology } from '../server/topology.js';
 
 test('Python AST analyzer resolves imported classes, instances, self calls and local inheritance', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-ast-'));
@@ -174,4 +175,39 @@ def build():
   assert.deepEqual(call?.keywordArgs, ['default', 'initial']);
   assert.match(call?.snippet || '', /Field\(default=['"]x['"], initial=/);
   assert.match(condition?.snippet || '', /if value is not None/);
+});
+
+
+test('CodeTopology reuses complete construct index snapshots by commit', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-construct-cache-'));
+  const repoDir = path.join(root, 'repo');
+  const cacheRoot = path.join(root, 'cache');
+  await fs.mkdir(repoDir, { recursive: true });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(repoDir, 'main.py'), 'def build():\n    return Field(initial=True)\n');
+
+  const topology = new CodeTopology({ cacheRoot });
+  topology.repoDir = repoDir;
+  topology.repoUrl = 'https://example.invalid/demo.git';
+  topology.files = ['main.py'];
+  topology.commit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  await topology.buildConstructIndex();
+  assert.equal(topology.constructIndexMeta?.reused, false);
+  assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Field'));
+  const firstCount = topology.constructIndex.length;
+
+  await fs.writeFile(path.join(repoDir, 'main.py'), 'def build():\n    return Other()\n');
+  await topology.buildConstructIndex();
+
+  assert.equal(topology.constructIndexMeta?.reused, true);
+  assert.equal(topology.constructIndex.length, firstCount);
+  assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Field'));
+
+  topology.commit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  await topology.buildConstructIndex();
+
+  assert.equal(topology.constructIndexMeta?.reused, false);
+  assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Other'));
 });
