@@ -272,15 +272,69 @@ There is no absolute navigation-score cutoff. If the model returns ranked candid
 
 In causal mode, the model must not claim `x = 1` merely because a branch is plausible or topically related. The traversed path and supported facts must establish a causal mechanism that could produce the reported behavior. In query mode, `x = 1` means the accumulated evidence directly answers the question.
 
-## Entry exploration
+## Entry selection before exploration
 
-Entry candidates are ordered deterministically by LeMap.
+Code-flow Query does not always begin from repository root entry points.
 
-For each bounded entry batch, Learn first ensures each candidate has its three-level semantic window. Query then evaluates those semantic windows against the issue.
+Before exploration, the model chooses one of two entry-selection strategies:
 
-If one window already explains the issue, Query stops.
+```text
+question / issue
+        ↓
+entry selection
+        ↓
+pattern_search OR root_entries
+        ↓
+rank candidate source regions
+        ↓
+Learn current region + next 3 call levels
+        ↓
+normal Query exploration
+```
 
-Otherwise Query chooses the strongest entry branch. Later entry batches are considered only when earlier evidence is inadequate or exhausted.
+### Pattern search
+
+When the issue contains concrete source signatures such as an API/function name, warning text, keyword argument, metadata key, decorator, annotation, constant, config key, table/field name or distinctive code fragment, the model may request a grep-like repository search before semantic traversal.
+
+The model supplies a small bounded set of literal or regex patterns. LeMap performs the scan deterministically over tracked code files. The implementation is cross-platform Node filesystem search rather than a dependency on platform-specific `grep`, `findstr` or shell behavior.
+
+Search results retain:
+
+- source path and line
+- matched text and pattern
+- enclosing executable symbol when known
+- matching external boundary when known
+- test/production classification
+
+Matching results are grouped into candidate executable regions and ranked before exploration. Production code receives preference over test/spec/fixture/mock paths unless the evidence itself only exists in tests.
+
+A matched function or region becomes a temporary query entry point. It does not become a permanent repository root.
+
+This phase performs localization only. It does not infer causality or answer the issue.
+
+### Root-entry fallback
+
+When the model determines that the request is primarily an end-to-end flow question, or when pattern search yields no usable executable region, Query uses the existing deterministic repository entry candidates.
+
+Root entry ranking remains unchanged.
+
+### Entry tiers
+
+Pattern-selected entries form the first entry tier. Query learns and evaluates their three-level semantic windows before considering ordinary root entries.
+
+Only when the pattern-selected tier is inadequate or exhausted does Query fall back to the existing root/external-entry tier.
+
+This keeps Learn and the normal query traversal unchanged:
+
+```text
+pattern match
+→ enclosing function / region
+→ Learn local three-level semantic window
+→ Query causal/relevance decision
+→ descend / backtrack using existing machinery
+```
+
+If one window already explains the issue, Query stops. Otherwise Query chooses the strongest continuation and preserves alternatives exactly as before.
 
 ## Branch exploration
 
@@ -350,3 +404,5 @@ Localize   final supporting evidence → exact source ranges
 13. Query classifies the request once as causal or query mode and keeps that objective stable.
 14. Causal-mode branch scores measure causal continuation, not generic relevance.
 15. Deterministic graph relationships are never delegated to the model.
+16. Entry selection may localize likely source regions before traversal, but causality/relevance is still established only by the normal semantic exploration.
+17. Pattern-selected regions are temporary query entry points; they do not redefine repository roots or Learn semantics.
