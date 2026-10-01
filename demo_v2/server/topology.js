@@ -259,7 +259,8 @@ export class CodeTopology {
     }
 
     this.commit = (await git.revparse(['HEAD'])).trim();
-    if (requestedCommit && !this.commit.toLowerCase().startsWith(requestedCommit.toLowerCase())) {
+    const requestedLooksLikeCommit = /^[0-9a-f]{7,40}$/i.test(requestedCommit);
+    if (requestedLooksLikeCommit && !this.commit.toLowerCase().startsWith(requestedCommit.toLowerCase())) {
       throw new Error(`Prepared revision ${this.commit} does not match requested commit ${requestedCommit}.`);
     }
     const tracked = (await git.raw(['ls-files'])).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
