@@ -442,6 +442,25 @@ snippet regex = ...
 
 The regular expressions apply only to indexed metadata fields. They are not expected to parse the source language.
 
+Structured candidates are ranked by match quality before weaker heuristics:
+
+```text
+whole metadata value matches
+→ match begins at character 0
+→ match occurs later in the value
+```
+
+For example, a filter for `Field` ranks `Field` above `FieldFactory`, and `FieldFactory` above `initial_for_Field`.
+
+Language adapters also expose canonical AST snippets alongside original source snippets. This removes formatting noise from structural search. For Python, these source forms are structurally equivalent:
+
+```python
+Field(initial="x")
+Field ( initial = "x" )
+```
+
+Both index as a call named `Field` with keyword argument `initial`. Snippet filters are evaluated against both the original source snippet and its canonical AST form, while original source text is retained for evidence and display.
+
 ### Faceted refinement
 
 If a construct category contains hundreds or thousands of entries, LeMap does not send those entries to the model. It sends counts and compact facets instead.
@@ -611,3 +630,5 @@ Localize   final supporting evidence → exact source ranges
 24. A cached index is reusable only when commit, schema version, analyzer version and completion status match.
 25. Incremental indexing may optimize construction later, but Query always consumes a complete logical snapshot for the selected commit.
 26. Saving a repository profile triggers repository preparation and structural indexing; Learn does not initiate the indexing lifecycle.
+27. Structured search ranks whole-value matches above prefix matches and prefix matches above later substring matches.
+28. Canonical AST snippets make structural matching insensitive to harmless source formatting such as spaces around calls and keyword assignment.
