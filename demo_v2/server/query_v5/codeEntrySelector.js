@@ -83,12 +83,22 @@ export function constructIndexSummary(index=[]){
   }).sort((a,b)=>b.count-a.count||a.construct.localeCompare(b.construct));
 }
 
-function fieldMatches(row,filter){
+function fieldMatchQuality(row,filter){
   let matcher;
-  try{matcher=new RegExp(filter.regex,'i')}catch{return false}
+  try{matcher=new RegExp(filter.regex,'i')}catch{return null}
   const raw=row?.[filter.field];
-  if(Array.isArray(raw))return raw.some(value=>matcher.test(String(value??'')));
-  return matcher.test(String(raw??''));
+  const values=Array.isArray(raw)?raw:[raw];
+  let best=null;
+  for(const value of values){
+    const candidate=String(value??'');
+    matcher.lastIndex=0;
+    const match=matcher.exec(candidate);
+    if(!match)continue;
+    const quality=match.index===0&&match[0].length===candidate.length?'exact':match.index===0?'prefix':'contains';
+    const rank=quality==='exact'?3:quality==='prefix'?2:1;
+    if(!best||rank>best.rank)best={field:filter.field,regex:filter.regex,value:candidate,quality,rank};
+  }
+  return best;
 }
 
 export function scanConstructIndex({topology,searches=[]}){
@@ -102,7 +112,12 @@ export function scanConstructIndex({topology,searches=[]}){
     for(const row of index){
       if(hits.length>=MAX_HITS)break;
       if(String(row?.constructType||'').toLowerCase()!==spec.construct)continue;
-      if(!spec.filters.every(filter=>fieldMatches(row,filter)))continue;
+      const filterMatches=spec.filters.map(filter=>fieldMatchQuality(row,filter));
+      if(filterMatches.some(match=>!match))continue;
+      const exactCount=filterMatches.filter(match=>match.quality==='exact').length;
+      const prefixCount=filterMatches.filter(match=>match.quality==='prefix').length;
+      const containsCount=filterMatches.filter(match=>match.quality==='contains').length;
+      const structuralScore=exactCount*1000+prefixCount*100+containsCount*10+spec.filters.length*5+Number(spec.weight||1);
       const line=Number(row?.startLine||0);
       const sourcePath=String(row?.sourcePath||'');
       const key=[sourcePath,line,spec.construct,JSON.stringify(spec.filters)].join('|');
@@ -119,6 +134,8 @@ export function scanConstructIndex({topology,searches=[]}){
         kind:'structured',
         constructType:spec.construct,
         weight:spec.weight,
+        structuralScore,
+        matchQuality:{exact:exactCount,prefix:prefixCount,contains:containsCount,filters:filterMatches},
         symbolId:symbol?.id||'',
         symbolName:symbol?.name||row?.parentFunction||row?.parentClass||'',
         externalId:external?.id||'',
@@ -195,16 +212,26 @@ export function rankPatternEntryHits(hits=[]){
     const key=hit.symbolId?'symbol:'+hit.symbolId:hit.externalId?'external:'+hit.externalId:'line:'+hit.sourcePath+':'+hit.line;
     const current=grouped.get(key)||{
       key,symbolId:hit.symbolId||'',externalId:hit.externalId||'',name:hit.symbolName||hit.externalName||'',
-      sourcePath:hit.sourcePath,startLine:hit.line,endLine:hit.line,test:!!hit.test,score:0,matches:[]
+      sourcePath:hit.sourcePath,startLine:hit.line,endLine:hit.endLine||hit.line,test:!!hit.test,score:0,structuredScore:0,hasStructured:false,matches:[]
     };
     current.startLine=Math.min(current.startLine,hit.line);
-    current.endLine=Math.max(current.endLine,hit.line);
-    current.score+=Number(hit.weight||1)*10;
-    if(!current.matches.some(item=>item.pattern===hit.pattern&&item.line===hit.line))current.matches.push({pattern:hit.pattern,line:hit.line,text:hit.text});
+    current.endLine=Math.max(current.endLine,hit.endLine||hit.line);
+    if(hit.kind==='structured'){
+      current.hasStructured=true;
+      current.structuredScore=Math.max(current.structuredScore,Number(hit.structuralScore||0));
+    }else{
+      current.score+=Number(hit.weight||1)*10;
+    }
+    if(!current.matches.some(item=>item.pattern===hit.pattern&&item.line===hit.line))current.matches.push({pattern:hit.pattern,line:hit.line,text:hit.text,matchQuality:hit.matchQuality||null});
     grouped.set(key,current);
   }
   return [...grouped.values()]
-    .map(item=>({...item,score:item.score+(item.test?-50:25)+Math.min(20,item.matches.length*3)}))
+    .map(item=>{
+      const score=item.hasStructured
+        ? item.structuredScore+Math.min(20,item.matches.length)
+        : item.score+(item.test?-50:25)+Math.min(20,item.matches.length*3);
+      return {...item,score};
+    })
     .sort((a,b)=>b.score-a.score||Number(a.test)-Number(b.test)||a.sourcePath.localeCompare(b.sourcePath))
     .slice(0,24);
 }
