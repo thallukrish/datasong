@@ -23,6 +23,8 @@ const queryClient = process.env.DEEPSEEK_API_KEY
   : null;
 const queryModel = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 let running = false;
+let preparingRepository = false;
+let repositoryPreparation = { status:'idle', repoUrl:'', requestedRevision:'', commit:'', constructIndex:null, error:'' };
 let latestQueryLogPath = '';
 
 const arr = (value) => Array.isArray(value) ? value : [];
@@ -175,7 +177,8 @@ function uiState(snapshot = explorer.snapshot()) {
     learningCoverage: coverageSummary(snapshot),
     visibleBusinessArcIds: arcs.map((arc) => arc.id),
     codeMap: codeMap(snapshot),
-    queryV5Progress: snapshot?.queryV5Progress || null
+    queryV5Progress: snapshot?.queryV5Progress || null,
+    repositoryPreparation
   };
 }
 function allGroupedPaths() {
@@ -287,6 +290,46 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'public'), { etag: false, lastModified: false, setHeaders(res) { res.setHeader('Cache-Control', 'no-store'); } }));
 
 app.get('/api/state', (_req, res) => { const snapshot = explorer.snapshot(); res.json(uiState(snapshot)); });
+app.post('/api/prepare-repository', async (req, res) => {
+  if (running) return res.status(409).json({ error:'Stop learning before preparing another repository revision.' });
+  if (preparingRepository) return res.status(409).json({ error:'Repository preparation is already running.' });
+  const repoUrl = String(req.body?.repoUrl || '').trim();
+  const requestedRevision = String(req.body?.repoCommit || req.body?.repoRevision || '').trim();
+  if (!repoUrl) return res.status(400).json({ error:'repoUrl is required' });
+
+  preparingRepository = true;
+  repositoryPreparation = { status:'preparing', repoUrl, requestedRevision, commit:'', constructIndex:null, error:'' };
+  broadcast(explorer.snapshot());
+  try {
+    topology.targetCommit = requestedRevision;
+    const prepared = await topology.prepare(repoUrl);
+    repositoryPreparation = {
+      status:'ready',
+      repoUrl,
+      requestedRevision,
+      commit:String(prepared?.commit || topology.commit || ''),
+      constructIndex: prepared?.constructIndex || (topology.constructIndexMeta ? {
+        status:topology.constructIndexMeta.status,
+        language:topology.constructIndexMeta.language,
+        recordCount:topology.constructIndexMeta.recordCount,
+        reused:!!topology.constructIndexMeta.reused,
+        commit:topology.constructIndexMeta.commit,
+        schemaVersion:topology.constructIndexMeta.schemaVersion,
+        analyzerVersion:topology.constructIndexMeta.analyzerVersion
+      } : null),
+      error:''
+    };
+    broadcast(explorer.snapshot());
+    return res.json({ ok:true, ...repositoryPreparation });
+  } catch (error) {
+    repositoryPreparation = { status:'error', repoUrl, requestedRevision, commit:'', constructIndex:null, error:error.message || 'Repository preparation failed' };
+    broadcast(explorer.snapshot());
+    return res.status(500).json({ error:repositoryPreparation.error });
+  } finally {
+    preparingRepository = false;
+  }
+});
+
 app.post('/api/select-enterprise', (req, res) => {
   if (running) return res.status(409).json({ error:'Stop learning before selecting another enterprise.' });
   const repoUrl = String(req.body?.repoUrl || '').trim();
