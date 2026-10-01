@@ -88,3 +88,58 @@ test('structural entry search filters AST construct metadata before candidate ra
   assert.equal(hits[0].symbolId,'test');
   assert.match(hits[0].text,/Field\(default=None, initial=True\)/);
 });
+
+
+test('structured ranking prefers exact metadata matches, then prefix matches, then contains matches', () => {
+  const topology={
+    symbols:[
+      {id:'exact',name:'exact_fn',sourcePath:'a.py',startLine:1,endLine:3},
+      {id:'prefix',name:'prefix_fn',sourcePath:'b.py',startLine:1,endLine:3},
+      {id:'contains',name:'contains_fn',sourcePath:'c.py',startLine:1,endLine:3}
+    ],
+    externalSymbols:[],
+    constructIndex:[
+      {constructType:'call',name:'Field',sourcePath:'a.py',startLine:2,endLine:2,snippet:'Field ( initial = "x" )',canonicalSnippet:'Field(initial="x")',parentFunction:'exact_fn',keywordArgs:['initial']},
+      {constructType:'call',name:'FieldFactory',sourcePath:'b.py',startLine:2,endLine:2,snippet:'FieldFactory()',canonicalSnippet:'FieldFactory()',parentFunction:'prefix_fn',keywordArgs:[]},
+      {constructType:'call',name:'initial_for_Field',sourcePath:'c.py',startLine:2,endLine:2,snippet:'initial_for_Field()',canonicalSnippet:'initial_for_Field()',parentFunction:'contains_fn',keywordArgs:[]}
+    ]
+  };
+  const hits=scanConstructIndex({topology,searches:[{
+    construct:'call',
+    weight:5,
+    filters:[{field:'name',regex:'Field'}]
+  }]});
+  const ranked=rankPatternEntryHits(hits);
+  assert.deepEqual(ranked.map(item=>item.symbolId),['exact','prefix','contains']);
+  assert.equal(ranked[0].matches[0].matchQuality.filters[0].quality,'exact');
+  assert.equal(ranked[1].matches[0].matchQuality.filters[0].quality,'prefix');
+  assert.equal(ranked[2].matches[0].matchQuality.filters[0].quality,'contains');
+});
+
+test('structured metadata matching ignores source whitespace around calls and keyword assignment', () => {
+  const topology={
+    symbols:[{id:'spaced',name:'build',sourcePath:'spaced.py',startLine:1,endLine:3}],
+    externalSymbols:[],
+    constructIndex:[{
+      constructType:'call',
+      name:'Field',
+      sourcePath:'spaced.py',
+      startLine:2,
+      endLine:2,
+      snippet:'Field ( initial = "x" )',
+      canonicalSnippet:'Field(initial="x")',
+      parentFunction:'build',
+      keywordArgs:['initial']
+    }]
+  };
+  const hits=scanConstructIndex({topology,searches:[{
+    construct:'call',
+    weight:5,
+    filters:[
+      {field:'name',regex:'^Field$'},
+      {field:'keywordArgs',regex:'^initial$'}
+    ]
+  }]});
+  assert.equal(hits.length,1);
+  assert.equal(hits[0].matchQuality.exact,2);
+});
