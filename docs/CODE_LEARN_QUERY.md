@@ -292,6 +292,66 @@ Learn current region + next 3 call levels
 normal Query exploration
 ```
 
+### Structural index lifecycle
+
+The structural code index is prepared when a repository revision is added or prepared, before Query uses it.
+
+The cache identity is revision-based rather than branch-name-based:
+
+```text
+repository
++ commit SHA
++ index schema version
++ language adapter / analyzer version
+```
+
+A branch name is only a movable label. The commit SHA is authoritative.
+
+Repository preparation therefore follows:
+
+```text
+clone / fetch requested revision
+        ↓
+resolve exact commit SHA
+        ↓
+complete compatible construct index already cached for this SHA?
+        ↓ yes                         ↓ no
+reuse snapshot                 run language adapter indexing
+                                      ↓
+                              persist complete snapshot
+        ↓
+repository is query-ready
+```
+
+Switching branches or revisions resolves the new commit first. If that commit already has a complete compatible index, LeMap reuses it immediately. Otherwise LeMap builds and persists an index for that commit.
+
+Indexes are stored as complete logical snapshots per commit. Query never needs to replay a chain of branch deltas.
+
+An index snapshot is reusable only when all of the following match:
+
+```text
+status = complete
+commit SHA
+index schema version
+adapter / analyzer version
+```
+
+If the schema or analyzer changes, the old snapshot is treated as stale and rebuilt.
+
+The initial implementation builds a complete snapshot for a previously unseen commit. A later optimization may construct that snapshot incrementally from the nearest indexed ancestor:
+
+```text
+nearest indexed ancestor
++ git diff to new commit
++ re-index changed / added files
++ remove deleted-file records
++ reuse unchanged-file records
+        ↓
+persist a new complete snapshot for the new commit
+```
+
+Even with incremental construction, the persisted result remains a complete commit-level snapshot. Branches do not depend on chained delta indexes at query time.
+
 ### Structural code search
 
 For supported languages, entry selection uses an adapter-built structural code index before falling back to raw regex search.
@@ -534,3 +594,6 @@ Localize   final supporting evidence → exact source ranges
 20. Selected structural regions are temporary query entry points; they do not redefine repository roots or Learn semantics.
 21. Structural discovery changes only how the starting function is found. Once selected, the enclosing function follows the same Learn and Query lifecycle as any normal Query-selected function.
 22. The matched source span remains attached as highlighted semantic evidence while the enclosing function drives the normal three-level call lookahead.
+23. Structural indexes are cached by exact commit SHA, not by mutable branch name.
+24. A cached index is reusable only when commit, schema version, analyzer version and completion status match.
+25. Incremental indexing may optimize construction later, but Query always consumes a complete logical snapshot for the selected commit.
