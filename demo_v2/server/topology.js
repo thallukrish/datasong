@@ -15,6 +15,8 @@ const MAX_NEIGHBORS = 18;
 const MAX_SEARCH_RESULTS = 12;
 const MAX_ENTRY_SYMBOLS = 24;
 const MAX_README_CHARS = 5000;
+const CONSTRUCT_INDEX_SCHEMA_VERSION = 1;
+const PYTHON_ANALYZER_VERSION = 3;
 
 function normalizeRepoUrl(repoUrl) {
   return String(repoUrl || '').trim().replace(/\/$/, '');
@@ -233,6 +235,7 @@ export class CodeTopology {
     this.targetCommit = '';
     this.constructIndex = [];
     this.constructIndexVersion = 0;
+    this.constructIndexMeta = null;
   }
 
   async prepare(repoUrl) {
@@ -272,6 +275,15 @@ export class CodeTopology {
       commit: this.commit,
       searchableFiles: this.files.length,
       searchableSymbols: this.symbols.length,
+      constructIndex: this.constructIndexMeta ? {
+        status: this.constructIndexMeta.status,
+        language: this.constructIndexMeta.language,
+        recordCount: this.constructIndexMeta.recordCount,
+        reused: !!this.constructIndexMeta.reused,
+        commit: this.constructIndexMeta.commit,
+        schemaVersion: this.constructIndexMeta.schemaVersion,
+        analyzerVersion: this.constructIndexMeta.analyzerVersion
+      } : null,
       root: this.repositoryOrientation(),
       readme: this.repositoryReadme
     };
@@ -314,20 +326,86 @@ export class CodeTopology {
     }
   }
 
+  constructIndexCachePath(language='python') {
+    const revision = String(this.commit || '').trim();
+    if (!revision || !this.repoUrl) return '';
+    return path.join(
+      this.cacheRoot,
+      'code-construct-index',
+      repoKey(this.repoUrl),
+      revision,
+      `${language}.json`
+    );
+  }
+
+  async loadConstructIndexSnapshot({ language='python', analyzerVersion=0 }={}) {
+    const cachePath = this.constructIndexCachePath(language);
+    if (!cachePath) return false;
+    try {
+      const payload = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+      const meta = payload?.meta || {};
+      const valid =
+        meta.status === 'complete' &&
+        meta.commit === this.commit &&
+        Number(meta.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
+        Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
+        Array.isArray(payload?.constructs);
+      if (!valid) return false;
+      this.constructIndex = payload.constructs;
+      this.constructIndexVersion = Number(meta.analyzerVersion || 0);
+      this.constructIndexMeta = { ...meta, cachePath, reused: true };
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[] }={}) {
+    const cachePath = this.constructIndexCachePath(language);
+    if (!cachePath) return;
+    const metadata = {
+      status: 'complete',
+      repoUrl: this.repoUrl,
+      requestedRevision: String(this.targetCommit || ''),
+      commit: this.commit,
+      language,
+      schemaVersion: CONSTRUCT_INDEX_SCHEMA_VERSION,
+      analyzerVersion: Number(analyzerVersion || 0),
+      recordCount: constructs.length,
+      createdAt: new Date().toISOString()
+    };
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    const tempPath = `${cachePath}.${process.pid}.tmp`;
+    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs }), 'utf8');
+    await fs.rename(tempPath, cachePath);
+    this.constructIndexMeta = { ...metadata, cachePath, reused: false };
+  }
+
   async buildConstructIndex() {
     this.constructIndex = [];
     this.constructIndexVersion = 0;
+    this.constructIndexMeta = null;
     const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
     if (!pythonFiles.length) return;
+
+    if (await this.loadConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) return;
+
     try {
       const analyzed = await analyzePythonRepository({ repoDir: this.repoDir, files: pythonFiles });
       this.constructIndex = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
       this.constructIndexVersion = Number(analyzed?.version || 0);
+      if (this.constructIndexVersion !== PYTHON_ANALYZER_VERSION) return;
+      await this.persistConstructIndexSnapshot({
+        language:'python',
+        analyzerVersion:this.constructIndexVersion,
+        constructs:this.constructIndex
+      });
     } catch (error) {
       // Structural entry indexing is an optimization. Repository preparation and
       // ordinary root-based Query must still work when a language parser is absent.
       this.constructIndex = [];
       this.constructIndexVersion = 0;
+      this.constructIndexMeta = null;
     }
   }
 
