@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import simpleGit from 'simple-git';
+import { analyzePythonRepository } from './languages/python/adapter.js';
 
 const CODE_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.java', '.kt', '.kts', '.py', '.rb', '.go', '.rs', '.cs',
@@ -230,6 +231,8 @@ export class CodeTopology {
     this.callers = new Map();
     this.repositoryReadme = '';
     this.targetCommit = '';
+    this.constructIndex = [];
+    this.constructIndexVersion = 0;
   }
 
   async prepare(repoUrl) {
@@ -262,6 +265,7 @@ export class CodeTopology {
     this.repositoryReadme = readmeRel ? (await fs.readFile(path.join(this.repoDir, readmeRel), 'utf8').catch(() => '')).slice(0, MAX_README_CHARS) : '';
 
     await this.buildSymbolGraph();
+    await this.buildConstructIndex();
 
     return {
       repoUrl: this.repoUrl,
@@ -307,6 +311,23 @@ export class CodeTopology {
           this.callers.get(target.id).push({ sourceId: symbol.id, relation: ref.relation });
         }
       }
+    }
+  }
+
+  async buildConstructIndex() {
+    this.constructIndex = [];
+    this.constructIndexVersion = 0;
+    const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
+    if (!pythonFiles.length) return;
+    try {
+      const analyzed = await analyzePythonRepository({ repoDir: this.repoDir, files: pythonFiles });
+      this.constructIndex = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
+      this.constructIndexVersion = Number(analyzed?.version || 0);
+    } catch (error) {
+      // Structural entry indexing is an optimization. Repository preparation and
+      // ordinary root-based Query must still work when a language parser is absent.
+      this.constructIndex = [];
+      this.constructIndexVersion = 0;
     }
   }
 
