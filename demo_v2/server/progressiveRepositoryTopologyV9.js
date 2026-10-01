@@ -50,7 +50,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
 
 
   async augmentPythonAstGraph() {
-    const result = await analyzePythonRepository({ repoDir: this.repoDir, files: this.files });
+    const result = this.pythonAnalysis || await analyzePythonRepository({ repoDir: this.repoDir, files: this.files });
+    this.pythonAnalysis = result;
     const pythonSymbols = Array.isArray(result?.symbols) ? result.symbols : [];
     this.externalSymbols = Array.isArray(result?.externalSymbols) ? result.externalSymbols : [];
     if (!pythonSymbols.length) return { version: Number(result?.version || 1), symbolCount: 0, externalSymbolCount: this.externalSymbols.length, resolvedCallCount: 0, unresolvedCallCount: 0 };
