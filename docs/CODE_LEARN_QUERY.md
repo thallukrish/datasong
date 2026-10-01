@@ -325,7 +325,7 @@ Matching results are grouped into candidate functions or function-regions and ra
 
 Regex search only narrows the candidate set. It does not infer causality or answer the issue.
 
-For each selected candidate, LeMap maps the regex hit to the enclosing function and also creates a small contained function-region around the matched source span. Learn runs exactly as it does for a normal Query-selected function: it semantically annotates the enclosing function, annotates the highlighted matched region, and expands the enclosing function through its normal next-three-call-level window.
+For each selected candidate, LeMap maps each regex hit to the enclosing function and creates a small contained function-region around each matched source line. Multiple distant matches in the same function remain separate highlighted regions rather than being merged into one large span. Learn runs exactly as it does for a normal Query-selected function: it semantically annotates the enclosing function, annotates the highlighted matched region, and expands the enclosing function through its normal next-three-call-level window.
 
 The highlighted region preserves the exact matched line(s), regex pattern(s), and surrounding source lines so Query can see why this function was selected. The enclosing function remains the traversal root, so any calls in that function still receive the normal three-level lookahead.
 
