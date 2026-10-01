@@ -296,24 +296,20 @@ normal Query exploration
 
 When the issue suggests a recognizable code construct, the model may request regex-based code search before semantic traversal.
 
-The model does not emit natural-language grep terms. It emits a small bounded set of regular expressions shaped like code in the repository language. The repository language/file extensions are supplied as context so the model can respect the source syntax without requiring a language-specific search DSL.
+The model emits a small bounded set of regular expressions to grep the repository code. The repository language/file extensions are supplied as context so the model can shape those regexes according to the syntax of the codebase without requiring a language-specific search DSL.
 
-Examples:
+The contract is intentionally minimal:
 
 ```text
-bad
-Field
-deprecated
-extra keyword arguments
-
-good
-\\bField\\s*\\(
-\\bField\\s*\\([^)]*\\binitial\\s*=
-def\\s+initial_for_field\\s*\\(
-class\\s+GoodConf\\b
+issue / question
++ repository language
+        ↓
+model generates regex for that language
+        ↓
+LeMap greps the codebase
 ```
 
-The regex should search for code structure such as calls, keyword arguments, function or class declarations, decorators/annotations, assignments, member access, or literals inside code expressions. Bare vocabulary tokens and warning/error prose are not valid entry-search patterns.
+The regexes must resemble the source code being searched and respect the supplied language syntax. Natural-language search terms or paraphrases of the issue are not used as entry-search patterns.
 
 LeMap performs the regex scan deterministically over tracked code files. The implementation is cross-platform Node filesystem search rather than a dependency on platform-specific `grep`, `findstr` or shell behavior.
 
