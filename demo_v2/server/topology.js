@@ -16,7 +16,7 @@ const MAX_SEARCH_RESULTS = 12;
 const MAX_ENTRY_SYMBOLS = 24;
 const MAX_README_CHARS = 5000;
 const CONSTRUCT_INDEX_SCHEMA_VERSION = 1;
-const PYTHON_ANALYZER_VERSION = 3;
+const PYTHON_ANALYZER_VERSION = 4;
 
 function normalizeRepoUrl(repoUrl) {
   return String(repoUrl || '').trim().replace(/\/$/, '');
