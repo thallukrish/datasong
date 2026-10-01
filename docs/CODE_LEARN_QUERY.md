@@ -292,25 +292,62 @@ Learn current region + next 3 call levels
 normal Query exploration
 ```
 
-### Pattern search
+### Regex code search
 
-When the issue contains concrete source signatures such as an API/function name, warning text, keyword argument, metadata key, decorator, annotation, constant, config key, table/field name or distinctive code fragment, the model may request a grep-like repository search before semantic traversal.
+When the issue suggests a recognizable code construct, the model may request regex-based code search before semantic traversal.
 
-The model supplies a small bounded set of literal or regex patterns. LeMap performs the scan deterministically over tracked code files. The implementation is cross-platform Node filesystem search rather than a dependency on platform-specific `grep`, `findstr` or shell behavior.
+The model does not emit natural-language grep terms. It emits a small bounded set of regular expressions shaped like code in the repository language. The repository language/file extensions are supplied as context so the model can respect the source syntax without requiring a language-specific search DSL.
+
+Examples:
+
+```text
+bad
+Field
+deprecated
+extra keyword arguments
+
+good
+\\bField\\s*\\(
+\\bField\\s*\\([^)]*\\binitial\\s*=
+def\\s+initial_for_field\\s*\\(
+class\\s+GoodConf\\b
+```
+
+The regex should search for code structure such as calls, keyword arguments, function or class declarations, decorators/annotations, assignments, member access, or literals inside code expressions. Bare vocabulary tokens and warning/error prose are not valid entry-search patterns.
+
+LeMap performs the regex scan deterministically over tracked code files. The implementation is cross-platform Node filesystem search rather than a dependency on platform-specific `grep`, `findstr` or shell behavior.
 
 Search results retain:
 
 - source path and line
-- matched text and pattern
+- matched text and regex
 - enclosing executable symbol when known
 - matching external boundary when known
 - test/production classification
 
-Matching results are grouped into candidate executable regions and ranked before exploration. Production code receives preference over test/spec/fixture/mock paths unless the evidence itself only exists in tests.
+Matching results are grouped into candidate functions or function-regions and ranked before exploration. Production code receives preference over test/spec/fixture/mock paths unless the strongest structural evidence exists in tests.
 
-A matched function or region becomes a temporary query entry point. It does not become a permanent repository root.
+Regex search only narrows the candidate set. It does not infer causality or answer the issue.
 
-This phase performs localization only. It does not infer causality or answer the issue.
+For each selected candidate, the model identifies the enclosing function or meaningful region containing the matched code. Learn semantically annotates that function/region and expands its normal next-three-call-level window. Those learned regions then become temporary seeds for the existing Query exploration.
+
+```text
+issue / question
+        ↓
+model generates language-syntax-aware regex
+        ↓
+LeMap scans source and narrows candidate regions
+        ↓
+model selects candidate function / region
+        ↓
+Learn annotates region + next 3 call levels
+        ↓
+selected learned region becomes temporary seed
+        ↓
+normal causal / relevance exploration
+```
+
+A matched function or region does not become a permanent repository root.
 
 ### Root-entry fallback
 
