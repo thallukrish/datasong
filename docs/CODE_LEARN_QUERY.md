@@ -515,6 +515,32 @@ Exact matching is preferred when the issue supplies a concrete identifier or key
 
 Facet values can be presented by frequency or alphabetically. This lets the model browse a large branch without receiving raw source rows.
 
+Each facet value also carries up to two short representative canonical code samples. The samples are selected to prefer structurally different rows when possible, for example different keyword-argument shapes for the same call name.
+
+```text
+name
+  Field 19
+    samples
+      Field(default=None)
+      Field(initial=lambda: True)
+
+  validator 12
+    samples
+      validator("name")
+      validator("email")
+```
+
+Samples are navigation hints only. They help the model understand what a facet bucket contains without materializing all rows. They are not semantic conclusions and are never sufficient by themselves to establish causality.
+
+Samples are deliberately bounded:
+
+```text
+maximum 2 per facet value
+canonical snippet preferred
+maximum 120 characters each
+no file path unless rows are materialized
+```
+
 For example:
 
 ```text
@@ -729,3 +755,4 @@ Localize   final supporting evidence → exact source ranges
 30. Facets should remain low-cardinality and compress incidental syntax differences rather than reproduce source-level variable names.
 31. The model may refine a facet with exact, prefix or regex matching and may browse facet values by count or alphabetically.
 32. Once a grounded exact or prefix anchor yields a small candidate set, LeMap materializes it rather than refining further from frequency alone.
+33. Each facet value may expose at most two short representative canonical snippets chosen for structural diversity; these samples guide navigation but do not establish causality.
