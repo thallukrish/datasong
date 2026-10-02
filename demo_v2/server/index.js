@@ -303,7 +303,10 @@ app.post('/api/prepare-repository', async (req, res) => {
   try {
     topology.targetCommit = requestedRevision;
     topology.forceConstructIndexRebuild = true;
-    const prepared = await topology.prepare(repoUrl);
+    console.log(`[profile-save] indexing repo=${repoUrl} revision=${requestedRevision||'HEAD'}`);
+    const saveStarted=Date.now();
+    const prepared = await topology.prepareIndexOnly(repoUrl);
+    console.log(`[profile-save] index ready ${Date.now()-saveStarted}ms commit=${prepared?.commit||''} records=${prepared?.constructIndex?.recordCount||0}`);
     repositoryPreparation = {
       status:'ready',
       repoUrl,
@@ -323,6 +326,7 @@ app.post('/api/prepare-repository', async (req, res) => {
     broadcast(explorer.snapshot());
     return res.json({ ok:true, ...repositoryPreparation });
   } catch (error) {
+    console.error('[profile-save] indexing failed', error?.stack || error?.message || String(error));
     repositoryPreparation = { status:'error', repoUrl, requestedRevision, commit:'', constructIndex:null, error:error.message || 'Repository preparation failed' };
     broadcast(explorer.snapshot());
     return res.status(500).json({ error:repositoryPreparation.error });
