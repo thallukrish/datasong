@@ -524,7 +524,42 @@ CALL 4872
 
 Only the final small row set is materialized into source snippets and enclosing functions for Learn.
 
-The LeMap construct vocabulary is intentionally small and language-neutral. Language adapters may add low-cardinality structural facets beneath those constructs, such as loop kind, start kind, end kind, increment kind, call kind, or argument style. Those facets should compress syntax differences rather than preserve incidental variable names.
+The LeMap construct vocabulary is intentionally small and language-neutral. Language adapters add low-cardinality structural facets beneath those constructs. These facets compress syntax differences rather than preserve incidental variable names.
+
+The Python adapter currently emits:
+
+```text
+LOOP
+  loopKind = counted | collection | conditional
+  startKind = zero | one | literal | variable | expression
+  endKind = collection_length | literal | variable | expression
+  incrementKind = one | literal | variable | expression
+
+CALL
+  callKind = function | method
+  argumentStyle = none | positional | keyword | mixed
+  positionalCountBand = 0 | 1 | 2_3 | many
+```
+
+For example, all of these:
+
+```python
+for i in range(len(a)):
+for j in range(0, len(items)):
+for k in range(len(records)):
+```
+
+collapse into the same useful structural neighborhood:
+
+```text
+LOOP
+  loopKind = counted
+  startKind = zero
+  endKind = collection_length
+  incrementKind = one
+```
+
+The original variable names and source remain available only when the final rows are materialized.
 
 The index therefore acts as a coarse funnel:
 
