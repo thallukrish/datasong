@@ -302,6 +302,7 @@ app.post('/api/prepare-repository', async (req, res) => {
   broadcast(explorer.snapshot());
   try {
     topology.targetCommit = requestedRevision;
+    topology.forceConstructIndexRebuild = true;
     const prepared = await topology.prepare(repoUrl);
     repositoryPreparation = {
       status:'ready',
@@ -326,6 +327,7 @@ app.post('/api/prepare-repository', async (req, res) => {
     broadcast(explorer.snapshot());
     return res.status(500).json({ error:repositoryPreparation.error });
   } finally {
+    topology.forceConstructIndexRebuild = false;
     preparingRepository = false;
   }
 });
