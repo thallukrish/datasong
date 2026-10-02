@@ -302,13 +302,15 @@ Repository indexing is not a Learn operation. Saving the repository profile trig
 Profiles
 → Save repository / revision
 → resolve branch or commit
-→ prepare repository topology
+→ checkout the requested revision
 → rebuild structural construct index from source
 → replace the cached snapshot for the resolved commit
-→ mark repository revision ready
+→ mark repository revision index-ready
 ```
 
 Profile Save always rebuilds the structural index, even when the same branch, commit, schema version and analyzer version already have a complete cached snapshot. This makes Save the explicit "refresh from source" operation.
+
+Profile Save is deliberately index-only. It does not build call-path indexes, run framework topology adapters, synthesize the full traversal topology, or invoke semantic Learn. Those deterministic traversal structures are prepared lazily when Query or Learn first needs the repository. The cached AST/index snapshot from Profile Save is reused during that later full preparation, so the expensive language parse is not repeated.
 
 Learn does not own this lifecycle. Learn consumes an already prepared repository revision and its structural index. Other internal preparation paths may reuse a complete compatible commit-level snapshot when no explicit Profile Save requested a refresh.
 
@@ -762,7 +764,7 @@ Localize   final supporting evidence → exact source ranges
 23. Structural indexes are cached by exact commit SHA, not by mutable branch name.
 24. A cached index is reusable only when commit, schema version, analyzer version and completion status match.
 25. Incremental indexing may optimize construction later, but Query always consumes a complete logical snapshot for the selected commit.
-26. Saving a repository profile triggers repository preparation and forces a fresh structural index rebuild for the resolved commit; Learn does not initiate the indexing lifecycle.
+26. Saving a repository profile performs only checkout plus a fresh structural index rebuild for the resolved commit; full traversal topology and semantic Learn are deferred until Query or Learn needs them.
 27. Structured search ranks whole-value matches above prefix matches and prefix matches above later substring matches.
 28. Canonical AST snippets make structural matching insensitive to harmless source formatting such as spaces around calls and keyword assignment.
 29. Structural entry selection is a bounded faceted tree walk, normally two or three model-to-LeMap refinements before source rows are materialized.
