@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 
-const ENTRY_SELECT_SYSTEM = 'Navigate LeMap\'s structural code index as a short faceted tree walk before semantic exploration. The first payload gives top-level LeMap construct counts. Choose one construct when structural localization is useful. Subsequent payloads give only the current filtered row count plus compact facets. Refine one facet at a time using exact, prefix, or regex matching. Prefer exact when the issue supplies a concrete identifier or keyword, then prefix, then regex. You may request alphabetical facet ordering when names are more useful than frequency. Materialize rows once an exact or prefix refinement reduces the set to a small candidate set; do not keep refining merely because a frequent facet value exists. Additional refinement values must be grounded in the issue/question or be structurally discriminative, never guessed as causal. Use root_entries for end-to-end flow questions or when structural localization is not useful. Use pattern_search only when no structural index exists. Never infer causality here. Return one JSON action: {"action":"select_construct","construct":"call","reason":""}, {"action":"refine","field":"name","match":"exact|prefix|regex","value":"Field","facetSort":"count|alpha","reason":""}, {"action":"browse_facets","facetSort":"count|alpha","reason":""}, {"action":"show_rows","reason":""}, {"action":"pattern_search","patterns":[{"pattern":"","kind":"regex","weight":1}],"reason":""}, or {"action":"root_entries","reason":""}.';
+const ENTRY_SELECT_SYSTEM = 'Navigate LeMap\'s structural code index as a short faceted tree walk before semantic exploration. The first payload gives top-level LeMap construct counts. Choose one construct when structural localization is useful. Subsequent payloads give only the current filtered row count plus compact facets. Each facet value may include up to two short representative canonical code samples to clarify what that bucket means; use them as navigation evidence, not as proof of causality. Refine one facet at a time using exact, prefix, or regex matching. Prefer exact when the issue supplies a concrete identifier or keyword, then prefix, then regex. You may request alphabetical facet ordering when names are more useful than frequency. Materialize rows once an exact or prefix refinement reduces the set to a small candidate set; do not keep refining merely because a frequent facet value exists. Additional refinement values must be grounded in the issue/question or be structurally discriminative, never guessed as causal. Use root_entries for end-to-end flow questions or when structural localization is not useful. Use pattern_search only when no structural index exists. Never infer causality here. Return one JSON action: {"action":"select_construct","construct":"call","reason":""}, {"action":"refine","field":"name","match":"exact|prefix|regex","value":"Field","facetSort":"count|alpha","reason":""}, {"action":"browse_facets","facetSort":"count|alpha","reason":""}, {"action":"show_rows","reason":""}, {"action":"pattern_search","patterns":[{"pattern":"","kind":"regex","weight":1}],"reason":""}, or {"action":"root_entries","reason":""}.';
 
 const MAX_PATTERNS = 8;
 const MAX_SEARCHES = 6;
@@ -108,20 +108,65 @@ function rowsForSelection(index=[],construct='',filters=[]){
   });
 }
 
+function facetSampleText(row={}){
+  return text(row?.canonicalSnippet||row?.snippet||'',120);
+}
+
+function facetSampleShape(row={}){
+  return JSON.stringify({
+    constructType:row?.constructType||'',
+    callKind:row?.callKind||'',
+    argumentStyle:row?.argumentStyle||'',
+    keywordArgs:arr(row?.keywordArgs).map(String).sort(),
+    loopKind:row?.loopKind||'',
+    startKind:row?.startKind||'',
+    endKind:row?.endKind||'',
+    incrementKind:row?.incrementKind||''
+  });
+}
+
+function representativeFacetSamples(rows=[],limit=2){
+  const out=[];
+  const seenText=new Set();
+  const seenShape=new Set();
+  const candidates=arr(rows).filter(row=>facetSampleText(row));
+  for(const row of candidates){
+    const sample=facetSampleText(row);
+    const shape=facetSampleShape(row);
+    if(seenText.has(sample)||seenShape.has(shape))continue;
+    out.push(sample);seenText.add(sample);seenShape.add(shape);
+    if(out.length>=limit)return out;
+  }
+  for(const row of candidates){
+    const sample=facetSampleText(row);
+    if(seenText.has(sample))continue;
+    out.push(sample);seenText.add(sample);
+    if(out.length>=limit)break;
+  }
+  return out;
+}
+
 function facetEntries(rows,field,sort='count',limit=FACET_LIMIT){
-  const counts=new Map();
+  const groups=new Map();
   for(const row of rows){
     const raw=row?.[field];
     const values=Array.isArray(raw)?raw:[raw];
     for(const value of values){
       const key=String(value??'').trim();
       if(!key||key.length>120)continue;
-      counts.set(key,(counts.get(key)||0)+1);
+      if(!groups.has(key))groups.set(key,[]);
+      groups.get(key).push(row);
     }
   }
-  const entries=[...counts.entries()];
-  entries.sort(sort==='alpha'?(x,y)=>x[0].localeCompare(y[0])||y[1]-x[1]:(x,y)=>y[1]-x[1]||x[0].localeCompare(y[0]));
-  return entries.slice(0,limit).map(([value,count])=>[value,count]);
+  const entries=[...groups.entries()].map(([value,matchingRows])=>({
+    value,
+    count:matchingRows.length,
+    samples:representativeFacetSamples(matchingRows,2)
+  }));
+  entries.sort(sort==='alpha'
+    ?(x,y)=>x.value.localeCompare(y.value)||y.count-x.count
+    :(x,y)=>y.count-x.count||x.value.localeCompare(y.value));
+  return entries.slice(0,limit);
 }
 
 function facetView(rows=[],sort='count'){
