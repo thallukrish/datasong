@@ -310,7 +310,11 @@ Profiles
 
 Profile Save always rebuilds the structural index, even when the same branch, commit, schema version and analyzer version already have a complete cached snapshot. This makes Save the explicit "refresh from source" operation.
 
-Profile Save is deliberately index-only. It does not build call-path indexes, run framework topology adapters, synthesize the full traversal topology, or invoke semantic Learn. Those deterministic traversal structures are prepared lazily when Query or Learn first needs the repository. The cached AST/index snapshot from Profile Save is reused during that later full preparation, so the expensive language parse is not repeated.
+Profile Save is deliberately index-only. It does not build call-path indexes, run framework topology adapters, synthesize the full traversal topology, or invoke semantic Learn.
+
+Code Query does not require the repository-wide call-path index. When a structural index is available, Query hydrates the cached language AST symbols and deterministic direct-call edges only. Faceted structural search then chooses the entry functions, and Learn expands a bounded local call window from those entries. Repository-wide call-path construction remains available for workflows such as Enterprise Learn, where discovering global business flows is itself the objective.
+
+The cached AST/index snapshot from Profile Save is therefore reused directly by Code Query, so the expensive language parse is not repeated and Query does not construct unrelated repository-wide paths.
 
 Learn does not own this lifecycle. Learn consumes an already prepared repository revision and its structural index. Other internal preparation paths may reuse a complete compatible commit-level snapshot when no explicit Profile Save requested a refresh.
 
@@ -617,9 +621,34 @@ language AST
 → bounded tree walk
 → exact/prefix/regex refinement
 → small source row set
+→ entry functions
+→ bounded local direct-call topology
 → Learn
 → Query
 ```
+
+For Code Query, the faceted search is also the boundary that controls graph construction. LeMap does not first build every call path in the repository and then search those paths. It first narrows the repository structurally, maps the resulting rows to enclosing entry functions, and expands deterministic direct-call relationships only from those entries as Learn and Query need them.
+
+```text
+Code Query
+  issue / question
+        ↓
+  faceted structural search
+        ↓
+  source-only triage
+        ↓
+  entry functions
+        ↓
+  local direct calls, bounded to the Learn window
+        ↓
+  Learn
+        ↓
+  Query chooses the next branch
+        ↓
+  expand locally again only when needed
+```
+
+Repository-wide call-path indexing is intentionally outside this Code Query path.
 
 This avoids both extremes: sending thousands of raw rows to the model and over-fragmenting code into excessively specific structural fingerprints.
 
@@ -764,7 +793,7 @@ Localize   final supporting evidence → exact source ranges
 23. Structural indexes are cached by exact commit SHA, not by mutable branch name.
 24. A cached index is reusable only when commit, schema version, analyzer version and completion status match.
 25. Incremental indexing may optimize construction later, but Query always consumes a complete logical snapshot for the selected commit.
-26. Saving a repository profile performs only checkout plus a fresh structural index rebuild for the resolved commit; full traversal topology and semantic Learn are deferred until Query or Learn needs them.
+26. Saving a repository profile performs only checkout plus a fresh structural index rebuild for the resolved commit; semantic Learn is never part of Profile Save.
 27. Structured search ranks whole-value matches above prefix matches and prefix matches above later substring matches.
 28. Canonical AST snippets make structural matching insensitive to harmless source formatting such as spaces around calls and keyword assignment.
 29. Structural entry selection is a bounded faceted tree walk, normally two or three model-to-LeMap refinements before source rows are materialized.
@@ -774,3 +803,7 @@ Localize   final supporting evidence → exact source ranges
 33. Each facet value may expose at most two short representative canonical snippets chosen for structural diversity; these samples guide navigation but do not establish causality.
 34. Structural matches are source-triaged before three-level Learn expansion, and no more than four structural candidates are expanded initially.
 35. A matched call site that directly passes the deprecated or invalid argument to a resolved external API is a valid causal location; Query must not invent an absent local wrapper to explain it.
+36. Code Query must not require a repository-wide call-path index when a structural language index is available.
+37. Faceted structural search supplies Code Query entry functions before local call expansion begins.
+38. Code Query expands deterministic direct-call topology only from selected entries and only to the bounded Learn window needed for the current decision.
+39. Repository-wide call-path discovery remains a separate capability for workflows whose purpose is global flow discovery, such as Enterprise Learn.
