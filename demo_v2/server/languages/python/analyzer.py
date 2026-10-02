@@ -3,6 +3,11 @@ import ast, json, os, sys
 from pathlib import Path
 from urllib.parse import quote
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 root = Path(sys.argv[1]).resolve()
 requested = json.loads(sys.stdin.read() or "[]")
 
