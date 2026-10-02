@@ -40,6 +40,12 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     const startedAt=Date.now();
     console.log('[code-query-prepare] START structural query topology');
 
+    this.callPathIndex = null;
+    this.moquiEntitySchema = null;
+    this.moquiXmlExecution = null;
+    this.entitySchemas = [];
+    this.entitySchemaByName = new Map();
+
     const prep = await super.prepareIndexOnly(repoUrl);
     if (!Array.isArray(this.constructIndex) || !this.constructIndex.length || !this.pythonAnalysis) {
       console.log('[code-query-prepare] structural index unavailable; falling back to full topology preparation');
