@@ -87,7 +87,7 @@ export function constructIndexSummary(index=[]){
 }
 
 function escapeRegex(value=''){
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\function fieldMatchQuality(row,filter){');
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 }
 
 function filterFromFacetAction(action={}){
@@ -95,7 +95,91 @@ function filterFromFacetAction(action={}){
   const value=String(action?.value||'').trim();
   const match=String(action?.match||'exact').toLowerCase();
   if(!field||!value)return null;
-  if(match==='exact')return {field,regex:'^'+escapeRegex(value)+'
+  if(match==='exact')return {field,regex:'^'+escapeRegex(value)+'$',match:'exact',value};
+  if(match==='prefix')return {field,regex:'^'+escapeRegex(value),match:'prefix',value};
+  if(match==='regex'){try{new RegExp(value,'i')}catch{return null}return {field,regex:value,match:'regex',value};}
+  return null;
+}
+
+function rowsForSelection(index=[],construct='',filters=[]){
+  return arr(index).filter(row=>{
+    if(construct&&String(row?.constructType||'').toLowerCase()!==construct)return false;
+    return filters.every(filter=>!!fieldMatchQuality(row,filter));
+  });
+}
+
+function facetEntries(rows,field,sort='count',limit=FACET_LIMIT){
+  const counts=new Map();
+  for(const row of rows){
+    const raw=row?.[field];
+    const values=Array.isArray(raw)?raw:[raw];
+    for(const value of values){
+      const key=String(value??'').trim();
+      if(!key||key.length>120)continue;
+      counts.set(key,(counts.get(key)||0)+1);
+    }
+  }
+  const entries=[...counts.entries()];
+  entries.sort(sort==='alpha'?(x,y)=>x[0].localeCompare(y[0])||y[1]-x[1]:(x,y)=>y[1]-x[1]||x[0].localeCompare(y[0]));
+  return entries.slice(0,limit).map(([value,count])=>[value,count]);
+}
+
+function facetView(rows=[],sort='count'){
+  const excluded=new Set(['constructType','sourcePath','startLine','endLine','snippet','canonicalSnippet']);
+  const fields=[...new Set(rows.flatMap(row=>Object.keys(row||{})).filter(key=>!excluded.has(key)))].sort();
+  const facets={};
+  for(const field of fields){const values=facetEntries(rows,field,sort);if(values.length)facets[field]=values;}
+  return {count:rows.length,fields:Object.keys(facets),facets,sort};
+}
+
+function topLevelConstructCounts(index=[]){
+  const counts=new Map();
+  for(const row of arr(index)){const type=String(row?.constructType||'').trim().toLowerCase();if(type)counts.set(type,(counts.get(type)||0)+1);}
+  return [...counts.entries()].sort((x,y)=>y[1]-x[1]||x[0].localeCompare(y[0])).map(([construct,count])=>({construct,count}));
+}
+
+function actionReason(action={}){return text(action?.reason||'',320);}
+
+function materializeStructuredRows({topology,construct,filters,rows}){
+  const hits=[];const seen=new Set();
+  for(const row of arr(rows).slice(0,MAX_HITS)){
+    const filterMatches=filters.map(filter=>fieldMatchQuality(row,filter)).filter(Boolean);
+    const exactCount=filterMatches.filter(match=>match.quality==='exact').length;
+    const prefixCount=filterMatches.filter(match=>match.quality==='prefix').length;
+    const containsCount=filterMatches.filter(match=>match.quality==='contains').length;
+    const structuralScore=exactCount*1000+prefixCount*100+containsCount*10+filters.length*5+1;
+    const line=Number(row?.startLine||0);const sourcePath=String(row?.sourcePath||'');
+    const key=[sourcePath,line,construct].join('|');if(seen.has(key))continue;seen.add(key);
+    const symbol=enclosingSymbol(topology,sourcePath,line);const external=!symbol?externalAtLine(topology,sourcePath,line):null;
+    hits.push({sourcePath,line,endLine:Number(row?.endLine||line),text:text(row?.snippet||'',700),pattern:filters.length?filters.map(filter=>filter.field+'~'+filter.regex).join(' & '):construct,kind:'structured',constructType:construct,weight:1,structuralScore,matchQuality:{exact:exactCount,prefix:prefixCount,contains:containsCount,filters:filterMatches},symbolId:symbol?.id||'',symbolName:symbol?.name||row?.parentFunction||row?.parentClass||'',externalId:external?.id||'',externalName:external?.qualifiedName||external?.name||'',test:isTestPath(sourcePath),metadata:row});
+  }
+  return hits;
+}
+
+export async function walkConstructFacets({question,mode,topology,client,model,usage}){
+  const index=arr(topology?.constructIndex);
+  if(!index.length)return {strategy:'unavailable',history:[],construct:'',filters:[],rows:[]};
+  const counts=topLevelConstructCounts(index);const history=[];let construct='';let filters=[];let rows=index;let facetSort='count';
+  for(let step=0;step<MAX_FACET_STEPS;step++){
+    const payload=construct?{q:question,mode,step:step+1,selected:{construct,filters:filters.map(({field,match,value})=>({field,match,value}))},current:facetView(rows,facetSort),canMaterialize:true}:{q:question,mode,step:step+1,constructs:counts};
+    const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,payload);addUsage(usage,call.usage);
+    const action=call.parsed||{};history.push({step:step+1,action,usage:call.usage,currentCount:rows.length});
+    const kind=String(action?.action||'').toLowerCase();
+    if(!construct){
+      if(kind==='select_construct'){const wanted=String(action?.construct||'').toLowerCase();if(!counts.some(item=>item.construct===wanted))break;construct=wanted;rows=rowsForSelection(index,construct,filters);if(rows.length<=MATERIALIZE_AT)break;continue;}
+      if(kind==='pattern_search')return {strategy:'pattern_search',patterns:normalizedPatterns(action?.patterns),reason:actionReason(action),history,construct:'',filters:[],rows:[]};
+      if(kind==='root_entries')return {strategy:'root_entries',reason:actionReason(action),history,construct:'',filters:[],rows:[]};
+      break;
+    }
+    if(kind==='show_rows')break;
+    if(kind==='root_entries')return {strategy:'root_entries',reason:actionReason(action),history,construct,filters,rows:[]};
+    if(kind==='refine'){facetSort=String(action?.facetSort||facetSort).toLowerCase()==='alpha'?'alpha':'count';const filter=filterFromFacetAction(action);const availableFields=new Set(facetView(rows,facetSort).fields);if(!filter||!availableFields.has(filter.field))break;filters=[...filters,filter];rows=rowsForSelection(index,construct,filters);if(rows.length<=MATERIALIZE_AT)break;continue;}
+    break;
+  }
+  if(!construct)return {strategy:'root_entries',reason:'No usable structural branch selected.',history,construct:'',filters:[],rows:[]};
+  return {strategy:'structured_search',reason:'Faceted structural tree walk.',history,construct,filters,rows};
+}
+function fieldMatchQuality(row,filter){
   let matcher;
   try{matcher=new RegExp(filter.regex,'i')}catch{return null}
   const raw=row?.[filter.field];
@@ -253,39 +337,18 @@ export function rankPatternEntryHits(hits=[]){
 export async function selectCodeEntries({question,mode,topology,client,model,usage,log=()=>{}}){
   const languages=[...new Set(arr(topology?.files).map(file=>path.extname(String(file||'')).toLowerCase()).filter(Boolean))].slice(0,12);
   const indexSummary=constructIndexSummary(topology?.constructIndex);
-
   if(indexSummary.length){
     const walked=await walkConstructFacets({question,mode,topology,client,model,usage});
-    if(walked.strategy==='root_entries'){
-      const plan={strategy:'root_entries',reason:walked.reason||'',searches:[],patterns:[],facetHistory:walked.history};
-      log('query_v5_entry_selection',{plan,indexSummary,hits:[],candidates:[]});
-      return {plan,hits:[],candidates:[],indexSummary};
-    }
-    if(walked.strategy==='pattern_search'){
-      const hits=await scanRepositoryPatterns({topology,patterns:walked.patterns});
-      const candidates=rankPatternEntryHits(hits);
-      const plan={strategy:'pattern_search',reason:walked.reason||'',searches:[],patterns:walked.patterns,facetHistory:walked.history};
-      log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});
-      return {plan,hits,candidates,indexSummary};
-    }
+    if(walked.strategy==='root_entries'){const plan={strategy:'root_entries',reason:walked.reason||'',searches:[],patterns:[],facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:[],candidates:[]});return {plan,hits:[],candidates:[],indexSummary};}
+    if(walked.strategy==='pattern_search'){const hits=await scanRepositoryPatterns({topology,patterns:walked.patterns});const candidates=rankPatternEntryHits(hits);const plan={strategy:'pattern_search',reason:walked.reason||'',searches:[],patterns:walked.patterns,facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});return {plan,hits,candidates,indexSummary};}
     const hits=materializeStructuredRows({topology,construct:walked.construct,filters:walked.filters,rows:walked.rows});
     const candidates=rankPatternEntryHits(hits);
     const plan={strategy:'structured_search',reason:walked.reason||'',searches:[{construct:walked.construct,weight:1,filters:walked.filters.map(({field,regex})=>({field,regex}))}],patterns:[],facetHistory:walked.history,remainingRowCount:walked.rows.length};
     log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});
     return {plan,hits,candidates,indexSummary};
   }
-
   const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question,mode,languages,index:{available:false}});addUsage(usage,call.usage);
-  const action=call.parsed||{};const kind=String(action?.action||'').toLowerCase();
-  const patterns=kind==='pattern_search'?normalizedPatterns(action?.patterns):[];
-  if(patterns.length){
-    const hits=await scanRepositoryPatterns({topology,patterns});
-    const candidates=rankPatternEntryHits(hits);
-    const plan={strategy:'pattern_search',reason:actionReason(action),searches:[],patterns};
-    log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});
-    return {plan,hits,candidates,indexSummary};
-  }
-  const plan={strategy:'root_entries',reason:actionReason(action),searches:[],patterns:[]};
-  log('query_v5_entry_selection',{plan,indexSummary,hits:[],candidates:[],usage:call.usage});
-  return {plan,hits:[],candidates:[],indexSummary};
+  const action=call.parsed||{};const kind=String(action?.action||'').toLowerCase();const patterns=kind==='pattern_search'?normalizedPatterns(action?.patterns):[];
+  if(patterns.length){const hits=await scanRepositoryPatterns({topology,patterns});const candidates=rankPatternEntryHits(hits);const plan={strategy:'pattern_search',reason:actionReason(action),searches:[],patterns};log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});return {plan,hits,candidates,indexSummary};}
+  const plan={strategy:'root_entries',reason:actionReason(action),searches:[],patterns:[]};log('query_v5_entry_selection',{plan,indexSummary,hits:[],candidates:[],usage:call.usage});return {plan,hits:[],candidates:[],indexSummary};
 }
