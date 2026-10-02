@@ -463,30 +463,83 @@ Both index as a call named `Field` with keyword argument `initial`. Snippet filt
 
 ### Faceted refinement
 
-If a construct category contains hundreds or thousands of entries, LeMap does not send those entries to the model. It sends counts and compact facets instead.
+Structural entry selection is a bounded model-to-LeMap tree walk rather than one large one-shot search.
 
-Conceptually:
+The first step exposes only the top-level LeMap construct vocabulary and counts:
 
 ```text
-calls = 4872
-
-searchable fields
-name
-module
-qualifiedName
-parentFunction
-parentClass
-keywordArgs
-snippet
-
-facets
-name: ...
-module: ...
+CALL         4872
+ASSIGNMENT   1830
+CONDITION     914
+LOOP          402
+FUNCTION       986
+...
 ```
 
-The model can then request a narrow deterministic search. Only the resulting small candidate set is exposed for selection.
+The model selects one branch. LeMap then returns only the remaining row count and compact facets for that branch. The model may refine one facet at a time.
 
-The first implementation performs this in one model decision by providing the summary and facets together. The contract also allows iterative refinement later if one-shot filtering is insufficient.
+```text
+issue
+  ↓
+CALL 4872
+  ↓
+model selects CALL
+  ↓
+LeMap returns CALL facets + counts
+  ↓
+model selects name = Field
+  ↓
+LeMap returns remaining CALL facets
+  ↓
+model selects keywordArgs = initial
+  ↓
+small row set
+  ↓
+materialize exact source locations
+```
+
+The tree walk is capped at three model decisions. LeMap may stop earlier when the remaining candidate set is already small enough.
+
+A refinement supports:
+
+```text
+exact
+prefix
+regex
+```
+
+Exact matching is preferred when the issue supplies a concrete identifier or keyword. Prefix matching is preferred over a broader regex when it is sufficient.
+
+Facet values can be presented by frequency or alphabetically. This lets the model browse a large branch without receiving raw source rows.
+
+For example:
+
+```text
+CALL 4872
+→ browse name alphabetically
+→ exact Field
+→ keywordArgs exact initial
+→ 4 rows
+```
+
+Only the final small row set is materialized into source snippets and enclosing functions for Learn.
+
+The LeMap construct vocabulary is intentionally small and language-neutral. Language adapters may add low-cardinality structural facets beneath those constructs, such as loop kind, start kind, end kind, increment kind, call kind, or argument style. Those facets should compress syntax differences rather than preserve incidental variable names.
+
+The index therefore acts as a coarse funnel:
+
+```text
+language AST
+→ LeMap construct
+→ low-cardinality facets
+→ bounded tree walk
+→ exact/prefix/regex refinement
+→ small source row set
+→ Learn
+→ Query
+```
+
+This avoids both extremes: sending thousands of raw rows to the model and over-fragmenting code into excessively specific structural fingerprints.
 
 ### Regex source fallback
 
@@ -632,3 +685,6 @@ Localize   final supporting evidence → exact source ranges
 26. Saving a repository profile triggers repository preparation and structural indexing; Learn does not initiate the indexing lifecycle.
 27. Structured search ranks whole-value matches above prefix matches and prefix matches above later substring matches.
 28. Canonical AST snippets make structural matching insensitive to harmless source formatting such as spaces around calls and keyword assignment.
+29. Structural entry selection is a bounded faceted tree walk, normally two or three model-to-LeMap refinements before source rows are materialized.
+30. Facets should remain low-cardinality and compress incidental syntax differences rather than reproduce source-level variable names.
+31. The model may refine a facet with exact, prefix or regex matching and may browse facet values by count or alphabetically.
