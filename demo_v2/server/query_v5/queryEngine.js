@@ -459,9 +459,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   if(!wanted)throw new Error('Select a repository before querying code.');
 
   const requestedCommit=String(repoCommit||'').trim();
-  const loadedCommit=String(explorer.state?.commit||'').trim();
+  const loadedCommit=String(explorer.topology?.commit||explorer.state?.commit||'').trim();
   const revisionMismatch=requestedCommit&&(!loadedCommit||!loadedCommit.toLowerCase().startsWith(requestedCommit.toLowerCase()));
-  const sameRepo=String(explorer.state?.repoUrl||'').trim()===wanted;
+  const sameRepo=String(explorer.topology?.repoUrl||'').trim()===wanted;
   const localTopologyReady=sameRepo&&!revisionMismatch
     &&Array.isArray(explorer.topology?.constructIndex)&&explorer.topology.constructIndex.length>0
     &&Number(explorer.topology?.symbolById?.size||0)>0;
@@ -524,6 +524,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     }
     return null;
   }).filter(Boolean));
+  console.log(`[query-v5] faceted entries selected=${selectedEntries.length} localWindowDepth=${WINDOW_DEPTH} globalCallPaths=skipped`);
   const selectedIds=new Set(selectedEntries.map(state=>state.id));
   const fallbackEntries=pool.filter(state=>!selectedIds.has(state.id));
   const entryTiers=selectedEntries.length?[selectedEntries,fallbackEntries]:[fallbackEntries];
