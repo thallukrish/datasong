@@ -2,11 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 
-const ENTRY_SELECT_SYSTEM = 'Choose how LeMap should localize promising starting code before semantic exploration. The payload contains repository languages and, when available, a structural code index summary with construct types, counts, searchable fields and compact facets. Prefer "structured_search" when that index can express the likely source. Select one or more construct types and give regex filters over their indexed metadata fields. Filters within one search are ANDed; multiple searches are ORed. Use issue vocabulary directly when it is a useful anchor. Use facets only to discover repository-specific vocabulary when the issue itself is insufficient. Do not ask to inspect hundreds of raw rows. Use "pattern_search" only when no useful structural index is available; then emit syntax-respecting source regex. Use "root_entries" for end-to-end flow questions or when there is no useful localization. Search only localizes candidates; it does not infer causality. Return {"strategy":"structured_search|pattern_search|root_entries","reason":"","searches":[{"construct":"","weight":1,"filters":[{"field":"","regex":""}]}],"patterns":[{"pattern":"","kind":"regex","weight":1}]}. Use at most 6 structured searches, 4 filters per search, or 8 raw patterns. weight is 1..5.';
+const ENTRY_SELECT_SYSTEM = 'Navigate LeMap\'s structural code index as a short faceted tree walk before semantic exploration. The first payload gives top-level LeMap construct counts. Choose one construct when structural localization is useful. Subsequent payloads give only the current filtered row count plus compact facets. Refine one facet at a time using exact, prefix, or regex matching. Prefer exact when the issue supplies a concrete identifier or keyword, then prefix, then regex. You may request alphabetical facet ordering when names are more useful than frequency. Ask to materialize rows once the set is small enough. Use root_entries for end-to-end flow questions or when structural localization is not useful. Use pattern_search only when no structural index exists. Never infer causality here. Return one JSON action: {"action":"select_construct","construct":"call","reason":""}, {"action":"refine","field":"name","match":"exact|prefix|regex","value":"Field","facetSort":"count|alpha","reason":""}, {"action":"show_rows","reason":""}, {"action":"pattern_search","patterns":[{"pattern":"","kind":"regex","weight":1}],"reason":""}, or {"action":"root_entries","reason":""}.';
 
 const MAX_PATTERNS = 8;
 const MAX_SEARCHES = 6;
 const MAX_FILTERS = 4;
+const MAX_FACET_STEPS = 3;
+const MATERIALIZE_AT = 24;
+const FACET_LIMIT = 12;
 const MAX_HITS = 80;
 const MAX_FILE_BYTES = 750_000;
 
