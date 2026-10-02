@@ -429,6 +429,7 @@ export class CodeTopology {
       if (!valid) return false;
       this.constructIndex = payload.constructs;
       this.pythonAnalysis = payload.analysis;
+      if (Array.isArray(this.pythonAnalysis?.constructs)) this.pythonAnalysis.constructs = [];
       this.constructIndexVersion = Number(meta.analyzerVersion || 0);
       this.constructIndexMeta = { ...meta, cachePath, reused: true };
       return true;
@@ -453,7 +454,10 @@ export class CodeTopology {
     };
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
     const tempPath = `${cachePath}.${process.pid}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs, analysis }), 'utf8');
+    const compactAnalysis = analysis && typeof analysis === 'object'
+      ? { ...analysis, constructs: [] }
+      : analysis;
+    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs, analysis:compactAnalysis }), 'utf8');
     await fs.rm(cachePath, { force:true });
     await fs.rename(tempPath, cachePath);
     this.constructIndexMeta = { ...metadata, cachePath, reused: false };
