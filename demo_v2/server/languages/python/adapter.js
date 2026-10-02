@@ -3,7 +3,14 @@ import { fileURLToPath } from 'node:url';
 
 function run(command, args, input) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1'
+      }
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
