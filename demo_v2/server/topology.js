@@ -240,6 +240,78 @@ export class CodeTopology {
     this.forceConstructIndexRebuild = false;
   }
 
+  async prepareIndexOnly(repoUrl) {
+    const startedAt=Date.now();
+    const stage=(name,started,extra='')=>console.log(`[repo-index] ${name} ${Date.now()-started}ms${extra?' '+extra:''}`);
+
+    this.repoUrl = normalizeRepoUrl(repoUrl);
+    await fs.mkdir(this.cacheRoot, { recursive: true });
+    this.repoDir = path.join(this.cacheRoot, repoKey(this.repoUrl));
+    const gitDir = path.join(this.repoDir, '.git');
+    const requestedCommit = String(this.targetCommit || '').trim();
+
+    console.log(`[repo-index] START repo=${this.repoUrl} revision=${requestedCommit||'HEAD'} force=${this.forceConstructIndexRebuild?'yes':'no'}`);
+
+    let t=Date.now();
+    if (!(await safeStat(gitDir))) {
+      console.log('[repo-index] cloning repository');
+      await fs.rm(this.repoDir, { recursive: true, force: true });
+      await simpleGit().clone(this.repoUrl, this.repoDir, ['--depth', '1']);
+      stage('clone',t);
+    } else {
+      stage('reuse-local-checkout',t);
+    }
+
+    const git = simpleGit(this.repoDir);
+    t=Date.now();
+    console.log(`[repo-index] fetching revision ${requestedCommit||'HEAD'}`);
+    if (requestedCommit) {
+      await git.fetch(['origin', requestedCommit, '--depth', '1']);
+      await git.reset(['--hard', 'FETCH_HEAD']);
+    } else {
+      await git.fetch(['origin', '--depth', '1']);
+      await git.reset(['--hard', 'FETCH_HEAD']);
+    }
+    this.commit = (await git.revparse(['HEAD'])).trim();
+    stage('fetch-checkout',t,`commit=${this.commit}`);
+
+    const requestedLooksLikeCommit = /^[0-9a-f]{7,40}$/i.test(requestedCommit);
+    if (requestedLooksLikeCommit && !this.commit.toLowerCase().startsWith(requestedCommit.toLowerCase())) {
+      throw new Error(`Prepared revision ${this.commit} does not match requested commit ${requestedCommit}.`);
+    }
+
+    t=Date.now();
+    const tracked = (await git.raw(['ls-files'])).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    this.files = tracked.filter(extensionLooksCode);
+    const readmeRel = tracked.find((rel) => /^readme(?:\.[^/]+)?$/i.test(rel));
+    this.repositoryReadme = readmeRel ? (await fs.readFile(path.join(this.repoDir, readmeRel), 'utf8').catch(() => '')).slice(0, MAX_README_CHARS) : '';
+    stage('enumerate-files',t,`tracked=${tracked.length} code=${this.files.length} python=${this.files.filter(file=>String(file).toLowerCase().endsWith('.py')).length}`);
+
+    t=Date.now();
+    console.log('[repo-index] building structural construct index');
+    await this.buildConstructIndex();
+    stage('construct-index',t,`records=${this.constructIndex.length} reused=${this.constructIndexMeta?.reused?'yes':'no'}`);
+
+    console.log(`[repo-index] DONE ${Date.now()-startedAt}ms commit=${this.commit} records=${this.constructIndex.length}`);
+    return {
+      repoUrl:this.repoUrl,
+      commit:this.commit,
+      searchableFiles:this.files.length,
+      searchableSymbols:0,
+      constructIndex:this.constructIndexMeta ? {
+        status:this.constructIndexMeta.status,
+        language:this.constructIndexMeta.language,
+        recordCount:this.constructIndexMeta.recordCount,
+        reused:!!this.constructIndexMeta.reused,
+        commit:this.constructIndexMeta.commit,
+        schemaVersion:this.constructIndexMeta.schemaVersion,
+        analyzerVersion:this.constructIndexMeta.analyzerVersion
+      } : null,
+      indexOnly:true,
+      readme:this.repositoryReadme
+    };
+  }
+
   async prepare(repoUrl) {
     this.repoUrl = normalizeRepoUrl(repoUrl);
     await fs.mkdir(this.cacheRoot, { recursive: true });
@@ -395,21 +467,30 @@ export class CodeTopology {
     const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
     if (!pythonFiles.length) return;
 
-    if (!this.forceConstructIndexRebuild && await this.loadConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) return;
+    if (!this.forceConstructIndexRebuild && await this.loadConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) {
+      console.log(`[repo-index] cache hit language=python records=${this.constructIndex.length}`);
+      return;
+    }
 
     try {
+      console.log(`[repo-index] python AST analyze files=${pythonFiles.length}`);
+      const analyzeStarted=Date.now();
       const analyzed = await analyzePythonRepository({ repoDir: this.repoDir, files: pythonFiles });
+      console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms constructs=${Array.isArray(analyzed?.constructs)?analyzed.constructs.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
       this.pythonAnalysis = analyzed;
       this.constructIndex = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
       this.constructIndexVersion = Number(analyzed?.version || 0);
       if (this.constructIndexVersion !== PYTHON_ANALYZER_VERSION) return;
+      const persistStarted=Date.now();
       await this.persistConstructIndexSnapshot({
         language:'python',
         analyzerVersion:this.constructIndexVersion,
         constructs:this.constructIndex,
         analysis:analyzed
       });
+      console.log(`[repo-index] persisted snapshot ${Date.now()-persistStarted}ms path=${this.constructIndexMeta?.cachePath||''}`);
     } catch (error) {
+      console.error('[repo-index] construct index failed', error?.stack || error?.message || String(error));
       // Structural entry indexing is an optimization. Repository preparation and
       // ordinary root-based Query must still work when a language parser is absent.
       this.constructIndex = [];
