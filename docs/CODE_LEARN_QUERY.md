@@ -555,6 +555,20 @@ Only if that exact anchor still leaves a large set should LeMap continue with an
 
 Only the final small row set is materialized into source snippets and enclosing functions for Learn.
 
+Before Learn expands any candidate by three call levels, LeMap performs one cheap source-only triage over the matched rows. This prevents a 10-20 row structural match set from triggering semantic Learn across every candidate.
+
+```text
+structural matches
+→ compact matched source lines only
+→ model ranks at most 4 direct candidates
+→ Learn only those candidates
+→ Query
+```
+
+The triage model receives no expanded semantic windows. It sees only compact source matches, names and resolved target metadata. It must prefer concrete source evidence and must not invent wrappers or forwarding layers that are absent from the matched code.
+
+A direct call site can itself be causal. For example, if indexed evidence resolves a call to an external API and the matched source passes the deprecated argument directly, Query does not need to discover a local wrapper merely because the warning is emitted by the external library.
+
 The LeMap construct vocabulary is intentionally small and language-neutral. Language adapters add low-cardinality structural facets beneath those constructs. These facets compress syntax differences rather than preserve incidental variable names.
 
 The Python adapter currently emits:
@@ -756,3 +770,5 @@ Localize   final supporting evidence → exact source ranges
 31. The model may refine a facet with exact, prefix or regex matching and may browse facet values by count or alphabetically.
 32. Once a grounded exact or prefix anchor yields a small candidate set, LeMap materializes it rather than refining further from frequency alone.
 33. Each facet value may expose at most two short representative canonical snippets chosen for structural diversity; these samples guide navigation but do not establish causality.
+34. Structural matches are source-triaged before three-level Learn expansion, and no more than four structural candidates are expanded initially.
+35. A matched call site that directly passes the deprecated or invalid argument to a resolved external API is a valid causal location; Query must not invent an absent local wrapper to explain it.
