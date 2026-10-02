@@ -237,6 +237,7 @@ export class CodeTopology {
     this.constructIndexVersion = 0;
     this.constructIndexMeta = null;
     this.pythonAnalysis = null;
+    this.forceConstructIndexRebuild = false;
   }
 
   async prepare(repoUrl) {
@@ -381,6 +382,7 @@ export class CodeTopology {
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
     const tempPath = `${cachePath}.${process.pid}.tmp`;
     await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs, analysis }), 'utf8');
+    await fs.rm(cachePath, { force:true });
     await fs.rename(tempPath, cachePath);
     this.constructIndexMeta = { ...metadata, cachePath, reused: false };
   }
@@ -393,7 +395,7 @@ export class CodeTopology {
     const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
     if (!pythonFiles.length) return;
 
-    if (await this.loadConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) return;
+    if (!this.forceConstructIndexRebuild && await this.loadConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) return;
 
     try {
       const analyzed = await analyzePythonRepository({ repoDir: this.repoDir, files: pythonFiles });
