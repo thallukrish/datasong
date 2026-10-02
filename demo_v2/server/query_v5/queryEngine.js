@@ -1,5 +1,4 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
-import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 import { selectCodeEntries } from './codeEntrySelector.js';
 
@@ -124,6 +123,23 @@ function callChildren(state, explorer, flowChildren=null) {
   const allowed=flowChildren?.get?.(state.symbolId)||null;
   return directCallStates(symbol,state,explorer.topology.symbolById).filter(s=>!allowed||allowed.has(s.symbolId));
 }
+
+function fallbackCodeEntries(topology, limit=40) {
+  const symbols=typeof topology?.entrySymbols==='function'
+    ? topology.entrySymbols()
+    : [...(topology?.symbolById?.values?.()||[])];
+  return symbols
+    .filter(symbol=>symbol?.id&&symbol?.executable!==false)
+    .map(symbol=>({
+      symbol,
+      priority:Number(typeof topology?.entryPriority==='function'?topology.entryPriority(symbol):0)
+        +(String(symbol?.sourceRole||'source')==='test'?-100:0)
+    }))
+    .sort((a,b)=>b.priority-a.priority||String(a.symbol?.name||'').localeCompare(String(b.symbol?.name||'')))
+    .slice(0,Math.max(1,Number(limit)||40))
+    .map(item=>symbolState(item.symbol));
+}
+
 
 function semanticNodeView(state,explorer){
   const semantic=codeSemanticForState(state,explorer)||{};
@@ -445,19 +461,26 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const requestedCommit=String(repoCommit||'').trim();
   const loadedCommit=String(explorer.state?.commit||'').trim();
   const revisionMismatch=requestedCommit&&(!loadedCommit||!loadedCommit.toLowerCase().startsWith(requestedCommit.toLowerCase()));
-  if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted||revisionMismatch){
+  const sameRepo=String(explorer.state?.repoUrl||'').trim()===wanted;
+  const localTopologyReady=sameRepo&&!revisionMismatch
+    &&Array.isArray(explorer.topology?.constructIndex)&&explorer.topology.constructIndex.length>0
+    &&Number(explorer.topology?.symbolById?.size||0)>0;
+
+  if(!localTopologyReady){
     explorer.topology.targetCommit=requestedCommit;
     const prepareStarted=Date.now();
-    console.log(`[query-v5] preparing deterministic topology repo=${wanted} revision=${requestedCommit||'HEAD'}`);
-    emit({action:'PREPARE_TOPOLOGY',mode:'',detail:'Preparing deterministic repository topology before semantic exploration.'});
-    const preparedResult=await explorer.topology.prepare(wanted);
-    console.log(`[query-v5] deterministic topology ready ${Date.now()-prepareStarted}ms`);
-    emit({action:'TOPOLOGY_READY',mode:'',detail:'Repository topology ready. Starting semantic exploration.'});
+    console.log(`[query-v5] preparing query-local topology repo=${wanted} revision=${requestedCommit||'HEAD'}`);
+    emit({action:'PREPARE_TOPOLOGY',mode:'',detail:'Hydrating structural index and local AST call graph for Query.'});
+    const preparedResult=typeof explorer.topology?.prepareCodeQuery==='function'
+      ? await explorer.topology.prepareCodeQuery(wanted)
+      : await explorer.topology.prepare(wanted);
+    console.log(`[query-v5] query-local topology ready ${Date.now()-prepareStarted}ms globalCallPaths=${preparedResult?.codeQueryTopology?'skipped':'prepared'}`);
+    emit({action:'TOPOLOGY_READY',mode:'',detail:'Structural query topology ready. Starting faceted entry selection.'});
     const prepared=String(preparedResult?.commit||explorer.topology?.commit||'').trim();
     if(requestedCommit&&!prepared.toLowerCase().startsWith(requestedCommit.toLowerCase()))throw new Error('Prepared repository revision does not match the requested Query v5 commit.');
     explorer.state.repoUrl=wanted;
     explorer.state.commit=prepared;
-    explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared};
+    explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared,scope:preparedResult?.codeQueryTopology?'query-local':'full'};
   }
 
   const mode=await classifyRequest({question,client,model,usage,log});
@@ -469,37 +492,19 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   console.log(`[entry-search] ${entrySelection.plan.strategy} searches=${searchCount} hits=${entrySelection.hits.length} candidates=${entrySelection.candidates.length}${bestEntry?` best=${bestEntry.sourcePath}#${bestEntry.name||bestEntry.symbolId||bestEntry.externalId||'match'}:${bestEntry.startLine}`:''}`);
   emit({action:'ENTRY_SELECTION',strategy:entrySelection.plan.strategy,reason:entrySelection.plan.reason,searches:entrySelection.plan.searches,patterns:entrySelection.plan.patterns,indexConstructs:entrySelection.indexSummary?.map(item=>({construct:item.construct,count:item.count}))||[],candidates:entrySelection.candidates.map(item=>({name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,score:item.score,test:item.test}))});
 
-  const grouped=explorer.topology?.topCallPaths?.(Number.MAX_SAFE_INTEGER)||[];
-  if(!grouped.length)throw new Error('Prepared call-path index contains no code-flow paths.');
   explorer.state.semanticProfile='code';
+  const flowChildren=null;
 
-  const flowChildren=new Map();
-  for(const group of grouped)for(const variant of [group,...arr(group?.alternatives)]){
-    const ids=arr(variant?.symbolIds);
-    for(let i=0;i<ids.length-1;i++){
-      if(!flowChildren.has(ids[i]))flowChildren.set(ids[i],new Set());
-      flowChildren.get(ids[i]).add(ids[i+1]);
-    }
-  }
-
-  const rankedEntries=entryCandidates(grouped,explorer.topology?.symbolById||new Map());
-  const sourceEntries=rankedEntries
-    .filter((entry)=>!String(entry.boundaryKind||'').startsWith('test_'))
-    .map((entry)=>({entry,state:explorer.topology.symbolById.get(entry.symbolId)}))
-    .filter((item)=>item.state)
-    .map((item)=>({state:symbolState(item.state),priority:Number(item.entry.boundaryPriority||0)}));
-  const testEntries=rankedEntries
-    .filter((entry)=>String(entry.boundaryKind||'').startsWith('test_'))
-    .map((entry)=>({entry,state:explorer.topology.symbolById.get(entry.symbolId)}))
-    .filter((item)=>item.state)
-    .map((item)=>({state:symbolState(item.state),priority:Number(item.entry.boundaryPriority||0)}));
+  const fallbackRoots=fallbackCodeEntries(explorer.topology,40);
   const externalEntries=arr(explorer.topology?.externalSymbols)
     .map((boundary)=>({
       state:externalBoundaryState(boundary),
       priority:boundary?.reExported?650:(boundary?.kind==='external-call'?(arr(boundary?.keywordArgs).length?600:450):250)
-    }));
-  const pool=[...(sourceEntries.length?sourceEntries:testEntries),...externalEntries]
-    .sort((a,b)=>b.priority-a.priority||String(a.state.name||'').localeCompare(String(b.state.name||'')));
+    }))
+    .sort((a,b)=>b.priority-a.priority||String(a.state.name||'').localeCompare(String(b.state.name||'')))
+    .slice(0,20)
+    .map(item=>item.state);
+  const pool=[...fallbackRoots,...externalEntries];
   const externalById=new Map(arr(explorer.topology?.externalSymbols).map(boundary=>[String(boundary?.id||''),boundary]));
   const triagedEntryCandidates=entrySelection.plan.strategy==='structured_search'
     ? await triageEntryCandidates({question,candidates:entrySelection.candidates,client,model,usage,log})
@@ -520,7 +525,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     return null;
   }).filter(Boolean));
   const selectedIds=new Set(selectedEntries.map(state=>state.id));
-  const fallbackEntries=pool.map((item)=>item.state).filter(state=>!selectedIds.has(state.id));
+  const fallbackEntries=pool.filter(state=>!selectedIds.has(state.id));
   const entryTiers=selectedEntries.length?[selectedEntries,fallbackEntries]:[fallbackEntries];
   const entries=entryTiers.flat();
   if(!entries.length)throw new Error('Prepared repository contains no code entry roots or external API boundaries.');
