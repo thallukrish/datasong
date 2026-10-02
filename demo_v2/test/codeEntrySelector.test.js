@@ -160,12 +160,20 @@ test('faceted structural walk materializes once exact Field anchor yields a smal
     {action:'refine',field:'name',match:'exact',value:'Field',facetSort:'alpha',reason:'Concrete identifier'}
   ];
   let callIndex=0;
-  const client={chat:{completions:{create:async()=>({
-    choices:[{message:{content:JSON.stringify(replies[callIndex++])}}],
-    usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}
-  })}}};
+  const requests=[];
+  const client={chat:{completions:{create:async(request)=>{
+    requests.push(request);
+    return {
+      choices:[{message:{content:JSON.stringify(replies[callIndex++])}}],
+      usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}
+    };
+  }}}};
   const usage={prompt:0,completion:0,total:0};
   const walked=await walkConstructFacets({question:'Field initial warning',mode:'causal',topology,client,model:'mock',usage});
+  const secondPayload=JSON.parse(requests[1].messages.at(-1).content);
+  const fieldFacet=secondPayload.current.facets.name.find((entry)=>entry.value==='Field');
+  assert.equal(fieldFacet.count,2);
+  assert.deepEqual(new Set(fieldFacet.samples),new Set(['Field(default=1)','Field(initial="x")']));
   assert.equal(walked.strategy,'structured_search');
   assert.equal(walked.construct,'call');
   assert.equal(walked.rows.length,2);
