@@ -145,7 +145,7 @@ test('structured metadata matching ignores source whitespace around calls and ke
 });
 
 
-test('faceted structural walk narrows CALL to Field then initial within three model steps', async () => {
+test('faceted structural walk materializes once exact Field anchor yields a small set', async () => {
   const topology={
     files:['a.py','b.py','c.py'],
     constructIndex:[
@@ -157,8 +157,7 @@ test('faceted structural walk narrows CALL to Field then initial within three mo
   };
   const replies=[
     {action:'select_construct',construct:'call',reason:'Issue is call-related'},
-    {action:'refine',field:'name',match:'exact',value:'Field',facetSort:'alpha',reason:'Concrete identifier'},
-    {action:'refine',field:'keywordArgs',match:'exact',value:'initial',facetSort:'count',reason:'Concrete keyword'}
+    {action:'refine',field:'name',match:'exact',value:'Field',facetSort:'alpha',reason:'Concrete identifier'}
   ];
   let callIndex=0;
   const client={chat:{completions:{create:async()=>({
@@ -169,9 +168,10 @@ test('faceted structural walk narrows CALL to Field then initial within three mo
   const walked=await walkConstructFacets({question:'Field initial warning',mode:'causal',topology,client,model:'mock',usage});
   assert.equal(walked.strategy,'structured_search');
   assert.equal(walked.construct,'call');
-  assert.equal(walked.rows.length,1);
+  assert.equal(walked.rows.length,2);
   assert.equal(walked.rows[0].name,'Field');
-  assert.deepEqual(walked.rows[0].keywordArgs,['initial']);
-  assert.equal(walked.history.length,3);
-  assert.equal(usage.total,6);
+  assert.ok(walked.rows.some((row)=>row.name==='Field'&&row.keywordArgs.includes('initial')));
+  assert.ok(walked.rows.some((row)=>row.name==='Field'&&row.keywordArgs.includes('default')));
+  assert.equal(walked.history.length,2);
+  assert.equal(usage.total,4);
 });
