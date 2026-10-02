@@ -5,9 +5,13 @@ import { selectCodeEntries } from './codeEntrySelector.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
+const ENTRY_TRIAGE_LIMIT = 4;
 const WINDOW_DEPTH = 3;
 
 const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the user reports a bug, failure, regression, incorrect behavior, unexpected result, or asks what caused/why something went wrong. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. Return {"mode":"causal"} or {"mode":"query"} only.`;
+
+const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue/question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates that most directly exhibit the reported construct or behavior. Prefer concrete source evidence over inferred architecture. A call site that passes a suspicious/deprecated argument directly to an external library API is itself a valid causal candidate even when the warning is emitted inside that library. Do not invent wrappers, adapters, forwarding layers, or missing functions that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
+
 
 const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics and the current function body when supplied. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. m is an optional regex-selected source region inside the current function, including the matched source and its learned semantics. h is the rolling evidence-backed hypothesis.
 
@@ -20,7 +24,7 @@ At every current function ask in this order:
 4. Set x=1 only when the cumulative supported evidence, including any already closed causes in f, explains the whole reported issue. Otherwise x=0 and continue investigating unresolved parts.
 5. Only rank child continuations when further execution is actually needed to establish an unresolved cause.
 
-Tests, config helpers, validators, or similarly related code should score low or be omitted unless execution through them could itself cause the reported behavior.
+Tests, config helpers, validators, or similarly related code should score low or be omitted unless execution through them could itself cause the reported behavior. A matched call site that directly passes the deprecated/invalid argument to the resolved external API can itself establish the causal mechanism; do not require a local wrapper merely because the warning text originates in the external library. Never invent a wrapper, forwarding layer, or implementation that is absent from the supplied evidence.
 
 When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. If k=1, also include the closed causal statement in a so it becomes durable evidence. Do not return evidence IDs or slot IDs. During entry selection, where several independent windows are being compared and no current function body exists, leave a empty and set k=0. Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId].
 
@@ -329,6 +333,30 @@ async function assessCausalCompleteness({question,hypothesis,ledger,client,model
   return result;
 }
 
+
+async function triageEntryCandidates({question,candidates=[],client,model,usage,log}){
+  const compact=arr(candidates).map((candidate,index)=>[
+    index,
+    candidate?.name||candidate?.symbolName||candidate?.externalName||'',
+    candidate?.sourcePath||'',
+    arr(candidate?.matches).slice(0,4).map(match=>[Number(match?.line||0),text(match?.text||'',220)]),
+    candidate?.metadata?.qualifiedName||candidate?.externalName||''
+  ]);
+  if(compact.length<=ENTRY_TRIAGE_LIMIT)return arr(candidates);
+  const call=await modelJson(client,model,ENTRY_TRIAGE_SYSTEM,{q:question,c:compact});addUsage(usage,call.usage);
+  const byIndex=new Map(arr(candidates).map((candidate,index)=>[String(index),candidate]));
+  const ranked=[];
+  for(const row of arr(call.parsed?.p)){
+    const candidate=byIndex.get(String(row?.[0]));if(!candidate)continue;
+    ranked.push({candidate,score:Number(row?.[1]||0)});
+  }
+  ranked.sort((a,b)=>b.score-a.score);
+  const selected=ranked.slice(0,ENTRY_TRIAGE_LIMIT).map(item=>item.candidate);
+  const fallback=selected.length?selected:arr(candidates).slice(0,ENTRY_TRIAGE_LIMIT);
+  log('query_v5_entry_triage',{candidateCount:compact.length,selected:fallback.map(candidate=>({name:candidate?.name||candidate?.symbolName||candidate?.externalName||'',sourcePath:candidate?.sourcePath||'',startLine:Number(candidate?.startLine||0),matches:arr(candidate?.matches).slice(0,4)})),usage:call.usage});
+  return fallback;
+}
+
 async function classifyRequest({question,client,model,usage,log}){
   const call=await modelJson(client,model,CLASSIFY_SYSTEM,{q:question});addUsage(usage,call.usage);
   const mode=String(call.parsed?.mode||'query').toLowerCase()==='causal'?'causal':'query';
@@ -468,7 +496,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const pool=[...(sourceEntries.length?sourceEntries:testEntries),...externalEntries]
     .sort((a,b)=>b.priority-a.priority||String(a.state.name||'').localeCompare(String(b.state.name||'')));
   const externalById=new Map(arr(explorer.topology?.externalSymbols).map(boundary=>[String(boundary?.id||''),boundary]));
-  const selectedEntries=dedupeStates(entrySelection.candidates.map((candidate)=>{
+  const triagedEntryCandidates=entrySelection.plan.strategy==='structured_search'
+    ? await triageEntryCandidates({question,candidates:entrySelection.candidates,client,model,usage,log})
+    : entrySelection.candidates;
+  const selectedEntries=dedupeStates(triagedEntryCandidates.map((candidate)=>{
     if(candidate.symbolId){
       const symbol=explorer.topology.symbolById.get(candidate.symbolId);
       if(!symbol)return null;
