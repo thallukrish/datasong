@@ -33,6 +33,10 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemas = [];
     this.entitySchemaByName = new Map();
     this.externalSymbols = [];
+    this.symbols = [];
+    this.symbolById.clear();
+    this.nameIndex.clear();
+    this.callers.clear();
     return super.prepareIndexOnly(repoUrl);
   }
 
