@@ -170,7 +170,7 @@ def build():
   );
   const condition = (result.constructs || []).find((item) => item.constructType === 'condition');
 
-  assert.equal(result.version, 4);
+  assert.equal(result.version, 5);
   assert.equal(call?.parentFunction, 'build');
   assert.deepEqual(call?.keywordArgs, ['default', 'initial']);
   assert.match(call?.snippet || '', /Field\(default=['"]x['"], initial=/);
@@ -232,4 +232,38 @@ def build():
   assert.deepEqual(call?.keywordArgs, ['initial']);
   assert.match(call?.snippet || '', /Field \( initial = "x" \)/);
   assert.equal(call?.canonicalSnippet, "Field(initial='x')");
+});
+
+
+test('Python AST emits low-cardinality LeMap loop and call facets', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-facets-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'main.py'), `
+from pydantic import Field
+
+def build(arr):
+    for i in range(0, len(arr)):
+        Field(initial="x")
+    for item in arr:
+        print(item)
+    while arr:
+        break
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
+  const loops = (result.constructs || []).filter((item) => item.constructType === 'loop');
+  const counted = loops.find((item) => item.loopKind === 'counted');
+  const collection = loops.find((item) => item.loopKind === 'collection');
+  const conditional = loops.find((item) => item.loopKind === 'conditional');
+  const fieldCall = (result.constructs || []).find((item) => item.constructType === 'call' && item.name === 'Field');
+
+  assert.equal(counted?.startKind, 'zero');
+  assert.equal(counted?.endKind, 'collection_length');
+  assert.equal(counted?.incrementKind, 'one');
+  assert.ok(collection);
+  assert.ok(conditional);
+  assert.equal(fieldCall?.callKind, 'function');
+  assert.equal(fieldCall?.argumentStyle, 'keyword');
+  assert.equal(fieldCall?.positionalCountBand, '0');
 });
