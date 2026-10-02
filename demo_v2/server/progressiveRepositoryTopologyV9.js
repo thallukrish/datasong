@@ -36,6 +36,35 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     return super.prepareIndexOnly(repoUrl);
   }
 
+  async prepareCodeQuery(repoUrl) {
+    const startedAt=Date.now();
+    console.log('[code-query-prepare] START structural query topology');
+
+    const prep = await super.prepareIndexOnly(repoUrl);
+    if (!Array.isArray(this.constructIndex) || !this.constructIndex.length || !this.pythonAnalysis) {
+      console.log('[code-query-prepare] structural index unavailable; falling back to full topology preparation');
+      return this.prepare(repoUrl);
+    }
+
+    this.symbols = [];
+    this.symbolById.clear();
+    this.nameIndex.clear();
+    this.callers.clear();
+    this.externalSymbols = [];
+
+    const t=Date.now();
+    const pythonAst = await this.augmentPythonAstGraph();
+    console.log(`[code-query-prepare] AST call graph hydrated ${Date.now()-t}ms symbols=${pythonAst.symbolCount} external=${pythonAst.externalSymbolCount}`);
+    console.log(`[code-query-prepare] DONE ${Date.now()-startedAt}ms globalCallPaths=skipped`);
+
+    return {
+      ...prep,
+      pythonAst,
+      codeQueryTopology:true,
+      callPathIndex:null
+    };
+  }
+
   async prepare(repoUrl) {
     const startedAt=Date.now();
     let t=Date.now();
