@@ -26,12 +26,39 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.externalSymbols = [];
   }
 
+  async prepareIndexOnly(repoUrl) {
+    this.callPathIndex = null;
+    this.moquiEntitySchema = null;
+    this.moquiXmlExecution = null;
+    this.entitySchemas = [];
+    this.entitySchemaByName = new Map();
+    this.externalSymbols = [];
+    return super.prepareIndexOnly(repoUrl);
+  }
+
   async prepare(repoUrl) {
+    const startedAt=Date.now();
+    let t=Date.now();
+    console.log('[repo-prepare] START full deterministic topology preparation');
     const prep = await super.prepare(repoUrl);
+    console.log(`[repo-prepare] base topology ${Date.now()-t}ms symbols=${this.symbols.length}`);
+
+    t=Date.now();
     const pythonAst = await this.augmentPythonAstGraph();
+    console.log(`[repo-prepare] python AST graph ${Date.now()-t}ms symbols=${pythonAst.symbolCount} external=${pythonAst.externalSymbolCount}`);
+
+    t=Date.now();
     this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
+    console.log(`[repo-prepare] framework schema adapter ${Date.now()-t}ms`);
+
+    t=Date.now();
     this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
+    console.log(`[repo-prepare] framework execution adapter ${Date.now()-t}ms`);
+
+    t=Date.now();
     this.callPathIndex = this.callPathIndexer.build();
+    console.log(`[repo-prepare] call-path index ${Date.now()-t}ms ranked=${this.callPathIndex.rankedPathCount} grouped=${this.callPathIndex.groupedPathCount}`);
+    console.log(`[repo-prepare] DONE ${Date.now()-startedAt}ms`);
     return {
       ...prep,
       pythonAst,
