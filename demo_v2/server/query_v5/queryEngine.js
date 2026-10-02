@@ -447,7 +447,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const revisionMismatch=requestedCommit&&(!loadedCommit||!loadedCommit.toLowerCase().startsWith(requestedCommit.toLowerCase()));
   if(!explorer.topology?.callPathIndex||String(explorer.state?.repoUrl||'').trim()!==wanted||revisionMismatch){
     explorer.topology.targetCommit=requestedCommit;
+    const prepareStarted=Date.now();
+    console.log(`[query-v5] preparing deterministic topology repo=${wanted} revision=${requestedCommit||'HEAD'}`);
+    emit({action:'PREPARE_TOPOLOGY',mode:'',detail:'Preparing deterministic repository topology before semantic exploration.'});
     const preparedResult=await explorer.topology.prepare(wanted);
+    console.log(`[query-v5] deterministic topology ready ${Date.now()-prepareStarted}ms`);
+    emit({action:'TOPOLOGY_READY',mode:'',detail:'Repository topology ready. Starting semantic exploration.'});
     const prepared=String(preparedResult?.commit||explorer.topology?.commit||'').trim();
     if(requestedCommit&&!prepared.toLowerCase().startsWith(requestedCommit.toLowerCase()))throw new Error('Prepared repository revision does not match the requested Query v5 commit.');
     explorer.state.repoUrl=wanted;
