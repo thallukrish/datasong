@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeEntrySelectionPlan, scanRepositoryPatterns, scanConstructIndex, constructIndexSummary, rankPatternEntryHits } from '../server/query_v5/codeEntrySelector.js';
+import { normalizeEntrySelectionPlan, scanRepositoryPatterns, scanConstructIndex, constructIndexSummary, rankPatternEntryHits, walkConstructFacets } from '../server/query_v5/codeEntrySelector.js';
 
 test('entry selection accepts regex code searches and rejects literal grep terms', () => {
   const plan=normalizeEntrySelectionPlan({
@@ -142,4 +142,36 @@ test('structured metadata matching ignores source whitespace around calls and ke
   }]});
   assert.equal(hits.length,1);
   assert.equal(hits[0].matchQuality.exact,2);
+});
+
+
+test('faceted structural walk narrows CALL to Field then initial within three model steps', async () => {
+  const topology={
+    files:['a.py','b.py','c.py'],
+    constructIndex:[
+      {constructType:'call',name:'Field',keywordArgs:['default'],sourcePath:'a.py',startLine:1,endLine:1,snippet:'Field(default=1)'},
+      {constructType:'call',name:'Field',keywordArgs:['initial'],sourcePath:'b.py',startLine:1,endLine:1,snippet:'Field(initial="x")'},
+      {constructType:'call',name:'FieldFactory',keywordArgs:['initial'],sourcePath:'c.py',startLine:1,endLine:1,snippet:'FieldFactory(initial="x")'},
+      ...Array.from({length:30},(_,i)=>({constructType:'call',name:'other'+i,keywordArgs:[],sourcePath:'x'+i+'.py',startLine:1,endLine:1,snippet:'other'+i+'()'}))
+    ]
+  };
+  const replies=[
+    {action:'select_construct',construct:'call',reason:'Issue is call-related'},
+    {action:'refine',field:'name',match:'exact',value:'Field',facetSort:'alpha',reason:'Concrete identifier'},
+    {action:'refine',field:'keywordArgs',match:'exact',value:'initial',facetSort:'count',reason:'Concrete keyword'}
+  ];
+  let callIndex=0;
+  const client={chat:{completions:{create:async()=>({
+    choices:[{message:{content:JSON.stringify(replies[callIndex++])}}],
+    usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}
+  })}}};
+  const usage={prompt:0,completion:0,total:0};
+  const walked=await walkConstructFacets({question:'Field initial warning',mode:'causal',topology,client,model:'mock',usage});
+  assert.equal(walked.strategy,'structured_search');
+  assert.equal(walked.construct,'call');
+  assert.equal(walked.rows.length,1);
+  assert.equal(walked.rows[0].name,'Field');
+  assert.deepEqual(walked.rows[0].keywordArgs,['initial']);
+  assert.equal(walked.history.length,3);
+  assert.equal(usage.total,6);
 });
