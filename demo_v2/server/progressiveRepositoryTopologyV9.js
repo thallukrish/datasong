@@ -47,13 +47,23 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     const pythonAst = await this.augmentPythonAstGraph();
     console.log(`[repo-prepare] python AST graph ${Date.now()-t}ms symbols=${pythonAst.symbolCount} external=${pythonAst.externalSymbolCount}`);
 
-    t=Date.now();
-    this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
-    console.log(`[repo-prepare] framework schema adapter ${Date.now()-t}ms`);
+    const isMoqui = Array.isArray(this.trackedFiles) && this.trackedFiles.some((file)=>String(file).replaceAll('\\','/').toLowerCase()==='component.xml');
+    if (isMoqui) {
+      console.log('[repo-prepare] framework=moqui detected');
+      t=Date.now();
+      this.moquiEntitySchema = await this.moquiEntitySchemaAdapter.augment();
+      console.log(`[repo-prepare] moqui schema adapter ${Date.now()-t}ms`);
 
-    t=Date.now();
-    this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
-    console.log(`[repo-prepare] framework execution adapter ${Date.now()-t}ms`);
+      t=Date.now();
+      this.moquiXmlExecution = await this.moquiXmlAdapter.augment();
+      console.log(`[repo-prepare] moqui execution adapter ${Date.now()-t}ms`);
+    } else {
+      this.moquiEntitySchema = null;
+      this.moquiXmlExecution = null;
+      this.entitySchemas = [];
+      this.entitySchemaByName = new Map();
+      console.log('[repo-prepare] framework=moqui skipped');
+    }
 
     t=Date.now();
     this.callPathIndex = this.callPathIndexer.build();
