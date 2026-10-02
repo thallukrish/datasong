@@ -267,3 +267,38 @@ def build(arr):
   assert.equal(fieldCall?.argumentStyle, 'keyword');
   assert.equal(fieldCall?.positionalCountBand, '0');
 });
+
+
+test('CodeTopology force rebuild ignores an existing complete same-commit construct snapshot', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-construct-force-rebuild-'));
+  const repoDir = path.join(root, 'repo');
+  const cacheRoot = path.join(root, 'cache');
+  await fs.mkdir(repoDir, { recursive: true });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  const topology = new CodeTopology({ cacheRoot });
+  topology.repoDir = repoDir;
+  topology.repoUrl = 'https://example.invalid/force-demo.git';
+  topology.files = ['main.py'];
+  topology.commit = 'cccccccccccccccccccccccccccccccccccccccc';
+
+  await fs.writeFile(path.join(repoDir, 'main.py'), 'def build():\n    return Field(initial=True)\n');
+  await topology.buildConstructIndex();
+  assert.equal(topology.constructIndexMeta?.reused, false);
+  assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Field'));
+
+  await fs.writeFile(path.join(repoDir, 'main.py'), 'def build():\n    return Other()\n');
+  topology.forceConstructIndexRebuild = true;
+  await topology.buildConstructIndex();
+
+  assert.equal(topology.constructIndexMeta?.reused, false);
+  assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Other'));
+  assert.ok(!topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Field'));
+
+  topology.forceConstructIndexRebuild = false;
+  await fs.writeFile(path.join(repoDir, 'main.py'), 'def build():\n    return Third()\n');
+  await topology.buildConstructIndex();
+
+  assert.equal(topology.constructIndexMeta?.reused, true);
+  assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Other'));
+});
