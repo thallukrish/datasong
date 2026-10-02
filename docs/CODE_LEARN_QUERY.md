@@ -501,7 +501,7 @@ small row set
 materialize exact source locations
 ```
 
-The tree walk is capped at three model decisions. LeMap may stop earlier when the remaining candidate set is already small enough.
+The tree walk is capped at three model decisions. LeMap stops earlier when an exact or prefix lexical anchor has already reduced the branch to a small candidate set. Once that happens, LeMap materializes the rows instead of asking the model to invent another facet distinction.
 
 A refinement supports:
 
@@ -511,7 +511,7 @@ prefix
 regex
 ```
 
-Exact matching is preferred when the issue supplies a concrete identifier or keyword. Prefix matching is preferred over a broader regex when it is sufficient.
+Exact matching is preferred when the issue supplies a concrete identifier or keyword. Prefix matching is preferred over a broader regex when it is sufficient. A further facet value must be grounded in the issue/question or be clearly structural. Facet frequency alone is never evidence that a value is relevant or causal.
 
 Facet values can be presented by frequency or alphabetically. This lets the model browse a large branch without receiving raw source rows.
 
@@ -521,8 +521,10 @@ For example:
 CALL 4872
 → browse name alphabetically
 → exact Field
-→ keywordArgs exact initial
-→ 4 rows
+→ 19 rows
+→ materialize rows
+
+Only if that exact anchor still leaves a large set should LeMap continue with another grounded facet, for example a keyword explicitly named in the issue.
 ```
 
 Only the final small row set is materialized into source snippets and enclosing functions for Learn.
@@ -726,3 +728,4 @@ Localize   final supporting evidence → exact source ranges
 29. Structural entry selection is a bounded faceted tree walk, normally two or three model-to-LeMap refinements before source rows are materialized.
 30. Facets should remain low-cardinality and compress incidental syntax differences rather than reproduce source-level variable names.
 31. The model may refine a facet with exact, prefix or regex matching and may browse facet values by count or alphabetically.
+32. Once a grounded exact or prefix anchor yields a small candidate set, LeMap materializes it rather than refining further from frequency alone.
