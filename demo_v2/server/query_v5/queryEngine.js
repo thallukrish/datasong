@@ -155,7 +155,10 @@ function fallbackCodeEntries(topology, limit=40) {
 
 function semanticNodeView(state,explorer){
   const semantic=codeSemanticForState(state,explorer)||{};
-  return [state.name,text(semantic.purpose||'',260),text(semantic.effect||'',220)];
+  const base=[state.name,text(semantic.purpose||'',260),text(semantic.effect||'',220)];
+  return state?.type==='code_region'
+    ? [...base,text(state.body||'',700),state.kind||'']
+    : base;
 }
 
 function semanticWindowView(rootState,window,explorer){
@@ -704,7 +707,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
         const windows=[];
         for(const candidate of candidates){
-          const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,highlightRegions:arr(candidate.regexMatchRegions),explorer,client,model,usage,log,onProgress:emit});
+          const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,highlightRegions:arr(candidate.regexMatchRegions),includeRootRegions:false,explorer,client,model,usage,log,onProgress:emit});
           recordExplored(arr(learned.window?.states),`entry_window:${goal.id}`,step);
           windows.push(learned.window);
         }
