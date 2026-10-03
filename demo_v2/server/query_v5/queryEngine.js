@@ -797,76 +797,75 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     thread.visited.add(state.id);
 
     const learned=await ensureLocalSemanticWindow({
-      state,path:frame.path,depth:WINDOW_DEPTH,highlightRegions:arr(state.regexMatchRegions),
+      state,path:frame.path,depth:WINDOW_DEPTH,
+      // Structural match snippets are entry-localization evidence only. Once
+      // selected, Query walks learned semantics and requests source explicitly.
+      highlightRegions:[],
       explorer,client,model,usage,log,onProgress:emit
     });
     recordTraversed(state,step);
     recordExplored(arr(learned.window?.states),`semantic_window:${goal.id}`,step);
     const path=[...frame.path,state];
 
-    // Before a selected function is allowed to branch into callees or another
-    // entry candidate, deterministically walk its direct AST statement regions.
-    // These top-level regions cover the complete function body while preserving
-    // nested blocks inside their raw source and learned semantics.
-    const bodyRegions=directBodyRegions(state,learned.window);
-    if(bodyRegions.length){
-      emit({action:'BODY_REGIONS_START',goalId:goal.id,state:state.name,count:bodyRegions.length,path:path.map(x=>x.name)});
-      for(const region of bodyRegions){
-        if(step>=MAX_STEPS||goal.status==='resolved')break;
-        thread.visited.add(region.id);
-        recordTraversed(region,step);
-        const regionWindow={states:[region],links:[],highlights:[]};
-        const regionDecision=await decide({
-          question,mode,goals,activeGoalId:goal.id,hypothesis:thread.hypothesis,
-          ledger,path,currentState:region,currentWindow:regionWindow,candidates:[],
-          explorer,client,model,usage,log,step:++step,onProgress:emit
-        });
+    const regionCandidates=semanticRegionChildren(state,learned.window)
+      .filter(region=>!thread.visited.has(region.id));
 
-        thread.hypothesis=regionDecision.hypothesis||thread.hypothesis;
-        rollingHypothesis=thread.hypothesis||rollingHypothesis;
-        applyLedgerDecision({
-          ledger,goal,additions:regionDecision.additions,disputes:regionDecision.disputes,
-          resolutions:regionDecision.resolutions,supportStates:regionDecision.supportStates,nextFactId
-        });
-
-        const regionResolution=regionDecision.goalResolutions.includes(goal.id)?[goal.id]:[];
-        const regionResolvedNow=applyGoalResolutions({goals,resolvedIds:regionResolution,supportStates:regionDecision.supportStates});
-        emit({action:'BODY_REGION_VISITED',goalId:goal.id,state:state.name,region:region.name,startLine:region.startLine,endLine:region.endLine,resolved:regionResolvedNow,path:[...path,region].map(x=>x.name)});
-
-        if(regionResolvedNow.length){
-          if(goal.kind==='locate'){
-            addResolvedLocationFact({ledger,goal,state:region,supportStates:regionDecision.supportStates,nextFactId});
-            goal.summary=`${region.name} is the existing implementation identified for ${goal.text}.`;
-          }else{
-            goal.summary=regionDecision.hypothesis||goal.summary||goal.text;
-          }
-          thread.stack=[];
-          thread.exhausted=true;
-          emit({action:'GOALS_RESOLVED',goalId:goal.id,resolved:regionResolvedNow,goals:goalView(goals),hypothesis:goal.summary});
-          break;
-        }
-
-        emit({action:'FACTS',goalId:goal.id,facts:ledgerView(ledger,{all:true}),hypothesis:thread.hypothesis,explained:allGoalsResolved(goals),goals:goalView(goals)});
-      }
-      emit({action:'BODY_REGIONS_DONE',goalId:goal.id,state:state.name,visited:bodyRegions.filter(region=>thread.visited.has(region.id)).length,resolved:goal.status==='resolved'});
-      if(allGoalsResolved(goals))break;
-      if(goal.status==='resolved')continue;
+    // Body-first semantic search. A function or region walks its semantic
+    // child regions before the surrounding function may branch to callees.
+    // Region nodes themselves never branch to callees; after their semantic
+    // subtree is exhausted, control returns to the containing function.
+    let next=[];
+    let navigationKind='none';
+    if(regionCandidates.length){
+      next=regionCandidates;
+      navigationKind='region';
+    }else if(state.type==='code_symbol'){
+      next=callChildren(state,explorer,flowChildren).filter(child=>!thread.visited.has(child.id));
+      navigationKind='call';
     }
 
-    const next=callChildren(state,explorer,flowChildren).filter(child=>!thread.visited.has(child.id));
-
-    const decision=await decide({
+    let decision=await decide({
       question,mode,goals,activeGoalId:goal.id,hypothesis:frame.hypothesis,
       ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
+    // Source is an explicit verification action from semantic search, never
+    // automatic traversal evidence. While a function still has semantic body
+    // regions to narrow through, keep searching semantics rather than dumping
+    // the whole function body.
+    const sourceAllowed=state.type==='code_region'||state.type==='code_external'||!regionCandidates.length;
+    if(decision.inspectSource&&sourceAllowed&&step<MAX_STEPS){
+      emit({
+        action:'SOURCE_INSPECTION',goalId:goal.id,state:state.name,
+        sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,
+        path:path.map(x=>x.name)
+      });
+      decision=await decide({
+        question,mode,goals,activeGoalId:goal.id,hypothesis:decision.hypothesis||frame.hypothesis,
+        ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,
+        sourceBody:String(state.body||state.callText||''),
+        explorer,client,model,usage,log,step:++step,onProgress:emit
+      });
+    }else if(decision.inspectSource&&!sourceAllowed){
+      emit({
+        action:'SOURCE_DEFERRED',goalId:goal.id,state:state.name,
+        reason:'Semantic child regions remain; narrow semantically before source inspection.',
+        path:path.map(x=>x.name)
+      });
+    }
+
     thread.hypothesis=decision.hypothesis||thread.hypothesis;
     rollingHypothesis=thread.hypothesis||rollingHypothesis;
-    applyLedgerDecision({ledger,goal,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
+    applyLedgerDecision({
+      ledger,goal,additions:decision.additions,disputes:decision.disputes,
+      resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId
+    });
 
     const activeResolution=decision.goalResolutions.includes(goal.id)?[goal.id]:[];
-    const resolvedNow=applyGoalResolutions({goals,resolvedIds:activeResolution,supportStates:decision.supportStates});
+    const resolvedNow=applyGoalResolutions({
+      goals,resolvedIds:activeResolution,supportStates:decision.supportStates
+    });
     if(resolvedNow.length){
       if(goal.kind==='locate'){
         addResolvedLocationFact({ledger,goal,state,supportStates:decision.supportStates,nextFactId});
@@ -876,18 +875,32 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       }
       thread.stack=[];
       thread.exhausted=true;
-      emit({action:'GOALS_RESOLVED',goalId:goal.id,resolved:resolvedNow,goals:goalView(goals),hypothesis:goal.summary});
+      emit({
+        action:'GOALS_RESOLVED',goalId:goal.id,resolved:resolvedNow,
+        goalScore:decision.activeGoalScore,goals:goalView(goals),hypothesis:goal.summary
+      });
     }
 
-    emit({action:'FACTS',goalId:goal.id,facts:ledgerView(ledger,{all:true}),hypothesis:thread.hypothesis,explained:allGoalsResolved(goals),goals:goalView(goals)});
+    emit({
+      action:'FACTS',goalId:goal.id,facts:ledgerView(ledger,{all:true}),
+      goalScore:decision.activeGoalScore,hypothesis:thread.hypothesis,
+      explained:allGoalsResolved(goals),goals:goalView(goals)
+    });
 
     if(allGoalsResolved(goals))break;
     if(goal.status==='resolved')continue;
 
     const warm=decision.picks;
     if(warm.length){
-      thread.stack.push({path,current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
-      const event={step,action:'DESCEND',goalId:goal.id,from:state.name,to:warm[0].state.name,hypothesis:decision.hypothesis};
+      thread.stack.push({
+        path,current:warm[0],alternatives:warm.slice(1),
+        hypothesis:decision.hypothesis,navigationKind
+      });
+      const event={
+        step,action:'DESCEND',goalId:goal.id,navigationKind,
+        from:state.name,to:warm[0].state.name,score:warm[0].score,
+        hypothesis:decision.hypothesis
+      };
       events.push(event);emit({...event,path:[...path,warm[0].state].map(x=>x.name)});
       continue;
     }
