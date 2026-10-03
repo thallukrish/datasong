@@ -7,7 +7,7 @@ const ENTRY_BATCH_SIZE = 20;
 const ENTRY_TRIAGE_LIMIT = 4;
 const WINDOW_DEPTH = 3;
 
-const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the user reports a bug, failure, regression, incorrect behavior, unexpected result, or asks what caused/why something went wrong. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. Return {"mode":"causal"} or {"mode":"query"} only.`;
+const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the request asks why an existing bug, failure, regression, incorrect behavior, or unexpected result occurs. Use "change" when the request describes a modification to make in an existing codebase, including requests framed as replacing, simplifying, updating, adding, removing, or changing an implementation. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. A change request may contain symptoms, rationale, examples, or a suggested implementation; classify by the engineering task being requested, not by isolated words. Return {"mode":"causal"}, {"mode":"change"}, or {"mode":"query"} only.`;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
 
@@ -42,6 +42,23 @@ const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code seman
 At every position, if m exists examine that highlighted matched region first, then ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. During entry selection leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
 
 Set x=1 only when the supported facts plus traversed semantic path directly answer the question. Then h is the concise answer. Otherwise x=0 and h is the current evidence-backed answer hypothesis. p is [[candidateIndex,relevanceScore]] for at most 3 continuations. Do not invent missing evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
+
+const CHANGE_DECIDE_SYSTEM = `Investigate a requested code change from learned code semantics and the current function body when supplied. The original change request never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. m is an optional structurally matched source region inside the current function. h is the rolling evidence-backed hypothesis.
+
+Treat the request as an engineer locating the existing implementation to modify. Distinguish what exists in the current revision from behavior, rationale, examples, and proposed implementation details in the request.
+
+At every current function ask:
+1. Does the supplied evidence establish that this function or region is part of the existing implementation targeted by the request?
+2. Does the supplied evidence establish how that current implementation relates to the requested change?
+3. If both are established strongly enough to identify the code that should be changed, set x=1 and summarize that relationship in h. Do not continue down child calls merely to find the proposed replacement API or mechanism.
+4. If the target implementation is plausible but the relationship to the requested change is not yet established, set x=0 and rank only continuations that could establish the missing relationship.
+5. If the current code is unrelated, score its continuations low unless supplied evidence shows they lead toward the targeted implementation.
+
+A proposed API, method, configuration value, or mechanism mentioned in the request may be absent from the current revision. Its absence is not a reason to keep searching for it when the current implementation and requested replacement relationship are already clear.
+
+When there is one current traversal window, add explicit facts about the current implementation and its relationship to the requested change to a. During entry comparison leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
+
+p is [[candidateIndex,relevanceScore]] for at most 3 continuations. Never invent code, relationships, execution steps, or implementation details not present in the supplied evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
 
 function symbolState(symbol, parent=null) {
@@ -287,7 +304,11 @@ async function decide({
     })):[],
     c:candidates.map((state,index)=>currentState?[index,semanticNodeView(state,explorer)]:[index,index])
   };
-  const system=mode==='causal'?CAUSAL_DECIDE_SYSTEM:QUERY_DECIDE_SYSTEM;
+  const system=mode==='causal'
+    ? CAUSAL_DECIDE_SYSTEM
+    : mode==='change'
+      ? CHANGE_DECIDE_SYSTEM
+      : QUERY_DECIDE_SYSTEM;
   const call=await modelJson(client,model,system,payload);addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((state,index)=>[String(index),state]));
   const picks=[];
@@ -375,7 +396,8 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
 
 async function classifyRequest({question,client,model,usage,log}){
   const call=await modelJson(client,model,CLASSIFY_SYSTEM,{q:question});addUsage(usage,call.usage);
-  const mode=String(call.parsed?.mode||'query').toLowerCase()==='causal'?'causal':'query';
+  const requestedMode=String(call.parsed?.mode||'query').toLowerCase();
+  const mode=['causal','change','query'].includes(requestedMode)?requestedMode:'query';
   log('query_v5_mode',{question,mode,usage:call.usage});
   return mode;
 }
@@ -687,7 +709,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||''});
     log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
     const diag=diagnostics();log('query_v5_diagnostics',diag);
-    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the full cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+    const incompleteAnswer=mode==='causal'
+      ? 'The explored semantic evidence did not yet establish the full cause.'
+      : mode==='change'
+        ? 'The explored semantic evidence did not yet establish the existing implementation targeted by the requested change.'
+        : 'The explored semantic evidence did not yet answer the code question.';
+    return {answer:incompleteAnswer,mode,complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
