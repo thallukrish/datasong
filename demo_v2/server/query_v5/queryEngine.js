@@ -820,6 +820,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       next=regionCandidates;
       navigationKind='region';
     }else if(state.type==='code_symbol'){
+      // The body frontier is exhausted. Only now learn the immediate call
+      // frontier needed for the next semantic search decision.
+      const callFrontier=await ensureLocalSemanticWindow({
+        state,path:frame.path,depth:1,highlightRegions:[],
+        includeRootRegions:false,includeCallFrontier:true,
+        explorer,client,model,usage,log,onProgress:emit
+      });
+      recordExplored(arr(callFrontier.window?.states),`call_frontier:${goal.id}`,step);
       next=callChildren(state,explorer,flowChildren).filter(child=>!thread.visited.has(child.id));
       navigationKind='call';
     }
