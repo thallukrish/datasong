@@ -395,70 +395,89 @@ async function decomposeGoals({question,client,model,usage,log}){
 
 async function decide({
   question,mode,goals=[],activeGoalId='',hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
-  candidates=[],candidateWindows=[],explorer,client,model,usage,log,step,onProgress=()=>{}
+  candidates=[],candidateWindows=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
-  const slotStates=new Map(),slots=[];
-  if(path.length){slotStates.set(-1,dedupeStates(path));slots.push([-1,path.map(state=>semanticNodeView(state,explorer))])}
-  if(currentState&&currentWindow){
-    slotStates.set(0,dedupeStates(arr(currentWindow.states)));
-    slots.push([0,semanticWindowView(currentState,currentWindow,explorer)]);
-  }else{
-    for(let index=0;index<candidates.length;index++){
-      slotStates.set(index,dedupeStates(arr(candidateWindows[index]?.states)));
-      slots.push([index,semanticWindowView(candidates[index],candidateWindows[index],explorer)]);
-    }
-  }
+  const entryStage=!currentState;
+  const entryMatches=entryStage
+    ? candidates.map((state,index)=>({
+        index,
+        name:state.name,
+        matches:arr(candidateWindows[index]?.highlights).flatMap(region=>
+          arr(region?.matchedLines).map(match=>[Number(match?.line||0),text(match?.text||'',260),String(match?.pattern||'')])
+        )
+      })).filter(item=>item.matches.length)
+    : [];
+
   const payload={
     q:question,
     g:goalView(goals),
     u:String(activeGoalId||''),
     h:hypothesis||'',
     f:ledgerView(ledger,{goals,activeGoalId}),
-    s:slots,
-    b:currentState?{
-      name:currentState.name,
-      sourcePath:currentState.sourcePath,
-      startLine:Number(currentState.startLine||0),
-      endLine:Number(currentState.endLine||0),
-      body:text(currentState.body||'',4200)
+    n:currentState?semanticNodeView(currentState,explorer):null,
+    src:sourceBody?{
+      name:currentState?.name||'',
+      sourcePath:currentState?.sourcePath||'',
+      startLine:Number(currentState?.startLine||0),
+      endLine:Number(currentState?.endLine||0),
+      body:text(sourceBody,4200)
     }:null,
-    m:currentState&&currentWindow?.highlights?.length?arr(currentWindow.highlights).map(region=>({
-      name:region.name,
-      sourcePath:region.sourcePath,
-      startLine:Number(region.startLine||0),
-      endLine:Number(region.endLine||0),
-      matchedLines:arr(region.matchedLines),
-      semantic:semanticNodeView(region,explorer)
-    })):[],
-    c:candidates.map((state,index)=>currentState?[index,semanticNodeView(state,explorer)]:[index,index])
+    m:entryMatches,
+    c:candidates.map((state,index)=>[index,...semanticNodeView(state,explorer)])
   };
-  const system=GOAL_DECIDE_SYSTEM;
-  const call=await modelJson(client,model,system,payload);addUsage(usage,call.usage);
+
+  const call=await modelJson(client,model,GOAL_DECIDE_SYSTEM,payload);addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((state,index)=>[String(index),state]));
   const picks=[];
   for(const row of arr(call.parsed?.p)){
     const state=byIndex.get(String(row?.[0]));if(!state)continue;
-    const score=Number(row?.[1]||0);
+    const score=Math.max(0,Math.min(1,Number(row?.[1]||0)));
     if(!(score>0))continue;
     picks.push({state,score});
   }
   picks.sort((a,b)=>b.score-a.score);
-  const entryStage=!currentState;
+
+  const goalScores=new Map();
+  if(!entryStage){
+    for(const row of arr(call.parsed?.gs)){
+      const id=String(row?.[0]||'');
+      if(!id)continue;
+      goalScores.set(id,Math.max(0,Math.min(1,Number(row?.[1]||0))));
+    }
+  }
+  const activeGoalScore=entryStage?0:Number(goalScores.get(String(activeGoalId||''))||0);
+  const goalResolutions=!entryStage&&activeGoalScore>=1?[String(activeGoalId)]:[];
+  const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
+  const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const result={
-    explained:entryStage?false:Number(call.parsed?.x||0)===1,
-    causeClosed:false,
-    closedCause:'',
+    explained:!entryStage&&activeGoalScore>=1&&!unresolvedOther,
     hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:entryStage?[]:arr(call.parsed?.a),
     disputes:entryStage?[]:arr(call.parsed?.d),
     resolutions:entryStage?[]:arr(call.parsed?.r),
-    goalResolutions:entryStage?[]:arr(call.parsed?.z).map(String),
-    supportStates:currentState&&currentWindow?dedupeStates(arr(currentWindow.states)):[]
+    goalResolutions,
+    goalScores:[...goalScores.entries()],
+    activeGoalScore,
+    inspectSource,
+    supportStates:currentState?[currentState]:[]
   };
-  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,goalResolutions:result.goalResolutions},usage:call.usage});
+
+  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
+    explained:result.explained,hypothesis:result.hypothesis,
+    picks:picks.map(x=>({name:x.state.name,score:x.score})),
+    goalScores:result.goalScores,inspectSource:result.inspectSource,
+    additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,
+    goalResolutions:result.goalResolutions
+  },usage:call.usage});
+
   const displayPath=currentState?[...path,currentState]:path;
-  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,goals:goalView(goals),path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
+  onProgress({
+    action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
+    goalScores:result.goalScores,inspectSource:result.inspectSource,goals:goalView(goals),
+    path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
+    candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))
+  });
   return result;
 }
 
