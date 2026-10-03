@@ -635,7 +635,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
     const selectedIds=new Set(selectedEntries.map(state=>state.id));
     const fallbackEntries=fallbackPool.filter(state=>!selectedIds.has(state.id));
-    thread.entryTiers=selectedEntries.length?[selectedEntries,fallbackEntries]:[fallbackEntries];
+    const hasConcreteStructuralEntries=entrySelection.plan.strategy==='structured_search'&&selectedEntries.length>0;
+    thread.entryTiers=hasConcreteStructuralEntries?[selectedEntries]:(selectedEntries.length?[selectedEntries,fallbackEntries]:[fallbackEntries]);
     thread.searched=true;
     console.log(`[query-v5] goal=${goal.id} facetedEntries=${selectedEntries.length} localWindowDepth=${WINDOW_DEPTH}`);
   };
