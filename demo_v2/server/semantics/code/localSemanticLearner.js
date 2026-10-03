@@ -47,6 +47,16 @@ function structuralRegionStates(state,explorer){
   return arr(symbol.regions).map(region=>stateForRegion(symbol,region)).filter(region=>region.id);
 }
 
+function structuralRegionChildren(state,explorer){
+  if(!state||state.type!=='code_region')return[];
+  const symbol=explorer.topology?.symbolById?.get(state.symbolId);
+  if(!symbol)return[];
+  return arr(symbol.regions)
+    .filter(region=>String(region?.parentRegionId||'')===String(state.regionId||state.id||''))
+    .map(region=>stateForRegion(symbol,region))
+    .filter(region=>region.id);
+}
+
 function externalStateForRef(symbol,ref){
   const line=Number(ref?.line||ref?.startLine||0),endLine=Number(ref?.endLine||line);
   const qualified=String(ref?.qualifiedName||ref?.name||ref?.simpleName||'external');
@@ -96,8 +106,11 @@ export function collectLocalSemanticWindow({state,explorer,depth=3,includeRootRe
     // Lazily align the semantic graph with the AST structure of the function
     // currently under inspection. Called functions get their own regions when
     // they later become the root of an investigation.
-    if(includeRootRegions&&current.level===0&&node.type!=='code_external'&&node.type!=='code_region'){
-      for(const region of structuralRegionStates(node,explorer)){
+    if(includeRootRegions&&current.level===0&&node.type!=='code_external'){
+      const regions=node.type==='code_region'
+        ? structuralRegionChildren(node,explorer)
+        : structuralRegionStates(node,explorer);
+      for(const region of regions){
         if(!seen.has(region.id)){seen.add(region.id);states.push(region)}
         links.push({from:region.parent||node.id,to:region.id,relationship:'contains'});
       }
