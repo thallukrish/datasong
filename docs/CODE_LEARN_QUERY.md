@@ -975,3 +975,6 @@ Localize   final supporting evidence → exact source ranges
 74. Selecting a region learns only that region's direct semantic children.
 75. Called-function semantics are learned only after the current function's relevant body frontier has been exhausted, and only for the immediate call frontier needed for the next decision.
 76. Query never pays upfront to semantically expand an entire multi-level call tree or all nested regions.
+77. A semantic decision may return only the highest-scoring continuations, but the parent retains the complete exposed frontier.
+78. After returned continuations are exhausted, Query revisits the parent and rescans only the still-unvisited semantic frontier before leaving that parent.
+79. A frontier is abandoned only when it has no unvisited candidates or Query scores every supplied continuation as non-useful; unreturned candidates are never silently discarded.
