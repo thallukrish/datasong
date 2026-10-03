@@ -10,13 +10,25 @@ const WINDOW_DEPTH = 3;
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
 Use:
-- locate for identifying the existing implementation or code region under discussion.
+- locate only when locating or identifying code is itself an explicit requested outcome. Do not create a locate goal merely because another goal will need to find code; every investigation already performs structural localization as part of its own search.
 - describe for understanding existing behavior or flow.
-- causal for explaining why a reported condition, failure, regression, or unexpected behavior occurs.
+- causal for explaining why a reported condition, failure, regression, incorrect behavior, or unexpected result occurs.
 - change for establishing what existing implementation a requested modification applies to and how.
 - verify for checking a stated constraint, compatibility requirement, side effect, or consequence.
 
-Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Preserve dependencies between goals with dependsOn. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"locate","text":"","dependsOn":[]}]} only.`;
+Prefer the smallest coherent goal set. If one goal can preserve and answer the complete request, do not split it.
+
+If the request must be split, the decomposition must be lossless. The goals plus their dependency relationships must collectively preserve every material condition, discriminator, scope restriction, symptom, and requested outcome from the original request. Never remove an important condition from an earlier goal merely because a later goal mentions it. If a condition is needed to correctly identify or reason about evidence for a goal, keep that condition in that goal's text.
+
+Dependencies represent information flow. When goal G2 depends on G1, G2 is expected to consume the evidence established by G1, and its wording must remain coherent with that dependency. A dependent chain must collectively handle the complete original request; splitting must not create narrower subproblems whose combination loses part of the issue.
+
+Before returning the goals, mentally verify:
+1. Would solving all goals in dependency order fully answer the original request?
+2. Has every material condition from the request survived into at least the goals that need it?
+3. Is any locate goal present only because code must be found internally? If yes, remove it and let the substantive goal perform localization itself.
+4. Could two adjacent goals be one coherent goal without losing useful dependency structure? If yes, merge them.
+
+Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"causal","text":"","dependsOn":[]}]} only.`;
 
 const GOAL_DECIDE_SYSTEM = `Investigate one stable software-engineering request using a set of evidence obligations. q is the original request. g is the current goal ledger as [goalId,kind,status,text,dependsOn]. f is the evidence visible to the active goal as [factId,status,sourceGoalId,sourceGoalKind,text]. Facts from prerequisite goals are context, not conclusions for the active goal. s is learned semantic evidence. b is the raw body of the current function when one is being inspected. m is any structurally matched region in that function. h is the rolling evidence-backed summary.
 
