@@ -754,14 +754,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   }
 
   if(!finalExplanation){
-    emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||''});
-    log('query_v5_complete',{complete:false,mode,goals:goalView(goals),explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
+    emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:rollingHypothesis||''});
+    log('query_v5_complete',{complete:false,mode,goals:goalView(goals),explained:false,hypothesis:rollingHypothesis||'',facts:ledgerView(ledger),events,usage});
     const diag=diagnostics();log('query_v5_diagnostics',diag);
     const remaining=unresolvedGoals(goals).map(goal=>`${goal.id} ${goal.text}`).join('; ');
     const incompleteAnswer=remaining
       ? `The explored semantic evidence did not yet resolve: ${remaining}`
       : 'The explored semantic evidence did not yet resolve the request.';
-    return {answer:incompleteAnswer,mode,goals:goalView(goals),complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),usage}};
+    return {answer:incompleteAnswer,mode,goals:goalView(goals),complete:false,explained:false,hypothesis:rollingHypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),usage}};
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
