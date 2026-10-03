@@ -7,7 +7,35 @@ const ENTRY_BATCH_SIZE = 20;
 const ENTRY_TRIAGE_LIMIT = 4;
 const WINDOW_DEPTH = 3;
 
-const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the request asks why an existing bug, failure, regression, incorrect behavior, or unexpected result occurs. Use "change" when the request describes a modification to make in an existing codebase, including requests framed as replacing, simplifying, updating, adding, removing, or changing an implementation. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. A change request may contain symptoms, rationale, examples, or a suggested implementation; classify by the engineering task being requested, not by isolated words. Return {"mode":"causal"}, {"mode":"change"}, or {"mode":"query"} only.`;
+const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
+
+Use:
+- locate for identifying the existing implementation or code region under discussion.
+- describe for understanding existing behavior or flow.
+- causal for explaining why a reported condition, failure, regression, or unexpected behavior occurs.
+- change for establishing what existing implementation a requested modification applies to and how.
+- verify for checking a stated constraint, compatibility requirement, side effect, or consequence.
+
+Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Preserve dependencies between goals with dependsOn. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"locate","text":"","dependsOn":[]}]} only.`;
+
+const GOAL_DECIDE_SYSTEM = `Investigate one stable software-engineering request using a set of evidence obligations. q is the original request. g is the current goal ledger as [goalId,kind,status,text,dependsOn]. f is the cumulative evidence ledger as [factId,status,text]. s is learned semantic evidence. b is the raw body of the current function when one is being inspected. m is any structurally matched region in that function. h is the rolling evidence-backed summary.
+
+The request may mix locating code, understanding behavior, debugging a cause, identifying a change, and verifying constraints. Treat each unresolved goal according to its kind rather than forcing the whole request into one reasoning mode. Respect goal dependencies.
+
+CRITICAL ENTRY-STAGE RULE: when b is null, you are only comparing possible entry code. Rank candidates that are most useful for the unresolved goals, but do not form or carry a causal mechanism, change conclusion, verification conclusion, or descriptive answer. At this stage return x=0, z=[], a=[], and h="". Entry comparison answers only "which code should be inspected next?"
+
+When b is present, reason from the actual current function plus learned evidence:
+- locate: resolve only when the evidence identifies the existing implementation or region required by the goal.
+- describe: resolve only when the evidence directly establishes the requested behavior or flow.
+- causal: test candidate mechanisms against the specific distinguishing conditions in the report. Do not accept a mechanism merely because it shares terminology with the issue. Prefer a mechanism whose behavior actually changes under the reported condition, and reject alternatives that would behave the same with or without it.
+- change: distinguish current implementation from proposed implementation. Resolve when the evidence establishes the existing code targeted by the requested modification and how the requested change relates to it. Do not require a proposed API or mechanism to already exist in the current revision.
+- verify: resolve only when the supplied evidence directly establishes the requested constraint or consequence.
+
+Return resolved goal IDs in z. Resolve a goal only from supplied evidence, never from general assumptions. Do not resolve a dependent goal unless its dependencies are already resolved or are also directly resolved by the same evidence. Add explicit evidence-backed facts from the current window to a. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
+
+Set x=1 only when every material goal in g is resolved by supported evidence. Otherwise x=0. h is the best concise evidence-backed summary of resolved goals and the unresolved remainder. Rank p=[[candidateIndex,relevanceScore]] for at most 3 continuations that are most likely to resolve remaining goals. Do not traverse merely because a child exists. Never invent code, relationships, execution steps, or implementation details absent from the supplied evidence.
+
+Return {"x":0,"h":"","z":[],"a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
 
@@ -267,8 +295,83 @@ function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],sup
   }
 }
 
+function normalizeGoals(items=[]){
+  const allowed=new Set(['locate','describe','causal','change','verify']);
+  const raw=arr(items).slice(0,6);
+  const ids=new Set();
+  const out=[];
+  for(let i=0;i<raw.length;i++){
+    const item=raw[i]||{};
+    let id=String(item.id||`G${i+1}`).trim();
+    if(!/^G[1-9][0-9]*$/i.test(id)||ids.has(id))id=`G${i+1}`;
+    ids.add(id);
+    const kind=allowed.has(String(item.kind||'').toLowerCase())?String(item.kind).toLowerCase():'describe';
+    const goalText=text(item.text||'',420);
+    if(!goalText)continue;
+    out.push({id,kind,text:goalText,dependsOn:arr(item.dependsOn).map(String),status:'unresolved',supportStates:[]});
+  }
+  const validIds=new Set(out.map(goal=>goal.id));
+  for(const goal of out)goal.dependsOn=goal.dependsOn.filter(id=>id!==goal.id&&validIds.has(id));
+  return out.length?out:[{id:'G1',kind:'describe',text:'Answer the software-engineering request from repository evidence.',dependsOn:[],status:'unresolved',supportStates:[]}];
+}
+
+function goalView(goals=[]){
+  return arr(goals).map(goal=>[goal.id,goal.kind,goal.status,goal.text,arr(goal.dependsOn)]);
+}
+
+function goalEvidenceStates(goals=[]){
+  return dedupeStates(arr(goals).filter(goal=>goal.status==='resolved').flatMap(goal=>goal.supportStates||[]));
+}
+
+function unresolvedGoals(goals=[]){return arr(goals).filter(goal=>goal.status!=='resolved')}
+
+function allGoalsResolved(goals=[]){return arr(goals).length>0&&unresolvedGoals(goals).length===0}
+
+function reasoningModeForGoals(goals=[]){
+  const kinds=[...new Set(arr(goals).map(goal=>goal.kind).filter(kind=>kind!=='locate'))];
+  if(kinds.length===1){
+    if(kinds[0]==='causal')return 'causal';
+    if(kinds[0]==='change')return 'change';
+    if(kinds[0]==='describe')return 'query';
+    return kinds[0];
+  }
+  return kinds.length?'mixed':'query';
+}
+
+function applyGoalResolutions({goals,resolvedIds=[],supportStates=[]}){
+  const support=dedupeStates(supportStates);
+  if(!support.length)return [];
+  const requested=new Set(arr(resolvedIds).map(String));
+  const changed=[];
+  let progress=true;
+  while(progress){
+    progress=false;
+    for(const goal of arr(goals)){
+      if(goal.status==='resolved'||!requested.has(goal.id))continue;
+      const dependenciesSatisfied=arr(goal.dependsOn).every(id=>{
+        const dep=arr(goals).find(item=>item.id===id);
+        return !dep||dep.status==='resolved'||requested.has(id);
+      });
+      if(!dependenciesSatisfied)continue;
+      goal.status='resolved';
+      goal.supportStates=dedupeStates([...(goal.supportStates||[]),...support]);
+      changed.push(goal.id);
+      progress=true;
+    }
+  }
+  return changed;
+}
+
+async function decomposeGoals({question,client,model,usage,log}){
+  const call=await modelJson(client,model,GOAL_DECOMPOSE_SYSTEM,{q:question});addUsage(usage,call.usage);
+  const goals=normalizeGoals(call.parsed?.goals);
+  const mode=reasoningModeForGoals(goals);
+  log('query_v5_goals',{question,mode,goals:goalView(goals),usage:call.usage});
+  return {goals,mode};
+}
+
 async function decide({
-  question,mode,hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
+  question,mode,goals=[],hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
   candidates=[],candidateWindows=[],explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
   const slotStates=new Map(),slots=[];
@@ -284,6 +387,7 @@ async function decide({
   }
   const payload={
     q:question,
+    g:goalView(goals),
     h:hypothesis||'',
     f:ledgerView(ledger),
     s:slots,
@@ -304,11 +408,7 @@ async function decide({
     })):[],
     c:candidates.map((state,index)=>currentState?[index,semanticNodeView(state,explorer)]:[index,index])
   };
-  const system=mode==='causal'
-    ? CAUSAL_DECIDE_SYSTEM
-    : mode==='change'
-      ? CHANGE_DECIDE_SYSTEM
-      : QUERY_DECIDE_SYSTEM;
+  const system=GOAL_DECIDE_SYSTEM;
   const call=await modelJson(client,model,system,payload);addUsage(usage,call.usage);
   const byIndex=new Map(candidates.map((state,index)=>[String(index),state]));
   const picks=[];
@@ -326,11 +426,12 @@ async function decide({
     additions:currentState?arr(call.parsed?.a):[],
     disputes:arr(call.parsed?.d),
     resolutions:arr(call.parsed?.r),
+    goalResolutions:currentState?arr(call.parsed?.z).map(String):[],
     supportStates:currentState&&currentWindow?dedupeStates(arr(currentWindow.states)):[]
   };
-  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
+  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,goalResolutions:result.goalResolutions},usage:call.usage});
   const displayPath=currentState?[...path,currentState]:path;
-  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
+  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,goals:goalView(goals),path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
   return result;
 }
 
@@ -392,14 +493,6 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
   const fallback=selected.length?selected:arr(candidates).slice(0,ENTRY_TRIAGE_LIMIT);
   log('query_v5_entry_triage',{candidateCount:compact.length,selected:fallback.map(candidate=>({name:candidate?.name||candidate?.symbolName||candidate?.externalName||'',sourcePath:candidate?.sourcePath||'',startLine:Number(candidate?.startLine||0),matches:arr(candidate?.matches).slice(0,4)})),usage:call.usage});
   return fallback;
-}
-
-async function classifyRequest({question,client,model,usage,log}){
-  const call=await modelJson(client,model,CLASSIFY_SYSTEM,{q:question});addUsage(usage,call.usage);
-  const requestedMode=String(call.parsed?.mode||'query').toLowerCase();
-  const mode=['causal','change','query'].includes(requestedMode)?requestedMode:'query';
-  log('query_v5_mode',{question,mode,usage:call.usage});
-  return mode;
 }
 
 export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explorer,client,model,log=()=>{},onProgress=()=>{}}){
@@ -505,8 +598,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     explorer.state.runtimeHydration={status:'ready',repoUrl:wanted,commit:prepared,scope:preparedResult?.codeQueryTopology?'query-local':'full'};
   }
 
-  const mode=await classifyRequest({question,client,model,usage,log});
-  emit({action:'MODE',mode});
+  const goalPlan=await decomposeGoals({question,client,model,usage,log});
+  const goals=goalPlan.goals;
+  const mode=goalPlan.mode;
+  emit({action:'GOALS',mode,goals:goalView(goals)});
 
   const entrySelection=await selectCodeEntries({question,mode,topology:explorer.topology,client,model,usage,log});
   const bestEntry=entrySelection.candidates[0];
@@ -574,47 +669,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         windows.push(learned.window);
       }
 
-      const decision=await decide({question,mode,hypothesis:rollingHypothesis,ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit});
-      rollingHypothesis=decision.hypothesis||rollingHypothesis;
-      applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
-      emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
+      const decision=await decide({question,mode,goals,hypothesis:'',ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit});
+      // Entry comparison is navigation only. It cannot resolve goals, add facts, or seed a causal/change hypothesis.
+      emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:'',explained:false,goals:goalView(goals)});
       const batchEvent={step,action:'ENTRY_BATCH',batch:batchNumber,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,hypothesis:decision.hypothesis,explained:decision.explained};
       events.push(batchEvent);emit(batchEvent);
-
-      if(decision.explained){
-        let supported=ledgerEvidenceStates(ledger);
-        if(!supported.length){
-          const topPick=decision.picks[0]?.state||null;
-          const pickedIndex=topPick?candidates.findIndex(state=>state.id===topPick.id):-1;
-          if(pickedIndex>=0){
-            supported=dedupeStates(arr(windows[pickedIndex]?.states));
-            if(supported.length){
-              const id='F'+nextFactId.value++;
-              ledger.set(id,{
-                id,
-                text:decision.hypothesis||`Entry evidence for ${topPick.name} establishes the requested code relationship.`,
-                status:'supported',
-                supportStates:supported
-              });
-              log('query_v5_entry_completion_bound',{step,state:topPick.name,supportStateIds:supported.map(state=>state.id)});
-              emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:true});
-            }
-          }
-        }
-        if(!supported.length){
-          log('query_v5_invalid_explanation',{step,reason:'entry completion had no selected candidate evidence to bind'});
-          continue;
-        }
-        finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
-        finalEvidence=supported;
-        return true;
-      }
 
       const warm=decision.picks;
       if(!warm.length)continue;
 
-      stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
-      const event={step,action:'RESEED',state:warm[0].state.name,hypothesis:decision.hypothesis};
+      stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:''});
+      const event={step,action:'RESEED',state:warm[0].state.name,hypothesis:''};
       events.push(event);emit({...event,path:[warm[0].state.name]});
       return true;
       }
@@ -623,7 +688,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   };
 
   const seeded=await seed();
-  if(!seeded){const diag=diagnostics();log('query_v5_diagnostics',diag);return {answer:'No learned entry flow produced a usable continuation.',mode,complete:false,explained:false,hypothesis:'',events,usage,diagnostics:diag,sweExplore:sweExploreView([])};}
+  if(!seeded){const diag=diagnostics();log('query_v5_diagnostics',diag);return {answer:'No learned entry flow produced a usable continuation.',mode,goals:goalView(goals),complete:false,explained:false,hypothesis:'',events,usage,diagnostics:diag,sweExplore:sweExploreView([])};}
 
   while(!finalExplanation&&stack.length&&step<MAX_STEPS){
     const frame=stack.at(-1),state=frame.current.state;
@@ -638,6 +703,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const decision=await decide({
       question,
       mode,
+      goals,
       hypothesis:frame.hypothesis,
       ledger,
       path:frame.path,
@@ -649,53 +715,15 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
     rollingHypothesis=decision.hypothesis||rollingHypothesis;
     applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
-    emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:rollingHypothesis,explained:decision.explained});
+    const resolvedNow=applyGoalResolutions({goals,resolvedIds:decision.goalResolutions,supportStates:decision.supportStates});
+    if(resolvedNow.length)emit({action:'GOALS_RESOLVED',resolved:resolvedNow,goals:goalView(goals),hypothesis:rollingHypothesis});
+    const goalsComplete=allGoalsResolved(goals);
+    emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:rollingHypothesis,explained:goalsComplete,goals:goalView(goals)});
 
-    if(decision.explained){
-      finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
-      finalEvidence=dedupeStates([...ledgerEvidenceStates(ledger),...path,...arr(learned.window?.states)]);
+    if(goalsComplete){
+      finalExplanation=decision.hypothesis||'The supplied semantic evidence resolves all material goals in the request.';
+      finalEvidence=dedupeStates([...goalEvidenceStates(goals),...ledgerEvidenceStates(ledger),...path,...arr(learned.window?.states)]);
       break;
-    }
-
-    if(mode==='causal'&&decision.causeClosed){
-      const closedText=decision.closedCause||decision.hypothesis||'Current function establishes one causal component of the issue.';
-      const existing=[...ledger.values()].find((fact)=>fact.text.toLowerCase()===closedText.toLowerCase());
-      if(existing){
-        existing.status='supported';
-        existing.supportStates=dedupeStates([...(existing.supportStates||[]),...arr(learned.window?.states)]);
-      }else{
-        const id='F'+nextFactId.value++;
-        ledger.set(id,{id,text:closedText,status:'supported',supportStates:dedupeStates(arr(learned.window?.states))});
-      }
-      const event={step,action:'CAUSE_CLOSED',state:state.name,cause:closedText,hypothesis:decision.hypothesis};
-      events.push(event);emit({...event,path:path.map(x=>x.name),facts:ledgerView(ledger)});
-
-      const completeness=await assessCausalCompleteness({question,hypothesis:rollingHypothesis,ledger,client,model,usage,log,step});
-      rollingHypothesis=completeness.hypothesis||rollingHypothesis;
-      emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:rollingHypothesis,explained:completeness.explained});
-      if(completeness.explained){
-        finalExplanation=rollingHypothesis||closedText;
-        finalEvidence=ledgerEvidenceStates(ledger);
-        break;
-      }
-
-      stack.pop();
-      let resumed=false;
-      while(stack.length){
-        const top=stack.at(-1);
-        if(top.alternatives.length){
-          top.current=top.alternatives.shift();
-          const backtrack={step,action:'BACKTRACK',to:top.current.state.name,hypothesis:decision.hypothesis};
-          events.push(backtrack);emit({...backtrack,path:[...top.path,top.current.state].map(x=>x.name)});
-          resumed=true;
-          break;
-        }
-        stack.pop();
-      }
-      if(!resumed){
-        if(!(await seed()))break;
-      }
-      continue;
     }
 
     const warm=decision.picks;
@@ -725,21 +753,20 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
   if(!finalExplanation){
     emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||''});
-    log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
+    log('query_v5_complete',{complete:false,mode,goals:goalView(goals),explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
     const diag=diagnostics();log('query_v5_diagnostics',diag);
-    const incompleteAnswer=mode==='causal'
-      ? 'The explored semantic evidence did not yet establish the full cause.'
-      : mode==='change'
-        ? 'The explored semantic evidence did not yet establish the existing implementation targeted by the requested change.'
-        : 'The explored semantic evidence did not yet answer the code question.';
-    return {answer:incompleteAnswer,mode,complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+    const remaining=unresolvedGoals(goals).map(goal=>`${goal.id} ${goal.text}`).join('; ');
+    const incompleteAnswer=remaining
+      ? `The explored semantic evidence did not yet resolve: ${remaining}`
+      : 'The explored semantic evidence did not yet resolve the request.';
+    return {answer:incompleteAnswer,mode,goals:goalView(goals),complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),usage}};
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
   const ranges=(await localizeExplanation({question,explanation:finalExplanation,evidenceStates:finalEvidence,client,model,usage,log})).map((range,index)=>({...range,rank:index+1}));
   const locations=ranges.map(range=>`${range.sourcePath}#${range.name} ${range.startLine}-${range.endLine}${range.why?' — '+range.why:''}`).join('\n');
   const answer=finalExplanation+(locations?'\n\n'+locations:'');
-  log('query_v5_complete',{complete:true,mode,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage});
+  log('query_v5_complete',{complete:true,mode,goals:goalView(goals),explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage});
   const diag=diagnostics();log('query_v5_diagnostics',diag);
-  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+  return {answer,mode,goals:goalView(goals),complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),usage}};
 }
