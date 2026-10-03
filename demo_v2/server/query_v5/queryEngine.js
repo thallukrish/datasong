@@ -925,7 +925,22 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
-  const ranges=(await localizeExplanation({question,explanation:finalExplanation,evidenceStates:finalEvidence,client,model,usage,log})).map((range,index)=>({...range,rank:index+1}));
+  // Evidence states already carry exact structural ranges. Do not reopen source
+  // merely to localize a conclusion that semantic search has already proved.
+  const seenRanges=new Set();
+  const ranges=finalEvidence.map(state=>({
+    symbolId:state.symbolId||'',
+    name:state.name||'',
+    sourcePath:state.sourcePath||'',
+    startLine:Number(state.startLine||0),
+    endLine:Number(state.endLine||state.startLine||0),
+    why:text(codeSemanticForState(state,explorer)?.effect||codeSemanticForState(state,explorer)?.purpose||'',260)
+  })).filter(range=>{
+    if(!range.sourcePath||!range.startLine||range.endLine<range.startLine)return false;
+    const key=[range.sourcePath,range.startLine,range.endLine].join(':');
+    if(seenRanges.has(key))return false;
+    seenRanges.add(key);return true;
+  }).map((range,index)=>({...range,rank:index+1}));
   const locations=ranges.map(range=>`${range.sourcePath}#${range.name} ${range.startLine}-${range.endLine}${range.why?' — '+range.why:''}`).join('\n');
   const answer=finalExplanation+(locations?'\n\n'+locations:'');
   log('query_v5_complete',{complete:true,mode,goals:goalView(goals),explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger,{all:true}),ranges,events,usage});
