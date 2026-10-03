@@ -162,7 +162,7 @@ For a **locate** goal, Query asks whether the current evidence identifies the ex
 
 For a **describe** goal, Query asks whether the current evidence directly establishes the requested behavior or flow.
 
-For a **causal** goal, Query asks whether the observed code can actually produce the reported behavior. When multiple mechanisms look superficially relevant, each must be tested against the distinguishing condition in the issue. Shared terminology is not enough.
+For a **causal** goal, Query asks whether the observed code can actually produce the reported behavior. When multiple mechanisms look superficially relevant, each must be tested against the distinguishing condition in the issue. Shared terminology is not enough. Before leaving a current function, Query compares the plausible mechanisms visible in that body against the distinguishing condition instead of following whichever matching check appeared first.
 
 For a **change** goal, Query distinguishes current implementation from proposed implementation and establishes how the requested change applies to existing code. A proposed API or mechanism does not need to already exist in the selected revision.
 
@@ -208,6 +208,14 @@ The original issue is immutable. The hypothesis may change as evidence grows.
 ## Evidence ledger
 
 Query keeps a cumulative evidence ledger separate from the current branch hypothesis.
+
+The ledger contains facts that have been established from learned semantic evidence. Every fact records the goal that produced it and that goal's reasoning kind.
+
+A goal sees its own facts plus facts from its prerequisite goals. Facts from unrelated goals are hidden from that thread. Prerequisite facts provide context but do not themselves resolve the active goal.
+
+Locate goals are deliberately narrow: they publish only a deterministic location/context fact identifying the existing implementation. Free-form behavioral or causal claims produced while resolving a locate goal are not admitted to the shared ledger.
+
+Model fact additions are accepted only as plain strings. Arrays, objects, or model-returned ledger-shaped tuples are rejected rather than stringified into evidence.
 
 The ledger contains facts that have been established from learned semantic evidence:
 
@@ -924,3 +932,8 @@ Localize   final supporting evidence → exact source ranges
 51. Zero-confidence continuations are never traversed.
 52. When structured search returns concrete entries for a goal, that goal thread stays bounded to those entries instead of falling through to generic repository roots.
 53. Locate goals stop at the first current function whose evidence directly identifies the requested implementation.
+54. Every query-local fact carries source-goal provenance and goal kind.
+55. A goal sees only its own facts and facts produced by its prerequisite goals; unrelated goal facts cannot bias its reasoning.
+56. Locate goals export deterministic location context only, not free-form behavioral or causal interpretations.
+57. Model fact additions must be plain strings; ledger-shaped arrays or objects are rejected.
+58. Causal goals compare competing mechanisms visible in the current function against the reported distinguishing condition before leaving that function.
