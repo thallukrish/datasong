@@ -105,6 +105,57 @@ dependsOn G3
 
 The original request and goal set remain stable while evidence grows. Goals are marked resolved only when repository evidence supports them.
 
+### Per-goal investigation threads
+
+Each goal owns an independent investigation thread.
+
+A thread keeps its own:
+
+```text
+faceted-search state
+entry candidates
+visited symbols
+DFS stack
+preserved alternatives
+rolling hypothesis
+exhaustion state
+```
+
+The repository structural index, learned semantic map, and query-local evidence ledger are shared across threads.
+
+This means two goals that are unrelated in code space do not have to share one traversal:
+
+```text
+G1
+→ faceted search
+→ entry A
+→ Learn
+→ Query
+
+G2
+→ separate faceted search
+→ entry B
+→ Learn
+→ Query
+```
+
+If both goals touch the same code, Learn reuses the already persisted semantics even though their navigation threads are separate.
+
+Goal dependencies control scheduling rather than forcing structural proximity. An independent unresolved goal can be searched immediately. A dependent goal becomes schedulable only after its prerequisite goals are resolved.
+
+The scheduler therefore operates at two levels:
+
+```text
+issue
+→ choose schedulable unresolved goal
+→ run that goal's faceted search / traversal thread
+→ resolve goal or exhaust its thread
+→ choose next schedulable goal
+→ stop when all material goals are resolved
+```
+
+Evidence established by one thread remains available to later threads through the shared evidence ledger, even when the later goal searches a completely different part of the repository.
+
 ### Goal-specific reasoning
 
 For a **locate** goal, Query asks whether the current evidence identifies the existing implementation or source region.
@@ -123,9 +174,11 @@ Dependencies are respected. A dependent goal is not resolved merely because a pl
 
 The goal ledger defines evidence obligations, not a predetermined sequence of code steps.
 
-The initial evidence is limited, so an upfront traversal plan would still be a guess beyond what LeMap has actually seen. Query therefore keeps the goals stable while choosing code branches incrementally from the evidence available so far.
+The initial evidence is limited, so an upfront traversal plan would still be a guess beyond what LeMap has actually seen. Query therefore keeps the goals stable while choosing both the next schedulable goal and the next code branch incrementally from available evidence.
 
-Query also maintains a rolling evidence-backed summary.
+There is no requirement that different goals share an entry point, source file, call path, or traversal stack.
+
+Query also maintains a rolling evidence-backed summary per goal thread, while the evidence ledger remains shared across the whole request.
 
 ```text
 issue
@@ -218,10 +271,12 @@ The model may suggest completion, but LeMap's authoritative stop condition is th
 LeMap internally keeps:
 
 ```text
-active structural node / region
-DFS path
-visited nodes
-alternative branches
+goal scheduler
+per-goal entry-selection state
+per-goal active structural node / region
+per-goal DFS path
+per-goal visited nodes
+per-goal alternative branches
 symbol IDs
 source paths
 line ranges
@@ -860,3 +915,7 @@ Localize   final supporting evidence → exact source ranges
 44. Change goals do not require a proposed replacement API, configuration value or mechanism to already exist in the selected repository revision.
 45. Goal dependencies are preserved so a later obligation cannot be treated as established before its prerequisite evidence is established.
 46. The goal ledger is query-local and stable; traversal remains evidence-driven and may backtrack or reseed without rewriting the original obligations.
+47. Every goal has its own faceted-search and traversal state, so structurally unrelated goals can investigate different parts of the repository independently.
+48. Learned semantics and the evidence ledger are shared across goal threads, so repeated code is not relearned and established evidence can inform later goals.
+49. Goal dependencies constrain scheduling, not code-space locality; dependent goals may start a new faceted search after their prerequisites resolve.
+50. Exhausting one goal thread does not force unrelated goals to share its fallback roots or traversal path.
