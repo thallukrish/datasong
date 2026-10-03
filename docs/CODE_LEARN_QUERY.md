@@ -58,73 +58,74 @@ If A is the current position and the depth is 3, Learn ensures the reachable nod
 
 When Query later moves to C or E, Learn expands three levels from that new position and learns only newly exposed nodes. Previously learned semantics are reused.
 
-## Investigation mode
+## Evidence obligations
 
-Query first classifies the request once for the whole investigation:
+Query keeps the original request stable, but does not force the whole request into one reasoning mode.
 
-```text
-reported bug / failure / regression / wrong behavior
-→ causal mode
-
-descriptive code question
-→ query mode
-```
-
-The mode remains stable across traversal, backtracking and reseeding.
-
-### Causal mode
-
-For a reported issue, branch scoring is causal rather than topical.
-
-The model asks:
+A real engineering request may combine several interdependent tasks:
 
 ```text
-Could the behavior represented by the traversed path
-actually produce the reported issue?
+locate existing code
++ understand current behavior
++ explain a reported failure
++ identify a requested change
++ verify a constraint or consequence
 ```
 
-A candidate score means:
+Before structural exploration, Query performs one lightweight decomposition into material evidence obligations. Each goal has:
 
 ```text
-How likely is following this branch to complete
-a causal explanation of the reported behavior?
+id
+kind = locate | describe | causal | change | verify
+text
+dependsOn
+status = unresolved | resolved
 ```
 
-Code that is merely related to configuration, validation, testing or surrounding infrastructure should not be preferred unless execution through that code could itself participate in the failure mechanism.
+The decomposition is intentionally small, normally one to five goals and never more than six. It is not an execution plan. It says what must eventually be established from evidence, not which code path must be traversed.
 
-At each frontier, the model reasons over:
+For example:
 
 ```text
-original issue
-+ cumulative supported facts
-+ complete traversed semantic path
-+ current learned semantic window
-+ candidate continuations
+G1 locate
+identify the existing fixture-directory duplicate check
+
+G2 causal
+explain why the reported Path condition changes duplicate detection
+dependsOn G1
+
+G3 change
+identify what existing implementation a requested modification applies to
+dependsOn G1, G2
+
+G4 verify
+confirm a stated compatibility constraint
+dependsOn G3
 ```
 
-The issue closes only when that combined evidence forms a coherent causal mechanism capable of producing the reported behavior.
+The original request and goal set remain stable while evidence grows. Goals are marked resolved only when repository evidence supports them.
 
-### Query mode
+### Goal-specific reasoning
 
-For descriptive code questions, no root cause is required.
+For a **locate** goal, Query asks whether the current evidence identifies the existing implementation or source region.
 
-The model instead asks:
+For a **describe** goal, Query asks whether the current evidence directly establishes the requested behavior or flow.
 
-```text
-Does this traversed path help answer the question?
-```
+For a **causal** goal, Query asks whether the observed code can actually produce the reported behavior. When multiple mechanisms look superficially relevant, each must be tested against the distinguishing condition in the issue. Shared terminology is not enough.
 
-Candidate scores mean how likely a continuation is to complete the answer.
+For a **change** goal, Query distinguishes current implementation from proposed implementation and establishes how the requested change applies to existing code. A proposed API or mechanism does not need to already exist in the selected revision.
 
-The traversal, semantic window, evidence ledger and backtracking machinery are otherwise shared between both modes.
+For a **verify** goal, Query requires direct evidence for the stated constraint, compatibility condition, side effect or consequence.
 
-## Query is an evidence chase, not a fixed plan
+Dependencies are respected. A dependent goal is not resolved merely because a plausible interpretation exists; its prerequisite goals must already be resolved or be resolved by the same evidence.
 
-Query does not create a fixed list of steps that must later be fulfilled.
+## Query is an evidence chase, not a fixed execution plan
 
-The initial evidence is limited, so any multi-step plan created up front would be a guess beyond what LeMap has actually seen.
+The goal ledger defines evidence obligations, not a predetermined sequence of code steps.
 
-Instead Query maintains a rolling hypothesis from the evidence available so far.
+The initial evidence is limited, so an upfront traversal plan would still be a guess beyond what LeMap has actually seen. Query therefore keeps the goals stable while choosing code branches incrementally from the evidence available so far.
+
+Query also maintains a rolling evidence-backed summary.
 
 ```text
 issue
@@ -190,23 +191,27 @@ This prevents repeated rediscovery while still allowing the investigation to cha
 
 ## Stop condition
 
-At every meaningful position Query asks according to its fixed reasoning mode:
+At every meaningful code position, Query asks which unresolved evidence obligations the current evidence can resolve.
 
 ```text
-causal mode
-Does the complete traversed evidence establish a mechanism that could cause the reported issue?
-
-query mode
-Does the complete traversed evidence answer the code question?
+current goals
++ cumulative supported facts
++ traversed path
++ current learned semantic window
++ current raw function body
+        ↓
+resolve zero or more goals
+        ↓
+all material goals resolved?
 ```
 
-If yes, exploration stops immediately.
+If all material goals are resolved, exploration stops immediately.
 
-There is no requirement to complete an initial set of plan steps.
-
-If the issue is not yet explained, Query chooses the strongest semantic continuation.
+If some goals remain unresolved, Query ranks only continuations likely to resolve those remaining obligations. It does not continue merely because child calls exist.
 
 If no useful continuation exists at the current position, LeMap backtracks to a preserved alternative. If the current entry flow is exhausted, LeMap reseeds from another entry candidate.
+
+The model may suggest completion, but LeMap's authoritative stop condition is the goal ledger: every material goal must have evidence-bound resolution.
 
 ## Responsibility split
 
@@ -245,32 +250,28 @@ The model makes one compact decision from the currently visible evidence.
 ```json
 {
   "x": 0,
-  "h": "current evidence-backed hypothesis",
+  "h": "current evidence-backed summary",
+  "z": ["G1"],
   "a": ["new established fact"],
-  "d": [factId],
-  "p": [[candidateIndex, navigationConfidence]]
+  "d": ["F1"],
+  "r": ["F2"],
+  "p": [[0, 0.9]]
 }
 ```
 
 Where:
 
-- `x = 1` means the accumulated supported facts plus current semantic evidence directly explain the issue and exploration must stop.
-- `x = 0` means more evidence is required.
-- `h` is the current branch hypothesis. When `x = 1`, it is the concise causal explanation.
-- `a` adds newly established facts as plain sentences. LeMap automatically binds those facts to the current semantic window.
-- `d` marks previously established fact IDs as disputed when newly observed evidence contradicts them.
-- `p` contains at most three branches worth exploring next.
+- `z` contains goal IDs directly resolved by the current evidence.
+- `h` summarizes resolved goals and the unresolved remainder without inventing evidence.
+- `a` adds newly established facts as plain sentences. LeMap binds them deterministically to the current semantic window.
+- `d` marks previously established fact IDs as disputed.
+- `r` re-supports disputed facts when later evidence establishes them again.
+- `p` contains at most three continuations worth exploring next.
+- `x` is a model-side completion signal, but LeMap does not trust it by itself. LeMap stops only when the evidence-bound goal ledger shows that all material goals are resolved.
 
-The model receives the current ledger on every decision. A disputed fact cannot be used as support for `x = 1` until later evidence resolves or replaces it.
+Goal resolution is also evidence-bound. A model-returned goal ID is accepted only while inspecting an actual current function/window with supporting states.
 
-The model never returns evidence-slot IDs for facts. During traversal there is one current semantic window, so LeMap deterministically attaches every accepted fact to that window. During entry selection, where multiple independent windows are being compared, no facts are added to the ledger.
-
-
-Candidates omitted from `p` are not selected.
-
-There is no absolute navigation-score cutoff. If the model returns ranked candidates, LeMap follows the strongest one and preserves the remaining returned candidates as alternatives. If the model returns no candidate, LeMap backtracks or advances to the next entry batch.
-
-In causal mode, the model must not claim `x = 1` merely because a branch is plausible or topically related. The traversed path and supported facts must establish a causal mechanism that could produce the reported behavior. In query mode, `x = 1` means the accumulated evidence directly answers the question.
+Candidates omitted from `p` are not selected. There is no absolute navigation-score cutoff. If the model returns ranked candidates, LeMap follows the strongest one and preserves the remaining returned candidates as alternatives. If the model returns no candidate, LeMap backtracks or advances to the next entry batch.
 
 ## Entry selection before exploration
 
@@ -736,33 +737,29 @@ pattern match
 
 If one window already explains the issue, Query stops. Otherwise Query chooses the strongest continuation and preserves alternatives exactly as before.
 
-## Investigation modes
+## Entry comparison is navigation only
 
-Code Query classifies the engineering task once and keeps that objective stable during traversal.
-
-```text
-causal
-→ explain why an existing failure or incorrect behavior occurs
-
-query
-→ answer how, where or what the existing code does
-
-change
-→ identify the existing implementation targeted by a requested modification
-→ establish how the current implementation relates to the requested change
-```
-
-Change mode is intentionally different from causal mode. A change request may describe a replacement API, configuration value or mechanism that does not yet exist in the selected repository revision. Query must not keep traversing merely to find that proposed implementation.
-
-For change mode, semantic exploration is complete when supported evidence establishes both:
+Entry comparison has a deliberately narrower responsibility than Query reasoning.
 
 ```text
-the existing implementation being changed
-+
-how that implementation relates to the requested modification
+faceted structural search
+→ candidate entry functions
+→ compare learned entry windows
+→ choose which code to inspect
 ```
 
-At that point Query stops and localizes the supporting source ranges. It does not require a causal failure explanation and does not require the proposed replacement to already appear in source.
+At this stage there is no current raw function body. The model may rank candidates, but it must not:
+
+- resolve evidence goals
+- add facts
+- form a causal mechanism
+- conclude how a requested change works
+- verify a constraint
+- carry an answer hypothesis into traversal
+
+This prevents a speculative interpretation formed while merely comparing candidate entries from becoming the starting assumption for later reasoning.
+
+Once LeMap enters the selected function, the model receives the current raw body and learned semantic window. Only then may goals be resolved and facts enter the evidence ledger.
 
 ## Branch exploration
 
@@ -829,8 +826,8 @@ Localize   final supporting evidence → exact source ranges
 10. Evidence-backed facts survive backtracking; only branch hypotheses roll back.
 11. Fact-to-evidence binding is deterministic in LeMap; the model returns fact sentences, not evidence-slot IDs.
 12. Contradictions dispute facts rather than silently deleting them.
-13. Query classifies the request once as causal or query mode and keeps that objective stable.
-14. Causal-mode branch scores measure causal continuation, not generic relevance.
+13. Query decomposes the stable original request into a small set of typed evidence obligations rather than forcing the whole request into one mode.
+14. Evidence goals may be locate, describe, causal, change or verify and may declare dependencies on other goals.
 15. Deterministic graph relationships are never delegated to the model.
 16. Entry selection may localize likely source regions before traversal, but causality/relevance is still established only by the normal semantic exploration.
 17. Adapter-built structural indexes are the preferred localization mechanism for supported languages; raw-source regex is a fallback.
@@ -856,6 +853,10 @@ Localize   final supporting evidence → exact source ranges
 37. Faceted structural search supplies Code Query entry functions before local call expansion begins.
 38. Code Query expands deterministic direct-call topology only from selected entries and only to the bounded Learn window needed for the current decision.
 39. Repository-wide call-path discovery remains a separate capability for workflows whose purpose is global flow discovery, such as Enterprise Learn.
-40. Code Query distinguishes causal investigations, descriptive queries and requested code changes; the investigation mode remains stable once classified.
-41. Change mode stops when evidence identifies the existing implementation targeted by the request and establishes its relationship to the requested modification.
-42. Change mode must not require a proposed replacement API, configuration value or mechanism to already exist in the selected repository revision.
+40. Entry comparison is navigation-only: it ranks candidate code but cannot resolve goals, add facts or seed a causal/change/verification hypothesis.
+41. Goal resolution occurs only while inspecting evidence-bound current code, never from entry comparison alone.
+42. LeMap stops only when every material evidence goal is resolved; the model's completion bit alone is not authoritative.
+43. Causal goals must explain the distinguishing reported condition rather than merely match issue terminology.
+44. Change goals do not require a proposed replacement API, configuration value or mechanism to already exist in the selected repository revision.
+45. Goal dependencies are preserved so a later obligation cannot be treated as established before its prerequisite evidence is established.
+46. The goal ledger is query-local and stable; traversal remains evidence-driven and may backtrack or reseed without rewriting the original obligations.
