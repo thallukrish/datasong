@@ -40,53 +40,6 @@ Return {"x":0,"h":"","z":[],"a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
 
 
-const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics and the current function body when supplied. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. m is an optional regex-selected source region inside the current function, including the matched source and its learned semantics. h is the rolling evidence-backed hypothesis.
-
-Reason causally, not by topical relevance. The issue may contain multiple distinct or related failure components. Do not require one hypothesis to explain every component at once. A strong hypothesis may close one part of the issue while other parts remain unresolved.
-
-At every current function ask in this order:
-1. If m exists, examine that highlighted matched region first, together with its surrounding learned semantics and b. Then ask whether this function itself can concretely cause the whole issue or one identifiable part of it.
-2. Can this function itself, based on its semantics and b, concretely cause the whole issue or one identifiable part of it?
-3. If yes and no downstream call is needed to establish that mechanism, set k=1 and put the concise closed cause in g. Do not continue into child calls merely because they exist.
-4. Set x=1 only when the cumulative supported evidence, including any already closed causes in f, explains the whole reported issue. Otherwise x=0 and continue investigating unresolved parts.
-5. Only rank child continuations when further execution is actually needed to establish an unresolved cause.
-
-Evidence that is merely adjacent or topically related should score low unless it can participate in the reported behavior. When several mechanisms in the current code could superficially match the issue, test each mechanism against the specific distinguishing condition in the report. Do not accept a mechanism merely because it shares terminology with the issue. Prefer the mechanism whose behavior changes specifically under the reported condition, and reject alternatives that would behave the same with or without that condition. When the supplied evidence directly establishes a causal mechanism, accept that mechanism without requiring an additional intermediate component. Never invent components, relationships, execution steps, or implementation that are absent from the supplied evidence.
-
-When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. If k=1, also include the closed causal statement in a so it becomes durable evidence. Do not return evidence IDs or slot IDs. During entry selection, where several independent windows are being compared and no current function body exists, leave a empty and set k=0. Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId].
-
-h is always the best rolling hypothesis from all evidence seen so far. It may describe one solved component plus unresolved remainder. g is only the cause closed at the current function.
-
-p is [[candidateIndex,causalScore]] for at most 3 continuations, where causalScore means how likely following that branch is to complete an unresolved causal explanation. Do not invent missing evidence. Return {"x":0,"k":0,"g":"","h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
-
-const CAUSAL_COMPLETE_SYSTEM = `Decide whether the accumulated supported causal evidence now explains the whole reported software issue. The issue may contain multiple distinct or related parts. q is the original issue, f is the cumulative evidence ledger as [factId,status,text], and h is the rolling hypothesis.
-
-Return x=1 only if the supported evidence collectively explains every material failure described by the issue. If one or more parts remain unexplained, return x=0. h must summarize the best cumulative explanation and, when incomplete, identify the unresolved remainder without inventing facts.
-
-Return {"x":0,"h":""} only.`;
-
-const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. m is an optional regex-selected source region inside the current function, including the matched source and its learned semantics. h is the current answer hypothesis.
-
-At every position, if m exists examine that highlighted matched region first, then ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. During entry selection leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
-
-Set x=1 only when the supported facts plus traversed semantic path directly answer the question. Then h is the concise answer. Otherwise x=0 and h is the current evidence-backed answer hypothesis. p is [[candidateIndex,relevanceScore]] for at most 3 continuations. Do not invent missing evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
-
-const CHANGE_DECIDE_SYSTEM = `Investigate a requested code change from learned code semantics and the current function body when supplied. The original change request never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. m is an optional structurally matched source region inside the current function. h is the rolling evidence-backed hypothesis.
-
-Treat the request as an engineer locating the existing implementation to modify. Distinguish what exists in the current revision from behavior, rationale, examples, and proposed implementation details in the request.
-
-At every current function ask:
-1. Does the supplied evidence establish that this function or region is part of the existing implementation targeted by the request?
-2. Does the supplied evidence establish how that current implementation relates to the requested change?
-3. If both are established strongly enough to identify the code that should be changed, set x=1 and summarize that relationship in h. Do not continue down child calls merely to find the proposed replacement API or mechanism.
-4. If the target implementation is plausible but the relationship to the requested change is not yet established, set x=0 and rank only continuations that could establish the missing relationship.
-5. If the current code is unrelated, score its continuations low unless supplied evidence shows they lead toward the targeted implementation.
-
-A proposed API, method, configuration value, or mechanism mentioned in the request may be absent from the current revision. Its absence is not a reason to keep searching for it when the current implementation and requested replacement relationship are already clear.
-
-When there is one current traversal window, add explicit facts about the current implementation and its relationship to the requested change to a. During entry comparison leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
-
-p is [[candidateIndex,relevanceScore]] for at most 3 continuations. Never invent code, relationships, execution steps, or implementation details not present in the supplied evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
 
 function symbolState(symbol, parent=null) {
@@ -463,15 +416,6 @@ async function localizeExplanation({question,explanation,evidenceStates,client,m
   log('query_v5_localize',{explanation,ranges,usage:call.usage});
   return ranges;
 }
-
-async function assessCausalCompleteness({question,hypothesis,ledger,client,model,usage,log,step}) {
-  const call=await modelJson(client,model,CAUSAL_COMPLETE_SYSTEM,{q:question,h:hypothesis||'',f:ledgerView(ledger)});
-  addUsage(usage,call.usage);
-  const result={explained:Number(call.parsed?.x||0)===1,hypothesis:text(call.parsed?.h||hypothesis||'',900)};
-  log('query_v5_causal_completeness',{step,payload:{q:question,h:hypothesis||'',f:ledgerView(ledger)},modelResponse:call.parsed,result,usage:call.usage});
-  return result;
-}
-
 
 async function triageEntryCandidates({question,candidates=[],client,model,usage,log}){
   const compact=arr(candidates).map((candidate,index)=>[
