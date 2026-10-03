@@ -582,9 +582,27 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       events.push(batchEvent);emit(batchEvent);
 
       if(decision.explained){
-        const supported=ledgerEvidenceStates(ledger);
+        let supported=ledgerEvidenceStates(ledger);
         if(!supported.length){
-          log('query_v5_invalid_explanation',{step,reason:'explanation has no supported evidence ledger facts'});
+          const topPick=decision.picks[0]?.state||null;
+          const pickedIndex=topPick?candidates.findIndex(state=>state.id===topPick.id):-1;
+          if(pickedIndex>=0){
+            supported=dedupeStates(arr(windows[pickedIndex]?.states));
+            if(supported.length){
+              const id='F'+nextFactId.value++;
+              ledger.set(id,{
+                id,
+                text:decision.hypothesis||`Entry evidence for ${topPick.name} establishes the requested code relationship.`,
+                status:'supported',
+                supportStates:supported
+              });
+              log('query_v5_entry_completion_bound',{step,state:topPick.name,supportStateIds:supported.map(state=>state.id)});
+              emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:true});
+            }
+          }
+        }
+        if(!supported.length){
+          log('query_v5_invalid_explanation',{step,reason:'entry completion had no selected candidate evidence to bind'});
           continue;
         }
         finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
