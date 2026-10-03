@@ -417,16 +417,17 @@ async function decide({
     picks.push({state,score:Number(row?.[1]||0)});
   }
   picks.sort((a,b)=>b.score-a.score);
+  const entryStage=!currentState;
   const result={
-    explained:Number(call.parsed?.x||0)===1,
-    causeClosed:currentState&&Number(call.parsed?.k||0)===1,
-    closedCause:text(call.parsed?.g||'',700),
-    hypothesis:text(call.parsed?.h||hypothesis||'',900),
+    explained:entryStage?false:Number(call.parsed?.x||0)===1,
+    causeClosed:false,
+    closedCause:'',
+    hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
     picks,
-    additions:currentState?arr(call.parsed?.a):[],
-    disputes:arr(call.parsed?.d),
-    resolutions:arr(call.parsed?.r),
-    goalResolutions:currentState?arr(call.parsed?.z).map(String):[],
+    additions:entryStage?[]:arr(call.parsed?.a),
+    disputes:entryStage?[]:arr(call.parsed?.d),
+    resolutions:entryStage?[]:arr(call.parsed?.r),
+    goalResolutions:entryStage?[]:arr(call.parsed?.z).map(String),
     supportStates:currentState&&currentWindow?dedupeStates(arr(currentWindow.states)):[]
   };
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,goalResolutions:result.goalResolutions},usage:call.usage});
