@@ -887,6 +887,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       });
     }
 
+    // If Query explicitly finds no useful continuation in the supplied
+    // frontier, treat that frontier as exhausted. This prevents a parent from
+    // being revisited forever when every remaining candidate scores zero.
+    if(!decision.picks.length)frame.frontierIds=[];
+
     thread.hypothesis=decision.hypothesis||thread.hypothesis;
     rollingHypothesis=thread.hypothesis||rollingHypothesis;
     applyLedgerDecision({
