@@ -30,28 +30,35 @@ Before returning the goals, mentally verify:
 
 Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"causal","text":"","dependsOn":[]}]} only.`;
 
-const GOAL_DECIDE_SYSTEM = `Investigate one stable software-engineering request using a set of evidence obligations. q is the original request. g is the current goal ledger as [goalId,kind,status,text,dependsOn]. f is the evidence visible to the active goal as [factId,status,sourceGoalId,sourceGoalKind,text]. Facts from prerequisite goals are context, not conclusions for the active goal. s is learned semantic evidence. b is the raw body of the current function when one is being inspected. m is any structurally matched region in that function. h is the rolling evidence-backed summary.
+const GOAL_DECIDE_SYSTEM = `Search a learned semantic code space for evidence that satisfies one active software-engineering goal.
 
-The request may mix locating code, understanding behavior, debugging a cause, identifying a change, and verifying constraints. Treat each unresolved goal according to its kind rather than forcing the whole request into one reasoning mode. Respect goal dependencies. u is the ID of the one goal currently scheduled for this investigation thread. Reason toward that goal only. Other goals and supported facts are context; do not resolve another goal opportunistically from this thread.
+q is the original request.
+g is the goal ledger as [goalId,kind,status,text,dependsOn].
+u is the active goal ID.
+f is previously established evidence as [factId,status,sourceGoalId,sourceGoalKind,text].
+h is the rolling evidence-backed hypothesis.
+n is the semantic node currently being visited, or null during entry comparison.
+c is the set of semantic navigation candidates as [candidateIndex,type,name,purpose,effect].
+src is exact source for n only when you explicitly requested source inspection on the previous decision.
+m contains structural code matches only during entry localization.
 
-When the current raw function body directly satisfies a locate goal, resolve that goal immediately. A locate goal does not require explaining the behavior, finding a downstream call, or satisfying any later causal, change, or verify goal. Do not continue from an already-located implementation merely because child calls exist.
+Treat this as search. Structure bootstraps the semantic space; Learn fills missing semantics; Query walks semantic functions, regions and branches. Source is not normal traversal evidence. Use exact code only when it is supplied in src or in entry-stage structural matches.
 
-CRITICAL ENTRY-STAGE RULE: when b is null, you are only comparing possible entry code. Rank candidates that are most useful for the unresolved goals, but do not form or carry a causal mechanism, change conclusion, verification conclusion, or descriptive answer. At this stage return x=0, z=[], a=[], and h="". Entry comparison answers only "which code should be inspected next?"
+ENTRY STAGE: when n is null, rank the candidate semantic entries in p. Do not form a causal/change/verification conclusion, do not add facts, do not request source, and report goal score 0. Return h="".
 
-When b is present, reason from the actual current code unit plus learned evidence. A code unit may be a whole function or one AST region inside it. The controller walks a selected function's body regions before allowing traversal into callees, so evaluate the supplied region as evidence for the active goal rather than trying to skip ahead:
+SEMANTIC WALK: when n is present, evaluate only the semantics of the current node, prior supported evidence, and semantic candidates.
+- p ranks at most 3 semantic continuations by usefulness for the active goal, using scores 0..1.
+- gs reports evidence sufficiency for the active goal as [[goalId,score]], where 1.0 means the supplied evidence is sufficient to close that goal. A high navigation score is not a goal-satisfaction score.
+- a contains only explicit facts established by the visited semantic node or by src when present.
+- i=1 requests exact source for the current semantic node when its semantics look material but are insufficient to establish or reject the needed mechanism. Otherwise i=0.
+- Do not request source merely to browse. Narrow semantically first.
+- When src is present, use it to verify the semantic interpretation and update facts/goal sufficiency. Do not request source again in that decision.
 
+For causal goals, compare candidate mechanisms against the distinguishing conditions in the issue. For change goals, establish the current implementation and how the requested change applies. For describe goals, establish the requested behavior or flow. For verify goals, establish the stated constraint or consequence. Locate goals close when the semantic/structural evidence identifies the requested implementation.
 
-- locate: resolve only when the evidence identifies the existing implementation or region required by the goal.
-- describe: resolve only when the evidence directly establishes the requested behavior or flow.
-- causal: test candidate mechanisms against the specific distinguishing conditions in the report. Do not accept a mechanism merely because it shares terminology with the issue. Prefer a mechanism whose behavior actually changes under the reported condition, and reject alternatives that would behave the same with or without it. When b contains multiple relevant regions or checks, compare them explicitly against the distinguishing condition before leaving the current function. Use the supplied region code and semantics in s/m to identify which mechanism can actually produce the reported difference. Do not add causal facts for a superficially matching mechanism until that comparison is complete. If a plausible mechanism remains visible in the current function, do not backtrack or descend into callees yet.
-- change: distinguish current implementation from proposed implementation. Resolve when the evidence establishes the existing code targeted by the requested modification and how the requested change relates to it. Do not require a proposed API or mechanism to already exist in the current revision.
-- verify: resolve only when the supplied evidence directly establishes the requested constraint or consequence.
-
-Return z containing the current goal ID string, for example ["G1"], only when the currently scheduled goal is resolved by supplied evidence; otherwise return z=[]. Resolve a goal only from supplied evidence, never from general assumptions. Do not resolve a dependent goal unless its dependencies are already resolved or are also directly resolved by the same evidence. Add explicit evidence-backed facts from the current window to a as plain strings only. For a locate goal, do not add behavioral or causal facts; LeMap records the resolved location separately. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
-
-Set x=1 only when every material goal in g is resolved by supported evidence. Otherwise x=0. h is the best concise evidence-backed summary of resolved goals and the unresolved remainder. Rank p=[[candidateIndex,relevanceScore]] for at most 3 continuations that are most likely to resolve remaining goals. Do not traverse merely because a child exists. Never invent code, relationships, execution steps, or implementation details absent from the supplied evidence.
-
-Return {"x":0,"h":"","z":[],"a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
+Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src. Return only:
+{"h":"","gs":[["G1",0.0]],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+`;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
 
@@ -157,10 +164,7 @@ function fallbackCodeEntries(topology, limit=40) {
 
 function semanticNodeView(state,explorer){
   const semantic=codeSemanticForState(state,explorer)||{};
-  const base=[state.name,text(semantic.purpose||'',260),text(semantic.effect||'',220)];
-  return state?.type==='code_region'
-    ? [...base,text(state.body||'',700),state.kind||'']
-    : base;
+  return [state?.type||'',state?.name||'',text(semantic.purpose||'',320),text(semantic.effect||'',280)];
 }
 
 function semanticWindowView(rootState,window,explorer){
@@ -194,15 +198,12 @@ function dedupeStates(states=[]){
   return out;
 }
 
-function directBodyRegions(state,window){
-  if(state?.type!=='code_symbol')return[];
-  return dedupeStates(arr(window?.states)
-    .filter(region=>
-      region?.type==='code_region' &&
-      region?.symbolId===state.symbolId &&
-      region?.kind!=='regex-match' &&
-      (region?.parent===state.id || region?.parent===state.symbolId)
-    ))
+function semanticRegionChildren(state,window){
+  const byId=new Map(arr(window?.states).map(item=>[item.id,item]));
+  const ids=arr(window?.links)
+    .filter(link=>link?.relationship==='contains'&&String(link?.from||'')===String(state?.id||''))
+    .map(link=>link.to);
+  return dedupeStates(ids.map(id=>byId.get(id)).filter(region=>region?.type==='code_region'&&region?.kind!=='regex-match'))
     .sort((a,b)=>Number(a.startLine||0)-Number(b.startLine||0)||Number(a.endLine||0)-Number(b.endLine||0));
 }
 
