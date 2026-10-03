@@ -244,7 +244,7 @@ function substantiallySameFact(left,right,{rangeOverlap=false}={}){
 function applyLedgerDecision({ledger,goal,additions=[],disputes=[],resolutions=[],supportStates=[],nextFactId}){
   for(const id of arr(disputes).map(String)){
     const fact=ledger.get(id);
-    if(fact&&(fact.goalId===goal?.id||dependencyGoalIds([goal],goal?.id).has(fact.goalId)))fact.status='disputed';
+    if(fact)fact.status='disputed';
   }
   for(const id of arr(resolutions).map(String)){
     const fact=ledger.get(id);
