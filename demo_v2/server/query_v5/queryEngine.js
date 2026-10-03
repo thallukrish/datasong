@@ -38,7 +38,9 @@ When the current raw function body directly satisfies a locate goal, resolve tha
 
 CRITICAL ENTRY-STAGE RULE: when b is null, you are only comparing possible entry code. Rank candidates that are most useful for the unresolved goals, but do not form or carry a causal mechanism, change conclusion, verification conclusion, or descriptive answer. At this stage return x=0, z=[], a=[], and h="". Entry comparison answers only "which code should be inspected next?"
 
-When b is present, reason from the actual current function plus learned evidence:
+When b is present, reason from the actual current code unit plus learned evidence. A code unit may be a whole function or one AST region inside it. The controller walks a selected function's body regions before allowing traversal into callees, so evaluate the supplied region as evidence for the active goal rather than trying to skip ahead:
+
+
 - locate: resolve only when the evidence identifies the existing implementation or region required by the goal.
 - describe: resolve only when the evidence directly establishes the requested behavior or flow.
 - causal: test candidate mechanisms against the specific distinguishing conditions in the report. Do not accept a mechanism merely because it shares terminology with the issue. Prefer a mechanism whose behavior actually changes under the reported condition, and reject alternatives that would behave the same with or without it. When b contains multiple relevant regions or checks, compare them explicitly against the distinguishing condition before leaving the current function. Use the supplied region code and semantics in s/m to identify which mechanism can actually produce the reported difference. Do not add causal facts for a superficially matching mechanism until that comparison is complete. If a plausible mechanism remains visible in the current function, do not backtrack or descend into callees yet.
@@ -190,6 +192,18 @@ function dedupeStates(states=[]){
   const seen=new Set(),out=[];
   for(const state of arr(states)){if(!state?.id||seen.has(state.id))continue;seen.add(state.id);out.push(state)}
   return out;
+}
+
+function directBodyRegions(state,window){
+  if(state?.type!=='code_symbol')return[];
+  return dedupeStates(arr(window?.states)
+    .filter(region=>
+      region?.type==='code_region' &&
+      region?.symbolId===state.symbolId &&
+      region?.kind!=='regex-match' &&
+      (region?.parent===state.id || region?.parent===state.symbolId)
+    ))
+    .sort((a,b)=>Number(a.startLine||0)-Number(b.startLine||0)||Number(a.endLine||0)-Number(b.endLine||0));
 }
 
 function dependencyGoalIds(goals=[],activeGoalId=''){
@@ -769,6 +783,56 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     recordTraversed(state,step);
     recordExplored(arr(learned.window?.states),`semantic_window:${goal.id}`,step);
     const path=[...frame.path,state];
+
+    // Before a selected function is allowed to branch into callees or another
+    // entry candidate, deterministically walk its direct AST statement regions.
+    // These top-level regions cover the complete function body while preserving
+    // nested blocks inside their raw source and learned semantics.
+    const bodyRegions=directBodyRegions(state,learned.window);
+    if(bodyRegions.length){
+      emit({action:'BODY_REGIONS_START',goalId:goal.id,state:state.name,count:bodyRegions.length,path:path.map(x=>x.name)});
+      for(const region of bodyRegions){
+        if(step>=MAX_STEPS||goal.status==='resolved')break;
+        thread.visited.add(region.id);
+        recordTraversed(region,step);
+        const regionWindow={states:[region],links:[],highlights:[]};
+        const regionDecision=await decide({
+          question,mode,goals,activeGoalId:goal.id,hypothesis:thread.hypothesis,
+          ledger,path,currentState:region,currentWindow:regionWindow,candidates:[],
+          explorer,client,model,usage,log,step:++step,onProgress:emit
+        });
+
+        thread.hypothesis=regionDecision.hypothesis||thread.hypothesis;
+        rollingHypothesis=thread.hypothesis||rollingHypothesis;
+        applyLedgerDecision({
+          ledger,goal,additions:regionDecision.additions,disputes:regionDecision.disputes,
+          resolutions:regionDecision.resolutions,supportStates:regionDecision.supportStates,nextFactId
+        });
+
+        const regionResolution=regionDecision.goalResolutions.includes(goal.id)?[goal.id]:[];
+        const regionResolvedNow=applyGoalResolutions({goals,resolvedIds:regionResolution,supportStates:regionDecision.supportStates});
+        emit({action:'BODY_REGION_VISITED',goalId:goal.id,state:state.name,region:region.name,startLine:region.startLine,endLine:region.endLine,resolved:regionResolvedNow,path:[...path,region].map(x=>x.name)});
+
+        if(regionResolvedNow.length){
+          if(goal.kind==='locate'){
+            addResolvedLocationFact({ledger,goal,state:region,supportStates:regionDecision.supportStates,nextFactId});
+            goal.summary=`${region.name} is the existing implementation identified for ${goal.text}.`;
+          }else{
+            goal.summary=regionDecision.hypothesis||goal.summary||goal.text;
+          }
+          thread.stack=[];
+          thread.exhausted=true;
+          emit({action:'GOALS_RESOLVED',goalId:goal.id,resolved:regionResolvedNow,goals:goalView(goals),hypothesis:goal.summary});
+          break;
+        }
+
+        emit({action:'FACTS',goalId:goal.id,facts:ledgerView(ledger,{all:true}),hypothesis:thread.hypothesis,explained:allGoalsResolved(goals),goals:goalView(goals)});
+      }
+      emit({action:'BODY_REGIONS_DONE',goalId:goal.id,state:state.name,visited:bodyRegions.filter(region=>thread.visited.has(region.id)).length,resolved:goal.status==='resolved'});
+      if(allGoalsResolved(goals))break;
+      if(goal.status==='resolved')continue;
+    }
+
     const next=callChildren(state,explorer,flowChildren).filter(child=>!thread.visited.has(child.id));
 
     const decision=await decide({
