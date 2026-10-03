@@ -816,6 +816,8 @@ This prevents a speculative interpretation formed while merely comparing candida
 
 Once LeMap enters the selected function, the model receives the current raw body and learned semantic window. Only then may goals be resolved and facts enter the evidence ledger.
 
+For a scheduled locate goal, the thread closes as soon as the current function body directly identifies the requested implementation. It does not descend further merely because later causal or change goals remain unresolved.
+
 ## Branch exploration
 
 After Query selects a branch:
@@ -919,3 +921,6 @@ Localize   final supporting evidence → exact source ranges
 48. Learned semantics and the evidence ledger are shared across goal threads, so repeated code is not relearned and established evidence can inform later goals.
 49. Goal dependencies constrain scheduling, not code-space locality; dependent goals may start a new faceted search after their prerequisites resolve.
 50. Exhausting one goal thread does not force unrelated goals to share its fallback roots or traversal path.
+51. Zero-confidence continuations are never traversed.
+52. When structured search returns concrete entries for a goal, that goal thread stays bounded to those entries instead of falling through to generic repository roots.
+53. Locate goals stop at the first current function whose evidence directly identifies the requested implementation.
