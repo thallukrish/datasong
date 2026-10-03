@@ -84,6 +84,12 @@ status = unresolved | resolved
 
 The decomposition is intentionally small, normally one to five goals and never more than six. It is not an execution plan. It says what must eventually be established from evidence, not which code path must be traversed.
 
+A `locate` goal is created only when locating or identifying code is itself an explicit user-requested outcome. LeMap does not create a separate locate goal merely because a causal, descriptive, change, or verification goal must first find relevant code; faceted localization is already part of every goal's investigation thread.
+
+Goal decomposition must also be lossless. If the request is split, the goals plus their dependency relationships must collectively preserve every material condition, discriminator, scope restriction, symptom, and requested outcome from the original issue. A condition needed to identify or reason about evidence for a goal remains in that goal even if a later dependent goal also mentions it.
+
+Dependencies represent information flow. When G2 depends on G1, G2 consumes the evidence established by G1. Solving all goals in dependency order must therefore be equivalent in coverage to handling the original request as a whole. Splitting must never make the combined investigation weaker or narrower than the original issue.
+
 For example:
 
 ```text
@@ -937,3 +943,6 @@ Localize   final supporting evidence → exact source ranges
 56. Locate goals export deterministic location context only, not free-form behavioral or causal interpretations.
 57. Model fact additions must be plain strings; ledger-shaped arrays or objects are rejected.
 58. Causal goals compare competing mechanisms visible in the current function against the reported distinguishing condition before leaving that function.
+59. A locate goal exists only when code location is itself an explicit requested outcome, never merely as an internal prerequisite of another investigation.
+60. Goal decomposition is lossless: all material conditions and requested outcomes from the original issue must remain represented across the goal dependency graph.
+61. A dependent goal consumes prerequisite evidence, and the complete dependency chain must collectively cover the original request without dropping discriminating conditions.
