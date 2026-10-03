@@ -96,32 +96,52 @@ function directCallStates(state,explorer){
   return out;
 }
 
-export function collectLocalSemanticWindow({state,explorer,depth=3,includeRootRegions=true}){
+export function collectLocalSemanticWindow({
+  state,explorer,depth=1,includeRootRegions=true,includeCallFrontier=false
+}){
   if(!state)return{states:[],links:[]};
-  const queue=[{state,level:0}],seen=new Set(),states=[],links=[];
-  while(queue.length){
-    const current=queue.shift(),node=current.state;if(!node||seen.has(node.id))continue;
-    seen.add(node.id);states.push(node);
+  const seen=new Set(),states=[],links=[];
+  const add=(node)=>{
+    if(!node?.id||seen.has(node.id))return false;
+    seen.add(node.id);states.push(node);return true;
+  };
 
-    // Lazily align the semantic graph with the AST structure of the function
-    // currently under inspection. Called functions get their own regions when
-    // they later become the root of an investigation.
-    if(includeRootRegions&&current.level===0&&node.type!=='code_external'){
-      const regions=node.type==='code_region'
-        ? structuralRegionChildren(node,explorer)
-        : structuralRegionStates(node,explorer);
-      for(const region of regions){
-        if(!seen.has(region.id)){seen.add(region.id);states.push(region)}
-        links.push({from:region.parent||node.id,to:region.id,relationship:'contains'});
-      }
-    }
+  add(state);
 
-    if(current.level>=Math.max(0,Number(depth)||0))continue;
-    for(const child of directCallStates(node,explorer)){
-      links.push({from:node.id,to:child.id,relationship:'calls'});
-      if(!seen.has(child.id))queue.push({state:child,level:current.level+1});
+  // Learn only the semantic frontier needed for the next search decision.
+  // A function exposes its direct statement regions; a region exposes only its
+  // direct nested regions. Deeper regions are learned only after Query selects
+  // their parent.
+  if(includeRootRegions&&state.type!=='code_external'){
+    const regions=state.type==='code_region'
+      ? structuralRegionChildren(state,explorer)
+      : structuralRegionStates(state,explorer).filter(region=>region.parent===state.id||region.parent===state.symbolId);
+    for(const region of regions){
+      add(region);
+      links.push({from:state.id,to:region.id,relationship:'contains'});
     }
   }
+
+  // Calls are a separate frontier. Query requests them only after the relevant
+  // semantic body space for the current function has been exhausted.
+  if(includeCallFrontier&&state.type!=='code_external'){
+    const maxDepth=Math.max(1,Math.min(3,Number(depth)||1));
+    const queue=[{node:state,level:0}];
+    const callSeen=new Set([state.id]);
+    while(queue.length){
+      const {node,level}=queue.shift();
+      if(level>=maxDepth)continue;
+      for(const child of directCallStates(node,explorer)){
+        links.push({from:node.id,to:child.id,relationship:'calls'});
+        add(child);
+        if(!callSeen.has(child.id)){
+          callSeen.add(child.id);
+          queue.push({node:child,level:level+1});
+        }
+      }
+    }
+  }
+
   return{states,links};
 }
 
@@ -149,8 +169,11 @@ export async function ensureLocalCodeSemantics({states,path=[],links=[],explorer
 }
 
 
-export async function ensureLocalSemanticWindow({state,path=[],depth=3,highlightRegions=[],includeRootRegions=true,explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
-  const window=collectLocalSemanticWindow({state,explorer,depth,includeRootRegions});
+export async function ensureLocalSemanticWindow({
+  state,path=[],depth=1,highlightRegions=[],includeRootRegions=true,includeCallFrontier=false,
+  explorer,client,model,usage,log=()=>{},onProgress=()=>{}
+}){
+  const window=collectLocalSemanticWindow({state,explorer,depth,includeRootRegions,includeCallFrontier});
   const highlights=arr(highlightRegions).filter(Boolean);
   const result=await ensureLocalCodeSemantics({states:[...window.states,...highlights],path,links:window.links,explorer,client,model,usage,log,onProgress});
   return{...result,window:{...window,highlights}};
