@@ -26,6 +26,12 @@ persist semantic details
 
 The structural graph remains authoritative for symbol identity, source coordinates, calls, containment, branches and traversal.
 
+For Python, the analyzer already emits statement-level regions inside each function. When a function becomes the current investigation root, Learn now materializes those existing AST regions into the semantic graph and annotates them with query-independent semantics. The semantic graph therefore mirrors the function's structural body instead of reducing it to only function-level summaries and call edges.
+
+Each learned region keeps the same source range and raw code used by the structural analyzer. Query receives the region code together with its learned purpose and effect, so structural evidence and semantic evidence refer to the same code unit.
+
+This expansion is lazy. Entry-candidate comparison does not learn every candidate's body regions. Regions are expanded only after a candidate becomes the current function, and called functions receive their regions when they later become the current root.
+
 The model adds reusable semantic details such as:
 
 ```text
@@ -946,3 +952,6 @@ Localize   final supporting evidence → exact source ranges
 59. A locate goal exists only when code location is itself an explicit requested outcome, never merely as an internal prerequisite of another investigation.
 60. Goal decomposition is lossless: all material conditions and requested outcomes from the original issue must remain represented across the goal dependency graph.
 61. A dependent goal consumes prerequisite evidence, and the complete dependency chain must collectively cover the original request without dropping discriminating conditions.
+62. When a function is actively inspected, its existing AST statement regions are materialized into the semantic graph and learned with their exact source ranges and code.
+63. Query receives region code and region semantics together so structural and semantic evidence stay aligned.
+64. Region learning is lazy: entry-candidate comparison stays cheap, and function-body regions are expanded only for the selected current function.
