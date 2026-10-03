@@ -21,6 +21,32 @@ function stateForSymbol(symbol,parentSymbolId=null){
   return {id:symbol.id,type:'code_symbol',name:symbol.name,symbolId:symbol.id,sourcePath:symbol.sourcePath||'',startLine:symbol.startLine||0,endLine:symbol.endLine||0,body:String(symbol.body||''),parent:parentSymbolId,parentSymbolId};
 }
 
+function stateForRegion(symbol,region){
+  const kind=String(region?.kind||'region');
+  const startLine=Number(region?.startLine||symbol.startLine||0);
+  return {
+    id:region.id,
+    regionId:region.id,
+    type:'code_region',
+    name:`${symbol.name} [${kind} @ ${startLine}]`,
+    symbolId:symbol.id,
+    sourcePath:symbol.sourcePath||'',
+    startLine,
+    endLine:Number(region?.endLine||startLine),
+    body:String(region?.body||''),
+    parent:region?.parentRegionId||symbol.id,
+    parentSymbolId:symbol.id,
+    kind
+  };
+}
+
+function structuralRegionStates(state,explorer){
+  if(!state||state.type==='code_external'||state.type==='code_region')return[];
+  const symbol=explorer.topology?.symbolById?.get(state.symbolId);
+  if(!symbol)return[];
+  return arr(symbol.regions).map(region=>stateForRegion(symbol,region)).filter(region=>region.id);
+}
+
 function externalStateForRef(symbol,ref){
   const line=Number(ref?.line||ref?.startLine||0),endLine=Number(ref?.endLine||line);
   const qualified=String(ref?.qualifiedName||ref?.name||ref?.simpleName||'external');
@@ -60,12 +86,23 @@ function directCallStates(state,explorer){
   return out;
 }
 
-export function collectLocalSemanticWindow({state,explorer,depth=3}){
+export function collectLocalSemanticWindow({state,explorer,depth=3,includeRootRegions=true}){
   if(!state)return{states:[],links:[]};
   const queue=[{state,level:0}],seen=new Set(),states=[],links=[];
   while(queue.length){
     const current=queue.shift(),node=current.state;if(!node||seen.has(node.id))continue;
     seen.add(node.id);states.push(node);
+
+    // Lazily align the semantic graph with the AST structure of the function
+    // currently under inspection. Called functions get their own regions when
+    // they later become the root of an investigation.
+    if(includeRootRegions&&current.level===0&&node.type!=='code_external'&&node.type!=='code_region'){
+      for(const region of structuralRegionStates(node,explorer)){
+        if(!seen.has(region.id)){seen.add(region.id);states.push(region)}
+        links.push({from:region.parent||node.id,to:region.id,relationship:'contains'});
+      }
+    }
+
     if(current.level>=Math.max(0,Number(depth)||0))continue;
     for(const child of directCallStates(node,explorer)){
       links.push({from:node.id,to:child.id,relationship:'calls'});
@@ -99,8 +136,8 @@ export async function ensureLocalCodeSemantics({states,path=[],links=[],explorer
 }
 
 
-export async function ensureLocalSemanticWindow({state,path=[],depth=3,highlightRegions=[],explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
-  const window=collectLocalSemanticWindow({state,explorer,depth});
+export async function ensureLocalSemanticWindow({state,path=[],depth=3,highlightRegions=[],includeRootRegions=true,explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
+  const window=collectLocalSemanticWindow({state,explorer,depth,includeRootRegions});
   const highlights=arr(highlightRegions).filter(Boolean);
   const result=await ensureLocalCodeSemantics({states:[...window.states,...highlights],path,links:window.links,explorer,client,model,usage,log,onProgress});
   return{...result,window:{...window,highlights}};
