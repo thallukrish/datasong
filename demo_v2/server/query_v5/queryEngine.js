@@ -755,7 +755,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
         const warm=decision.picks;
         if(!warm.length)continue;
-        thread.stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:''});
+        thread.stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:'',frontierIds:[]});
         const event={step,action:'RESEED',goalId:goal.id,state:warm[0].state.name,hypothesis:''};
         events.push(event);emit({...event,path:[warm[0].state.name]});
         return true;
@@ -768,8 +768,27 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const resumeThread=async(thread)=>{
     while(thread.stack.length){
       const top=thread.stack.at(-1);
+
+      // A semantic decision may return only the best few candidates even though
+      // the parent had a wider frontier. Before abandoning that parent (or
+      // switching to one of the parent's siblings), revisit it while any of its
+      // previously exposed semantic frontier remains unvisited. The next Query
+      // decision will rescore only those remaining candidates.
+      const pendingFrontier=arr(top.frontierIds)
+        .filter(id=>id&&!thread.visited.has(id));
+      if(pendingFrontier.length){
+        const event={
+          step,action:'SEMANTIC_FRONTIER_REVISIT',goalId:thread.goal.id,
+          state:top.current.state.name,remaining:pendingFrontier.length,
+          hypothesis:top.hypothesis
+        };
+        events.push(event);emit({...event,path:[...top.path,top.current.state].map(x=>x.name)});
+        return true;
+      }
+
       if(top.alternatives.length){
         top.current=top.alternatives.shift();
+        top.frontierIds=[];
         const event={step,action:'BACKTRACK',goalId:thread.goal.id,to:top.current.state.name,hypothesis:top.hypothesis};
         events.push(event);emit({...event,path:[...top.path,top.current.state].map(x=>x.name)});
         return true;
@@ -831,6 +850,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       next=callChildren(state,explorer,flowChildren).filter(child=>!thread.visited.has(child.id));
       navigationKind='call';
     }
+
+    // Preserve the complete semantic frontier on the parent frame. Query may
+    // return only the top few navigation picks; the unreturned candidates must
+    // remain searchable after those picks are exhausted.
+    frame.frontierIds=next.map(candidate=>candidate.id);
 
     let decision=await decide({
       question,mode,goals,activeGoalId:goal.id,hypothesis:frame.hypothesis,
@@ -902,7 +926,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(warm.length){
       thread.stack.push({
         path,current:warm[0],alternatives:warm.slice(1),
-        hypothesis:decision.hypothesis,navigationKind
+        hypothesis:decision.hypothesis,navigationKind,frontierIds:[]
       });
       const event={
         step,action:'DESCEND',goalId:goal.id,navigationKind,
