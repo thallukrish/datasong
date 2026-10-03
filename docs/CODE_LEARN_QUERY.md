@@ -736,6 +736,34 @@ pattern match
 
 If one window already explains the issue, Query stops. Otherwise Query chooses the strongest continuation and preserves alternatives exactly as before.
 
+## Investigation modes
+
+Code Query classifies the engineering task once and keeps that objective stable during traversal.
+
+```text
+causal
+→ explain why an existing failure or incorrect behavior occurs
+
+query
+→ answer how, where or what the existing code does
+
+change
+→ identify the existing implementation targeted by a requested modification
+→ establish how the current implementation relates to the requested change
+```
+
+Change mode is intentionally different from causal mode. A change request may describe a replacement API, configuration value or mechanism that does not yet exist in the selected repository revision. Query must not keep traversing merely to find that proposed implementation.
+
+For change mode, semantic exploration is complete when supported evidence establishes both:
+
+```text
+the existing implementation being changed
++
+how that implementation relates to the requested modification
+```
+
+At that point Query stops and localizes the supporting source ranges. It does not require a causal failure explanation and does not require the proposed replacement to already appear in source.
+
 ## Branch exploration
 
 After Query selects a branch:
@@ -828,3 +856,6 @@ Localize   final supporting evidence → exact source ranges
 37. Faceted structural search supplies Code Query entry functions before local call expansion begins.
 38. Code Query expands deterministic direct-call topology only from selected entries and only to the bounded Learn window needed for the current decision.
 39. Repository-wide call-path discovery remains a separate capability for workflows whose purpose is global flow discovery, such as Enterprise Learn.
+40. Code Query distinguishes causal investigations, descriptive queries and requested code changes; the investigation mode remains stable once classified.
+41. Change mode stops when evidence identifies the existing implementation targeted by the request and establishes its relationship to the requested modification.
+42. Change mode must not require a proposed replacement API, configuration value or mechanism to already exist in the selected repository revision.
