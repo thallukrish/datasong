@@ -370,7 +370,9 @@ async function decide({
   const picks=[];
   for(const row of arr(call.parsed?.p)){
     const state=byIndex.get(String(row?.[0]));if(!state)continue;
-    picks.push({state,score:Number(row?.[1]||0)});
+    const score=Number(row?.[1]||0);
+    if(!(score>0))continue;
+    picks.push({state,score});
   }
   picks.sort((a,b)=>b.score-a.score);
   const entryStage=!currentState;
