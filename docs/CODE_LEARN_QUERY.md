@@ -28,11 +28,13 @@ The structural graph remains authoritative for symbol identity, source coordinat
 
 For Python, the analyzer already emits statement-level regions inside each function. When a function becomes the current investigation root, Learn now materializes those existing AST regions into the semantic graph and annotates them with query-independent semantics. The semantic graph therefore mirrors the function's structural body instead of reducing it to only function-level summaries and call edges.
 
-Each learned region keeps the same source range and raw code used by the structural analyzer. Query receives the region code together with its learned purpose and effect, so structural evidence and semantic evidence refer to the same code unit.
+Each learned region keeps the same structural identity and source range as the analyzer region. Learn may use the region's raw code to create query-independent semantics, but Query normally receives only the learned purpose/effect plus structural identity. Source is fetched only for structural entry matching or an explicit source-inspection action requested by Query.
 
 This expansion is lazy. Entry-candidate comparison does not learn every candidate's body regions. Regions are expanded only after a candidate becomes the current function, and called functions receive their regions when they later become the current root.
 
-Once a function is selected for active investigation, Query must traverse its direct AST statement regions before it may branch into called functions or abandon that entry candidate. These direct regions cover the complete function body, with nested control-flow retained inside the region source and semantics. Each region is evaluated against the active goal in source order. If the accumulated region evidence is sufficient, Query resolves the goal from the function body and returns without leaving the function. Only after the body regions have been exhausted may call-graph traversal or entry backtracking continue.
+Once a function is selected for active investigation, Query searches its semantic region hierarchy before branching into called functions or abandoning that entry candidate. Direct regions are scored as semantic navigation candidates, the highest-scoring region is visited first, and nested semantic regions are scored in the same way. A region with score 0 can be pruned; the walk is relevance-driven rather than a sequential source-code scan. Only after the function's relevant semantic body space has been exhausted may call-graph traversal or entry backtracking continue.
+
+Navigation score and goal-satisfaction score are separate. Navigation answers "where should the semantic search go next?" Goal satisfaction answers "is the accumulated evidence sufficient for this goal?" A goal closes only at 1.0. If semantics identify a material node but are insufficient to establish the needed fact, Query may explicitly request that node's exact source range and score again with that source as verification evidence.
 
 The model adds reusable semantic details such as:
 
@@ -272,10 +274,11 @@ At every meaningful code position, Query asks which unresolved evidence obligati
 current goals
 + cumulative supported facts
 + traversed path
-+ current learned semantic window
-+ current raw function body
++ current semantic node
++ semantic navigation candidates
++ exact source only when explicitly requested
         ↓
-resolve zero or more goals
+score active-goal evidence sufficiency
         ↓
 all material goals resolved?
 ```
@@ -959,4 +962,9 @@ Localize   final supporting evidence → exact source ranges
 64. Region learning is lazy: entry-candidate comparison stays cheap, and function-body regions are expanded only for the selected current function.
 65. A selected function's direct AST statement regions are traversed before Query may descend into callees or backtrack to another entry.
 66. Region traversal evaluates evidence against the active goal in source order and stops immediately when the accumulated function-body evidence resolves that goal.
-67. Call-graph branching is permitted only after the selected function's body evidence has been exhausted without resolving the active goal.
+67. Call-graph branching is permitted only after the selected function's relevant semantic body space has been exhausted without resolving the active goal.
+68. Query traversal is semantic-first: functions, regions and branches are navigation candidates scored from learned semantics, not from raw source.
+69. Navigation relevance and goal satisfaction are separate scores. A navigation score chooses the next semantic node; an active-goal score of 1.0 closes that goal.
+70. Raw source is exposed to Query only during structural entry matching or after Query explicitly requests source inspection for the current semantic node.
+71. Learn may read source to construct missing query-independent semantics; this is semantic expansion, not Query source traversal.
+72. Final evidence localization reuses structural ranges already attached to semantic evidence and does not reopen source merely to produce locations.
