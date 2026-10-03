@@ -32,6 +32,8 @@ Each learned region keeps the same source range and raw code used by the structu
 
 This expansion is lazy. Entry-candidate comparison does not learn every candidate's body regions. Regions are expanded only after a candidate becomes the current function, and called functions receive their regions when they later become the current root.
 
+Once a function is selected for active investigation, Query must traverse its direct AST statement regions before it may branch into called functions or abandon that entry candidate. These direct regions cover the complete function body, with nested control-flow retained inside the region source and semantics. Each region is evaluated against the active goal in source order. If the accumulated region evidence is sufficient, Query resolves the goal from the function body and returns without leaving the function. Only after the body regions have been exhausted may call-graph traversal or entry backtracking continue.
+
 The model adds reusable semantic details such as:
 
 ```text
@@ -955,3 +957,6 @@ Localize   final supporting evidence → exact source ranges
 62. When a function is actively inspected, its existing AST statement regions are materialized into the semantic graph and learned with their exact source ranges and code.
 63. Query receives region code and region semantics together so structural and semantic evidence stay aligned.
 64. Region learning is lazy: entry-candidate comparison stays cheap, and function-body regions are expanded only for the selected current function.
+65. A selected function's direct AST statement regions are traversed before Query may descend into callees or backtrack to another entry.
+66. Region traversal evaluates evidence against the active goal in source order and stops immediately when the accumulated function-body evidence resolves that goal.
+67. Call-graph branching is permitted only after the selected function's body evidence has been exhausted without resolving the active goal.
