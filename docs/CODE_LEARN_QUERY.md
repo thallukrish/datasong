@@ -10,19 +10,27 @@ The governing split is:
 
 Learn never receives the user issue, query hypothesis, relevance criteria or desired answer.
 
-Given a function or function-region, Learn expands a local execution window through the next three call levels.
+Learn is frontier-lazy. It builds only the semantics needed for the next search decision.
 
 ```text
-supplied function / region
+selected function
         ↓
-deterministic call expansion
+learn function + direct semantic regions
         ↓
-current node + next 3 call levels
+Query scores the region frontier
         ↓
-learn semantics only for nodes not already learned
+selected region
         ↓
-persist semantic details
+learn only that region's direct semantic children
+        ↓
+repeat
+
+after relevant body space is exhausted
+        ↓
+learn only the immediate call frontier
 ```
+
+Learn never expands a three-level call tree merely because a function was selected. Deeper regions and called functions are learned only when Query reaches that frontier.
 
 The structural graph remains authoritative for symbol identity, source coordinates, calls, containment, branches and traversal.
 
@@ -57,16 +65,11 @@ A learned node is reusable by every later query.
 
 Lazy learning does not mean learning one node at a time and it does not mean learning the whole repository.
 
-LeMap maintains a learned semantic window around the current execution position.
+LeMap maintains a learned semantic frontier around the current search position.
 
-```text
-A → B → C → D
-        └→ E → F
-```
+For a function, the frontier is its direct semantic body regions. For a region, the frontier is its direct nested semantic regions. For a function whose relevant body space has been exhausted, the frontier becomes its immediate called functions.
 
-If A is the current position and the depth is 3, Learn ensures the reachable nodes inside that local window have semantic details.
-
-When Query later moves to C or E, Learn expands three levels from that new position and learns only newly exposed nodes. Previously learned semantics are reused.
+When Query moves to one of those nodes, Learn expands only that node's next frontier and reuses semantics already persisted.
 
 ## Evidence obligations
 
@@ -968,3 +971,7 @@ Localize   final supporting evidence → exact source ranges
 70. Raw source is exposed to Query only during structural entry matching or after Query explicitly requests source inspection for the current semantic node.
 71. Learn may read source to construct missing query-independent semantics; this is semantic expansion, not Query source traversal.
 72. Final evidence localization reuses structural ranges already attached to semantic evidence and does not reopen source merely to produce locations.
+73. Learn is frontier-lazy: selecting a function learns only that function and its direct semantic body frontier.
+74. Selecting a region learns only that region's direct semantic children.
+75. Called-function semantics are learned only after the current function's relevant body frontier has been exhausted, and only for the immediate call frontier needed for the next decision.
+76. Query never pays upfront to semantically expand an entire multi-level call tree or all nested regions.
