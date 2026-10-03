@@ -470,6 +470,27 @@ Field ( initial = "x" )
 
 Both index as a call named `Field` with keyword argument `initial`. Snippet filters are evaluated against both the original source snippet and its canonical AST form, while original source text is retained for evidence and display.
 
+### Change-request interpretation before faceted search
+
+Code Query treats the user's request as a change request against an existing repository rather than as a bag of search terms.
+
+Before choosing a structural facet, the entry-selection model distinguishes:
+
+```text
+evidence identifying existing code
+symptoms / current behavior
+desired behavior
+rationale
+examples
+proposed implementation changes
+```
+
+The faceted search is driven first by evidence that identifies the existing code under discussion. A concrete API, method, configuration value, or mechanism mentioned as part of a proposed fix must not automatically be treated as something that already exists in the selected repository revision.
+
+For example, a request may say that an existing backend client should be changed to use a different process API and environment variable. The backend/client identity is strong localization evidence for the existing code. The proposed API and environment variable become useful after candidate code is found, when Query relates the current implementation to the requested change.
+
+This distinction happens inside the normal entry-selection reasoning. It does not require a separate classification model call.
+
 ### Faceted refinement
 
 Structural entry selection is a bounded model-to-LeMap tree walk rather than one large one-shot search.
