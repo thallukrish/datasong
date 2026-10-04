@@ -29,12 +29,17 @@ Before returning the goals, mentally verify:
 3. Is any locate goal present only because code must be found internally? If yes, remove it and let the substantive goal perform localization itself.
 4. Could two adjacent goals be one coherent goal without losing useful dependency structure? If yes, merge them.
 
-Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"causal","text":"","dependsOn":[]}]} only.`;
+For every goal, also derive its acceptance criteria once at decomposition time:
+- hardConstraints: the minimum exact conditions that must be established for that goal to count as satisfied.
+- optionalConstraints: conditions that strengthen confidence or context but are not mandatory.
+Derive these only from the original request and the goal. Do not mention candidate code, implementation mechanisms, filenames, symbols, or source details unless they are explicitly stated in the request itself. These constraints are immutable during traversal.
+
+Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"causal","text":"","dependsOn":[],"hardConstraints":[],"optionalConstraints":[]}]} only.`;
 
 const GOAL_DECIDE_SYSTEM = `Search a learned semantic code space for evidence that satisfies one active software-engineering goal.
 
 q is the original request.
-g is the goal ledger as [goalId,kind,status,text,dependsOn].
+g is the goal ledger as [goalId,kind,status,text,dependsOn,hardConstraints,optionalConstraints].
 u is the active goal ID.
 f is previously established evidence as [factId,status,sourceGoalId,sourceGoalKind,text].
 h is the rolling evidence-backed hypothesis.
@@ -50,11 +55,11 @@ ENTRY STAGE: when n is null, rank the candidate semantic entries in p. Do not fo
 SEMANTIC WALK: when n is present, evaluate only the semantics of the current node, prior supported evidence, and semantic candidates.
 - p ranks at most 3 semantic continuations by usefulness for the active goal, using scores 0..1.
 - gs reports evidence sufficiency for the active goal as [[goalId,score]]. Score the evidence actually present at the current function/region/body. Use 1.0 whenever that evidence is sufficient to answer the active goal; do not reserve 1.0 for exhaustive certainty across the repository. Scores below 0.9 mean more evidence is materially needed. A high navigation score is not a goal-satisfaction score.
-- For every active goal kind, derive a compact checklist of the exact constraints that must hold for the current node to satisfy that goal. Use the active goal plus all material conditions in q that constrain it. Return ck as [["constraint text",score,"hard"|"support"],...], with each score 0..1.
-- Mark a constraint hard when it must be true for this node to satisfy the active goal. Mark it support when it only increases confidence or helps localize context. Do not use a fixed checklist by goal kind; derive the constraints from the actual request and active goal.
-- fit is the current node's candidate-fit score 0..1 derived from that checklist. A clearly failed hard constraint forces fit below 0.5. fit>=0.5 means this remains a live candidate and should be verified before abandoning it for a weaker sibling/frontier alternative. fit is not goal sufficiency.
-- If fit>=0.5 but gs<0.9, stay with the candidate: request source if it has not been supplied, or select in p only a semantic continuation materially needed to verify an unresolved hard constraint. When src is present and no further continuation is materially needed, do not leave a candidate in limbo: either score gs>=0.9 if the hard constraints establish the goal, or score fit<0.5 if they do not.
-- a contains only explicit facts established by the visited semantic node or by src when present.
+- The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace those constraints from candidate evidence.
+- Score those supplied constraints against the current node. Return ck as [[constraintIndex,score],...] using the concatenated order hardConstraints then optionalConstraints, with each score 0..1. The constraint text itself must not be returned.
+- fit is the current node's candidate-fit score 0..1 derived from those fixed constraints. A clearly failed hard constraint forces fit below 0.5. fit>=0.5 means this remains a live candidate and should be verified before abandoning it for a weaker sibling/frontier alternative. fit is not goal sufficiency.
+- If fit>=0.5 but gs<0.9, stay with the candidate: request source if it has not been supplied, or select in p only a semantic continuation materially needed to verify an unresolved hard constraint. When src is present and no further continuation is materially needed, do not leave a candidate in limbo: either score gs>=0.9 if the fixed hard constraints establish the goal, or score fit<0.5 if they do not.
+- a contains only explicit facts established by the visited semantic node or by src when present. Every item in a must be a plain string, never an array or object.
 - i=1 requests exact source for the current semantic node when its semantics look material but are insufficient to establish or reject the needed mechanism. Otherwise i=0.
 - Do not request source merely to browse. Narrow semantically first.
 - When src is present, use it to verify the semantic interpretation and update facts/goal sufficiency. Do not request source again in that decision.
@@ -62,7 +67,7 @@ SEMANTIC WALK: when n is present, evaluate only the semantics of the current nod
 For causal goals, compare candidate mechanisms against the distinguishing conditions in the issue. For change goals, establish the current implementation and how the requested change applies. For describe goals, establish the requested behavior or flow. For verify goals, establish the stated constraint or consequence. Locate goals close when the semantic/structural evidence identifies the requested implementation.
 
 Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src. Return only:
-{"h":"","gs":[["G1",0.0]],"ck":[],"fit":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+{"h":"","gs":[["G1",0.0]],"ck":[[0,0.0]],"fit":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
@@ -336,15 +341,17 @@ function normalizeGoals(items=[]){
     const kind=allowed.has(String(item.kind||'').toLowerCase())?String(item.kind).toLowerCase():'describe';
     const goalText=text(item.text||'',420);
     if(!goalText)continue;
-    out.push({id,kind,text:goalText,dependsOn:arr(item.dependsOn).map(String),status:'unresolved',supportStates:[],summary:''});
+    const hardConstraints=arr(item.hardConstraints).map(value=>text(value,320)).filter(Boolean).slice(0,8);
+    const optionalConstraints=arr(item.optionalConstraints).map(value=>text(value,320)).filter(Boolean).slice(0,8);
+    out.push({id,kind,text:goalText,dependsOn:arr(item.dependsOn).map(String),hardConstraints,optionalConstraints,status:'unresolved',supportStates:[],summary:''});
   }
   const validIds=new Set(out.map(goal=>goal.id));
   for(const goal of out)goal.dependsOn=goal.dependsOn.filter(id=>id!==goal.id&&validIds.has(id));
-  return out.length?out:[{id:'G1',kind:'describe',text:'Answer the software-engineering request from repository evidence.',dependsOn:[],status:'unresolved',supportStates:[],summary:''}];
+  return out.length?out:[{id:'G1',kind:'describe',text:'Answer the software-engineering request from repository evidence.',dependsOn:[],hardConstraints:['The repository evidence answers the requested software-engineering question.'],optionalConstraints:[],status:'unresolved',supportStates:[],summary:''}];
 }
 
 function goalView(goals=[]){
-  return arr(goals).map(goal=>[goal.id,goal.kind,goal.status,goal.text,arr(goal.dependsOn)]);
+  return arr(goals).map(goal=>[goal.id,goal.kind,goal.status,goal.text,arr(goal.dependsOn),arr(goal.hardConstraints),arr(goal.optionalConstraints)]);
 }
 
 function goalEvidenceStates(goals=[]){
@@ -452,12 +459,20 @@ async function decide({
   }
   const activeGoalScore=entryStage?0:Number(goalScores.get(String(activeGoalId||''))||0);
   const activeGoal=arr(goals).find(goal=>goal.id===activeGoalId);
+  const fixedConstraints=[
+    ...arr(activeGoal?.hardConstraints).map((value,index)=>({index,text:value,kind:'hard'})),
+    ...arr(activeGoal?.optionalConstraints).map((value,index)=>({index:arr(activeGoal?.hardConstraints).length+index,text:value,kind:'support'}))
+  ];
+  const scoreByIndex=new Map();
+  if(!entryStage){
+    for(const row of arr(call.parsed?.ck)){
+      const index=Number(row?.[0]);
+      if(!Number.isInteger(index)||index<0||index>=fixedConstraints.length)continue;
+      scoreByIndex.set(index,Math.max(0,Math.min(1,Number(row?.[1]||0))));
+    }
+  }
   const constraintChecklist=!entryStage
-    ? arr(call.parsed?.ck).slice(0,10).map(row=>[
-        text(row?.[0]||'',220),
-        Math.max(0,Math.min(1,Number(row?.[1]||0))),
-        String(row?.[2]||'support')==='hard'?'hard':'support'
-      ]).filter(row=>row[0])
+    ? fixedConstraints.map(item=>[item.text,Number(scoreByIndex.get(item.index)||0),item.kind])
     : [];
   const candidateFit=!entryStage
     ? Math.max(0,Math.min(1,Number(call.parsed?.fit||0)))
