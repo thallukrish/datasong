@@ -372,6 +372,10 @@ After LeMap enters the chosen entry, a semantic decision returns the updated hyp
 The ck field scores immutable goal constraints by index. The hs field is the model's overall hypothesis-match diagnostic; LeMap also derives progress from hard-constraint scores. Each p row means "move to this immediate candidate; semantic lookahead suggests the hypothesis may reach this expected score, and these unresolved constraints may improve." LeMap moves only one hop even though the model can see deeper semantics.
 
 
+When exact source is supplied, Query switches from hypothesis extension to source diagnosis. The previous hypothesis is treated only as a candidate explanation, not as something to confirm. Query must classify the source result as `confirm`, `revise`, or `reject`, re-derive the best explanation from the supplied source plus established facts, and only then select supporting evidence and score the fixed constraints.
+
+For causal goals, source diagnosis must account for the issue's distinguishing behavior: the operation involved, what differs in the failing case, why that difference changes behavior, and how the changed behavior produces the symptom. Related code is not sufficient by itself.
+
 When exact source is supplied for the current visited node, LeMap first assigns stable evidence indexes to the non-empty source lines and sends those indexed source candidates to Query:
 
 ```json
@@ -409,7 +413,11 @@ visited function semantics
         ↓
 request exact source only if needed
         ↓
+treat previous hypothesis as provisional
+        ↓
 inspect the whole supplied body
+        ↓
+confirm / revise / reject the hypothesis
         ↓
 select materially useful indexed source candidates
         ↓
@@ -1003,6 +1011,7 @@ The current Query v5 implementation now follows the hypothesis-driven semantic-s
 | Entry-branch competition | Avoid wandering through weaker entry candidates once a stronger entry branch is already established. | Every entry keeps current and best hypothesis scores. After its current node and requested source inspection, an entry whose score falls below another entry's established best is abandoned before deeper traversal. | Implemented |
 | Source inspection | Raw source is verification evidence, not the normal traversal substrate. | Query requests source explicitly only when semantics are insufficient to settle an unresolved hard constraint. | Implemented |
 | Combined local evidence | Several lines or regions in one function may jointly support the hypothesis; no single-line ranking is required. | When source is inspected, Query selects a bounded evidence set of exact ranges, links them to fixed constraints, updates the hypothesis from the combined set, and only navigates away if unresolved constraints cannot be materially improved from the remaining supplied source. | Implemented |
+| Source diagnosis | Exact source should challenge an earlier hypothesis rather than merely confirm it. | When source is present, Query explicitly confirms, revises or rejects the previous hypothesis and re-derives the mechanism before selecting evidence or scoring constraints. Causal goals must explain the distinguishing behavior. | Implemented |
 | Evidence grounding | High constraint scores must be supported by the selected exact source rather than by related-code proximity. | A separate verifier scores each fixed criterion from only the proposed hypothesis and selected ranges; controller scores are capped by verifier groundedness before closure. | Implemented |
 | Evidence tightness | Whole-function source remains available for reasoning, but supporting evidence should exclude lines that do not materially support the hypothesis. | LeMap indexes source lines, Query selects only evidence indexes, and LeMap deterministically assigns exact repository coordinates. Evidence covering at least 80% of a function of 8+ lines triggers one evidence-only re-selection pass. | Implemented |
 | Final answer synthesis | Search truth and user-facing prose should be separate responsibilities. | After all goals resolve, a dedicated synthesis prompt receives only the original request, fixed criteria, final hypotheses/scores, and exact supporting source ranges. It may explain but not invent or change the established mechanism. | Implemented |
@@ -1143,3 +1152,5 @@ The remaining work is therefore mostly calibration and observability rather than
 98. An evidence selection covering at least 80% of a function of 8 or more lines triggers one evidence-only re-selection pass; that pass cannot revise the hypothesis or navigate elsewhere.
 99. Query selects source evidence by LeMap-assigned evidence indexes, never by invented line numbers.
 100. LeMap deterministically maps selected evidence indexes back to repository line coordinates; semantic relevance belongs to the model, structural location belongs to LeMap.
+101. A previous rolling hypothesis is provisional whenever exact source is supplied. Source diagnosis must explicitly confirm, revise, or reject it rather than treating it as the default truth.
+102. For causal goals, exact-source convergence requires an explanation of the distinguishing behavior in the issue, not merely nearby code related to the symptom.
