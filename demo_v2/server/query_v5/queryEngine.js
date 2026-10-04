@@ -128,6 +128,25 @@ For every acceptance criterion, return a groundedness score 0..1. A high score m
 Also return ok=1 only when every hard criterion is grounded at least 0.9 by the selected evidence set. Return only:
 {"ck":[[0,0.0]],"ok":0}.`;
 
+const COUNTERFACTUAL_VALIDATE_SYSTEM = `Validate a proposed causal diagnosis by deriving the smallest hypothetical code change implied by that diagnosis and testing whether that intervention would fix the exact reported failing condition.
+
+q is the original request.
+goal is the active causal goal with immutable hard and optional constraints.
+h is the source-grounded causal hypothesis.
+ev is the exact selected source evidence as [path,startLine,endLine,code,claimedConstraintIndexes,why].
+
+Do not search for a different cause and do not repair h during this step. Treat h as the diagnosis under test.
+
+1. Propose the smallest concrete code change that follows directly from h. The patch may be pseudocode or a minimal before/after snippet, but it must change the operation claimed to be causal rather than an unrelated workaround.
+2. Apply that change counterfactually to the exact failing condition described by q and goal.
+3. Decide whether the reported functionality would now behave correctly for the reason claimed by h.
+4. If the patch would not fix the exact reported condition, or if the patch must alter a different mechanism than h identified, validation fails.
+
+Return pass=1 only when the intervention logically neutralizes the claimed mechanism and fixes the exact reported condition.
+When pass=0, failure must state specifically why the intervention does not validate the diagnosis.
+Return only:
+{"patch":"","prediction":"","pass":0,"failure":""}.`;
+
 const ANSWER_SYNTHESIS_SYSTEM = `Write the final user-facing answer from an already completed code investigation.
 
 You receive the original request and one or more resolved goal packages. Each package contains the fixed acceptance criteria, the final evidence-backed hypothesis, constraint scores, and exact supporting source ranges.
@@ -768,6 +787,39 @@ async function decide({
   return result;
 }
 
+async function validateCausalCounterfactual({question,goal,hypothesis,evidenceStates,client,model,usage,log,step}){
+  const evidence=dedupeStates(evidenceStates).map(state=>[
+    state.sourcePath||'',
+    Number(state.startLine||0),
+    Number(state.endLine||state.startLine||0),
+    text(state.body||'',1200),
+    arr(state.evidenceSupports),
+    state.evidenceWhy||''
+  ]);
+  if(!hypothesis||!evidence.length){
+    return {pass:false,patch:'',prediction:'',failure:'Counterfactual validation could not run because the causal hypothesis has no exact supporting source evidence.'};
+  }
+  const payload={
+    q:question,
+    goal:{
+      id:goal?.id||'',text:goal?.text||'',
+      hard:arr(goal?.hardConstraints),optional:arr(goal?.optionalConstraints)
+    },
+    h:hypothesis,
+    ev:evidence
+  };
+  const call=await modelJson(client,model,COUNTERFACTUAL_VALIDATE_SYSTEM,payload);addUsage(usage,call.usage);
+  const result={
+    pass:Number(call.parsed?.pass||0)===1,
+    patch:text(call.parsed?.patch||'',2200),
+    prediction:text(call.parsed?.prediction||'',1600),
+    failure:text(call.parsed?.failure||'',1600)
+  };
+  if(!result.pass&&!result.failure)result.failure='The proposed intervention did not establish that the diagnosed mechanism fixes the exact reported failing condition.';
+  log('query_v5_counterfactual_validation',{step,goalId:goal?.id||'',payload,result,usage:call.usage});
+  return result;
+}
+
 async function synthesizeResolvedAnswer({question,goals,threads,client,model,usage,log}){
   const packages=goals.map(goal=>{
     const thread=threads.get(goal.id);
@@ -987,6 +1039,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     bestScore:0,
     bestConstraintChecklist:[],
     bestSupportStates:[],
+    counterfactualValidation:null,
     entryScores:new Map(),
     flatSteps:0
   }]));
@@ -1261,6 +1314,30 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       path:path.map(x=>x.name)
     });
 
+    // A causal diagnosis cannot resolve on source/constraint scores alone.
+    // Once it otherwise qualifies for closure, test the diagnosis by deriving
+    // its minimal intervention and predicting the exact reported failing case.
+    if(goal.kind==='causal'&&decision.hardConstraintsMet){
+      const counterfactual=await validateCausalCounterfactual({
+        question,goal,hypothesis:decision.hypothesis,
+        evidenceStates:decision.supportStates,
+        client,model,usage,log,step
+      });
+      decision.counterfactualValidation=counterfactual;
+      thread.counterfactualValidation=counterfactual;
+      emit({
+        action:counterfactual.pass?'COUNTERFACTUAL_PASS':'COUNTERFACTUAL_FAIL',
+        goalId:goal.id,hypothesis:decision.hypothesis,
+        patch:counterfactual.patch,prediction:counterfactual.prediction,
+        failure:counterfactual.failure,path:path.map(x=>x.name)
+      });
+      if(!counterfactual.pass){
+        decision.hardConstraintsMet=false;
+        decision.explained=false;
+        decision.goalResolutions=[];
+      }
+    }
+
     // Compare the updated accumulated hypothesis with the previous state.
     const previousScore=Number(thread.hypothesisScore||0);
     const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
@@ -1284,6 +1361,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       previousScore,delta:progress.delta,trend:progress.trend,
       bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
       evidenceRanges:decision.evidenceRanges,
+      counterfactualValidation:decision.counterfactualValidation||null,
       path:path.map(x=>x.name),goals:goalView(goals)
     });
 
@@ -1457,12 +1535,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const weakHard=bestConstraints
       .filter(row=>row[2]==='hard'&&Number(row[1]||0)<GOAL_CLOSE_SCORE)
       .map(row=>`${row[0]} (${Math.round(Number(row[1]||0)*100)}%)`);
+    const failedCounterfactual=unresolved
+      .map(goal=>threads.get(goal.id)?.counterfactualValidation)
+      .find(item=>item&&!item.pass);
+    const counterfactualFailure=failedCounterfactual?.failure||'';
     const incompleteAnswer=best
-      ? `Best hypothesis found, but the goal is not resolved because not every hard acceptance criterion reached ${Math.round(GOAL_CLOSE_SCORE*100)}%. ${bestHypothesis}${weakHard.length?` Unresolved/weak criteria: ${weakHard.join('; ')}.`:''}`
+      ? `Best hypothesis found, but the goal is not resolved. ${bestHypothesis}${weakHard.length?` Unresolved/weak criteria: ${weakHard.join('; ')}.`:''}${counterfactualFailure?` Counterfactual validation failed: ${counterfactualFailure}`:''}`
       : (remaining?`The explored semantic evidence did not yet resolve: ${remaining}`:'The explored semantic evidence did not yet resolve the request.');
     return {
       answer:incompleteAnswer,status,mode,goals:goalView(goals),complete:false,explained:false,
       hypothesis:bestHypothesis,hypothesisScore:bestScore,constraintChecklist:bestConstraints,
+      counterfactualValidation:failedCounterfactual||null,
       facts:ledgerView(ledger,{all:true}),ranges:bestRanges,events,usage,diagnostics:diag,
       sweExplore:sweExploreView(bestRanges),
       investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),status,usage}
