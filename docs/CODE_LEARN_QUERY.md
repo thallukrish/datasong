@@ -10,7 +10,7 @@ The governing split is:
 
 Learn never receives the user issue, query hypothesis, relevance criteria or desired answer.
 
-Learn is frontier-lazy. It builds only the semantics needed for the next search decision.
+Learn is frontier-lazy. It builds only the semantics needed for the next search decision. Functions of 50 lines or fewer remain coherent semantic units; statement regions are used as a chunking mechanism only for functions longer than 50 lines.
 
 ```text
 selected function
@@ -67,7 +67,7 @@ Lazy learning does not mean learning one node at a time and it does not mean lea
 
 LeMap maintains a learned semantic frontier around the current search position.
 
-For a function, the frontier is its direct semantic body regions. For a region, the frontier is its direct nested semantic regions. For a function whose relevant body space has been exhausted, the frontier becomes its immediate called functions.
+For a function of 50 lines or fewer, the function itself is the semantic unit and the next frontier is its immediate called functions. For a function longer than 50 lines, the frontier is its direct semantic body regions. For a selected region, the frontier is its direct nested semantic regions. After a large function's relevant body space has been exhausted, its frontier becomes its immediate called functions.
 
 When Query moves to one of those nodes, Learn expands only that node's next frontier and reuses semantics already persisted.
 
@@ -979,3 +979,5 @@ Localize   final supporting evidence → exact source ranges
 78. After returned continuations are exhausted, Query revisits the parent and rescans only the still-unvisited semantic frontier before leaving that parent.
 79. A frontier is abandoned only when it has no unvisited candidates or Query scores every supplied continuation as non-useful; unreturned candidates are never silently discarded.
 80. If the current function, region, or inspected source body is already sufficient for the active goal, that goal closes immediately and no sibling region, callee, or alternate entry is explored for that goal.
+81. Functions of 50 lines or fewer are learned and queried as one coherent semantic unit; Query does not fragment them into statement regions.
+82. Functions longer than 50 lines may be traversed by regions, but the rolling hypothesis and supported facts from earlier chunks are carried into later chunks so the function's logic remains coherent across the walk.
