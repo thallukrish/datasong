@@ -50,9 +50,10 @@ ENTRY STAGE: when n is null, rank the candidate semantic entries in p. Do not fo
 SEMANTIC WALK: when n is present, evaluate only the semantics of the current node, prior supported evidence, and semantic candidates.
 - p ranks at most 3 semantic continuations by usefulness for the active goal, using scores 0..1.
 - gs reports evidence sufficiency for the active goal as [[goalId,score]]. Score the evidence actually present at the current function/region/body. Use 1.0 whenever that evidence is sufficient to answer the active goal; do not reserve 1.0 for exhaustive certainty across the repository. Scores below 0.9 mean more evidence is materially needed. A high navigation score is not a goal-satisfaction score.
-- For a causal goal, build a compact checklist from the active goal and the distinguishing conditions in q. Return ck as [["check text",score,"hard"|"support"],...], with each score 0..1. Hard checks should cover at least: this node participates in the reported behavior, the reported discriminator actually changes the relevant operation here, and that changed operation can produce the reported symptom. Supporting checks may cover naming, surrounding flow, or contextual consistency.
-- For a causal goal, cf is the current node's causal-fit score 0..1 derived from that checklist. A hard contradiction forces cf below 0.5. cf>=0.5 means this remains a live causal candidate and should be verified before abandoning it for a weaker sibling/frontier alternative. cf is not goal sufficiency.
-- If cf>=0.5 but gs<0.9, stay with the candidate: request source if it has not been supplied, or select in p only a semantic continuation materially needed to verify an unresolved hard check. When src is present and no further continuation is materially needed, do not leave a candidate in limbo: either score gs>=0.9 if the hard checks establish the mechanism, or score cf<0.5 if they do not.
+- For every active goal kind, derive a compact checklist of the exact constraints that must hold for the current node to satisfy that goal. Use the active goal plus all material conditions in q that constrain it. Return ck as [["constraint text",score,"hard"|"support"],...], with each score 0..1.
+- Mark a constraint hard when it must be true for this node to satisfy the active goal. Mark it support when it only increases confidence or helps localize context. Do not use a fixed checklist by goal kind; derive the constraints from the actual request and active goal.
+- fit is the current node's candidate-fit score 0..1 derived from that checklist. A clearly failed hard constraint forces fit below 0.5. fit>=0.5 means this remains a live candidate and should be verified before abandoning it for a weaker sibling/frontier alternative. fit is not goal sufficiency.
+- If fit>=0.5 but gs<0.9, stay with the candidate: request source if it has not been supplied, or select in p only a semantic continuation materially needed to verify an unresolved hard constraint. When src is present and no further continuation is materially needed, do not leave a candidate in limbo: either score gs>=0.9 if the hard constraints establish the goal, or score fit<0.5 if they do not.
 - a contains only explicit facts established by the visited semantic node or by src when present.
 - i=1 requests exact source for the current semantic node when its semantics look material but are insufficient to establish or reject the needed mechanism. Otherwise i=0.
 - Do not request source merely to browse. Narrow semantically first.
@@ -61,7 +62,7 @@ SEMANTIC WALK: when n is present, evaluate only the semantics of the current nod
 For causal goals, compare candidate mechanisms against the distinguishing conditions in the issue. For change goals, establish the current implementation and how the requested change applies. For describe goals, establish the requested behavior or flow. For verify goals, establish the stated constraint or consequence. Locate goals close when the semantic/structural evidence identifies the requested implementation.
 
 Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src. Return only:
-{"h":"","gs":[["G1",0.0]],"ck":[],"cf":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+{"h":"","gs":[["G1",0.0]],"ck":[],"fit":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
@@ -451,15 +452,15 @@ async function decide({
   }
   const activeGoalScore=entryStage?0:Number(goalScores.get(String(activeGoalId||''))||0);
   const activeGoal=arr(goals).find(goal=>goal.id===activeGoalId);
-  const causalChecklist=!entryStage&&activeGoal?.kind==='causal'
-    ? arr(call.parsed?.ck).slice(0,8).map(row=>[
+  const constraintChecklist=!entryStage
+    ? arr(call.parsed?.ck).slice(0,10).map(row=>[
         text(row?.[0]||'',220),
         Math.max(0,Math.min(1,Number(row?.[1]||0))),
         String(row?.[2]||'support')==='hard'?'hard':'support'
       ]).filter(row=>row[0])
     : [];
-  const candidateFit=!entryStage&&activeGoal?.kind==='causal'
-    ? Math.max(0,Math.min(1,Number(call.parsed?.cf||0)))
+  const candidateFit=!entryStage
+    ? Math.max(0,Math.min(1,Number(call.parsed?.fit||0)))
     : 0;
   // Search stops when the current semantic node/body is already good enough
   // to answer the active goal. 1.0 is the model's explicit "sufficient" score;
@@ -479,7 +480,7 @@ async function decide({
     goalScores:[...goalScores.entries()],
     activeGoalScore,
     candidateFit,
-    causalChecklist,
+    constraintChecklist,
     inspectSource,
     supportStates:currentState?[currentState]:[]
   };
@@ -487,7 +488,7 @@ async function decide({
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
     explained:result.explained,hypothesis:result.hypothesis,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
-    goalScores:result.goalScores,candidateFit:result.candidateFit,causalChecklist:result.causalChecklist,inspectSource:result.inspectSource,
+    goalScores:result.goalScores,candidateFit:result.candidateFit,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
     additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,
     goalResolutions:result.goalResolutions
   },usage:call.usage});
@@ -495,7 +496,7 @@ async function decide({
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
     action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
-    goalScores:result.goalScores,candidateFit:result.candidateFit,causalChecklist:result.causalChecklist,inspectSource:result.inspectSource,goals:goalView(goals),
+    goalScores:result.goalScores,candidateFit:result.candidateFit,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))
   });
@@ -883,13 +884,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
-    // Source is an explicit verification action from semantic search. For
-    // causal goals, a live candidate (fit >= 0.5) must be verified before we
-    // abandon it for a weaker sibling. If semantics alone leave the goal below
-    // sufficiency, source inspection is therefore forced when it is available.
+    // Source is an explicit verification action from semantic search. A live
+    // candidate (fit >= 0.5) must be verified before we abandon it for a
+    // weaker sibling, regardless of whether the active goal is describe,
+    // causal, change, verify, or locate.
     const sourceAllowed=state.type==='code_region'||state.type==='code_external'||!regionCandidates.length;
-    const retainCausalCandidate=goal.kind==='causal'&&decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE;
-    const shouldInspectSource=(decision.inspectSource||retainCausalCandidate)&&sourceAllowed;
+    const retainCandidate=decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE;
+    const shouldInspectSource=(decision.inspectSource||retainCandidate)&&sourceAllowed;
     let inspectedSource=false;
     if(shouldInspectSource&&step<MAX_STEPS){
       inspectedSource=true;
@@ -904,7 +905,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
       });
-    }else if((decision.inspectSource||retainCausalCandidate)&&!sourceAllowed){
+    }else if((decision.inspectSource||retainCandidate)&&!sourceAllowed){
       emit({
         action:'SOURCE_DEFERRED',goalId:goal.id,state:state.name,
         reason:'Semantic child regions remain; narrow semantically before source inspection.',
@@ -970,17 +971,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       continue;
     }
 
-    // A causal candidate that still scores >= 0.5 after verification is not
+    // A candidate that still scores >= 0.5 after verification is not
     // discarded merely because goal sufficiency is slightly lower. At this
     // point the model must either have selected a continuation for an
-    // unresolved hard check or have enough evidence to resolve. If neither
-    // happened, stop this thread as an explicit stalled candidate instead of
-    // wandering into lower-ranked sibling/frontier branches.
-    if(goal.kind==='causal'&&decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE){
+    // unresolved hard constraint or have enough evidence to resolve. If
+    // neither happened, stop this thread explicitly instead of wandering into
+    // lower-ranked sibling/frontier branches.
+    if(decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE){
       emit({
-        action:'CAUSAL_CANDIDATE_STALLED',goalId:goal.id,state:state.name,
+        action:'CANDIDATE_STALLED',goalId:goal.id,state:state.name,
         candidateFit:decision.candidateFit,goalScore:decision.activeGoalScore,
-        checklist:decision.causalChecklist,inspectedSource,
+        checklist:decision.constraintChecklist,inspectedSource,
         hypothesis:decision.hypothesis,path:path.map(x=>x.name)
       });
       thread.stack=[];
