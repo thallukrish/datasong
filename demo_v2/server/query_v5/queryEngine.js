@@ -67,7 +67,8 @@ SEMANTIC WALK: when n is present, treat h as the accumulated explanation for the
 - l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
 - p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. constraintIndexes are unresolved constraints that the branch appears capable of improving.
 - a contains only explicit facts established by the visited semantic node or by src when present. Every item in a must be a plain string, never an array or object.
-- ev identifies the evidence from the CURRENT visited node that materially supports the UPDATED hypothesis. When src is present, return ev as [[startLine,endLine,[constraintIndexes],"why"],...]. Multiple disjoint ranges may contribute together, and one range may support several constraints. Select the smallest combined evidence set that supports the hypothesis and advances the unresolved constraints. Do not rank lines against one another and do not force a single-line mechanism. A hard constraint should not receive a high score unless the selected evidence set materially supports it. When src is absent, return ev=[] and the visited semantic node itself is the evidence unit.
+- src.lines contains LeMap-assigned source evidence candidates as [evidenceIndex,sourceText]. LeMap owns the source coordinates; do not invent or return line numbers.
+- ev identifies the evidence candidates from the CURRENT visited node that materially support the UPDATED hypothesis. When src is present, return ev as [[evidenceIndex,[constraintIndexes],"why"],...]. Multiple candidates may contribute together, and one candidate may support several constraints. Select only the smallest combined evidence set that supports the hypothesis and advances unresolved constraints. Do not rank candidates against one another and do not force a single-line mechanism. A hard constraint should not receive a high score unless the selected evidence set materially supports it. When src is absent, return ev=[] and the visited semantic node itself is the evidence unit.
 - When src is present, examine the whole supplied body before deciding to navigate away. Use any combination of supplied lines that jointly strengthens or revises h. If the resulting hypothesis satisfies all hard constraints, return no continuation in p. If hard constraints remain unresolved, return p only when the remaining supplied source cannot materially strengthen those constraints.
 - i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
 - Do not request source merely to browse. When src is present, use it to update h and the constraint scores, and do not request source again in that decision.
@@ -92,12 +93,12 @@ q is the original request.
 goal is the active goal.
 hard and optional are immutable acceptance criteria.
 h is the proposed hypothesis.
-src is the complete source body for the current visited node.
-previousEv is the earlier evidence selection, which was rejected as overly broad.
+src.lines contains LeMap-assigned source evidence candidates as [evidenceIndex,sourceText].
+previousEv contains the earlier selected evidence indexes, which were rejected as overly broad.
 
-Do not change, repair, or reinterpret h. Do not search outside src. Select only source ranges that materially support h and the acceptance criteria it addresses. Several disjoint ranges may be selected and may work together. Omit surrounding, setup, cleanup, unrelated branches, and other lines that do not contribute. Do not return the whole function unless essentially every part is necessary to establish h.
+Do not change, repair, or reinterpret h. Do not search outside src. Select only evidence indexes that materially support h and the acceptance criteria it addresses. Several candidates may be selected and may work together. Omit surrounding, setup, cleanup, unrelated branches, and other candidates that do not contribute. Do not select nearly the whole function unless essentially every candidate is necessary to establish h.
 
-Return ev only as [[startLine,endLine,[constraintIndexes],"why"],...].
+Return ev only as [[evidenceIndex,[constraintIndexes],"why"],...].
 Return only {"ev":[]}.`;
 
 const EVIDENCE_GROUND_SYSTEM = `Verify whether the selected source evidence actually grounds an evidence-backed hypothesis against fixed acceptance criteria.
@@ -480,29 +481,32 @@ async function decomposeGoals({question,client,model,usage,log}){
   return {goals,mode};
 }
 
-function sourceEvidenceStates(state,sourceBody,evidenceRows=[]){
+function sourceEvidenceCandidates(state,sourceBody){
   if(!state||!sourceBody)return [];
-  const minLine=Number(state.startLine||0),maxLine=Number(state.endLine||state.startLine||0);
-  const lines=String(sourceBody||'').split(/\r?\n/);
+  const start=Number(state.startLine||0);
+  return String(sourceBody||'').split(/\r?\n/)
+    .map((code,offset)=>({index:offset,line:start+offset,code:String(code||'')}))
+    .filter(item=>item.code.trim().length>0);
+}
+
+function sourceEvidenceStates(state,sourceBody,evidenceRows=[],sourceCandidates=sourceEvidenceCandidates(state,sourceBody)){
+  if(!state||!sourceBody)return [];
+  const byIndex=new Map(arr(sourceCandidates).map(item=>[String(item.index),item]));
   const out=[];
-  for(const row of arr(evidenceRows).slice(0,12)){
-    let start=Number(row?.[0]),end=Number(row?.[1]);
-    if(!Number.isInteger(start)||!Number.isInteger(end))continue;
-    if(end<start)[start,end]=[end,start];
-    if(minLine){start=Math.max(minLine,start);end=Math.min(maxLine||end,end)}
-    if(end<start)continue;
-    const offset=Math.max(0,start-(minLine||start));
-    const count=Math.max(1,end-start+1);
-    const supports=arr(row?.[2]).map(Number).filter(Number.isInteger);
+  for(const row of arr(evidenceRows).slice(0,24)){
+    const candidate=byIndex.get(String(row?.[0]));
+    if(!candidate)continue;
+    const supports=arr(row?.[1]).map(Number).filter(Number.isInteger);
     out.push({
       ...state,
-      id:`${state.id}:evidence:${start}-${end}`,
-      name:`${state.name} [evidence ${start}-${end}]`,
-      startLine:start,
-      endLine:end,
-      body:lines.slice(offset,offset+count).join('\n'),
+      id:`${state.id}:evidence:${candidate.line}`,
+      name:`${state.name} [evidence ${candidate.line}]`,
+      startLine:candidate.line,
+      endLine:candidate.line,
+      body:candidate.code,
+      evidenceIndex:candidate.index,
       evidenceSupports:supports,
-      evidenceWhy:text(row?.[3]||'',260)
+      evidenceWhy:text(row?.[2]||'',260)
     });
   }
   return dedupeStates(out);
@@ -520,7 +524,8 @@ function evidenceCoverageRatio(state,evidenceStates=[]){
   return covered.size/total;
 }
 
-async function reselectTightEvidence({question,goal,hypothesis,state,sourceBody,previousEvidence,client,model,usage,log,step}){
+async function reselectTightEvidence({question,goal,hypothesis,state,sourceBody,sourceCandidates,previousEvidence,client,model,usage,log,step}){
+  const sourceCandidates=sourceBody?sourceEvidenceCandidates(currentState,sourceBody):[];
   const payload={
     q:question,
     goal:{id:goal?.id||'',kind:goal?.kind||'',text:goal?.text||''},
@@ -530,17 +535,15 @@ async function reselectTightEvidence({question,goal,hypothesis,state,sourceBody,
     src:{
       name:state?.name||'',
       sourcePath:state?.sourcePath||'',
-      startLine:Number(state?.startLine||0),
-      endLine:Number(state?.endLine||0),
-      body:text(sourceBody,4200)
+      lines:arr(sourceCandidates).map(item=>[item.index,text(item.code,360)])
     },
     previousEv:arr(previousEvidence).map(item=>[
-      Number(item?.startLine||0),Number(item?.endLine||0),
+      Number(item?.evidenceIndex),
       arr(item?.evidenceSupports),item?.evidenceWhy||''
     ])
   };
   const call=await modelJson(client,model,EVIDENCE_RESELECT_SYSTEM,payload);addUsage(usage,call.usage);
-  const states=sourceEvidenceStates(state,sourceBody,call.parsed?.ev);
+  const states=sourceEvidenceStates(state,sourceBody,call.parsed?.ev,sourceCandidates);
   log('query_v5_evidence_reselect',{step,goalId:goal?.id||'',payload,modelResponse:call.parsed,coverage:evidenceCoverageRatio(state,states),usage:call.usage});
   return states;
 }
@@ -601,9 +604,7 @@ async function decide({
     src:sourceBody?{
       name:currentState?.name||'',
       sourcePath:currentState?.sourcePath||'',
-      startLine:Number(currentState?.startLine||0),
-      endLine:Number(currentState?.endLine||0),
-      body:text(sourceBody,4200)
+      lines:sourceCandidates.map(item=>[item.index,text(item.code,360)])
     }:null,
     m:entryMatches,
     c:candidates.map((state,index)=>[index,...semanticNodeView(state,explorer)]),
@@ -658,7 +659,7 @@ async function decide({
   // convergence switch.
   const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
   let evidenceStates=!entryStage&&sourceBody
-    ? sourceEvidenceStates(currentState,sourceBody,call.parsed?.ev)
+    ? sourceEvidenceStates(currentState,sourceBody,call.parsed?.ev,sourceCandidates)
     : [];
   let evidenceReselected=false;
   if(!entryStage&&sourceBody&&evidenceStates.length){
@@ -667,7 +668,7 @@ async function decide({
     if(functionLines>=8&&coverage>=0.8){
       const tighter=await reselectTightEvidence({
         question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
-        state:currentState,sourceBody,previousEvidence:evidenceStates,
+        state:currentState,sourceBody,sourceCandidates,previousEvidence:evidenceStates,
         client,model,usage,log,step
       });
       if(tighter.length){
@@ -707,6 +708,7 @@ async function decide({
     sourcePath:item.sourcePath||'',
     startLine:Number(item.startLine||0),
     endLine:Number(item.endLine||item.startLine||0),
+    evidenceIndex:Number(item.evidenceIndex),
     supports:arr(item.evidenceSupports),
     why:item.evidenceWhy||''
   }));
