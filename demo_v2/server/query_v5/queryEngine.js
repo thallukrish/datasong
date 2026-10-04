@@ -901,6 +901,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     bestScore:0,
     bestConstraintChecklist:[],
     bestSupportStates:[],
+    entryScores:new Map(),
     flatSteps:0
   }]));
 
@@ -989,7 +990,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
         const warm=decision.picks;
         if(!warm.length)continue;
-        thread.stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:'',hypothesisScore:0,baseHypothesis:'',baseScore:0,frontierIds:[]});
+        thread.stack.push({
+          path:[],current:warm[0],alternatives:warm.slice(1),
+          hypothesis:'',hypothesisScore:0,baseHypothesis:'',baseScore:0,frontierIds:[],
+          entryRootId:warm[0].state.id,entryRootName:warm[0].state.name
+        });
         const event={step,action:'RESEED',goalId:goal.id,state:warm[0].state.name,hypothesis:''};
         events.push(event);emit({...event,path:[warm[0].state.name]});
         return true;
@@ -1023,6 +1028,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       if(top.alternatives.length){
         top.current=top.alternatives.shift();
         top.frontierIds=[];
+        if(top.path.length===0){
+          top.entryRootId=top.current.state.id;
+          top.entryRootName=top.current.state.name;
+        }
         thread.hypothesis=top.baseHypothesis||'';
         thread.hypothesisScore=Number(top.baseScore||0);
         top.hypothesis=thread.hypothesis;
@@ -1126,6 +1135,43 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       });
     }
 
+    // Every entry-level branch keeps an independent score. Compare the
+    // current branch against the strongest score already established by a
+    // different entry. Only compare after the current node has had its normal
+    // chance to inspect source when requested. If it is already below another
+    // entry branch, do not spend more traversal on its descendants.
+    const entryRootId=frame.entryRootId||state.id;
+    const entryRootName=frame.entryRootName||state.name;
+    const entryPrevious=thread.entryScores.get(entryRootId)||{
+      id:entryRootId,name:entryRootName,bestScore:0,currentScore:0
+    };
+    const entryRecord={
+      ...entryPrevious,
+      id:entryRootId,
+      name:entryRootName,
+      currentScore:Number(decision.hypothesisScore||0),
+      bestScore:Math.max(Number(entryPrevious.bestScore||0),Number(decision.hypothesisScore||0))
+    };
+    thread.entryScores.set(entryRootId,entryRecord);
+    const bestOtherEntry=[...thread.entryScores.values()]
+      .filter(item=>item.id!==entryRootId)
+      .sort((a,b)=>Number(b.bestScore||0)-Number(a.bestScore||0))[0]||null;
+    const sourceOpportunityComplete=!decision.inspectSource||inspectedSource;
+    const entryBranchDominated=Boolean(
+      bestOtherEntry&&sourceOpportunityComplete&&
+      Number(decision.hypothesisScore||0)+HYPOTHESIS_DELTA_EPSILON<Number(bestOtherEntry.bestScore||0)
+    );
+    emit({
+      action:'ENTRY_BRANCH_SCORE',goalId:goal.id,
+      entryId:entryRootId,entry:entryRootName,
+      currentScore:Number(decision.hypothesisScore||0),
+      branchBestScore:entryRecord.bestScore,
+      incumbentEntry:bestOtherEntry?.name||'',
+      incumbentScore:Number(bestOtherEntry?.bestScore||0),
+      dominated:entryBranchDominated,
+      path:path.map(x=>x.name)
+    });
+
     // Compare the updated accumulated hypothesis with the previous state.
     const previousScore=Number(thread.hypothesisScore||0);
     const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
@@ -1200,6 +1246,25 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
       .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
       .map(item=>item.index));
+    if(entryBranchDominated){
+      emit({
+        action:'ENTRY_BRANCH_PRUNED',goalId:goal.id,
+        entry:entryRootName,entryScore:Number(decision.hypothesisScore||0),
+        incumbentEntry:bestOtherEntry.name,incumbentScore:Number(bestOtherEntry.bestScore||0),
+        reason:'Entry branch fell below an already established entry-level score.',
+        path:path.map(x=>x.name)
+      });
+      // Collapse any descendants of this entry back to its root frame, clear
+      // its semantic frontier, and let normal backtracking try the next entry.
+      while(thread.stack.length>1&&thread.stack.at(-1).entryRootId===entryRootId){
+        thread.stack.pop();
+      }
+      const rootFrame=thread.stack.at(-1);
+      if(rootFrame?.entryRootId===entryRootId)rootFrame.frontierIds=[];
+      await resumeThread(thread);
+      continue;
+    }
+
     const warm=decision.picks.filter(pick=>{
       const improves=pick.score>thread.bestScore+HYPOTHESIS_DELTA_EPSILON;
       const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
@@ -1211,7 +1276,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         path,current:warm[0],alternatives:warm.slice(1),
         hypothesis:thread.hypothesis||decision.hypothesis,hypothesisScore:thread.hypothesisScore,
         baseHypothesis:thread.hypothesis||decision.hypothesis,baseScore:thread.hypothesisScore,
-        navigationKind,frontierIds:[]
+        navigationKind,frontierIds:[],
+        entryRootId,entryRootName
       });
       const event={
         step,action:'DESCEND',goalId:goal.id,navigationKind,
