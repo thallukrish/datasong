@@ -851,23 +851,26 @@ For a scheduled locate goal, the thread closes as soon as the current function b
 
 ## Branch exploration
 
-After Query selects a branch:
+At each visited semantic position LeMap prepares a bounded lookahead horizon, but commits to only one immediate step:
 
 ```text
-selected function
+current visited node
         ↓
-Learn ensures next 3 levels
+update hypothesis from current evidence
         ↓
-Query sees refreshed semantic window
+score hypothesis against fixed constraints
         ↓
-update hypothesis
+Learn / reuse up to 3 semantic levels for navigation lookahead
         ↓
-stop if explained
+estimate each immediate branch's expected hypothesis match
+and which unresolved constraints it can improve
         ↓
-otherwise select next branch
+move one level
+        ↓
+repeat
 ```
 
-Only the selected position causes the semantic window to extend farther. Query does not need to eagerly learn three additional levels from every sibling before choosing among them.
+Lookahead semantics are not evidence. They may influence branch choice, but they cannot update the hypothesis until the corresponding node is actually visited. This creates receding-horizon semantic search rather than a three-step commitment.
 
 ## Backtracking, memory and hypothesis state
 
@@ -963,27 +966,27 @@ Localize   final supporting evidence → exact source ranges
 59. A locate goal exists only when code location is itself an explicit requested outcome, never merely as an internal prerequisite of another investigation.
 60. Goal decomposition is lossless: all material conditions and requested outcomes from the original issue must remain represented across the goal dependency graph.
 61. A dependent goal consumes prerequisite evidence, and the complete dependency chain must collectively cover the original request without dropping discriminating conditions.
-62. When a function is actively inspected, its existing AST statement regions are materialized into the semantic graph and learned with their exact source ranges and code.
-63. Query receives region code and region semantics together so structural and semantic evidence stay aligned.
-64. Region learning is lazy: entry-candidate comparison stays cheap, and function-body regions are expanded only for the selected current function.
-65. A selected function's direct AST statement regions are traversed before Query may descend into callees or backtrack to another entry.
-66. Region traversal evaluates evidence against the active goal in source order and stops immediately when the accumulated function-body evidence resolves that goal.
-67. Call-graph branching is permitted only after the selected function's relevant semantic body space has been exhausted without resolving the active goal.
-68. Query traversal is semantic-first: functions, regions and branches are navigation candidates scored from learned semantics, not from raw source.
-69. Navigation relevance and goal satisfaction are separate scores. A navigation score chooses the next semantic node. An active-goal score of 1.0 means the current function/region/body is sufficient to answer the goal; the controller closes at 0.9 or above to prevent a well-supported answer from wandering merely because the model is slightly conservative.
-70. Raw source is exposed to Query only during structural entry matching or after Query explicitly requests source inspection for the current semantic node.
-71. Learn may read source to construct missing query-independent semantics; this is semantic expansion, not Query source traversal.
-72. Final evidence localization reuses structural ranges already attached to semantic evidence and does not reopen source merely to produce locations.
-73. Learn is frontier-lazy: selecting a function learns only that function and its direct semantic body frontier.
-74. Selecting a region learns only that region's direct semantic children.
-75. Called-function semantics are learned only after the current function's relevant body frontier has been exhausted, and only for the immediate call frontier needed for the next decision.
-76. Query never pays upfront to semantically expand an entire multi-level call tree or all nested regions.
-77. A semantic decision may return only the highest-scoring continuations, but the parent retains the complete exposed frontier.
-78. After returned continuations are exhausted, Query revisits the parent and rescans only the still-unvisited semantic frontier before leaving that parent.
-79. A frontier is abandoned only when it has no unvisited candidates or Query scores every supplied continuation as non-useful; unreturned candidates are never silently discarded.
-80. If the current function, region, or inspected source body is already sufficient for the active goal, that goal closes immediately and no sibling region, callee, or alternate entry is explored for that goal.
-81. Functions of 50 lines or fewer are learned and queried as one coherent semantic unit; Query does not fragment them into statement regions.
-82. Functions longer than 50 lines may be traversed by regions, but the rolling hypothesis and supported facts from earlier chunks are carried into later chunks so the function's logic remains coherent across the walk.
-83. Query uses three independent signals for every goal kind: navigation score chooses where to search, candidate-fit score determines whether the current function remains a plausible match for the active goal's hard constraints, and goal-sufficiency score determines whether enough evidence exists to answer.
-84. A candidate with fit at least 0.5 is verified before lower-ranked sibling/frontier alternatives are explored. If verification still leaves it unresolved without a useful continuation, the thread stops explicitly rather than wandering away from a plausible candidate.
-85. Hard and optional constraints are derived once during goal decomposition from the original request and then frozen for the life of the goal. Query may update only their scores, never their content.
+62. Functions of 50 lines or fewer are learned and queried as one coherent semantic unit; larger functions may use AST regions as chunking units.
+63. Region chunking must preserve one continuous accumulated hypothesis across the function; sibling chunks are not independent explanations.
+64. Query traversal is semantic-first: source is used for structural entry matching or explicit verification, not as the default navigation substrate.
+65. The current visited node may update the hypothesis; unvisited lookahead nodes may not.
+66. Around the current visited node, LeMap may learn or reuse up to three semantic levels of regions and/or calls for navigation lookahead.
+67. The three-level window is a lookahead horizon only. Query moves one immediate semantic hop, then recomputes the hypothesis and scores.
+68. Every substantive repository-grounded goal performs code/evidence localization as part of solving that goal; a separate locate goal is created only when location itself is an explicit requested outcome.
+69. Hard and optional acceptance constraints are derived once during goal decomposition from the original request and remain immutable for the life of the goal.
+70. The accumulated evidence-backed hypothesis, not the current candidate in isolation, is scored against the fixed goal constraints.
+71. Hard-constraint scores are the authoritative convergence state. Optional constraints strengthen confidence but do not block resolution.
+72. A goal closes when all of its hard constraints meet the evidence threshold.
+73. Navigation scores estimate expected future hypothesis match, not current goal completion.
+74. Each navigation candidate may identify unresolved hard constraints that its lookahead appears capable of improving.
+75. A branch is worth exploring when its expected trajectory can plausibly improve on the best hypothesis reached so far or resolve an unmet hard constraint.
+76. After every visited node, LeMap classifies hypothesis progress as strengthening, flat, or weakening from the score delta.
+77. Flat exploration is tolerated only briefly unless the branch still targets an unresolved hard constraint.
+78. Weakening evidence should cause hypothesis revision or earlier backtracking rather than continued blind descent.
+79. Backtracking preserves the best hypothesis and scores reached on the goal thread.
+80. Trying an alternative sibling restores the hypothesis and score from the branch point; evidence from the abandoned sibling must not leak into the new branch hypothesis.
+81. Supported evidence facts remain query-local and cumulative even when branch-local hypotheses are rolled back.
+82. Source inspection is explicit verification for the current semantic node when semantics are insufficient to settle an unresolved hard constraint.
+83. The complete immediate frontier may be preserved, but branches whose expected trajectory cannot beat the best-known hypothesis and cannot resolve an unmet hard constraint may be pruned.
+84. Query progress events expose the active goal, hypothesis, constraint scores, current path, branch potentials, strengthening/flat/weakening trend, best score and cumulative token usage.
+85. Structural entry search, Learn semantics and Query reasoning remain separate: structure finds plausible code, Learn provides reusable query-independent meaning, and Query searches for an evidence-backed hypothesis that satisfies the goal constraints.
