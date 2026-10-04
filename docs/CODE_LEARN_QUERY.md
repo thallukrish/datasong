@@ -374,7 +374,7 @@ pattern_search OR root_entries
         ↓
 rank candidate source regions
         ↓
-Learn current region + next 3 call levels
+Learn current region + next 3 semantic levels
         ↓
 normal Query exploration
 ```
@@ -669,7 +669,7 @@ Only if that exact anchor still leaves a large set should LeMap continue with an
 
 Only the final small row set is materialized into source snippets and enclosing functions for Learn.
 
-Before Learn expands any candidate by three call levels, LeMap performs one cheap source-only triage over the matched rows. This prevents a 10-20 row structural match set from triggering semantic Learn across every candidate.
+Before Learn expands any candidate by three semantic levels, LeMap performs one cheap source-only triage over the matched rows. This prevents a 10-20 row structural match set from triggering semantic Learn across every candidate.
 
 ```text
 structural matches
@@ -788,11 +788,10 @@ After Learn, structural discovery is finished. The enclosing function is passed 
 
 - enclosing-function semantics
 - highlighted matched-region semantics
-- exact matched source
-- normal three-level lookahead semantics
-- current function body when Query evaluates the seed
+- exact matched source from structural matching
+- normal three-level semantic lookahead
 
-Query may close the cause immediately if the highlighted code and current body are sufficient. Otherwise it continues normal causal or relevance exploration.
+The current function body is not automatically exposed as Query evidence. Query requests exact source explicitly when semantics are insufficient to settle an unresolved hard constraint.
 
 The invariant is:
 
@@ -845,9 +844,9 @@ At this stage there is no current raw function body. The model may rank candidat
 
 This prevents a speculative interpretation formed while merely comparing candidate entries from becoming the starting assumption for later reasoning.
 
-Once LeMap enters the selected function, the model receives the current raw body and learned semantic window. Only then may goals be resolved and facts enter the evidence ledger.
+Once LeMap enters the selected function, the model receives the visited function semantics plus bounded semantic lookahead. Goals may be resolved and facts may enter the ledger from visited semantic evidence; exact source is added only through explicit source inspection.
 
-For a scheduled locate goal, the thread closes as soon as the current function body directly identifies the requested implementation. It does not descend further merely because later causal or change goals remain unresolved.
+For a scheduled locate goal, the thread closes as soon as the visited evidence identifies the requested implementation. It does not descend further merely because later causal or change goals remain unresolved.
 
 ## Branch exploration
 
@@ -911,7 +910,7 @@ Localize   final supporting evidence → exact source ranges
 4. The original issue remains fixed while the hypothesis follows evidence.
 5. Query stops as soon as the evidence explains the issue.
 6. LeMap keeps structural path, alternatives and source coordinates internally.
-7. The semantic window extends lazily by three call levels from the selected position.
+7. The semantic window extends lazily by three semantic levels from the selected position.
 8. Learned semantics are persisted and reused across queries.
 9. Wrong or exhausted paths cause backtracking, not goal rewriting.
 10. Evidence-backed facts survive backtracking; only branch hypotheses roll back.
@@ -926,7 +925,7 @@ Localize   final supporting evidence → exact source ranges
 19. Structural-search regexes filter indexed metadata fields; they are not responsible for parsing source syntax.
 20. Selected structural regions are temporary query entry points; they do not redefine repository roots or Learn semantics.
 21. Structural discovery changes only how the starting function is found. Once selected, the enclosing function follows the same Learn and Query lifecycle as any normal Query-selected function.
-22. The matched source span remains attached as highlighted semantic evidence while the enclosing function drives the normal three-level call lookahead.
+22. The matched source span remains attached as highlighted entry evidence while the enclosing function drives the normal three-level semantic lookahead.
 23. Structural indexes are cached by exact commit SHA, not by mutable branch name.
 24. A cached index is reusable only when commit, schema version, analyzer version and completion status match.
 25. Incremental indexing may optimize construction later, but Query always consumes a complete logical snapshot for the selected commit.
@@ -938,7 +937,7 @@ Localize   final supporting evidence → exact source ranges
 31. The model may refine a facet with exact, prefix or regex matching and may browse facet values by count or alphabetically.
 32. Once a grounded exact or prefix anchor yields a small candidate set, LeMap materializes it rather than refining further from frequency alone.
 33. Each facet value may expose at most two short representative canonical snippets chosen for structural diversity; these samples guide navigation but do not establish causality.
-34. Structural matches are source-triaged before three-level Learn expansion, and no more than four structural candidates are expanded initially.
+34. Structural matches are source-triaged before bounded semantic lookahead expansion, and no more than four structural candidates are expanded initially.
 35. A matched call site that directly passes the deprecated or invalid argument to a resolved external API is a valid causal location; Query must not invent an absent local wrapper to explain it.
 36. Code Query must not require a repository-wide call-path index when a structural language index is available.
 37. Faceted structural search supplies Code Query entry functions before local call expansion begins.
@@ -970,7 +969,7 @@ Localize   final supporting evidence → exact source ranges
 63. Region chunking must preserve one continuous accumulated hypothesis across the function; sibling chunks are not independent explanations.
 64. Query traversal is semantic-first: source is used for structural entry matching or explicit verification, not as the default navigation substrate.
 65. The current visited node may update the hypothesis; unvisited lookahead nodes may not.
-66. Around the current visited node, LeMap may learn or reuse up to three semantic levels of regions and/or calls for navigation lookahead.
+66. Around the current visited node, LeMap may learn or reuse up to three semantic levels of regions and/or calls for navigation lookahead, with a bounded frontier to control token cost.
 67. The three-level window is a lookahead horizon only. Query moves one immediate semantic hop, then recomputes the hypothesis and scores.
 68. Every substantive repository-grounded goal performs code/evidence localization as part of solving that goal; a separate locate goal is created only when location itself is an explicit requested outcome.
 69. Hard and optional acceptance constraints are derived once during goal decomposition from the original request and remain immutable for the life of the goal.
