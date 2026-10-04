@@ -370,6 +370,7 @@ function normalizeGoals(items=[]){
     if(!goalText)continue;
     const hardConstraints=arr(item.hardConstraints).map(value=>text(value,320)).filter(Boolean).slice(0,8);
     const optionalConstraints=arr(item.optionalConstraints).map(value=>text(value,320)).filter(Boolean).slice(0,8);
+    if(!hardConstraints.length)hardConstraints.push(goalText);
     out.push({id,kind,text:goalText,dependsOn:arr(item.dependsOn).map(String),hardConstraints,optionalConstraints,status:'unresolved',supportStates:[],summary:''});
   }
   const validIds=new Set(out.map(goal=>goal.id));
@@ -516,7 +517,7 @@ async function decide({
   const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const result={
-    explained:!entryStage&&activeGoalScore>=GOAL_CLOSE_SCORE&&!unresolvedOther,
+    explained:hardConstraintsMet&&!unresolvedOther,
     hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:entryStage?[]:arr(call.parsed?.a),
