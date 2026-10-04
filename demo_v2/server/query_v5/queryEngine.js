@@ -142,10 +142,12 @@ Do not search for a different cause and do not repair h during this step. Treat 
 3. Decide whether the reported functionality would now behave correctly for the reason claimed by h.
 4. If the patch would not fix the exact reported condition, or if the patch must alter a different mechanism than h identified, validation fails.
 
+For every immutable acceptance criterion, also return ck as [[constraintIndex,score],...] with score 0..1, but score only what the intervention itself logically establishes. Do not raise a criterion merely because the diagnosis already claimed it.
+
 Return pass=1 only when the intervention logically neutralizes the claimed mechanism and fixes the exact reported condition.
 When pass=0, failure must state specifically why the intervention does not validate the diagnosis.
 Return only:
-{"patch":"","prediction":"","pass":0,"failure":""}.`;
+{"patch":"","prediction":"","ck":[[0,0.0]],"pass":0,"failure":""}.`;
 
 const ANSWER_SYNTHESIS_SYSTEM = `Write the final user-facing answer from an already completed code investigation.
 
@@ -813,6 +815,9 @@ async function validateCausalCounterfactual({question,goal,hypothesis,evidenceSt
     pass:Number(call.parsed?.pass||0)===1,
     patch:text(call.parsed?.patch||'',2200),
     prediction:text(call.parsed?.prediction||'',1600),
+    constraintScores:arr(call.parsed?.ck).map(row=>[
+      Number(row?.[0]),Math.max(0,Math.min(1,Number(row?.[1]||0)))
+    ]).filter(row=>Number.isInteger(row[0])&&row[0]>=0),
     failure:text(call.parsed?.failure||'',1600)
   };
   if(!result.pass&&!result.failure)result.failure='The proposed intervention did not establish that the diagnosed mechanism fixes the exact reported failing condition.';
@@ -1041,6 +1046,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     bestConstraintChecklist:[],
     bestSupportStates:[],
     counterfactualValidation:null,
+    counterfactualByHypothesis:new Map(),
+    rejectedCausalHypotheses:new Set(),
     entryScores:new Map(),
     flatSteps:0
   }]));
@@ -1315,15 +1322,42 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       path:path.map(x=>x.name)
     });
 
-    // A causal diagnosis cannot resolve on source/constraint scores alone.
-    // Once it otherwise qualifies for closure, test the diagnosis by deriving
-    // its minimal intervention and predicting the exact reported failing case.
-    if(goal.kind==='causal'&&decision.hardConstraintsMet){
-      const counterfactual=await validateCausalCounterfactual({
-        question,goal,hypothesis:decision.hypothesis,
-        evidenceStates:decision.supportStates,
-        client,model,usage,log,step
-      });
+    // Counterfactual validation is both the final gate for an otherwise
+    // resolved causal diagnosis and the last discriminator for a source-
+    // grounded best hypothesis that is about to run out of useful branches.
+    const unresolvedBeforeCounterfactual=new Set(decision.constraintChecklist
+      .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
+      .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
+      .map(item=>item.index));
+    const bestReference=Math.max(Number(thread.bestScore||0),Number(decision.hypothesisScore||0));
+    const hasPromisingContinuation=decision.picks.some(pick=>{
+      const improves=Number(pick.score||0)>bestReference+HYPOTHESIS_DELTA_EPSILON;
+      const targetsWeak=arr(pick.targets).some(index=>unresolvedBeforeCounterfactual.has(index));
+      return improves||targetsWeak;
+    });
+    const sourceGroundedCandidate=Boolean(
+      inspectedSource&&decision.evidenceRanges?.length&&decision.evidenceGrounded!==null
+    );
+    const bestCausalCandidate=sourceGroundedCandidate&&
+      Number(decision.hypothesisScore||0)>=Number(thread.bestScore||0)&&
+      !hasPromisingContinuation;
+    const shouldCounterfactuallyValidate=goal.kind==='causal'&&
+      (decision.hardConstraintsMet||bestCausalCandidate);
+
+    if(shouldCounterfactuallyValidate){
+      const cfKey=[
+        decision.hypothesis||'',
+        ...arr(decision.evidenceRanges).map(range=>`${range.sourcePath}:${range.startLine}-${range.endLine}`)
+      ].join('|');
+      let counterfactual=thread.counterfactualByHypothesis.get(cfKey);
+      if(!counterfactual){
+        counterfactual=await validateCausalCounterfactual({
+          question,goal,hypothesis:decision.hypothesis,
+          evidenceStates:decision.supportStates,
+          client,model,usage,log,step
+        });
+        thread.counterfactualByHypothesis.set(cfKey,counterfactual);
+      }
       decision.counterfactualValidation=counterfactual;
       thread.counterfactualValidation=counterfactual;
       emit({
@@ -1332,10 +1366,37 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         patch:counterfactual.patch,prediction:counterfactual.prediction,
         failure:counterfactual.failure,path:path.map(x=>x.name)
       });
-      if(!counterfactual.pass){
+
+      if(counterfactual.pass){
+        // A successful intervention is additional causal evidence. It may
+        // strengthen only the fixed criteria that the independent validator
+        // says the intervention itself establishes.
+        const checklist=arr(decision.constraintChecklist).map(row=>[row[0],Number(row[1]||0),row[2]]);
+        for(const row of arr(counterfactual.constraintScores)){
+          const index=Number(row?.[0]),score=Number(row?.[1]||0);
+          if(!Number.isInteger(index)||index<0||index>=checklist.length)continue;
+          checklist[index][1]=Math.max(Number(checklist[index][1]||0),score);
+        }
+        decision.constraintChecklist=checklist;
+        const hard=checklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
+        decision.hypothesisScore=hard.length?hard.reduce((sum,value)=>sum+value,0)/hard.length:decision.hypothesisScore;
+        decision.hardConstraintsMet=hard.length>0&&hard.every(score=>score>=GOAL_CLOSE_SCORE);
+        decision.goalResolutions=decision.hardConstraintsMet?[goal.id]:[];
+        decision.explained=decision.hardConstraintsMet&&!goals.some(item=>item.id!==goal.id&&item.status!=='resolved');
+      }else{
+        decision.causalRejected=true;
+        thread.rejectedCausalHypotheses.add(String(decision.hypothesis||''));
         decision.hardConstraintsMet=false;
         decision.explained=false;
         decision.goalResolutions=[];
+        // If this exact explanation had been the incumbent, it is no longer
+        // eligible to remain best-so-far after failing its own intervention.
+        if(String(thread.bestHypothesis||'')===String(decision.hypothesis||'')){
+          thread.bestHypothesis='';
+          thread.bestScore=0;
+          thread.bestConstraintChecklist=[];
+          thread.bestSupportStates=[];
+        }
       }
     }
 
@@ -1344,13 +1405,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
     thread.hypothesisScore=decision.hypothesisScore;
     thread.flatSteps=progress.trend==='flat'?thread.flatSteps+1:0;
-    if(decision.hypothesisScore>thread.bestScore){
+    if(!decision.causalRejected&&decision.hypothesisScore>thread.bestScore){
       thread.bestScore=decision.hypothesisScore;
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
       thread.bestConstraintChecklist=decision.constraintChecklist;
       thread.bestSupportStates=dedupeStates(decision.supportStates||[]);
     }
-    if(decision.hardConstraintsMet){
+    if(!decision.causalRejected&&decision.hardConstraintsMet){
       thread.bestHypothesis=decision.hypothesis||thread.bestHypothesis||thread.hypothesis;
       thread.bestConstraintChecklist=decision.constraintChecklist;
       thread.bestSupportStates=dedupeStates(decision.supportStates||thread.bestSupportStates||[]);
@@ -1414,12 +1475,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
       .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
       .map(item=>item.index));
-    if(entryBranchDominated){
+    if(entryBranchDominated||decision.causalRejected){
       emit({
         action:'ENTRY_BRANCH_PRUNED',goalId:goal.id,
         entry:entryRootName,entryScore:Number(decision.hypothesisScore||0),
-        incumbentEntry:bestOtherEntry.name,incumbentScore:Number(bestOtherEntry.bestScore||0),
-        reason:'Entry branch fell below an already established entry-level score.',
+        incumbentEntry:bestOtherEntry?.name||'',incumbentScore:Number(bestOtherEntry?.bestScore||0),
+        reason:decision.causalRejected
+          ?'Counterfactual intervention failed to validate this causal diagnosis.'
+          :'Entry branch fell below an already established entry-level score.',
         entryBranches:[...thread.entryScores.values()].map(item=>({
           id:item.id,name:item.name,currentScore:Number(item.currentScore||0),bestScore:Number(item.bestScore||0)
         })),
