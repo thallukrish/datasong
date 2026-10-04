@@ -138,17 +138,22 @@ ev is the exact selected source evidence as [path,startLine,endLine,code,claimed
 
 Do not search for a different cause and do not repair h during this step. Treat h as the diagnosis under test.
 
-1. Propose the smallest concrete code change that follows directly from h. The patch may be pseudocode or a minimal before/after snippet, but it must change the operation claimed to be causal rather than an unrelated workaround.
-2. Apply that change counterfactually to the exact failing condition described by q and goal.
-3. Decide whether the reported functionality would now behave correctly for the reason claimed by h.
-4. If the patch would not fix the exact reported condition, or if the patch must alter a different mechanism than h identified, validation fails.
+First derive failingCase only from q plus the immutable goal text and hard/optional constraints. Preserve every material discriminator exactly. Do not weaken, broaden, substitute, normalize, reinterpret, or add conditions merely to make h or the proposed patch succeed. In particular, do not replace the reported case with a nearby mixed-type, alternate-input, or more convenient scenario unless that scenario is explicitly part of q or the immutable constraints.
+
+Then:
+1. State failingCase concretely enough that the before and after behavior can be compared.
+2. Propose the smallest concrete code change that follows directly from h. The patch may be pseudocode or a minimal before/after snippet, but it must change the operation claimed to be causal rather than an unrelated workaround.
+3. Predict beforePrediction for that exact failingCase under the existing code.
+4. Predict afterPrediction for the same exact failingCase after applying the patch.
+5. Decide whether the reported functionality changes from failing to correct for the reason claimed by h.
+6. If the patch leaves the exact reported case unchanged, only fixes a different case, requires changing a different mechanism than h identified, or depends on modifying failingCase, validation fails.
 
 For every immutable acceptance criterion, also return ck as [[constraintIndex,score],...] with score 0..1, but score only what the intervention itself logically establishes. Do not raise a criterion merely because the diagnosis already claimed it.
 
-Return pass=1 only when the intervention logically neutralizes the claimed mechanism and fixes the exact reported condition.
+Return pass=1 only when the same immutable failingCase fails before, succeeds after, and the change occurs because the intervention neutralizes the claimed mechanism.
 When pass=0, failure must state specifically why the intervention does not validate the diagnosis.
 Return only:
-{"patch":"","prediction":"","ck":[[0,0.0]],"pass":0,"failure":""}.`;
+{"failingCase":"","patch":"","beforePrediction":"","afterPrediction":"","ck":[[0,0.0]],"pass":0,"failure":""}.`;
 
 const ANSWER_SYNTHESIS_SYSTEM = `Write the final user-facing answer from an already completed code investigation.
 
@@ -809,7 +814,7 @@ async function validateCausalCounterfactual({question,goal,hypothesis,evidenceSt
     state.evidenceWhy||''
   ]);
   if(!hypothesis||!evidence.length){
-    return {pass:false,patch:'',prediction:'',failure:'Counterfactual validation could not run because the causal hypothesis has no exact supporting source evidence.'};
+    return {pass:false,failingCase:'',patch:'',beforePrediction:'',afterPrediction:'',prediction:'',constraintScores:[],failure:'Counterfactual validation could not run because the causal hypothesis has no exact supporting source evidence.'};
   }
   const payload={
     q:question,
@@ -823,13 +828,23 @@ async function validateCausalCounterfactual({question,goal,hypothesis,evidenceSt
   const call=await modelJson(client,model,COUNTERFACTUAL_VALIDATE_SYSTEM,payload);addUsage(usage,call.usage);
   const result={
     pass:Number(call.parsed?.pass||0)===1,
+    failingCase:text(call.parsed?.failingCase||'',1800),
     patch:text(call.parsed?.patch||'',2200),
-    prediction:text(call.parsed?.prediction||'',1600),
+    beforePrediction:text(call.parsed?.beforePrediction||'',1600),
+    afterPrediction:text(call.parsed?.afterPrediction||'',1600),
+    prediction:'',
     constraintScores:arr(call.parsed?.ck).map(row=>[
       Number(row?.[0]),Math.max(0,Math.min(1,Number(row?.[1]||0)))
     ]).filter(row=>Number.isInteger(row[0])&&row[0]>=0),
     failure:text(call.parsed?.failure||'',1600)
   };
+  result.prediction=[result.beforePrediction&&`before: ${result.beforePrediction}`,result.afterPrediction&&`after: ${result.afterPrediction}`].filter(Boolean).join(' | ');
+  // The validator must expose the immutable testcase and a true before/after
+  // comparison. A pass without those artifacts is structurally invalid.
+  if(result.pass&&(!result.failingCase||!result.beforePrediction||!result.afterPrediction)){
+    result.pass=false;
+    result.failure='Counterfactual validation did not preserve and test one explicit failing case with both before and after predictions.';
+  }
   if(!result.pass&&!result.failure)result.failure='The proposed intervention did not establish that the diagnosed mechanism fixes the exact reported failing condition.';
   log('query_v5_counterfactual_validation',{step,goalId:goal?.id||'',payload,result,usage:call.usage});
   return result;
@@ -1374,7 +1389,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       emit({
         action:counterfactual.pass?'COUNTERFACTUAL_PASS':'COUNTERFACTUAL_FAIL',
         goalId:goal.id,hypothesis:decision.hypothesis,
-        patch:counterfactual.patch,prediction:counterfactual.prediction,
+        failingCase:counterfactual.failingCase,
+        patch:counterfactual.patch,beforePrediction:counterfactual.beforePrediction,
+        afterPrediction:counterfactual.afterPrediction,prediction:counterfactual.prediction,
         failure:counterfactual.failure,path:path.map(x=>x.name)
       });
 
