@@ -92,8 +92,12 @@ id
 kind = locate | describe | causal | change | verify
 text
 dependsOn
+hardConstraints
+optionalConstraints
 status = unresolved | resolved
 ```
+
+The goal model derives hard and optional constraints once, at decomposition time, from the original request. Hard constraints are the minimum conditions that must be established for the goal to count as satisfied. Optional constraints strengthen confidence or context but are not mandatory. These constraints remain immutable during traversal; candidate code may change only their scores, never their wording or membership.
 
 The decomposition is intentionally small, normally one to five goals and never more than six. It is not an execution plan. It says what must eventually be established from evidence, not which code path must be traversed.
 
@@ -181,9 +185,9 @@ For a **locate** goal, Query asks whether the current evidence identifies the ex
 
 For a **describe** goal, Query asks whether the current evidence directly establishes the requested behavior or flow.
 
-For every active goal, Query derives a compact constraint checklist from the goal plus the material conditions in the original request. A hard constraint is something that must be true for the current function or region to satisfy that goal. A supporting constraint raises confidence or supplies useful context but is not mandatory. The checklist is not hard-coded by goal kind; describe, causal, change, verify, and locate goals all derive their own constraints from the actual request.
+For every active goal, Query receives the immutable hard and optional constraints that were created during goal decomposition. Query only scores those existing constraints against the current function or region. It cannot add, remove, rewrite, or substitute constraints based on whatever implementation mechanism it happens to encounter.
 
-The checklist produces a candidate-fit score separate from navigation and goal sufficiency. A clearly failed hard constraint forces candidate fit below 0.5. A candidate fit of 0.5 or greater keeps the current function as a live candidate: Query verifies it with source or a materially necessary semantic continuation before considering weaker sibling/frontier branches. After source verification, a candidate may not remain indefinitely ambiguous. If no further continuation is needed, it must either satisfy the goal or fall below the candidate-fit threshold.
+The fixed checklist produces a candidate-fit score separate from navigation and goal sufficiency. A clearly failed hard constraint forces candidate fit below 0.5. A candidate fit of 0.5 or greater keeps the current function as a live candidate: Query verifies it with source or a materially necessary semantic continuation before considering weaker sibling/frontier branches. After source verification, a candidate may not remain indefinitely ambiguous. If no further continuation is needed, it must either satisfy the goal or fall below the candidate-fit threshold.
 
 For a **causal** goal, the derived hard constraints normally encode the conditions needed for the observed code to actually produce the reported behavior. When multiple mechanisms look superficially relevant, each is therefore tested against those request-derived constraints rather than a fixed causal template.
 
@@ -987,4 +991,4 @@ Localize   final supporting evidence → exact source ranges
 82. Functions longer than 50 lines may be traversed by regions, but the rolling hypothesis and supported facts from earlier chunks are carried into later chunks so the function's logic remains coherent across the walk.
 83. Query uses three independent signals for every goal kind: navigation score chooses where to search, candidate-fit score determines whether the current function remains a plausible match for the active goal's hard constraints, and goal-sufficiency score determines whether enough evidence exists to answer.
 84. A candidate with fit at least 0.5 is verified before lower-ranked sibling/frontier alternatives are explored. If verification still leaves it unresolved without a useful continuation, the thread stops explicitly rather than wandering away from a plausible candidate.
-85. Hard and supporting checklist constraints are derived from the active goal and the original request rather than hard-coded by goal kind.
+85. Hard and optional constraints are derived once during goal decomposition from the original request and then frozen for the life of the goal. Query may update only their scores, never their content.
