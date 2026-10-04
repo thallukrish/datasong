@@ -829,7 +829,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
         const warm=decision.picks;
         if(!warm.length)continue;
-        thread.stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:'',frontierIds:[]});
+        thread.stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:'',hypothesisScore:0,baseHypothesis:'',baseScore:0,frontierIds:[]});
         const event={step,action:'RESEED',goalId:goal.id,state:warm[0].state.name,hypothesis:''};
         events.push(event);emit({...event,path:[warm[0].state.name]});
         return true;
@@ -863,11 +863,18 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       if(top.alternatives.length){
         top.current=top.alternatives.shift();
         top.frontierIds=[];
-        const event={step,action:'BACKTRACK',goalId:thread.goal.id,to:top.current.state.name,hypothesis:top.hypothesis};
+        thread.hypothesis=top.baseHypothesis||'';
+        thread.hypothesisScore=Number(top.baseScore||0);
+        top.hypothesis=thread.hypothesis;
+        top.hypothesisScore=thread.hypothesisScore;
+        const event={step,action:'BACKTRACK',goalId:thread.goal.id,to:top.current.state.name,hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,bestScore:thread.bestScore};
         events.push(event);emit({...event,path:[...top.path,top.current.state].map(x=>x.name)});
         return true;
       }
       thread.stack.pop();
+      const parent=thread.stack.at(-1);
+      thread.hypothesis=parent?.hypothesis||'';
+      thread.hypothesisScore=Number(parent?.hypothesisScore||0);
     }
     return seedGoal(thread);
   };
@@ -987,6 +994,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // Carry the accumulated assessment back onto the current frame so large
     // function chunks and sibling regions are never evaluated in isolation.
     frame.hypothesis=thread.hypothesis||frame.hypothesis;
+    frame.hypothesisScore=thread.hypothesisScore;
     rollingHypothesis=thread.hypothesis||rollingHypothesis;
     applyLedgerDecision({
       ledger,goal,additions:decision.additions,disputes:decision.disputes,
@@ -1033,8 +1041,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(warm.length){
       thread.stack.push({
         path,current:warm[0],alternatives:warm.slice(1),
-        hypothesis:thread.hypothesis||decision.hypothesis,navigationKind,frontierIds:[],
-        entryScore:thread.hypothesisScore
+        hypothesis:thread.hypothesis||decision.hypothesis,hypothesisScore:thread.hypothesisScore,
+        baseHypothesis:thread.hypothesis||decision.hypothesis,baseScore:thread.hypothesisScore,
+        navigationKind,frontierIds:[]
       });
       const event={
         step,action:'DESCEND',goalId:goal.id,navigationKind,
@@ -1044,6 +1053,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       };
       events.push(event);emit({...event,path:[...path,warm[0].state].map(x=>x.name)});
       continue;
+    }
+
+    if(decision.picks.length&&!warm.length){
+      frame.frontierIds=[];
+      emit({
+        action:'BRANCH_PRUNED',goalId:goal.id,state:state.name,
+        bestScore:thread.bestScore,hypothesisScore:thread.hypothesisScore,
+        candidates:decision.picks.map(pick=>({name:pick.state.name,expected:pick.score,targets:pick.targets})),
+        path:path.map(x=>x.name)
+      });
     }
 
     // Flat exploration is tolerated briefly only while a branch still appears
