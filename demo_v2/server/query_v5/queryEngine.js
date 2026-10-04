@@ -900,6 +900,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     bestHypothesis:'',
     bestScore:0,
     bestConstraintChecklist:[],
+    bestSupportStates:[],
     flatSteps:0
   }]));
 
@@ -1134,10 +1135,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.bestScore=decision.hypothesisScore;
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
       thread.bestConstraintChecklist=decision.constraintChecklist;
+      thread.bestSupportStates=dedupeStates(decision.supportStates||[]);
     }
     if(decision.hardConstraintsMet){
       thread.bestHypothesis=decision.hypothesis||thread.bestHypothesis||thread.hypothesis;
       thread.bestConstraintChecklist=decision.constraintChecklist;
+      thread.bestSupportStates=dedupeStates(decision.supportStates||thread.bestSupportStates||[]);
     }
     emit({
       action:'HYPOTHESIS_PROGRESS',goalId:goal.id,
@@ -1252,14 +1255,60 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   }
 
   if(!finalExplanation){
-    emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:rollingHypothesis||''});
-    log('query_v5_complete',{complete:false,mode,goals:goalView(goals),explained:false,hypothesis:rollingHypothesis||'',facts:ledgerView(ledger,{all:true}),events,usage});
+    const unresolved=unresolvedGoals(goals);
+    const bestThreads=unresolved.map(goal=>{
+      const thread=threads.get(goal.id);
+      return {
+        goalId:goal.id,
+        hypothesis:thread?.bestHypothesis||thread?.hypothesis||'',
+        score:Number(thread?.bestScore||thread?.hypothesisScore||0),
+        constraintChecklist:arr(thread?.bestConstraintChecklist),
+        supportStates:dedupeStates(thread?.bestSupportStates||[])
+      };
+    });
+    const best=bestThreads
+      .filter(item=>item.hypothesis)
+      .sort((a,b)=>b.score-a.score)[0]||null;
+    const bestEvidence=best?best.supportStates:[];
+    const bestRanges=bestEvidence.map((state,index)=>({
+      rank:index+1,
+      symbolId:state.symbolId||'',
+      name:state.name||'',
+      sourcePath:state.sourcePath||'',
+      startLine:Number(state.startLine||0),
+      endLine:Number(state.endLine||state.startLine||0),
+      why:text(state.evidenceWhy||codeSemanticForState(state,explorer)?.effect||codeSemanticForState(state,explorer)?.purpose||'',260)
+    })).filter(range=>range.sourcePath&&range.startLine&&range.endLine>=range.startLine);
+    const status=best?'best_so_far_exhausted':'exhausted';
+    const bestHypothesis=best?.hypothesis||rollingHypothesis||'';
+    const bestScore=Number(best?.score||0);
+    const bestConstraints=arr(best?.constraintChecklist);
+    emit({
+      action:'SEARCH_EXHAUSTED',explained:false,status,
+      hypothesis:bestHypothesis,hypothesisScore:bestScore,bestScore,
+      constraintChecklist:bestConstraints,evidenceRanges:bestRanges,
+      goals:goalView(goals)
+    });
+    log('query_v5_complete',{
+      complete:false,status,mode,goals:goalView(goals),explained:false,
+      hypothesis:bestHypothesis,bestScore,constraintChecklist:bestConstraints,
+      ranges:bestRanges,facts:ledgerView(ledger,{all:true}),events,usage
+    });
     const diag=diagnostics();log('query_v5_diagnostics',diag);
-    const remaining=unresolvedGoals(goals).map(goal=>`${goal.id} ${goal.text}`).join('; ');
-    const incompleteAnswer=remaining
-      ? `The explored semantic evidence did not yet resolve: ${remaining}`
-      : 'The explored semantic evidence did not yet resolve the request.';
-    return {answer:incompleteAnswer,mode,goals:goalView(goals),complete:false,explained:false,hypothesis:rollingHypothesis||'',facts:ledgerView(ledger,{all:true}),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),usage}};
+    const remaining=unresolved.map(goal=>`${goal.id} ${goal.text}`).join('; ');
+    const weakHard=bestConstraints
+      .filter(row=>row[2]==='hard'&&Number(row[1]||0)<GOAL_CLOSE_SCORE)
+      .map(row=>`${row[0]} (${Math.round(Number(row[1]||0)*100)}%)`);
+    const incompleteAnswer=best
+      ? `Best hypothesis found, but the goal is not resolved because not every hard acceptance criterion reached ${Math.round(GOAL_CLOSE_SCORE*100)}%. ${bestHypothesis}${weakHard.length?` Unresolved/weak criteria: ${weakHard.join('; ')}.`:''}`
+      : (remaining?`The explored semantic evidence did not yet resolve: ${remaining}`:'The explored semantic evidence did not yet resolve the request.');
+    return {
+      answer:incompleteAnswer,status,mode,goals:goalView(goals),complete:false,explained:false,
+      hypothesis:bestHypothesis,hypothesisScore:bestScore,constraintChecklist:bestConstraints,
+      facts:ledgerView(ledger,{all:true}),ranges:bestRanges,events,usage,diagnostics:diag,
+      sweExplore:sweExploreView(bestRanges),
+      investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),status,usage}
+    };
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
@@ -1282,7 +1331,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const synthesized=await synthesizeResolvedAnswer({question,goals,threads,client,model,usage,log});
   const locations=ranges.map(range=>`${range.sourcePath}#${range.name} ${range.startLine}-${range.endLine}${range.why?' — '+range.why:''}`).join('\n');
   const answer=synthesized||finalExplanation+(locations?'\n\n'+locations:'');
-  log('query_v5_complete',{complete:true,mode,goals:goalView(goals),explained:true,hypothesis:finalExplanation,answer,facts:ledgerView(ledger,{all:true}),ranges,events,usage});
+  log('query_v5_complete',{complete:true,status:'resolved',mode,goals:goalView(goals),explained:true,hypothesis:finalExplanation,answer,facts:ledgerView(ledger,{all:true}),ranges,events,usage});
   const diag=diagnostics();log('query_v5_diagnostics',diag);
-  return {answer,mode,goals:goalView(goals),complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger,{all:true}),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),usage}};
+  return {answer,status:'resolved',mode,goals:goalView(goals),complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger,{all:true}),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),status:'resolved',usage}};
 }
