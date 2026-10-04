@@ -86,6 +86,20 @@ const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic L
 
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
 
+const EVIDENCE_RESELECT_SYSTEM = `Select the smallest exact source ranges needed to support an already proposed hypothesis against fixed acceptance criteria.
+
+q is the original request.
+goal is the active goal.
+hard and optional are immutable acceptance criteria.
+h is the proposed hypothesis.
+src is the complete source body for the current visited node.
+previousEv is the earlier evidence selection, which was rejected as overly broad.
+
+Do not change, repair, or reinterpret h. Do not search outside src. Select only source ranges that materially support h and the acceptance criteria it addresses. Several disjoint ranges may be selected and may work together. Omit surrounding, setup, cleanup, unrelated branches, and other lines that do not contribute. Do not return the whole function unless essentially every part is necessary to establish h.
+
+Return ev only as [[startLine,endLine,[constraintIndexes],"why"],...].
+Return only {"ev":[]}.`;
+
 const EVIDENCE_GROUND_SYSTEM = `Verify whether the selected source evidence actually grounds an evidence-backed hypothesis against fixed acceptance criteria.
 
 q is the original request.
@@ -494,6 +508,43 @@ function sourceEvidenceStates(state,sourceBody,evidenceRows=[]){
   return dedupeStates(out);
 }
 
+function evidenceCoverageRatio(state,evidenceStates=[]){
+  const start=Number(state?.startLine||0),end=Number(state?.endLine||start);
+  const total=Math.max(1,end-start+1);
+  const covered=new Set();
+  for(const item of arr(evidenceStates)){
+    const a=Math.max(start,Number(item?.startLine||0));
+    const b=Math.min(end,Number(item?.endLine||0));
+    for(let line=a;line<=b;line++)covered.add(line);
+  }
+  return covered.size/total;
+}
+
+async function reselectTightEvidence({question,goal,hypothesis,state,sourceBody,previousEvidence,client,model,usage,log,step}){
+  const payload={
+    q:question,
+    goal:{id:goal?.id||'',kind:goal?.kind||'',text:goal?.text||''},
+    hard:arr(goal?.hardConstraints),
+    optional:arr(goal?.optionalConstraints),
+    h:hypothesis||'',
+    src:{
+      name:state?.name||'',
+      sourcePath:state?.sourcePath||'',
+      startLine:Number(state?.startLine||0),
+      endLine:Number(state?.endLine||0),
+      body:text(sourceBody,4200)
+    },
+    previousEv:arr(previousEvidence).map(item=>[
+      Number(item?.startLine||0),Number(item?.endLine||0),
+      arr(item?.evidenceSupports),item?.evidenceWhy||''
+    ])
+  };
+  const call=await modelJson(client,model,EVIDENCE_RESELECT_SYSTEM,payload);addUsage(usage,call.usage);
+  const states=sourceEvidenceStates(state,sourceBody,call.parsed?.ev);
+  log('query_v5_evidence_reselect',{step,goalId:goal?.id||'',payload,modelResponse:call.parsed,coverage:evidenceCoverageRatio(state,states),usage:call.usage});
+  return states;
+}
+
 async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evidenceStates,client,model,usage,log,step}){
   const evidence=arr(evidenceStates).map((state,index)=>[
     index,
@@ -606,9 +657,25 @@ async function decide({
   // hard acceptance constraint. gs remains a model diagnostic, not the sole
   // convergence switch.
   const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
-  const evidenceStates=!entryStage&&sourceBody
+  let evidenceStates=!entryStage&&sourceBody
     ? sourceEvidenceStates(currentState,sourceBody,call.parsed?.ev)
     : [];
+  let evidenceReselected=false;
+  if(!entryStage&&sourceBody&&evidenceStates.length){
+    const functionLines=Math.max(1,Number(currentState?.endLine||0)-Number(currentState?.startLine||0)+1);
+    const coverage=evidenceCoverageRatio(currentState,evidenceStates);
+    if(functionLines>=8&&coverage>=0.8){
+      const tighter=await reselectTightEvidence({
+        question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
+        state:currentState,sourceBody,previousEvidence:evidenceStates,
+        client,model,usage,log,step
+      });
+      if(tighter.length){
+        evidenceStates=tighter;
+        evidenceReselected=true;
+      }
+    }
+  }
   let grounding=null;
   if(!entryStage&&sourceBody){
     if(evidenceStates.length){
@@ -660,6 +727,8 @@ async function decide({
     inspectSource,
     evidenceRanges,
     evidenceGrounded:grounding?grounding.ok:null,
+    evidenceReselected,
+    evidenceCoverage:sourceBody?evidenceCoverageRatio(currentState,evidenceStates):0,
     supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
   };
 
@@ -667,7 +736,7 @@ async function decide({
     explained:result.explained,hypothesis:result.hypothesis,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
-    evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,
+    evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
     additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,
     goalResolutions:result.goalResolutions
   },usage:call.usage});
@@ -675,7 +744,7 @@ async function decide({
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
     action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
-    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,goals:goalView(goals),
+    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
   });
