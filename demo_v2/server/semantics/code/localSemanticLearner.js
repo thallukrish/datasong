@@ -2,6 +2,7 @@ import { addUsage, arr, modelJson, text } from '../../query_v2/modelJson.js';
 import { materializeCodeStructure, applyCodeSemantics, semanticDetails } from './codeGraph.js';
 
 const LARGE_FUNCTION_LINE_THRESHOLD = 50;
+const MAX_LOOKAHEAD_NODES = 48;
 
 function functionLineCount(state){
   return Math.max(0,Number(state?.endLine||0)-Number(state?.startLine||0)+1);
@@ -131,7 +132,7 @@ export function collectLocalSemanticWindow({
         : [];
     const queue=roots.map(region=>({region,parentId:state.id,level:1}));
     const regionSeen=new Set();
-    while(queue.length){
+    while(queue.length&&states.length<MAX_LOOKAHEAD_NODES){
       const {region,parentId,level}=queue.shift();
       if(!region?.id||regionSeen.has(region.id))continue;
       regionSeen.add(region.id);
@@ -150,10 +151,11 @@ export function collectLocalSemanticWindow({
     const maxDepth=Math.max(1,Math.min(3,Number(depth)||1));
     const queue=[{node:state,level:0}];
     const callSeen=new Set([state.id]);
-    while(queue.length){
+    while(queue.length&&states.length<MAX_LOOKAHEAD_NODES){
       const {node,level}=queue.shift();
       if(level>=maxDepth)continue;
       for(const child of directCallStates(node,explorer)){
+        if(states.length>=MAX_LOOKAHEAD_NODES)break;
         links.push({from:node.id,to:child.id,relationship:'calls'});
         add(child);
         if(!callSeen.has(child.id)){
