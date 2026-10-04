@@ -26,7 +26,7 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(Array.isArray(event.constraintChecklist))p.constraintChecklist=event.constraintChecklist;
         if(Array.isArray(event.evidenceRanges))p.evidenceRanges=event.evidenceRanges;
         if(Array.isArray(event.entryBranches))p.entryBranches=event.entryBranches;
-        if(event.action==='COUNTERFACTUAL_PASS'||event.action==='COUNTERFACTUAL_FAIL')p.counterfactualValidation={pass:event.action==='COUNTERFACTUAL_PASS',patch:event.patch||'',prediction:event.prediction||'',failure:event.failure||''};
+        if(event.action==='COUNTERFACTUAL_PASS'||event.action==='COUNTERFACTUAL_FAIL')p.counterfactualValidation={pass:event.action==='COUNTERFACTUAL_PASS',failingCase:event.failingCase||'',patch:event.patch||'',beforePrediction:event.beforePrediction||'',afterPrediction:event.afterPrediction||'',prediction:event.prediction||'',failure:event.failure||''};
         if(event.counterfactualValidation&&typeof event.counterfactualValidation==='object')p.counterfactualValidation=event.counterfactualValidation;
         if(Array.isArray(event.facts))p.facts=event.facts;
         if(typeof event.explained==='boolean')p.explained=event.explained;
