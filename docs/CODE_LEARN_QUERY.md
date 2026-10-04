@@ -365,6 +365,40 @@ After LeMap enters the chosen entry, a semantic decision returns the updated hyp
 
 The ck field scores immutable goal constraints by index. The hs field is the model's overall hypothesis-match diagnostic; LeMap also derives progress from hard-constraint scores. Each p row means "move to this immediate candidate; semantic lookahead suggests the hypothesis may reach this expected score, and these unresolved constraints may improve." LeMap moves only one hop even though the model can see deeper semantics.
 
+
+When exact source is supplied for the current visited node, Query also returns an evidence set:
+
+```json
+"ev": [
+  [355, 355, "Reads the configured fixture directories."],
+  [368, 370, "Builds the app fixture directory and tests membership against the configured entries."]
+]
+```
+
+The evidence set is not a ranking of individual lines. Several disjoint ranges may jointly establish one hypothesis. Query selects the smallest combined set of source ranges that materially supports the updated hypothesis and advances the unresolved acceptance criteria.
+
+The local-source rule is:
+
+```text
+visited function semantics
+        ↓
+request exact source only if needed
+        ↓
+inspect the whole supplied body
+        ↓
+select all materially useful evidence ranges
+        ↓
+update / revise accumulated hypothesis
+        ↓
+score hypothesis against fixed constraints
+        ↓
+all hard constraints met?
+    yes → stop
+    no  → navigate only if remaining local source cannot materially help
+```
+
+This prevents Query from forcing a single "winning line" when several operations together explain the goal. It also prevents leaving a coherent function before the already supplied source has been used as fully as necessary.
+
 ## Entry selection before exploration
 
 Code-flow Query does not always begin from repository root entry points.
@@ -936,6 +970,7 @@ The current Query v5 implementation now follows the hypothesis-driven semantic-s
 | Evidence memory | Established facts survive branch-local hypothesis rollback. | The query-local evidence ledger remains cumulative across backtracking. | Implemented |
 | Alternate-branch pruning | Do not explore branches that cannot improve the best explanation or resolve an unmet hard constraint. | Branch filtering compares expected score with bestScore and targeted unresolved constraints. | Implemented |
 | Source inspection | Raw source is verification evidence, not the normal traversal substrate. | Query requests source explicitly only when semantics are insufficient to settle an unresolved hard constraint. | Implemented |
+| Combined local evidence | Several lines or regions in one function may jointly support the hypothesis; no single-line ranking is required. | When source is inspected, Query selects a bounded evidence set of exact ranges, updates the hypothesis from the combined set, and only navigates away if unresolved constraints cannot be materially improved from the remaining supplied source. | Implemented |
 | Final localization | Reuse retained structural coordinates for the final supporting ranges. | Final evidence ranges come from already traversed structural states. | Implemented |
 | Query UI | Make convergence visible rather than showing only an event stream. | UI shows active goal, hypothesis, acceptance-criteria scores, current path, branch potentials, trend, best score and token use. | Implemented |
 | Token visibility | Show cost while the search is progressing. | Cumulative prompt, completion and total tokens are emitted with Query progress. | Implemented |
@@ -1058,3 +1093,6 @@ The remaining work is therefore mostly calibration and observability rather than
 83. The complete immediate frontier may be preserved, but branches whose expected trajectory cannot beat the best-known hypothesis and cannot resolve an unmet hard constraint may be pruned.
 84. Query progress events expose the active goal, hypothesis, constraint scores, current path, branch potentials, strengthening/flat/weakening trend, best score and cumulative token usage.
 85. Structural entry search, Learn semantics and Query reasoning remain separate: structure finds plausible code, Learn provides reusable query-independent meaning, and Query searches for an evidence-backed hypothesis that satisfies the goal constraints.
+86. Exact source evidence may be a set of multiple disjoint ranges whose combined behavior supports one hypothesis; Query does not need to rank one line above another.
+87. When exact source for a coherent visited function is supplied, Query examines the whole supplied body and selects the materially useful evidence set before navigating elsewhere.
+88. If that combined evidence makes every hard constraint sufficient, the goal closes immediately and those selected ranges become the supporting source evidence for the hypothesis.
