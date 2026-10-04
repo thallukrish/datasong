@@ -127,6 +127,7 @@ function queryProgressMarkup(p){
     const targets=(x.targets||[]).length?' · targets '+x.targets.map(n=>'C'+(Number(n)+1)).join(', '):'';
     return '<div class="qbranch '+(i===0?'best':'')+'">├─ '+esc(x.name)+' · expected match '+Math.round(x.n*100)+'%'+esc(targets)+'</div>';
   }).join('');
+  const evidence=(p.evidenceRanges||[]).map(r=>'<div class="qstep done">✓ '+esc((r.sourcePath||'source')+':'+(r.startLine||'')+(r.endLine&&r.endLine!==r.startLine?'-'+r.endLine:''))+(r.why?' · '+esc(r.why):'')+'</div>').join('');
   const facts=(p.facts||[]).map(f=>'<div class="qstep '+(f[1]==='disputed'?'':'done')+'">'+(f[1]==='disputed'?'?':'✓')+' '+esc(f[4]||'')+(f[1]==='disputed'?' · disputed':'')+'</div>').join('');
   const labels={START:'Starting exploration',DECIDE:'Evaluating current evidence',HYPOTHESIS_PROGRESS:'Hypothesis updated',HYPOTHESIS_FLAT:'Progress flattened · considering backtrack',BRANCH_PRUNED:'Weaker branch pruned',LEARN_START:'Learning semantic lookahead',LEARN_DONE:'Semantic lookahead ready',DESCEND:'Following strongest expected improvement',BACKTRACK:'Backtracking to a stronger alternative',RESEED:'Starting from another entry',SOURCE_INSPECTION:'Verifying exact source',EXPLAINED:'All hard constraints satisfied',SEARCH_COMPLETE:'Exploration complete',ERROR:'Exploration stopped'};
   return '<div class="qprogress">'+
@@ -142,6 +143,7 @@ function queryProgressMarkup(p){
     (constraints?'<div class="qconstraints"><div class="label">hypothesis vs acceptance criteria</div>'+constraints+'</div>':'')+
     (path?'<div class="qpath"><div class="label">current path</div>'+path+'</div>':'')+
     (branches?'<div class="qbranches"><div class="label">semantic lookahead</div>'+branches+'</div>':'')+
+    (evidence?'<div class="qpath"><div class="label">supporting source evidence</div>'+evidence+'</div>':'')+
     (facts?'<div class="qpath"><div class="label">established evidence</div>'+facts+'</div>':'')+
     '<div class="qstatus">'+esc(labels[p.action]||p.action||'Exploring')+'</div>'+
   '</div>';
