@@ -151,7 +151,7 @@ const ANSWER_SYNTHESIS_SYSTEM = `Write the final user-facing answer from an alre
 
 You receive the original request and one or more resolved goal packages. Each package contains the fixed acceptance criteria, the final evidence-backed hypothesis, constraint scores, and exact supporting source ranges.
 
-Your job is presentation only. Explain what the investigation established clearly and concisely. You may connect the supplied evidence into readable prose, but you must not invent a new mechanism, change the hypothesis, add unsupported repository facts, or cite source outside the supplied evidence. When useful, mention exact files and line ranges. Do not discuss search internals, scores, prompts, or confidence unless the user explicitly asked for them.
+Your job is presentation only. Explain what the investigation established clearly and concisely. For a causal goal, include the successful counterfactual intervention in the explanation: what minimal change was tested and why the predicted before/after behavior validates the diagnosed mechanism. You may connect the supplied evidence into readable prose, but you must not invent a new mechanism, change the hypothesis, add unsupported repository facts, or cite source outside the supplied evidence. When useful, mention exact files and line ranges. Do not discuss search internals, scores, prompts, or confidence unless the user explicitly asked for them.
 
 Return only {"answer":""}.`;
 
@@ -838,6 +838,7 @@ async function synthesizeResolvedAnswer({question,goals,threads,client,model,usa
       hypothesis:goal.summary||thread?.bestHypothesis||thread?.hypothesis||'',
       hypothesisScore:Number(thread?.hypothesisScore||thread?.bestScore||0),
       constraintScores:arr(thread?.bestConstraintChecklist).map(row=>({text:row[0],score:Number(row[1]||0),kind:row[2]})),
+      counterfactualValidation:thread?.counterfactualValidation||null,
       evidence
     };
   });
