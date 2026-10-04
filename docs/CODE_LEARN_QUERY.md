@@ -339,9 +339,15 @@ They remain available inside LeMap for deterministic traversal and final localiz
 
 ## Query decision contract
 
-The model receives the current evidence-backed hypothesis, fixed goal constraints, the visited semantic node, immediate candidates and bounded semantic lookahead. Lookahead is navigation-only and must never be promoted into evidence before traversal.
+Before traversal starts, the model may receive candidate entry semantics and returns entry navigation scores only. After an entry is visited, the model receives the current evidence-backed hypothesis, fixed goal constraints, the visited semantic node, immediate candidates and bounded semantic lookahead. Lookahead is navigation-only and must never be promoted into evidence before traversal.
 
-A semantic decision returns the updated hypothesis, fixed-constraint scores, an overall hypothesis-match diagnostic, optional source-inspection request, and at most three immediate branches:
+Entry selection returns only candidate entry navigation rows:
+
+```json
+{"h":"","gs":[],"ck":[],"hs":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.85]]}
+```
+
+After LeMap enters the chosen entry, a semantic decision returns the updated hypothesis, fixed-constraint scores, an overall hypothesis-match diagnostic, optional source-inspection request, and at most three immediate branches:
 
 ```json
 {
@@ -822,29 +828,27 @@ pattern match
 
 If one window already explains the issue, Query stops. Otherwise Query chooses the strongest continuation and preserves alternatives exactly as before.
 
-## Entry comparison is navigation only
+## Entry selection starts the evidence path
 
-Entry comparison has a deliberately narrower responsibility than Query reasoning.
+Faceted structural search proposes candidate entry functions or boundaries. The model uses their reusable semantics only to choose where the evidence path should begin.
 
 ```text
 faceted structural search
 → candidate entry functions
-→ compare learned entry windows
-→ choose which code to inspect
+→ entry navigation score
+→ choose one entry
+→ enter it
+→ its semantics become the first visited evidence
+→ form / update hypothesis
 ```
 
-At this stage there is no current raw function body. The model may rank candidates, but it must not:
+Before an entry is visited, the model may rank candidates but must not form a hypothesis, score acceptance criteria, add facts, request source, or conclude the issue. Entry scores answer only:
 
-- resolve evidence goals
-- add facts
-- form a causal mechanism
-- conclude how a requested change works
-- verify a constraint
-- carry an answer hypothesis into traversal
+> Which candidate is the most promising place to begin investigating this goal?
 
-This prevents a speculative interpretation formed while merely comparing candidate entries from becoming the starting assumption for later reasoning.
+The moment LeMap enters the selected function or boundary, it is no longer merely an entry candidate. It is the first node on the chosen semantic path. Its visited semantics may create or revise the hypothesis, contribute evidence, and be scored against the fixed goal constraints. Exact source is added only through explicit source inspection.
 
-Once LeMap enters the selected function, the model receives the visited function semantics plus bounded semantic lookahead. Goals may be resolved and facts may enter the ledger from visited semantic evidence; exact source is added only through explicit source inspection.
+This means the hypothesis traces the path actually taken. Entry selection chooses the first step; hypothesis reasoning begins with the first visited entry.
 
 For a scheduled locate goal, the thread closes as soon as the visited evidence identifies the requested implementation. It does not descend further merely because later causal or change goals remain unresolved.
 
