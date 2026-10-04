@@ -1037,7 +1037,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const warm=decision.picks.filter(pick=>{
       const improves=pick.score>thread.bestScore+HYPOTHESIS_DELTA_EPSILON;
       const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
-      return improves||targetsUnresolved;
+      const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
+      return improves||(targetsUnresolved&&canSpendFlatStep);
     });
     if(warm.length){
       thread.stack.push({
