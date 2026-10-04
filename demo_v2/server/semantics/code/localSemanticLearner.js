@@ -119,18 +119,28 @@ export function collectLocalSemanticWindow({
   add(state);
 
   // Functions up to 50 lines stay coherent semantic units. Regions are a
-  // chunking fallback only for larger functions. A selected large-function
-  // region exposes only its direct children, so Query can carry a rolling
-  // assessment across chunks without fragmenting ordinary functions.
+  // chunking fallback only for larger functions. For navigation lookahead we
+  // may materialize up to depth levels of the region hierarchy, but Query
+  // still moves only one level at a time.
   if(includeRootRegions&&state.type!=='code_external'){
-    const regions=state.type==='code_region'
+    const maxRegionDepth=Math.max(1,Math.min(3,Number(depth)||1));
+    const roots=state.type==='code_region'
       ? structuralRegionChildren(state,explorer)
       : shouldChunkFunction(state)
         ? structuralRegionStates(state,explorer).filter(region=>region.parent===state.id||region.parent===state.symbolId)
         : [];
-    for(const region of regions){
+    const queue=roots.map(region=>({region,parentId:state.id,level:1}));
+    const regionSeen=new Set();
+    while(queue.length){
+      const {region,parentId,level}=queue.shift();
+      if(!region?.id||regionSeen.has(region.id))continue;
+      regionSeen.add(region.id);
       add(region);
-      links.push({from:state.id,to:region.id,relationship:'contains'});
+      links.push({from:parentId,to:region.id,relationship:'contains'});
+      if(level>=maxRegionDepth)continue;
+      for(const child of structuralRegionChildren(region,explorer)){
+        queue.push({region:child,parentId:region.id,level:level+1});
+      }
     }
   }
 
