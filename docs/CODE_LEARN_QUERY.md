@@ -902,6 +902,71 @@ LeMap      structural state → traversal and backtracking
 Localize   final supporting evidence → exact source ranges
 ```
 
+## Current implementation status
+
+The current Query v5 implementation now follows the hypothesis-driven semantic-search architecture below.
+
+| Area | Target architecture | Current implementation | Status |
+|---|---|---|---|
+| Issue to goals | Break the issue into the smallest useful set of dependent goals. | Goal decomposition supports locate, describe, causal, change and verify goals with dependencies. | Implemented |
+| Acceptance criteria | Each goal gets fixed hard and optional constraints before code exploration. | hardConstraints and optionalConstraints are created during decomposition and remain immutable. | Implemented |
+| Localization | Every substantive goal locates relevant implementation evidence as part of solving itself. | Faceted structural search runs per goal. A separate locate goal is used only when location itself is requested. | Implemented |
+| Entry search | Structural search should find plausible starting code without solving the issue. | Faceted search and source-only entry triage select candidate functions. Entry comparison cannot resolve goals or seed a hypothesis. | Implemented |
+| Learn and Query split | Learn remains reusable and query-independent. Query performs issue-specific reasoning. | Learn stores purpose/effect semantics without seeing the issue. Query consumes those semantics. | Implemented |
+| Function granularity | Normal functions stay coherent; only large functions are chunked. | Functions up to 50 lines are one semantic unit; larger functions may expose AST regions. | Implemented |
+| Large-function coherence | Region chunks contribute to one continuous explanation. | Rolling hypothesis and score are carried across region traversal. | Implemented |
+| Hypothesis | Maintain one evolving evidence-backed explanation per active goal. | Each goal thread stores and updates a rolling hypothesis from visited evidence. | Implemented |
+| Hypothesis scoring | Score the accumulated hypothesis, not the current function, against fixed constraints. | Constraint scores are now produced for the updated accumulated hypothesis. | Implemented |
+| Hard-constraint convergence | Goal completion is determined by hard acceptance criteria. | A goal closes when every hard constraint reaches the convergence threshold. | Implemented |
+| Optional constraints | Optional criteria strengthen confidence but do not block completion. | Optional constraint scores are displayed and retained but are not part of the hard stop condition. | Implemented |
+| Navigation | Choose the next hop by expected improvement to the current hypothesis. | Navigation candidates return an expected hypothesis match plus unresolved constraints they may improve. | Implemented |
+| Three-level lookahead | Peek several semantic levels ahead, but move only one hop at a time. | Query may see up to three semantic levels of bounded lookahead while traversal advances one immediate node. | Implemented |
+| Lookahead grounding | Unvisited lookahead may guide navigation but must not become evidence. | Prompt contract explicitly prevents lookahead nodes from updating the hypothesis before traversal. | Implemented |
+| Lookahead breadth | Prevent bounded-depth lookahead from exploding in cost. | Semantic lookahead is capped at 48 nodes. | Implemented |
+| Progress classification | Detect strengthening, flat and weakening search trajectories. | Hypothesis score deltas are classified after each visited node. | Implemented |
+| Strengthening | Continue when visited evidence improves acceptance-criteria coverage. | Improving branches remain eligible for descent. | Implemented |
+| Flattening | Tolerate little or no gain briefly only when a branch can still address an unresolved hard constraint. | Flat progress is bounded to two steps. | Implemented |
+| Weakening | Backtrack earlier when evidence moves the hypothesis away from the goal. | Weakening prevents the flat-progress exception and drives backtracking. | Implemented |
+| Best-so-far memory | Preserve the strongest explanation reached during the goal search. | Threads keep bestHypothesis, bestScore and best constraint checklist. | Implemented |
+| Backtracking state | A sibling branch must start from the branch-point hypothesis, not from the abandoned sibling's interpretation. | Frames store baseHypothesis/baseScore and restore them on sibling traversal. | Implemented |
+| Evidence memory | Established facts survive branch-local hypothesis rollback. | The query-local evidence ledger remains cumulative across backtracking. | Implemented |
+| Alternate-branch pruning | Do not explore branches that cannot improve the best explanation or resolve an unmet hard constraint. | Branch filtering compares expected score with bestScore and targeted unresolved constraints. | Implemented |
+| Source inspection | Raw source is verification evidence, not the normal traversal substrate. | Query requests source explicitly only when semantics are insufficient to settle an unresolved hard constraint. | Implemented |
+| Final localization | Reuse retained structural coordinates for the final supporting ranges. | Final evidence ranges come from already traversed structural states. | Implemented |
+| Query UI | Make convergence visible rather than showing only an event stream. | UI shows active goal, hypothesis, acceptance-criteria scores, current path, branch potentials, trend, best score and token use. | Implemented |
+| Token visibility | Show cost while the search is progressing. | Cumulative prompt, completion and total tokens are emitted with Query progress. | Implemented |
+| Token efficiency metric | Relate token spend directly to convergence gain. | Tokens and score deltas are visible, but there is no explicit gain-per-1K-tokens metric yet. | Optional improvement |
+| Branch history UI | Make abandoned branch quality easy to compare visually. | Backend preserves best state, but the UI does not yet present a branch-history timeline. | Optional improvement |
+| Hypothesis version history | Make explicit revisions and contradictions visible over time. | Current controller tracks the latest hypothesis and score trend, not a full hypothesis-version history. | Optional improvement |
+| Final multi-goal synthesis | Produce one coherent final explanation across resolved goals. | Goal summaries are currently concatenated. | Optional improvement |
+| Benchmark validation | Demonstrate that lookahead reduces wandering, steps and tokens while improving correctness. | The architecture is implemented, but it still needs rerunning on benchmark cases to validate calibration. | Next validation step |
+
+The important operational distinction is:
+
+```text
+goal + immutable constraints
+        ↓
+faceted structural localization
+        ↓
+visited semantic evidence
+        ↓
+accumulated hypothesis
+        ↓
+hypothesis-to-constraint scores
+        ↓
+bounded semantic lookahead
+        ↓
+expected improvement / unresolved-constraint coverage
+        ↓
+move one hop
+        ↓
+strengthening / flat / weakening
+        ↓
+continue, prune or backtrack
+```
+
+The remaining work is therefore mostly calibration and observability rather than a change in the core search model. The benchmark suite should now be used to verify that lookahead quality, flat-step tolerance, branch pruning and token cost behave as intended.
+
 ## Invariants
 
 1. Learn is query-independent.
