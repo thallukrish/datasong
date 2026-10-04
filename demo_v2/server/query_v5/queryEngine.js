@@ -6,6 +6,7 @@ const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
 const ENTRY_TRIAGE_LIMIT = 4;
 const WINDOW_DEPTH = 3;
+const GOAL_CLOSE_SCORE = 0.9;
 
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
@@ -48,7 +49,7 @@ ENTRY STAGE: when n is null, rank the candidate semantic entries in p. Do not fo
 
 SEMANTIC WALK: when n is present, evaluate only the semantics of the current node, prior supported evidence, and semantic candidates.
 - p ranks at most 3 semantic continuations by usefulness for the active goal, using scores 0..1.
-- gs reports evidence sufficiency for the active goal as [[goalId,score]], where 1.0 means the supplied evidence is sufficient to close that goal. A high navigation score is not a goal-satisfaction score.
+- gs reports evidence sufficiency for the active goal as [[goalId,score]]. Score the evidence actually present at the current function/region/body. Use 1.0 whenever that evidence is sufficient to answer the active goal; do not reserve 1.0 for exhaustive certainty across the repository. Scores below 0.9 mean more evidence is materially needed. A high navigation score is not a goal-satisfaction score.
 - a contains only explicit facts established by the visited semantic node or by src when present.
 - i=1 requests exact source for the current semantic node when its semantics look material but are insufficient to establish or reject the needed mechanism. Otherwise i=0.
 - Do not request source merely to browse. Narrow semantically first.
@@ -446,11 +447,15 @@ async function decide({
     }
   }
   const activeGoalScore=entryStage?0:Number(goalScores.get(String(activeGoalId||''))||0);
-  const goalResolutions=!entryStage&&activeGoalScore>=1?[String(activeGoalId)]:[];
+  // Search stops when the current semantic node/body is already good enough
+  // to answer the active goal. 1.0 is the model's explicit "sufficient" score;
+  // 0.9 is the controller's convergence threshold so a well-supported answer
+  // cannot wander away merely because the model is slightly conservative.
+  const goalResolutions=!entryStage&&activeGoalScore>=GOAL_CLOSE_SCORE?[String(activeGoalId)]:[];
   const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const result={
-    explained:!entryStage&&activeGoalScore>=1&&!unresolvedOther,
+    explained:!entryStage&&activeGoalScore>=GOAL_CLOSE_SCORE&&!unresolvedOther,
     hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:entryStage?[]:arr(call.parsed?.a),
