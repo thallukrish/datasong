@@ -1,6 +1,16 @@
 import { addUsage, arr, modelJson, text } from '../../query_v2/modelJson.js';
 import { materializeCodeStructure, applyCodeSemantics, semanticDetails } from './codeGraph.js';
 
+const LARGE_FUNCTION_LINE_THRESHOLD = 50;
+
+function functionLineCount(state){
+  return Math.max(0,Number(state?.endLine||0)-Number(state?.startLine||0)+1);
+}
+
+function shouldChunkFunction(state){
+  return state?.type==='code_symbol'&&functionLineCount(state)>LARGE_FUNCTION_LINE_THRESHOLD;
+}
+
 const LEARN_SYSTEM = `Learn query-independent semantics for the supplied local execution window. flowContext contains only already-learned predecessor semantics. newNodes contains raw repository code plus deterministic call relationships, and may also contain terminal externalCalls for imported APIs whose implementation is outside the repository.
 
 Describe what each supplied function, function-region, or external call does and its execution effect. For externalCalls, use only the supplied import identity and call-site syntax. Explain the local meaning of invoking that imported API here; do not invent or claim knowledge of the dependency implementation beyond what the import name and call syntax support. External calls are terminal boundaries, not repository code to traverse.
@@ -108,14 +118,16 @@ export function collectLocalSemanticWindow({
 
   add(state);
 
-  // Learn only the semantic frontier needed for the next search decision.
-  // A function exposes its direct statement regions; a region exposes only its
-  // direct nested regions. Deeper regions are learned only after Query selects
-  // their parent.
+  // Functions up to 50 lines stay coherent semantic units. Regions are a
+  // chunking fallback only for larger functions. A selected large-function
+  // region exposes only its direct children, so Query can carry a rolling
+  // assessment across chunks without fragmenting ordinary functions.
   if(includeRootRegions&&state.type!=='code_external'){
     const regions=state.type==='code_region'
       ? structuralRegionChildren(state,explorer)
-      : structuralRegionStates(state,explorer).filter(region=>region.parent===state.id||region.parent===state.symbolId);
+      : shouldChunkFunction(state)
+        ? structuralRegionStates(state,explorer).filter(region=>region.parent===state.id||region.parent===state.symbolId)
+        : [];
     for(const region of regions){
       add(region);
       links.push({from:state.id,to:region.id,relationship:'contains'});
