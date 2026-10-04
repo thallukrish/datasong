@@ -34,14 +34,15 @@ Before returning the goals, mentally verify:
 For every goal, also derive its acceptance criteria once at decomposition time:
 - hardConstraints: the minimum exact conditions that must be established for that goal to count as satisfied.
 - optionalConstraints: conditions that strengthen confidence or context but are not mandatory.
-Derive these only from the original request and the goal. Do not mention candidate code, implementation mechanisms, filenames, symbols, or source details unless they are explicitly stated in the request itself. These constraints are immutable during traversal.
+- failingCase: for causal goals only, a concise literal statement of the reported failing condition/testcase derived only from the original request. Preserve all material discriminators exactly. Do not infer a nearby scenario, mixed-type variant, alternate input, implementation mechanism, or repair. For non-causal goals use "".
+Derive these only from the original request and the goal. Do not mention candidate code, implementation mechanisms, filenames, symbols, or source details unless they are explicitly stated in the request itself. These constraints and failingCase are immutable during traversal.
 
-Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"causal","text":"","dependsOn":[],"hardConstraints":[],"optionalConstraints":[]}]} only.`;
+Do not turn rationale, examples, proposed APIs, or incidental wording into separate goals unless the request actually requires them to be established. Keep the set small, normally 1-5 goals and never more than 6. Do not solve the goals. Return {"goals":[{"id":"G1","kind":"causal","text":"","dependsOn":[],"hardConstraints":[],"optionalConstraints":[],"failingCase":""}]} only.`;
 
 const GOAL_DECIDE_SYSTEM = `Search a learned semantic code space for evidence that satisfies one active software-engineering goal.
 
 q is the original request.
-g is the goal ledger as [goalId,kind,status,text,dependsOn,hardConstraints,optionalConstraints].
+g is the goal ledger as [goalId,kind,status,text,dependsOn,hardConstraints,optionalConstraints,failingCase].
 u is the active goal ID.
 f is previously established evidence as [factId,status,sourceGoalId,sourceGoalKind,text].
 h is the rolling evidence-backed hypothesis.
@@ -133,27 +134,26 @@ const COUNTERFACTUAL_VALIDATE_SYSTEM = `Validate a proposed causal diagnosis by 
 
 q is the original request.
 goal is the active causal goal with immutable hard and optional constraints.
+failingCase is the frozen failing testcase extracted before repository exploration.
 h is the source-grounded causal hypothesis.
 ev is the exact selected source evidence as [path,startLine,endLine,code,claimedConstraintIndexes,why].
 
 Do not search for a different cause and do not repair h during this step. Treat h as the diagnosis under test.
-
-First derive failingCase only from q plus the immutable goal text and hard/optional constraints. Preserve every material discriminator exactly. Do not weaken, broaden, substitute, normalize, reinterpret, or add conditions merely to make h or the proposed patch succeed. In particular, do not replace the reported case with a nearby mixed-type, alternate-input, or more convenient scenario unless that scenario is explicitly part of q or the immutable constraints.
+Do not derive, rewrite, broaden, narrow, normalize, reinterpret, or substitute failingCase. It is immutable input. If the diagnosis or patch only works for a different testcase, validation fails.
 
 Then:
-1. State failingCase concretely enough that the before and after behavior can be compared.
-2. Propose the smallest concrete code change that follows directly from h. The patch may be pseudocode or a minimal before/after snippet, but it must change the operation claimed to be causal rather than an unrelated workaround.
-3. Predict beforePrediction for that exact failingCase under the existing code.
-4. Predict afterPrediction for the same exact failingCase after applying the patch.
-5. Decide whether the reported functionality changes from failing to correct for the reason claimed by h.
-6. If the patch leaves the exact reported case unchanged, only fixes a different case, requires changing a different mechanism than h identified, or depends on modifying failingCase, validation fails.
+1. Propose the smallest concrete code change that follows directly from h. The patch may be pseudocode or a minimal before/after snippet, but it must change the operation claimed to be causal rather than an unrelated workaround.
+2. Predict beforePrediction for exactly failingCase under the existing code.
+3. Predict afterPrediction for exactly the same failingCase after applying the patch.
+4. Decide whether the reported functionality changes from failing to correct for the reason claimed by h.
+5. If the patch leaves failingCase unchanged, only fixes a different case, requires changing a different mechanism than h identified, or depends on modifying failingCase, validation fails.
 
 For every immutable acceptance criterion, also return ck as [[constraintIndex,score],...] with score 0..1, but score only what the intervention itself logically establishes. Do not raise a criterion merely because the diagnosis already claimed it.
 
-Return pass=1 only when the same immutable failingCase fails before, succeeds after, and the change occurs because the intervention neutralizes the claimed mechanism.
+Return pass=1 only when the immutable failingCase fails before, succeeds after, and the change occurs because the intervention neutralizes the claimed mechanism.
 When pass=0, failure must state specifically why the intervention does not validate the diagnosis.
 Return only:
-{"failingCase":"","patch":"","beforePrediction":"","afterPrediction":"","ck":[[0,0.0]],"pass":0,"failure":""}.`;
+{"patch":"","beforePrediction":"","afterPrediction":"","ck":[[0,0.0]],"pass":0,"failure":""}.`;
 
 const ANSWER_SYNTHESIS_SYSTEM = `Write the final user-facing answer from an already completed code investigation.
 
@@ -466,16 +466,17 @@ function normalizeGoals(items=[]){
     if(!goalText)continue;
     const hardConstraints=arr(item.hardConstraints).map(value=>text(value,320)).filter(Boolean).slice(0,8);
     const optionalConstraints=arr(item.optionalConstraints).map(value=>text(value,320)).filter(Boolean).slice(0,8);
+    const failingCase=kind==='causal'?text(item.failingCase||goalText,700):'';
     if(!hardConstraints.length)hardConstraints.push(goalText);
-    out.push({id,kind,text:goalText,dependsOn:arr(item.dependsOn).map(String),hardConstraints,optionalConstraints,status:'unresolved',supportStates:[],summary:''});
+    out.push({id,kind,text:goalText,dependsOn:arr(item.dependsOn).map(String),hardConstraints,optionalConstraints,failingCase,status:'unresolved',supportStates:[],summary:''});
   }
   const validIds=new Set(out.map(goal=>goal.id));
   for(const goal of out)goal.dependsOn=goal.dependsOn.filter(id=>id!==goal.id&&validIds.has(id));
-  return out.length?out:[{id:'G1',kind:'describe',text:'Answer the software-engineering request from repository evidence.',dependsOn:[],hardConstraints:['The repository evidence answers the requested software-engineering question.'],optionalConstraints:[],status:'unresolved',supportStates:[],summary:''}];
+  return out.length?out:[{id:'G1',kind:'describe',text:'Answer the software-engineering request from repository evidence.',dependsOn:[],hardConstraints:['The repository evidence answers the requested software-engineering question.'],optionalConstraints:[],failingCase:'',status:'unresolved',supportStates:[],summary:''}];
 }
 
 function goalView(goals=[]){
-  return arr(goals).map(goal=>[goal.id,goal.kind,goal.status,goal.text,arr(goal.dependsOn),arr(goal.hardConstraints),arr(goal.optionalConstraints)]);
+  return arr(goals).map(goal=>[goal.id,goal.kind,goal.status,goal.text,arr(goal.dependsOn),arr(goal.hardConstraints),arr(goal.optionalConstraints),goal.failingCase||'']);
 }
 
 function goalEvidenceStates(goals=[]){
@@ -822,13 +823,14 @@ async function validateCausalCounterfactual({question,goal,hypothesis,evidenceSt
       id:goal?.id||'',text:goal?.text||'',
       hard:arr(goal?.hardConstraints),optional:arr(goal?.optionalConstraints)
     },
+    failingCase:goal?.failingCase||'',
     h:hypothesis,
     ev:evidence
   };
   const call=await modelJson(client,model,COUNTERFACTUAL_VALIDATE_SYSTEM,payload);addUsage(usage,call.usage);
   const result={
     pass:Number(call.parsed?.pass||0)===1,
-    failingCase:text(call.parsed?.failingCase||'',1800),
+    failingCase:text(goal?.failingCase||'',1800),
     patch:text(call.parsed?.patch||'',2200),
     beforePrediction:text(call.parsed?.beforePrediction||'',1600),
     afterPrediction:text(call.parsed?.afterPrediction||'',1600),
@@ -843,7 +845,7 @@ async function validateCausalCounterfactual({question,goal,hypothesis,evidenceSt
   // comparison. A pass without those artifacts is structurally invalid.
   if(result.pass&&(!result.failingCase||!result.beforePrediction||!result.afterPrediction)){
     result.pass=false;
-    result.failure='Counterfactual validation did not preserve and test one explicit failing case with both before and after predictions.';
+    result.failure='Counterfactual validation did not test the frozen failing case with both before and after predictions.';
   }
   if(!result.pass&&!result.failure)result.failure='The proposed intervention did not establish that the diagnosed mechanism fixes the exact reported failing condition.';
   log('query_v5_counterfactual_validation',{step,goalId:goal?.id||'',payload,result,usage:call.usage});
@@ -862,7 +864,7 @@ async function synthesizeResolvedAnswer({question,goals,threads,client,model,usa
       why:state.evidenceWhy||''
     }));
     return {
-      id:goal.id,kind:goal.kind,text:goal.text,
+      id:goal.id,kind:goal.kind,text:goal.text,failingCase:goal.failingCase||'',
       hardConstraints:arr(goal.hardConstraints),
       optionalConstraints:arr(goal.optionalConstraints),
       hypothesis:goal.summary||thread?.bestHypothesis||thread?.hypothesis||'',
