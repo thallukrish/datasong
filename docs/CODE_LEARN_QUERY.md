@@ -406,6 +406,10 @@ If the selected evidence still covers 80% or more of an inspected function of at
 
 After source inspection, LeMap performs a separate evidence-grounding decision. It receives only the goal, immutable acceptance criteria, proposed final hypothesis, and selected exact source ranges. It scores whether those ranges actually establish each criterion. These groundedness scores cap the search model's constraint scores. If source was inspected but no supporting ranges are selected, the source-grounded constraint scores are zero and the goal cannot close from that inspection.
 
+For causal goals, source grounding is still not the final stop condition. When all hard constraints would otherwise close, LeMap runs a counterfactual intervention check. A separate prompt derives the smallest code change implied by the diagnosis and predicts whether that intervention would fix the exact reported failing condition. The intervention must change the operation claimed to be causal rather than an unrelated workaround.
+
+A causal goal resolves only if that counterfactual passes. If it fails, the goal remains unresolved and the failure reason is preserved and surfaced explicitly, for example: "the proposed change does not affect the behavior that fails in the reported case." Search may then continue to another branch; if search later exhausts, the final result reports the best hypothesis together with the counterfactual failure rather than presenting the diagnosis as proven.
+
 The local-source rule is:
 
 ```text
@@ -432,8 +436,16 @@ independent evidence-grounding check
 cap constraint scores by groundedness
         ↓
 all hard constraints met?
-    yes → stop
     no  → navigate only if remaining local source cannot materially help
+    yes
+      ↓
+causal goal?
+    no  → stop
+    yes → derive minimal counterfactual repair
+          ↓
+        does the repair fix the exact reported condition for the claimed reason?
+          yes → stop
+          no  → record validation failure and continue search
 ```
 
 This prevents Query from forcing a single "winning line" when several operations together explain the goal. It also prevents leaving a coherent function before the already supplied source has been used as fully as necessary.
@@ -1014,6 +1026,7 @@ The current Query v5 implementation now follows the hypothesis-driven semantic-s
 | Source diagnosis | Exact source should challenge an earlier hypothesis rather than merely confirm it. | When source is present, Query explicitly confirms, revises or rejects the previous hypothesis and re-derives the mechanism before selecting evidence or scoring constraints. Causal goals must explain the distinguishing behavior. | Implemented |
 | Evidence grounding | High constraint scores must be supported by the selected exact source rather than by related-code proximity. | A separate verifier scores each fixed criterion from only the proposed hypothesis and selected ranges; controller scores are capped by verifier groundedness before closure. | Implemented |
 | Evidence tightness | Whole-function source remains available for reasoning, but supporting evidence should exclude lines that do not materially support the hypothesis. | LeMap indexes source lines, Query selects only evidence indexes, and LeMap deterministically assigns exact repository coordinates. Evidence covering at least 80% of a function of 8+ lines triggers one evidence-only re-selection pass. | Implemented |
+| Counterfactual causal validation | A causal explanation should predict a successful intervention on the reported failing condition before it is accepted. | When a causal goal otherwise meets every hard constraint, a separate validator derives the smallest patch implied by the diagnosis and predicts the exact before/after behavior. Failure blocks resolution, records the patch/prediction/failure reason, and search continues. | Implemented |
 | Final answer synthesis | Search truth and user-facing prose should be separate responsibilities. | After all goals resolve, a dedicated synthesis prompt receives only the original request, fixed criteria, final hypotheses/scores, and exact supporting source ranges. It may explain but not invent or change the established mechanism. | Implemented |
 | Final localization | Reuse retained structural coordinates for the final supporting ranges. | Final evidence ranges come from already traversed structural states. | Implemented |
 | Query UI | Make convergence visible rather than showing only an event stream. | UI shows active goal, hypothesis, acceptance-criteria scores, current path, branch potentials, trend, best score and token use. | Implemented |
@@ -1154,3 +1167,6 @@ The remaining work is therefore mostly calibration and observability rather than
 100. LeMap deterministically maps selected evidence indexes back to repository line coordinates; semantic relevance belongs to the model, structural location belongs to LeMap.
 101. A previous rolling hypothesis is provisional whenever exact source is supplied. Source diagnosis must explicitly confirm, revise, or reject it rather than treating it as the default truth.
 102. For causal goals, exact-source convergence requires an explanation of the distinguishing behavior in the issue, not merely nearby code related to the symptom.
+103. A causal goal cannot resolve merely because every hard criterion reaches the close threshold; it must also pass a counterfactual intervention validation.
+104. Counterfactual validation derives the smallest code change implied by the diagnosed mechanism and checks whether that intervention fixes the exact reported failing condition for the claimed reason.
+105. If counterfactual validation fails, LeMap preserves and surfaces the failure reason, blocks causal resolution, and continues search when alternatives remain. Search exhaustion reports that validation failure with the best unresolved hypothesis.
