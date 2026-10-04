@@ -10,10 +10,11 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
     try{
       if(!queryClient)return res.status(503).json({error:'The reasoning service is not configured'});
       const question=String(req.body?.question||'').trim();if(!question)return res.status(400).json({error:'question is required'});
-      const progress={running:true,question,mode:'',goals:[],activeGoalId:'',hypothesis:'',hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],evidenceRanges:[],facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
+      const progress={running:true,question,mode:'',status:'searching',goals:[],activeGoalId:'',hypothesis:'',hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],evidenceRanges:[],facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
       const onProgress=(event={})=>{
         const p=explorer.state.queryV5Progress||progress;
         if(typeof event.mode==='string')p.mode=event.mode;
+        if(typeof event.status==='string')p.status=event.status;
         if(Array.isArray(event.goals))p.goals=event.goals;
         if(typeof event.goalId==='string')p.activeGoalId=event.goalId;
         if(typeof event.hypothesis==='string')p.hypothesis=event.hypothesis;
@@ -32,11 +33,11 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(event.action==='LEARN_START')p.learnNodes=event.nodes||[];
         if(event.action==='LEARN_DONE')p.learnNodes=[];
         p.action=event.action||p.action;p.detail=event;
-        if(['PREPARE_TOPOLOGY','TOPOLOGY_READY','GOALS','GOAL_ACTIVE','GOAL_SEARCH','GOAL_ENTRY_SELECTION','GOAL_ENTRY_BATCH','GOALS_RESOLVED','RESEED','DESCEND','BACKTRACK','BRANCH_PRUNED','DECIDE','HYPOTHESIS_PROGRESS','HYPOTHESIS_FLAT','FACTS','LEARN_START','LEARN_DONE','EXPLAINED'].includes(event.action))p.events=[...(p.events||[]),event].slice(-32);
+        if(['PREPARE_TOPOLOGY','TOPOLOGY_READY','GOALS','GOAL_ACTIVE','GOAL_SEARCH','GOAL_ENTRY_SELECTION','GOAL_ENTRY_BATCH','GOALS_RESOLVED','RESEED','DESCEND','BACKTRACK','BRANCH_PRUNED','DECIDE','HYPOTHESIS_PROGRESS','HYPOTHESIS_FLAT','FACTS','LEARN_START','LEARN_DONE','EXPLAINED','SEARCH_EXHAUSTED'].includes(event.action))p.events=[...(p.events||[]),event].slice(-32);
         explorer.state.queryV5Progress=p;explorer.emit?.();
       };
       const result=await runCodeFlowQueryV5({question,repoUrl:String(req.body?.repoUrl||explorer.state?.repoUrl||''),repoCommit:String(req.body?.repoCommit||''),explorer,client:queryClient,model:queryModel,log,onProgress});
-      explorer.state.queryV5Progress={...(explorer.state.queryV5Progress||progress),running:false,action:'DONE'};explorer.emit?.();
+      explorer.state.queryV5Progress={...(explorer.state.queryV5Progress||progress),running:false,status:result.status||((result.complete&&result.explained)?'resolved':'exhausted'),action:'DONE'};explorer.emit?.();
       return res.json(result);
     }catch(error){if(explorer.state)explorer.state.queryV5Progress={...(explorer.state.queryV5Progress||{}),running:false,action:'ERROR',error:error.message||String(error)};explorer.emit?.();log('query_v5_error',{error:error.message||String(error)});return res.status(500).json({error:error.message||'Query v5 failed'})}
   });
