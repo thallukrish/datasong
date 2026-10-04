@@ -111,7 +111,7 @@ function renderMapDetail(){if(!selectedMap)return;const ws=businessArcs(),em=ent
 function queryProgressMarkup(p){
   if(!p||!p.question)return'';
   const goals=p.goals||[],active=goals.find(g=>g[0]===p.activeGoalId)||goals.find(g=>g[2]!=='resolved')||goals[0];
-  const goalTitle=active?esc(active[3]||active[0]||''):'';
+  const goalTitle=active?esc(active[3]||active[0]||''):'';const queryStatus=p.status||'searching';
   const score=Math.max(0,Math.min(1,Number(p.hypothesisScore||0)));
   const best=Math.max(score,Number(p.bestScore||0));
   const delta=Number(p.delta||0),trend=p.trend||'';
@@ -129,10 +129,11 @@ function queryProgressMarkup(p){
   }).join('');
   const evidence=(p.evidenceRanges||[]).map(r=>'<div class="qstep done">✓ '+esc((r.sourcePath||'source')+':'+(r.startLine||'')+(r.endLine&&r.endLine!==r.startLine?'-'+r.endLine:''))+(r.why?' · '+esc(r.why):'')+'</div>').join('');
   const facts=(p.facts||[]).map(f=>'<div class="qstep '+(f[1]==='disputed'?'':'done')+'">'+(f[1]==='disputed'?'?':'✓')+' '+esc(f[4]||'')+(f[1]==='disputed'?' · disputed':'')+'</div>').join('');
-  const labels={START:'Starting exploration',DECIDE:'Evaluating current evidence',HYPOTHESIS_PROGRESS:'Hypothesis updated',HYPOTHESIS_FLAT:'Progress flattened · considering backtrack',BRANCH_PRUNED:'Weaker branch pruned',LEARN_START:'Learning semantic lookahead',LEARN_DONE:'Semantic lookahead ready',DESCEND:'Following strongest expected improvement',BACKTRACK:'Backtracking to a stronger alternative',RESEED:'Starting from another entry',SOURCE_INSPECTION:'Verifying exact source',EXPLAINED:'All hard constraints satisfied',SEARCH_COMPLETE:'Exploration complete',ERROR:'Exploration stopped'};
+  const labels={START:'Starting exploration',DECIDE:'Evaluating current evidence',HYPOTHESIS_PROGRESS:'Hypothesis updated',HYPOTHESIS_FLAT:'Progress flattened · considering backtrack',BRANCH_PRUNED:'Weaker branch pruned',LEARN_START:'Learning semantic lookahead',LEARN_DONE:'Semantic lookahead ready',DESCEND:'Following strongest expected improvement',BACKTRACK:'Backtracking to a stronger alternative',RESEED:'Starting from another entry',SOURCE_INSPECTION:'Verifying exact source',EXPLAINED:'All hard constraints satisfied',SEARCH_EXHAUSTED:'Search exhausted · showing best hypothesis found',SEARCH_COMPLETE:'Exploration complete',ERROR:'Exploration stopped'};
   return '<div class="qprogress">'+
     (goalTitle?'<div class="label">active goal</div><div class="qhypothesis">'+goalTitle+'</div>':'')+
     '<div class="qgrid">'+
+      '<div class="qmetric"><span class="label">status</span><b>'+esc(queryStatus==='best_so_far_exhausted'?'best so far · unresolved':queryStatus)+'</b></div>'+
       '<div class="qmetric"><span class="label">hypothesis match</span><b>'+Math.round(score*100)+'%</b></div>'+
       '<div class="qmetric"><span class="label">trend</span><b class="qtrend '+esc(trend)+'">'+esc(trendText)+'</b></div>'+
       '<div class="qmetric"><span class="label">best reached</span><b>'+Math.round(best*100)+'%</b></div>'+
