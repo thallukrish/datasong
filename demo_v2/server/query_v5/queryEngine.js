@@ -67,7 +67,7 @@ SEMANTIC WALK: when n is present and src is absent, treat h as a provisional acc
 - gs reports goal sufficiency as [[goalId,score]]. It should agree with the hypothesis/constraint evidence. Use 1.0 when the hypothesis is sufficient to answer the goal; do not reserve 1.0 for exhaustive repository certainty.
 - l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
 - p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. constraintIndexes are unresolved constraints that the branch appears capable of improving.
-- a contains only explicit facts established by the visited semantic node. Every item in a must be a plain string, never an array or object.
+- a contains only direct observations established by the visited semantic node. For causal goals, do not put causal interpretations, explanations, inferred mechanisms, or restatements of h into a; those remain branch-local in h. Every item in a must be a plain string, never an array or object.
 - ev=[] while src is absent.
 - i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
 - Do not request source merely to browse.
@@ -79,7 +79,8 @@ SOURCE DIAGNOSIS: when src is present, stop treating h as something to confirm. 
 - If the source supports a different mechanism better than h, replace h. Do not preserve an earlier explanation merely because it is plausible or already accumulated.
 - A causal hypothesis must not receive a high hard-constraint score merely because the source contains code related to the symptom. It must account for the distinguishing behavior requested by the goal.
 - src.lines contains LeMap-assigned source evidence candidates as [evidenceIndex,sourceText]. LeMap owns source coordinates; do not invent or return line numbers.
-- First determine the mechanism, then select ev as [[evidenceIndex,[constraintIndexes],"why"],...] containing only the smallest combined set of source candidates that establishes that mechanism. Multiple candidates may contribute together and one candidate may support several constraints.
+- First determine the mechanism, then select ev as [[evidenceIndex,[constraintIndexes],"why"],...] containing only the smallest combined set of source candidates that establishes that mechanism.
+- a may contain only direct source observations. Never copy the causal diagnosis or any inferred reason from h into a. Multiple candidates may contribute together and one candidate may support several constraints.
 - Examine the whole supplied source before deciding that the prior h is correct. Actively look for source statements that contradict, narrow, or supersede it.
 - Score ck, hs and gs only after choosing the source-grounded h and its evidence.
 - If the source-grounded hypothesis satisfies all hard constraints, return no continuation in p. If hard constraints remain unresolved, return p only when the remaining supplied source cannot materially improve them.
@@ -337,10 +338,11 @@ function dependencyGoalIds(goals=[],activeGoalId=''){
   return out;
 }
 
-function ledgerView(ledger,{goals=[],activeGoalId='',all=false}={}){
+function ledgerView(ledger,{goals=[],activeGoalId='',branchId='',all=false}={}){
   const dependencies=dependencyGoalIds(goals,activeGoalId);
   return [...ledger.values()]
     .filter(fact=>all||!activeGoalId||fact.goalId===activeGoalId||dependencies.has(fact.goalId))
+    .filter(fact=>all||fact.goalKind!=='causal'||!fact.branchId||fact.branchId===branchId)
     .map(fact=>[fact.id,fact.status,fact.goalId||'',fact.goalKind||'',fact.text]);
 }
 
@@ -389,7 +391,7 @@ function substantiallySameFact(left,right,{rangeOverlap=false}={}){
   return containment>=0.8&&jaccard>=0.55;
 }
 
-function applyLedgerDecision({ledger,goal,additions=[],disputes=[],resolutions=[],supportStates=[],nextFactId}){
+function applyLedgerDecision({ledger,goal,branchId='',additions=[],disputes=[],resolutions=[],supportStates=[],nextFactId}){
   for(const id of arr(disputes).map(String)){
     const fact=ledger.get(id);
     if(fact)fact.status='disputed';
@@ -417,7 +419,15 @@ function applyLedgerDecision({ledger,goal,additions=[],disputes=[],resolutions=[
       continue;
     }
     const id='F'+nextFactId.value++;
-    ledger.set(id,{id,text:factText,status:'supported',goalId:goal.id,goalKind:goal.kind,supportStates:boundSupport});
+    ledger.set(id,{id,text:factText,status:'supported',goalId:goal.id,goalKind:goal.kind,branchId:goal.kind==='causal'?String(branchId||''):'',supportStates:boundSupport});
+  }
+}
+
+function disputeCausalBranchFacts(ledger,goalId,branchId){
+  for(const fact of ledger.values()){
+    if(fact.goalId===goalId&&fact.goalKind==='causal'&&fact.branchId===branchId){
+      fact.status='disputed';
+    }
   }
 }
 
@@ -612,7 +622,7 @@ async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evi
 }
 
 async function decide({
-  question,mode,goals=[],activeGoalId='',hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
+  question,mode,goals=[],activeGoalId='',branchId='',hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
   candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
   const entryStage=!currentState;
@@ -632,7 +642,7 @@ async function decide({
     g:goalView(goals),
     u:String(activeGoalId||''),
     h:hypothesis||'',
-    f:ledgerView(ledger,{goals,activeGoalId}),
+    f:ledgerView(ledger,{goals,activeGoalId,branchId}),
     n:currentState?semanticNodeView(currentState,explorer):null,
     src:sourceBody?{
       name:currentState?.name||'',
@@ -1249,8 +1259,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // remain searchable after those picks are exhausted.
     frame.frontierIds=next.map(candidate=>candidate.id);
 
+    const entryRootId=frame.entryRootId||state.id;
+    const entryRootName=frame.entryRootName||state.name;
+
     let decision=await decide({
-      question,mode,goals,activeGoalId:goal.id,hypothesis:thread.hypothesis||frame.hypothesis,
+      question,mode,goals,activeGoalId:goal.id,branchId:entryRootId,hypothesis:thread.hypothesis||frame.hypothesis,
       ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
@@ -1269,7 +1282,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         path:path.map(x=>x.name)
       });
       decision=await decide({
-        question,mode,goals,activeGoalId:goal.id,hypothesis:decision.hypothesis||thread.hypothesis||frame.hypothesis,
+        question,mode,goals,activeGoalId:goal.id,branchId:entryRootId,hypothesis:decision.hypothesis||thread.hypothesis||frame.hypothesis,
         ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
@@ -1287,8 +1300,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // different entry. Only compare after the current node has had its normal
     // chance to inspect source when requested. If it is already below another
     // entry branch, do not spend more traversal on its descendants.
-    const entryRootId=frame.entryRootId||state.id;
-    const entryRootName=frame.entryRootName||state.name;
     const entryPrevious=thread.entryScores.get(entryRootId)||{
       id:entryRootId,name:entryRootName,bestScore:0,currentScore:0
     };
@@ -1386,6 +1397,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       }else{
         decision.causalRejected=true;
         thread.rejectedCausalHypotheses.add(String(decision.hypothesis||''));
+        disputeCausalBranchFacts(ledger,goal.id,entryRootId);
         decision.hardConstraintsMet=false;
         decision.explained=false;
         decision.goalResolutions=[];
@@ -1439,7 +1451,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     frame.hypothesisScore=thread.hypothesisScore;
     rollingHypothesis=thread.hypothesis||rollingHypothesis;
     applyLedgerDecision({
-      ledger,goal,additions:decision.additions,disputes:decision.disputes,
+      ledger,goal,branchId:entryRootId,additions:decision.additions,disputes:decision.disputes,
       resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId
     });
 
@@ -1463,7 +1475,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     }
 
     emit({
-      action:'FACTS',goalId:goal.id,facts:ledgerView(ledger,{all:true}),
+      action:'FACTS',goalId:goal.id,facts:ledgerView(ledger,{goals,activeGoalId:goal.id,branchId:entryRootId}),
       goalScore:decision.activeGoalScore,hypothesisScore:decision.hypothesisScore,hypothesis:thread.hypothesis,
       explained:allGoalsResolved(goals),goals:goalView(goals)
     });
