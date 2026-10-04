@@ -218,6 +218,32 @@ function semanticRegionChildren(state,window){
     .sort((a,b)=>Number(a.startLine||0)-Number(b.startLine||0)||Number(a.endLine||0)-Number(b.endLine||0));
 }
 
+function semanticLookaheadView(candidates=[],window,explorer,maxDepth=3){
+  const byId=new Map(arr(window?.states).map(state=>[state.id,state]));
+  const children=new Map();
+  for(const link of arr(window?.links)){
+    if(!['contains','calls'].includes(String(link?.relationship||'')))continue;
+    if(!children.has(link.from))children.set(link.from,[]);
+    children.get(link.from).push(link.to);
+  }
+  const walk=(state,depth,seen=new Set())=>{
+    if(!state?.id||depth>maxDepth||seen.has(state.id))return null;
+    const nextSeen=new Set(seen);nextSeen.add(state.id);
+    const kids=depth===maxDepth?[]:arr(children.get(state.id))
+      .map(id=>byId.get(id)).filter(Boolean)
+      .map(child=>walk(child,depth+1,nextSeen)).filter(Boolean);
+    return [...semanticNodeView(state,explorer),kids];
+  };
+  return arr(candidates).map((state,index)=>[index,walk(state,1)]).filter(row=>row[1]);
+}
+
+function hypothesisProgress(previous,current){
+  const delta=Number(current||0)-Number(previous||0);
+  if(delta>HYPOTHESIS_DELTA_EPSILON)return {trend:'strengthening',delta};
+  if(delta<-HYPOTHESIS_DELTA_EPSILON)return {trend:'weakening',delta};
+  return {trend:'flat',delta};
+}
+
 function dependencyGoalIds(goals=[],activeGoalId=''){
   const byId=new Map(arr(goals).map(goal=>[goal.id,goal]));
   const out=new Set(),queue=[...(byId.get(activeGoalId)?.dependsOn||[])];
@@ -408,7 +434,7 @@ async function decomposeGoals({question,client,model,usage,log}){
 
 async function decide({
   question,mode,goals=[],activeGoalId='',hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
-  candidates=[],candidateWindows=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
+  candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
   const entryStage=!currentState;
   const entryMatches=entryStage
@@ -436,7 +462,8 @@ async function decide({
       body:text(sourceBody,4200)
     }:null,
     m:entryMatches,
-    c:candidates.map((state,index)=>[index,...semanticNodeView(state,explorer)])
+    c:candidates.map((state,index)=>[index,...semanticNodeView(state,explorer)]),
+    l:entryStage?[]:lookahead
   };
 
   const call=await modelJson(client,model,GOAL_DECIDE_SYSTEM,payload);addUsage(usage,call.usage);
@@ -446,7 +473,8 @@ async function decide({
     const state=byIndex.get(String(row?.[0]));if(!state)continue;
     const score=Math.max(0,Math.min(1,Number(row?.[1]||0)));
     if(!(score>0))continue;
-    picks.push({state,score});
+    const targets=arr(row?.[2]).map(Number).filter(Number.isInteger);
+    picks.push({state,score,targets});
   }
   picks.sort((a,b)=>b.score-a.score);
 
@@ -475,14 +503,16 @@ async function decide({
   const constraintChecklist=!entryStage
     ? fixedConstraints.map(item=>[item.text,Number(scoreByIndex.get(item.index)||0),item.kind])
     : [];
-  const candidateFit=!entryStage
-    ? Math.max(0,Math.min(1,Number(call.parsed?.fit||0)))
-    : 0;
-  // Search stops when the current semantic node/body is already good enough
-  // to answer the active goal. 1.0 is the model's explicit "sufficient" score;
-  // 0.9 is the controller's convergence threshold so a well-supported answer
-  // cannot wander away merely because the model is slightly conservative.
-  const goalResolutions=!entryStage&&activeGoalScore>=GOAL_CLOSE_SCORE?[String(activeGoalId)]:[];
+  const hardScores=constraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
+  const modelHypothesisScore=!entryStage?Math.max(0,Math.min(1,Number(call.parsed?.hs||0))):0;
+  const hypothesisScore=hardScores.length
+    ? hardScores.reduce((sum,value)=>sum+value,0)/hardScores.length
+    : modelHypothesisScore||activeGoalScore;
+  const hardConstraintsMet=!entryStage&&hardScores.length>0&&hardScores.every(score=>score>=GOAL_CLOSE_SCORE);
+  // Goal closure is anchored in the accumulated hypothesis satisfying every
+  // hard acceptance constraint. gs remains a model diagnostic, not the sole
+  // convergence switch.
+  const goalResolutions=hardConstraintsMet?[String(activeGoalId)]:[];
   const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const result={
@@ -495,7 +525,8 @@ async function decide({
     goalResolutions,
     goalScores:[...goalScores.entries()],
     activeGoalScore,
-    candidateFit,
+    hypothesisScore,
+    hardConstraintsMet,
     constraintChecklist,
     inspectSource,
     supportStates:currentState?[currentState]:[]
@@ -504,7 +535,7 @@ async function decide({
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
     explained:result.explained,hypothesis:result.hypothesis,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
-    goalScores:result.goalScores,candidateFit:result.candidateFit,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
+    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
     additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,
     goalResolutions:result.goalResolutions
   },usage:call.usage});
@@ -512,9 +543,9 @@ async function decide({
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
     action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
-    goalScores:result.goalScores,candidateFit:result.candidateFit,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,goals:goalView(goals),
+    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
-    candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))
+    candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets}))
   });
   return result;
 }
