@@ -654,7 +654,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(event.action==='RESEED')diagnosticState.reseeds+=1;
     if(event.action==='FACTS'&&diagnosticState.firstFactStep===null&&arr(event.facts).length)diagnosticState.firstFactStep=step;
     if(event.action==='EXPLAINED'&&diagnosticState.convergenceStep===null)diagnosticState.convergenceStep=step;
-    onProgress(event);
+    onProgress({...event,tokens:{prompt:usage.prompt,completion:usage.completion,total:usage.total}});
   };
   const diagnostics=()=>({
     tokens:usage.total,
@@ -736,7 +736,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     entryTried:new Set(),
     stack:[],
     batchNumber:0,
-    hypothesis:''
+    hypothesis:'',
+    hypothesisScore:0,
+    bestHypothesis:'',
+    bestScore:0,
+    bestConstraintChecklist:[],
+    flatSteps:0
   }]));
 
   const dependenciesResolved=(goal)=>arr(goal.dependsOn).every(id=>goals.find(item=>item.id===id)?.status==='resolved');
@@ -886,9 +891,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
     const learned=await ensureLocalSemanticWindow({
       state,path:frame.path,depth:WINDOW_DEPTH,
-      // Structural match snippets are entry-localization evidence only. Once
-      // selected, Query walks learned semantics and requests source explicitly.
+      // Learn a bounded semantic lookahead around the current node. Query may
+      // inspect these semantics for navigation, but only the visited current
+      // node may update the evidence-backed hypothesis.
       highlightRegions:[],
+      includeRootRegions:true,includeCallFrontier:true,
       explorer,client,model,usage,log,onProgress:emit
     });
     recordTraversed(state,step);
@@ -908,17 +915,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       next=regionCandidates;
       navigationKind='region';
     }else if(state.type==='code_symbol'){
-      // The body frontier is exhausted. Only now learn the immediate call
-      // frontier needed for the next semantic search decision.
-      const callFrontier=await ensureLocalSemanticWindow({
-        state,path:frame.path,depth:1,highlightRegions:[],
-        includeRootRegions:false,includeCallFrontier:true,
-        explorer,client,model,usage,log,onProgress:emit
-      });
-      recordExplored(arr(callFrontier.window?.states),`call_frontier:${goal.id}`,step);
       next=callChildren(state,explorer,flowChildren).filter(child=>!thread.visited.has(child.id));
       navigationKind='call';
     }
+
+    const lookahead=semanticLookaheadView(next,learned.window,explorer,WINDOW_DEPTH);
 
     // Preserve the complete semantic frontier on the parent frame. Query may
     // return only the top few navigation picks; the unreturned candidates must
@@ -927,17 +928,15 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
     let decision=await decide({
       question,mode,goals,activeGoalId:goal.id,hypothesis:thread.hypothesis||frame.hypothesis,
-      ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,
+      ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
-    // Source is an explicit verification action from semantic search. A live
-    // candidate (fit >= 0.5) must be verified before we abandon it for a
-    // weaker sibling, regardless of whether the active goal is describe,
-    // causal, change, verify, or locate.
+    // Source remains an explicit verification action. The model requests it
+    // only when the current visited semantics materially affect the hypothesis
+    // but exact code is needed to settle an unresolved hard constraint.
     const sourceAllowed=state.type==='code_region'||state.type==='code_external'||!regionCandidates.length;
-    const retainCandidate=decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE;
-    const shouldInspectSource=(decision.inspectSource||retainCandidate)&&sourceAllowed;
+    const shouldInspectSource=decision.inspectSource&&sourceAllowed;
     let inspectedSource=false;
     if(shouldInspectSource&&step<MAX_STEPS){
       inspectedSource=true;
@@ -948,17 +947,36 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       });
       decision=await decide({
         question,mode,goals,activeGoalId:goal.id,hypothesis:decision.hypothesis||thread.hypothesis||frame.hypothesis,
-        ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,
+        ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
       });
-    }else if((decision.inspectSource||retainCandidate)&&!sourceAllowed){
+    }else if(decision.inspectSource&&!sourceAllowed){
       emit({
         action:'SOURCE_DEFERRED',goalId:goal.id,state:state.name,
         reason:'Semantic child regions remain; narrow semantically before source inspection.',
         path:path.map(x=>x.name)
       });
     }
+
+    // Compare the updated accumulated hypothesis with the previous state.
+    const previousScore=Number(thread.hypothesisScore||0);
+    const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
+    thread.hypothesisScore=decision.hypothesisScore;
+    thread.flatSteps=progress.trend==='flat'?thread.flatSteps+1:0;
+    if(decision.hypothesisScore>thread.bestScore){
+      thread.bestScore=decision.hypothesisScore;
+      thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
+      thread.bestConstraintChecklist=decision.constraintChecklist;
+    }
+    emit({
+      action:'HYPOTHESIS_PROGRESS',goalId:goal.id,
+      hypothesis:decision.hypothesis||thread.hypothesis,
+      hypothesisScore:decision.hypothesisScore,
+      previousScore,delta:progress.delta,trend:progress.trend,
+      bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
+      path:path.map(x=>x.name),goals:goalView(goals)
+    });
 
     // If Query explicitly finds no useful continuation in the supplied
     // frontier, treat that frontier as exhausted. This prevents a parent from
@@ -990,50 +1008,54 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.exhausted=true;
       emit({
         action:'GOALS_RESOLVED',goalId:goal.id,resolved:resolvedNow,
-        goalScore:decision.activeGoalScore,goals:goalView(goals),hypothesis:goal.summary
+        goalScore:decision.activeGoalScore,hypothesisScore:decision.hypothesisScore,goals:goalView(goals),hypothesis:goal.summary
       });
     }
 
     emit({
       action:'FACTS',goalId:goal.id,facts:ledgerView(ledger,{all:true}),
-      goalScore:decision.activeGoalScore,hypothesis:thread.hypothesis,
+      goalScore:decision.activeGoalScore,hypothesisScore:decision.hypothesisScore,hypothesis:thread.hypothesis,
       explained:allGoalsResolved(goals),goals:goalView(goals)
     });
 
     if(allGoalsResolved(goals))break;
     if(goal.status==='resolved')continue;
 
-    const warm=decision.picks;
+    const unresolvedHard=new Set(decision.constraintChecklist
+      .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
+      .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
+      .map(item=>item.index));
+    const warm=decision.picks.filter(pick=>{
+      const improves=pick.score>thread.bestScore+HYPOTHESIS_DELTA_EPSILON;
+      const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
+      return improves||targetsUnresolved;
+    });
     if(warm.length){
       thread.stack.push({
         path,current:warm[0],alternatives:warm.slice(1),
-        hypothesis:thread.hypothesis||decision.hypothesis,navigationKind,frontierIds:[]
+        hypothesis:thread.hypothesis||decision.hypothesis,navigationKind,frontierIds:[],
+        entryScore:thread.hypothesisScore
       });
       const event={
         step,action:'DESCEND',goalId:goal.id,navigationKind,
         from:state.name,to:warm[0].state.name,score:warm[0].score,
+        targets:warm[0].targets,hypothesisScore:thread.hypothesisScore,
         hypothesis:decision.hypothesis
       };
       events.push(event);emit({...event,path:[...path,warm[0].state].map(x=>x.name)});
       continue;
     }
 
-    // A candidate that still scores >= 0.5 after verification is not
-    // discarded merely because goal sufficiency is slightly lower. At this
-    // point the model must either have selected a continuation for an
-    // unresolved hard constraint or have enough evidence to resolve. If
-    // neither happened, stop this thread explicitly instead of wandering into
-    // lower-ranked sibling/frontier branches.
-    if(decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE){
+    // Flat exploration is tolerated briefly only while a branch still appears
+    // capable of resolving an unmet hard constraint. Otherwise backtrack and
+    // compare alternate branch potential with the best hypothesis seen so far.
+    if(thread.flatSteps>=MAX_FLAT_STEPS){
       emit({
-        action:'CANDIDATE_STALLED',goalId:goal.id,state:state.name,
-        candidateFit:decision.candidateFit,goalScore:decision.activeGoalScore,
-        checklist:decision.constraintChecklist,inspectedSource,
-        hypothesis:decision.hypothesis,path:path.map(x=>x.name)
+        action:'HYPOTHESIS_FLAT',goalId:goal.id,state:state.name,
+        hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,
+        bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
+        path:path.map(x=>x.name)
       });
-      thread.stack=[];
-      thread.exhausted=true;
-      continue;
     }
 
     await resumeThread(thread);
