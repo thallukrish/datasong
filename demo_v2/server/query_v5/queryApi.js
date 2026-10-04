@@ -26,7 +26,7 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(Array.isArray(event.facts))p.facts=event.facts;
         if(typeof event.explained==='boolean')p.explained=event.explained;
         if(Array.isArray(event.path))p.path=event.path;
-        if(Array.isArray(event.candidates))p.candidates=event.candidates;
+        if(event.action==='DECIDE'&&Array.isArray(event.candidates))p.candidates=event.candidates;
         if(event.tokens&&typeof event.tokens==='object')p.tokens=event.tokens;
         if(event.action==='LEARN_START')p.learnNodes=event.nodes||[];
         if(event.action==='LEARN_DONE')p.learnNodes=[];
