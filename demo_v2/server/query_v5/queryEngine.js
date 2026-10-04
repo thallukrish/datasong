@@ -7,6 +7,8 @@ const ENTRY_BATCH_SIZE = 20;
 const ENTRY_TRIAGE_LIMIT = 4;
 const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
+const HYPOTHESIS_DELTA_EPSILON = 0.03;
+const MAX_FLAT_STEPS = 2;
 
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
@@ -52,22 +54,21 @@ Treat this as search. Structure bootstraps the semantic space; Learn fills missi
 
 ENTRY STAGE: when n is null, rank the candidate semantic entries in p. Do not form a causal/change/verification conclusion, do not add facts, do not request source, and report goal score 0. Return h="".
 
-SEMANTIC WALK: when n is present, evaluate only the semantics of the current node, prior supported evidence, and semantic candidates.
-- p ranks at most 3 semantic continuations by usefulness for the active goal, using scores 0..1.
-- gs reports evidence sufficiency for the active goal as [[goalId,score]]. Score the evidence actually present at the current function/region/body. Use 1.0 whenever that evidence is sufficient to answer the active goal; do not reserve 1.0 for exhaustive certainty across the repository. Scores below 0.9 mean more evidence is materially needed. A high navigation score is not a goal-satisfaction score.
-- The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace those constraints from candidate evidence.
-- Score those supplied constraints against the current node. Return ck as [[constraintIndex,score],...] using the concatenated order hardConstraints then optionalConstraints, with each score 0..1. The constraint text itself must not be returned.
-- fit is the current node's candidate-fit score 0..1 derived from those fixed constraints. A clearly failed hard constraint forces fit below 0.5. fit>=0.5 means this remains a live candidate and should be verified before abandoning it for a weaker sibling/frontier alternative. fit is not goal sufficiency.
-- If fit>=0.5 but gs<0.9, stay with the candidate: request source if it has not been supplied, or select in p only a semantic continuation materially needed to verify an unresolved hard constraint. When src is present and no further continuation is materially needed, do not leave a candidate in limbo: either score gs>=0.9 if the fixed hard constraints establish the goal, or score fit<0.5 if they do not.
+SEMANTIC WALK: when n is present, treat h as the accumulated explanation for the active goal. Integrate only evidence from the current visited node (and src when supplied) into h. Do not treat unvisited lookahead nodes as evidence.
+- The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace them from candidate evidence.
+- Score the UPDATED accumulated hypothesis against those fixed constraints. Return ck as [[constraintIndex,score],...] using concatenated hardConstraints then optionalConstraints, with each score 0..1. The constraint text itself must not be returned.
+- hs is the overall hypothesis-match score 0..1. It summarizes how well the accumulated evidence-backed hypothesis satisfies the active goal. Hard constraints dominate this score.
+- gs reports goal sufficiency as [[goalId,score]]. It should agree with the hypothesis/constraint evidence. Use 1.0 when the hypothesis is sufficient to answer the goal; do not reserve 1.0 for exhaustive repository certainty.
+- l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
+- p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. constraintIndexes are unresolved constraints that the branch appears capable of improving.
 - a contains only explicit facts established by the visited semantic node or by src when present. Every item in a must be a plain string, never an array or object.
-- i=1 requests exact source for the current semantic node when its semantics look material but are insufficient to establish or reject the needed mechanism. Otherwise i=0.
-- Do not request source merely to browse. Narrow semantically first.
-- When src is present, use it to verify the semantic interpretation and update facts/goal sufficiency. Do not request source again in that decision.
+- i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
+- Do not request source merely to browse. When src is present, use it to update h and the constraint scores, and do not request source again in that decision.
 
 For causal goals, compare candidate mechanisms against the distinguishing conditions in the issue. For change goals, establish the current implementation and how the requested change applies. For describe goals, establish the requested behavior or flow. For verify goals, establish the stated constraint or consequence. Locate goals close when the semantic/structural evidence identifies the requested implementation.
 
 Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src. Return only:
-{"h":"","gs":[["G1",0.0]],"ck":[[0,0.0]],"fit":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+{"h":"","gs":[["G1",0.0]],"ck":[[0,0.0]],"hs":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0,[0]]]}.
 `;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
