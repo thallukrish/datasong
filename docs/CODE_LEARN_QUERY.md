@@ -297,7 +297,7 @@ The semantic lookahead gives each immediate branch an expected hypothesis score 
 
 Backtracking preserves the best hypothesis, its constraint scores and evidence. Trying a sibling restores the hypothesis state from the branch point; evidence from the abandoned sibling is not silently carried into the new branch.
 
-A goal closes when all of its hard constraints are sufficiently established by the accumulated evidence-backed hypothesis. Once every material goal is resolved, exploration stops immediately.
+A goal closes when all of its hard constraints are sufficiently established by the accumulated evidence-backed hypothesis. When exact source was needed to settle the goal, closure additionally requires an evidence-grounding pass over the selected source ranges. The grounding pass may only judge the supplied hypothesis and evidence; it cannot repair the hypothesis or search for a better mechanism. Controller scores are capped by those groundedness scores, so unsupported high model scores cannot close the goal. Once every material goal is resolved, exploration stops immediately.
 
 ## Query progress UI
 
@@ -370,12 +370,14 @@ When exact source is supplied for the current visited node, Query also returns a
 
 ```json
 "ev": [
-  [355, 355, "Reads the configured fixture directories."],
-  [368, 370, "Builds the app fixture directory and tests membership against the configured entries."]
+  [355, 355, [0], "Reads the configured fixture directories."],
+  [368, 370, [1, 2], "Builds the app fixture directory and tests membership against the configured entries."]
 ]
 ```
 
-The evidence set is not a ranking of individual lines. Several disjoint ranges may jointly establish one hypothesis. Query selects the smallest combined set of source ranges that materially supports the updated hypothesis and advances the unresolved acceptance criteria.
+The evidence set is not a ranking of individual lines. Several disjoint ranges may jointly establish one hypothesis. Query selects the smallest combined set of source ranges that materially supports the updated hypothesis and advances the unresolved acceptance criteria. Each range also names the fixed constraint indexes it claims to support.
+
+After source inspection, LeMap performs a separate evidence-grounding decision. It receives only the goal, immutable acceptance criteria, proposed final hypothesis, and selected exact source ranges. It scores whether those ranges actually establish each criterion. These groundedness scores cap the search model's constraint scores. If source was inspected but no supporting ranges are selected, the source-grounded constraint scores are zero and the goal cannot close from that inspection.
 
 The local-source rule is:
 
@@ -388,9 +390,13 @@ inspect the whole supplied body
         ↓
 select all materially useful evidence ranges
         ↓
+link ranges to the constraints they support
+        ↓
 update / revise accumulated hypothesis
         ↓
-score hypothesis against fixed constraints
+independent evidence-grounding check
+        ↓
+cap constraint scores by groundedness
         ↓
 all hard constraints met?
     yes → stop
@@ -970,7 +976,9 @@ The current Query v5 implementation now follows the hypothesis-driven semantic-s
 | Evidence memory | Established facts survive branch-local hypothesis rollback. | The query-local evidence ledger remains cumulative across backtracking. | Implemented |
 | Alternate-branch pruning | Do not explore branches that cannot improve the best explanation or resolve an unmet hard constraint. | Branch filtering compares expected score with bestScore and targeted unresolved constraints. | Implemented |
 | Source inspection | Raw source is verification evidence, not the normal traversal substrate. | Query requests source explicitly only when semantics are insufficient to settle an unresolved hard constraint. | Implemented |
-| Combined local evidence | Several lines or regions in one function may jointly support the hypothesis; no single-line ranking is required. | When source is inspected, Query selects a bounded evidence set of exact ranges, updates the hypothesis from the combined set, and only navigates away if unresolved constraints cannot be materially improved from the remaining supplied source. | Implemented |
+| Combined local evidence | Several lines or regions in one function may jointly support the hypothesis; no single-line ranking is required. | When source is inspected, Query selects a bounded evidence set of exact ranges, links them to fixed constraints, updates the hypothesis from the combined set, and only navigates away if unresolved constraints cannot be materially improved from the remaining supplied source. | Implemented |
+| Evidence grounding | High constraint scores must be supported by the selected exact source rather than by related-code proximity. | A separate verifier scores each fixed criterion from only the proposed hypothesis and selected ranges; controller scores are capped by verifier groundedness before closure. | Implemented |
+| Final answer synthesis | Search truth and user-facing prose should be separate responsibilities. | After all goals resolve, a dedicated synthesis prompt receives only the original request, fixed criteria, final hypotheses/scores, and exact supporting source ranges. It may explain but not invent or change the established mechanism. | Implemented |
 | Final localization | Reuse retained structural coordinates for the final supporting ranges. | Final evidence ranges come from already traversed structural states. | Implemented |
 | Query UI | Make convergence visible rather than showing only an event stream. | UI shows active goal, hypothesis, acceptance-criteria scores, current path, branch potentials, trend, best score and token use. | Implemented |
 | Token visibility | Show cost while the search is progressing. | Cumulative prompt, completion and total tokens are emitted with Query progress. | Implemented |
@@ -1096,3 +1104,6 @@ The remaining work is therefore mostly calibration and observability rather than
 86. Exact source evidence may be a set of multiple disjoint ranges whose combined behavior supports one hypothesis; Query does not need to rank one line above another.
 87. When exact source for a coherent visited function is supplied, Query examines the whole supplied body and selects the materially useful evidence set before navigating elsewhere.
 88. If that combined evidence makes every hard constraint sufficient, the goal closes immediately and those selected ranges become the supporting source evidence for the hypothesis.
+89. When exact source participates in convergence, selected source ranges are independently checked against the fixed criteria; source-grounded scores cap the model's proposed constraint scores.
+90. A source-inspected decision with no selected supporting ranges cannot close a goal.
+91. Final answer generation is a separate synthesis step over resolved goals, final hypotheses, scores and exact supporting source only; synthesis may improve presentation but cannot introduce a new repository explanation.
