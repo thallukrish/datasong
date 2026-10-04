@@ -525,7 +525,6 @@ function evidenceCoverageRatio(state,evidenceStates=[]){
 }
 
 async function reselectTightEvidence({question,goal,hypothesis,state,sourceBody,sourceCandidates,previousEvidence,client,model,usage,log,step}){
-  const sourceCandidates=sourceBody?sourceEvidenceCandidates(currentState,sourceBody):[];
   const payload={
     q:question,
     goal:{id:goal?.id||'',kind:goal?.kind||'',text:goal?.text||''},
@@ -584,6 +583,7 @@ async function decide({
   candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
   const entryStage=!currentState;
+  const sourceCandidates=sourceBody?sourceEvidenceCandidates(currentState,sourceBody):[];
   const entryMatches=entryStage
     ? candidates.map((state,index)=>({
         index,
