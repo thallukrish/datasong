@@ -345,6 +345,8 @@ Source paths, line numbers and internal symbol IDs are not needed for branch sel
 
 They remain available inside LeMap for deterministic traversal and final localization.
 
+For causal goals, goal decomposition also freezes one `failingCase` before any repository exploration begins. It is derived only from the original request and must preserve the reported discriminating condition exactly. Search, source diagnosis, grounding and counterfactual validation may consume this testcase but may never rewrite it.
+
 ## Query decision contract
 
 Before traversal starts, the model may receive candidate entry semantics and returns entry navigation scores only. After an entry is visited, the model receives the current evidence-backed hypothesis, fixed goal constraints, the visited semantic node, immediate candidates and bounded semantic lookahead. Lookahead is navigation-only and must never be promoted into evidence before traversal.
@@ -410,7 +412,7 @@ After source inspection, LeMap performs a separate evidence-grounding decision. 
 
 For causal goals, source grounding is still not the final stop condition. LeMap runs a counterfactual intervention check in either of two cases: when all hard constraints would otherwise close, or when a source-grounded causal hypothesis is the current best candidate and no supplied continuation appears capable of improving it before that branch is abandoned or exhausted.
 
-Counterfactual validation first derives one immutable `failingCase` from only the original request plus the fixed goal text and acceptance criteria. That testcase may not be weakened, broadened, substituted, normalized, or changed to make the proposed diagnosis succeed. The validator must compare the same case before and after the hypothetical patch. A separate prompt derives the smallest code change implied by the diagnosis and predicts whether that intervention would fix the exact reported failing condition. The intervention must change the operation claimed to be causal rather than an unrelated workaround.
+Counterfactual validation receives the immutable `failingCase` that was frozen during goal decomposition before repository exploration. The validator no longer derives or returns a testcase. It must compare that exact same case before and after the hypothetical patch and may not weaken, broaden, substitute, normalize, or otherwise change it. A separate prompt derives the smallest code change implied by the diagnosis and predicts whether that intervention would fix the exact reported failing condition. The intervention must change the operation claimed to be causal rather than an unrelated workaround.
 
 A successful counterfactual may strengthen only the fixed acceptance criteria that the independent intervention validator says the repair itself establishes. If those strengthened hard scores all reach the close threshold, the causal goal may resolve. If validation fails, that hypothesis is marked causally rejected, is removed from best-so-far eligibility, the branch is abandoned, and the failure reason is preserved and surfaced explicitly. Search then continues to another branch when available.
 
@@ -1001,7 +1003,7 @@ The current Query v5 implementation now follows the hypothesis-driven semantic-s
 
 | Area | Target architecture | Current implementation | Status |
 |---|---|---|---|
-| Issue to goals | Break the issue into the smallest useful set of dependent goals. | Goal decomposition supports locate, describe, causal, change and verify goals with dependencies. | Implemented |
+| Issue to goals | Break the issue into the smallest useful set of dependent goals. | Goal decomposition supports locate, describe, causal, change and verify goals with dependencies. For causal goals it also freezes the reported failingCase before any code search begins. | Implemented |
 | Acceptance criteria | Each goal gets fixed hard and optional constraints before code exploration. | hardConstraints and optionalConstraints are created during decomposition and remain immutable. | Implemented |
 | Localization | Every substantive goal locates relevant implementation evidence as part of solving itself. | Faceted structural search runs per goal. A separate locate goal is used only when location itself is requested. | Implemented |
 | Entry search | Structural search should find plausible starting code without solving the issue. | Faceted search and source-only entry triage select candidate functions. Entry comparison cannot resolve goals or seed a hypothesis. | Implemented |
@@ -1180,4 +1182,6 @@ The remaining work is therefore mostly calibration and observability rather than
 109. For causal goals, the model may add only direct observations to the ledger. Causal interpretations and inferred mechanisms remain in the branch hypothesis until validated.
 110. When a causal branch fails counterfactual validation, its branch-local causal facts are marked disputed before exploration moves to another entry.
 111. Counterfactual validation derives its failingCase only from the original request and immutable goal criteria; it may not alter that testcase to fit the hypothesis or patch.
-112. A counterfactual pass is structurally invalid unless one explicit failingCase has both before and after predictions for the same case.
+112. A counterfactual pass is structurally invalid unless the frozen failingCase has both before and after predictions for that same case.
+113. The failingCase for a causal goal is created once during issue decomposition, before repository exploration, and is immutable for the lifetime of that goal.
+114. The counterfactual validator does not derive or return failingCase; it receives the frozen testcase as input and may only judge before/after behavior for that testcase.
