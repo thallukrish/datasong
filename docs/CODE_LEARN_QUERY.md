@@ -1185,3 +1185,4 @@ The remaining work is therefore mostly calibration and observability rather than
 112. A counterfactual pass is structurally invalid unless the frozen failingCase has both before and after predictions for that same case.
 113. The failingCase for a causal goal is created once during issue decomposition, before repository exploration, and is immutable for the lifetime of that goal.
 114. The counterfactual validator does not derive or return failingCase; it receives the frozen testcase as input and may only judge before/after behavior for that testcase.
+115. A positively selected entry branch may not terminate on its first visited semantic node with an entirely empty decision. If it produces no hypothesis, no source request and no continuation, LeMap performs one exact-source fallback on that entry before the branch can be abandoned.
