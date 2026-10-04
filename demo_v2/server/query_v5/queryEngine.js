@@ -862,7 +862,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     frame.frontierIds=next.map(candidate=>candidate.id);
 
     let decision=await decide({
-      question,mode,goals,activeGoalId:goal.id,hypothesis:frame.hypothesis,
+      question,mode,goals,activeGoalId:goal.id,hypothesis:thread.hypothesis||frame.hypothesis,
       ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
@@ -879,7 +879,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         path:path.map(x=>x.name)
       });
       decision=await decide({
-        question,mode,goals,activeGoalId:goal.id,hypothesis:decision.hypothesis||frame.hypothesis,
+        question,mode,goals,activeGoalId:goal.id,hypothesis:decision.hypothesis||thread.hypothesis||frame.hypothesis,
         ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
@@ -898,6 +898,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(!decision.picks.length)frame.frontierIds=[];
 
     thread.hypothesis=decision.hypothesis||thread.hypothesis;
+    // Carry the accumulated assessment back onto the current frame so large
+    // function chunks and sibling regions are never evaluated in isolation.
+    frame.hypothesis=thread.hypothesis||frame.hypothesis;
     rollingHypothesis=thread.hypothesis||rollingHypothesis;
     applyLedgerDecision({
       ledger,goal,additions:decision.additions,disputes:decision.disputes,
@@ -936,7 +939,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(warm.length){
       thread.stack.push({
         path,current:warm[0],alternatives:warm.slice(1),
-        hypothesis:decision.hypothesis,navigationKind,frontierIds:[]
+        hypothesis:thread.hypothesis||decision.hypothesis,navigationKind,frontierIds:[]
       });
       const event={
         step,action:'DESCEND',goalId:goal.id,navigationKind,
