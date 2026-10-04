@@ -129,8 +129,10 @@ function queryProgressMarkup(p){
   }).join('');
   const evidence=(p.evidenceRanges||[]).map(r=>'<div class="qstep done">✓ '+esc((r.sourcePath||'source')+':'+(r.startLine||'')+(r.endLine&&r.endLine!==r.startLine?'-'+r.endLine:''))+(r.why?' · '+esc(r.why):'')+'</div>').join('');
   const entryBranches=(p.entryBranches||[]).slice().sort((a,b)=>Number(b.bestScore||0)-Number(a.bestScore||0)).map((b,i)=>'<div class="qbranch '+(i===0?'best':'')+'">├─ '+esc(b.name||'entry')+' · current '+Math.round(Number(b.currentScore||0)*100)+'% · best '+Math.round(Number(b.bestScore||0)*100)+'%</div>').join('');
+  const cf=p.counterfactualValidation;
+  const counterfactual=cf?'<div class="qpath"><div class="label">counterfactual validation</div><div class="qstep '+(cf.pass?'done':'')+'">'+(cf.pass?'✓ ':'? ')+esc(cf.pass?'Intervention validates diagnosis':'Validation failed')+(cf.patch?'<div class="small">Patch: '+esc(cf.patch)+'</div>':'')+(cf.prediction?'<div class="small">Prediction: '+esc(cf.prediction)+'</div>':'')+(cf.failure?'<div class="small">Failure: '+esc(cf.failure)+'</div>':'')+'</div></div>':'';
   const facts=(p.facts||[]).map(f=>'<div class="qstep '+(f[1]==='disputed'?'':'done')+'">'+(f[1]==='disputed'?'?':'✓')+' '+esc(f[4]||'')+(f[1]==='disputed'?' · disputed':'')+'</div>').join('');
-  const labels={START:'Starting exploration',DECIDE:'Evaluating current evidence',HYPOTHESIS_PROGRESS:'Hypothesis updated',HYPOTHESIS_FLAT:'Progress flattened · considering backtrack',BRANCH_PRUNED:'Weaker semantic branch pruned',ENTRY_BRANCH_SCORE:'Comparing entry branch score',ENTRY_BRANCH_PRUNED:'Entry branch fell below a stronger entry · abandoning it',LEARN_START:'Learning semantic lookahead',LEARN_DONE:'Semantic lookahead ready',DESCEND:'Following strongest expected improvement',BACKTRACK:'Backtracking to a stronger alternative',RESEED:'Starting from another entry',SOURCE_INSPECTION:'Verifying exact source',EXPLAINED:'All hard constraints satisfied',SEARCH_EXHAUSTED:'Search exhausted · showing best hypothesis found',SEARCH_COMPLETE:'Exploration complete',ERROR:'Exploration stopped'};
+  const labels={START:'Starting exploration',DECIDE:'Evaluating current evidence',HYPOTHESIS_PROGRESS:'Hypothesis updated',HYPOTHESIS_FLAT:'Progress flattened · considering backtrack',BRANCH_PRUNED:'Weaker semantic branch pruned',ENTRY_BRANCH_SCORE:'Comparing entry branch score',ENTRY_BRANCH_PRUNED:'Entry branch fell below a stronger entry · abandoning it',COUNTERFACTUAL_PASS:'Counterfactual repair validates the causal diagnosis',COUNTERFACTUAL_FAIL:'Counterfactual repair failed · causal diagnosis remains unresolved',LEARN_START:'Learning semantic lookahead',LEARN_DONE:'Semantic lookahead ready',DESCEND:'Following strongest expected improvement',BACKTRACK:'Backtracking to a stronger alternative',RESEED:'Starting from another entry',SOURCE_INSPECTION:'Verifying exact source',EXPLAINED:'All hard constraints satisfied',SEARCH_EXHAUSTED:'Search exhausted · showing best hypothesis found',SEARCH_COMPLETE:'Exploration complete',ERROR:'Exploration stopped'};
   return '<div class="qprogress">'+
     (goalTitle?'<div class="label">active goal</div><div class="qhypothesis">'+goalTitle+'</div>':'')+
     '<div class="qgrid">'+
@@ -147,6 +149,7 @@ function queryProgressMarkup(p){
     (branches?'<div class="qbranches"><div class="label">semantic lookahead</div>'+branches+'</div>':'')+
     (entryBranches?'<div class="qbranches"><div class="label">entry branch scores</div>'+entryBranches+'</div>':'')+
     (evidence?'<div class="qpath"><div class="label">supporting source evidence</div>'+evidence+'</div>':'')+
+    counterfactual+
     (facts?'<div class="qpath"><div class="label">established evidence</div>'+facts+'</div>':'')+
     '<div class="qstatus">'+esc(labels[p.action]||p.action||'Exploring')+'</div>'+
   '</div>';
