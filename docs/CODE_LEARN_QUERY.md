@@ -372,18 +372,33 @@ After LeMap enters the chosen entry, a semantic decision returns the updated hyp
 The ck field scores immutable goal constraints by index. The hs field is the model's overall hypothesis-match diagnostic; LeMap also derives progress from hard-constraint scores. Each p row means "move to this immediate candidate; semantic lookahead suggests the hypothesis may reach this expected score, and these unresolved constraints may improve." LeMap moves only one hop even though the model can see deeper semantics.
 
 
-When exact source is supplied for the current visited node, Query also returns an evidence set:
+When exact source is supplied for the current visited node, LeMap first assigns stable evidence indexes to the non-empty source lines and sends those indexed source candidates to Query:
+
+```json
+"src": {
+  "lines": [
+    [2, "fixture_dirs = settings.FIXTURE_DIRS"],
+    [13, "app_dir = os.path.join(app_config.path, \"fixtures\")"],
+    [14, "if app_dir in fixture_dirs:"]
+  ]
+}
+```
+
+Query selects evidence by those indexes rather than inventing source coordinates:
 
 ```json
 "ev": [
-  [355, 355, [0], "Reads the configured fixture directories."],
-  [368, 370, [1, 2], "Builds the app fixture directory and tests membership against the configured entries."]
+  [2, [0], "Reads the configured fixture directories."],
+  [13, [1, 2], "Builds the app fixture directory."],
+  [14, [1, 2], "Tests that directory against the configured entries."]
 ]
 ```
 
-The evidence set is not a ranking of individual lines. Several disjoint ranges may jointly establish one hypothesis. Query selects the smallest combined set of source ranges that materially supports the updated hypothesis and advances the unresolved acceptance criteria. Each range also names the fixed constraint indexes it claims to support.
+LeMap deterministically maps each selected evidence index back to the exact repository line number. The model therefore decides semantic relevance while LeMap owns structural identity and source coordinates.
 
-If the selected evidence covers 80% or more of an inspected function of at least 8 lines, LeMap treats that selection as suspiciously broad and performs one dedicated evidence-reselection pass. That pass receives the same hypothesis, fixed criteria, whole current source body, and the rejected broad selection. It may only tighten the evidence ranges; it cannot change the hypothesis or search elsewhere. This preserves full-function reasoning context while preventing the final evidence set from degenerating into "the whole function" by default.
+The evidence set is not a ranking of individual lines. Several selected candidates may jointly establish one hypothesis, and one candidate may support several fixed constraints. Query selects the smallest combined set that materially supports the updated hypothesis and advances unresolved acceptance criteria.
+
+If the selected evidence still covers 80% or more of an inspected function of at least 8 lines, LeMap treats that selection as suspiciously broad and performs one dedicated evidence-reselection pass over the same indexed candidates. That pass receives the same hypothesis, fixed criteria and rejected selection. It may only tighten the selected evidence indexes; it cannot change the hypothesis or search elsewhere.
 
 After source inspection, LeMap performs a separate evidence-grounding decision. It receives only the goal, immutable acceptance criteria, proposed final hypothesis, and selected exact source ranges. It scores whether those ranges actually establish each criterion. These groundedness scores cap the search model's constraint scores. If source was inspected but no supporting ranges are selected, the source-grounded constraint scores are zero and the goal cannot close from that inspection.
 
@@ -396,9 +411,11 @@ request exact source only if needed
         ↓
 inspect the whole supplied body
         ↓
-select all materially useful evidence ranges
+select materially useful indexed source candidates
         ↓
-link ranges to the constraints they support
+LeMap maps selected candidates to exact source lines
+        ↓
+link selected evidence to the constraints it supports
         ↓
 update / revise accumulated hypothesis
         ↓
@@ -987,7 +1004,7 @@ The current Query v5 implementation now follows the hypothesis-driven semantic-s
 | Source inspection | Raw source is verification evidence, not the normal traversal substrate. | Query requests source explicitly only when semantics are insufficient to settle an unresolved hard constraint. | Implemented |
 | Combined local evidence | Several lines or regions in one function may jointly support the hypothesis; no single-line ranking is required. | When source is inspected, Query selects a bounded evidence set of exact ranges, links them to fixed constraints, updates the hypothesis from the combined set, and only navigates away if unresolved constraints cannot be materially improved from the remaining supplied source. | Implemented |
 | Evidence grounding | High constraint scores must be supported by the selected exact source rather than by related-code proximity. | A separate verifier scores each fixed criterion from only the proposed hypothesis and selected ranges; controller scores are capped by verifier groundedness before closure. | Implemented |
-| Evidence tightness | Whole-function source remains available for reasoning, but supporting evidence should exclude lines that do not materially support the hypothesis. | Evidence covering at least 80% of a function of 8+ lines triggers one dedicated re-selection pass that can only tighten source ranges against the same hypothesis and criteria. | Implemented |
+| Evidence tightness | Whole-function source remains available for reasoning, but supporting evidence should exclude lines that do not materially support the hypothesis. | LeMap indexes source lines, Query selects only evidence indexes, and LeMap deterministically assigns exact repository coordinates. Evidence covering at least 80% of a function of 8+ lines triggers one evidence-only re-selection pass. | Implemented |
 | Final answer synthesis | Search truth and user-facing prose should be separate responsibilities. | After all goals resolve, a dedicated synthesis prompt receives only the original request, fixed criteria, final hypotheses/scores, and exact supporting source ranges. It may explain but not invent or change the established mechanism. | Implemented |
 | Final localization | Reuse retained structural coordinates for the final supporting ranges. | Final evidence ranges come from already traversed structural states. | Implemented |
 | Query UI | Make convergence visible rather than showing only an event stream. | UI shows active goal, hypothesis, acceptance-criteria scores, current path, branch potentials, trend, best score and token use. | Implemented |
@@ -1124,3 +1141,5 @@ The remaining work is therefore mostly calibration and observability rather than
 96. Entry-branch dominance only prunes search effort; it never converts the stronger entry into a resolved goal unless all hard constraints independently meet the close threshold.
 97. Query may reason over the whole inspected function, but the retained evidence set should contain only lines that materially support the hypothesis.
 98. An evidence selection covering at least 80% of a function of 8 or more lines triggers one evidence-only re-selection pass; that pass cannot revise the hypothesis or navigate elsewhere.
+99. Query selects source evidence by LeMap-assigned evidence indexes, never by invented line numbers.
+100. LeMap deterministically maps selected evidence indexes back to repository line coordinates; semantic relevance belongs to the model, structural location belongs to LeMap.
