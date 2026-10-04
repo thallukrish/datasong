@@ -967,7 +967,7 @@ Localize   final supporting evidence → exact source ranges
 66. Region traversal evaluates evidence against the active goal in source order and stops immediately when the accumulated function-body evidence resolves that goal.
 67. Call-graph branching is permitted only after the selected function's relevant semantic body space has been exhausted without resolving the active goal.
 68. Query traversal is semantic-first: functions, regions and branches are navigation candidates scored from learned semantics, not from raw source.
-69. Navigation relevance and goal satisfaction are separate scores. A navigation score chooses the next semantic node; an active-goal score of 1.0 closes that goal.
+69. Navigation relevance and goal satisfaction are separate scores. A navigation score chooses the next semantic node. An active-goal score of 1.0 means the current function/region/body is sufficient to answer the goal; the controller closes at 0.9 or above to prevent a well-supported answer from wandering merely because the model is slightly conservative.
 70. Raw source is exposed to Query only during structural entry matching or after Query explicitly requests source inspection for the current semantic node.
 71. Learn may read source to construct missing query-independent semantics; this is semantic expansion, not Query source traversal.
 72. Final evidence localization reuses structural ranges already attached to semantic evidence and does not reopen source merely to produce locations.
@@ -978,3 +978,4 @@ Localize   final supporting evidence → exact source ranges
 77. A semantic decision may return only the highest-scoring continuations, but the parent retains the complete exposed frontier.
 78. After returned continuations are exhausted, Query revisits the parent and rescans only the still-unvisited semantic frontier before leaving that parent.
 79. A frontier is abandoned only when it has no unvisited candidates or Query scores every supplied continuation as non-useful; unreturned candidates are never silently discarded.
+80. If the current function, region, or inspected source body is already sufficient for the active goal, that goal closes immediately and no sibling region, callee, or alternate entry is explored for that goal.
