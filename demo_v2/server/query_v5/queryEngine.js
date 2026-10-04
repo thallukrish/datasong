@@ -610,16 +610,22 @@ async function decide({
     ? sourceEvidenceStates(currentState,sourceBody,call.parsed?.ev)
     : [];
   let grounding=null;
-  if(!entryStage&&sourceBody&&evidenceStates.length){
-    grounding=await verifyEvidenceGrounding({
-      question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
-      constraints:fixedConstraints,evidenceStates,client,model,usage,log,step
-    });
-    for(const item of fixedConstraints){
-      if(!grounding.scores.has(item.index))continue;
-      const grounded=Number(grounding.scores.get(item.index)||0);
-      const current=Number(scoreByIndex.get(item.index)||0);
-      scoreByIndex.set(item.index,Math.min(current,grounded));
+  if(!entryStage&&sourceBody){
+    if(evidenceStates.length){
+      grounding=await verifyEvidenceGrounding({
+        question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
+        constraints:fixedConstraints,evidenceStates,client,model,usage,log,step
+      });
+      for(const item of fixedConstraints){
+        const current=Number(scoreByIndex.get(item.index)||0);
+        const grounded=grounding.scores.has(item.index)?Number(grounding.scores.get(item.index)||0):0;
+        scoreByIndex.set(item.index,Math.min(current,grounded));
+      }
+    }else{
+      grounding={scores:new Map(),ok:false};
+      for(const item of fixedConstraints){
+        scoreByIndex.set(item.index,0);
+      }
     }
   }
   const groundedConstraintChecklist=!entryStage
@@ -1266,7 +1272,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     sourcePath:state.sourcePath||'',
     startLine:Number(state.startLine||0),
     endLine:Number(state.endLine||state.startLine||0),
-    why:text(codeSemanticForState(state,explorer)?.effect||codeSemanticForState(state,explorer)?.purpose||'',260)
+    why:text(state.evidenceWhy||codeSemanticForState(state,explorer)?.effect||codeSemanticForState(state,explorer)?.purpose||'',260)
   })).filter(range=>{
     if(!range.sourcePath||!range.startLine||range.endLine<range.startLine)return false;
     const key=[range.sourcePath,range.startLine,range.endLine].join(':');
