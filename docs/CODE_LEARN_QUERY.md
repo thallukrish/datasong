@@ -181,7 +181,9 @@ For a **locate** goal, Query asks whether the current evidence identifies the ex
 
 For a **describe** goal, Query asks whether the current evidence directly establishes the requested behavior or flow.
 
-For a **causal** goal, Query asks whether the observed code can actually produce the reported behavior. When multiple mechanisms look superficially relevant, each must be tested against the distinguishing condition in the issue. Shared terminology is not enough. Before leaving a current function, Query compares the plausible mechanisms visible in that body against the distinguishing condition instead of following whichever matching check appeared first.
+For a **causal** goal, Query asks whether the observed code can actually produce the reported behavior. When multiple mechanisms look superficially relevant, each must be tested against the distinguishing condition in the issue. Shared terminology is not enough. Before leaving a current function, Query builds and scores a compact causal checklist from the active goal. Hard checks cover whether the node participates in the reported behavior, whether the reported discriminator actually changes the relevant operation, and whether that changed operation can produce the reported symptom. Supporting checks capture contextual consistency.
+
+The checklist produces a causal-fit score separate from navigation and goal sufficiency. A hard contradiction forces causal fit below 0.5. A causal fit of 0.5 or greater keeps the current function as a live candidate: Query verifies it with source or a materially necessary semantic continuation before considering weaker sibling/frontier branches. After source verification, a candidate may not remain indefinitely ambiguous. If no further continuation is needed, it must either satisfy the goal or fall below the causal-fit threshold.
 
 For a **change** goal, Query distinguishes current implementation from proposed implementation and establishes how the requested change applies to existing code. A proposed API or mechanism does not need to already exist in the selected revision.
 
@@ -981,3 +983,5 @@ Localize   final supporting evidence → exact source ranges
 80. If the current function, region, or inspected source body is already sufficient for the active goal, that goal closes immediately and no sibling region, callee, or alternate entry is explored for that goal.
 81. Functions of 50 lines or fewer are learned and queried as one coherent semantic unit; Query does not fragment them into statement regions.
 82. Functions longer than 50 lines may be traversed by regions, but the rolling hypothesis and supported facts from earlier chunks are carried into later chunks so the function's logic remains coherent across the walk.
+83. Causal reasoning uses three independent signals: navigation score chooses where to search, causal-fit score determines whether the current function remains a plausible cause, and goal-sufficiency score determines whether enough evidence exists to answer.
+84. A causal candidate with fit at least 0.5 is verified before lower-ranked sibling/frontier alternatives are explored. If verification still leaves it unresolved without a useful continuation, the thread stops explicitly rather than wandering away from a plausible candidate.
