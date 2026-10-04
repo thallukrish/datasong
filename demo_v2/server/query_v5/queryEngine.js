@@ -67,7 +67,7 @@ SEMANTIC WALK: when n is present, treat h as the accumulated explanation for the
 - l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
 - p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. constraintIndexes are unresolved constraints that the branch appears capable of improving.
 - a contains only explicit facts established by the visited semantic node or by src when present. Every item in a must be a plain string, never an array or object.
-- ev identifies the evidence from the CURRENT visited node that materially supports the UPDATED hypothesis. When src is present, return ev as [[startLine,endLine,"why"],...]. Multiple disjoint ranges may contribute together. Select the smallest combined evidence set that supports the hypothesis and advances the unresolved constraints. Do not rank lines against one another and do not force a single-line mechanism. When src is absent, return ev=[] and the visited semantic node itself is the evidence unit.
+- ev identifies the evidence from the CURRENT visited node that materially supports the UPDATED hypothesis. When src is present, return ev as [[startLine,endLine,[constraintIndexes],"why"],...]. Multiple disjoint ranges may contribute together, and one range may support several constraints. Select the smallest combined evidence set that supports the hypothesis and advances the unresolved constraints. Do not rank lines against one another and do not force a single-line mechanism. A hard constraint should not receive a high score unless the selected evidence set materially supports it. When src is absent, return ev=[] and the visited semantic node itself is the evidence unit.
 - When src is present, examine the whole supplied body before deciding to navigate away. Use any combination of supplied lines that jointly strengthens or revises h. If the resulting hypothesis satisfies all hard constraints, return no continuation in p. If hard constraints remain unresolved, return p only when the remaining supplied source cannot materially strengthen those constraints.
 - i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
 - Do not request source merely to browse. When src is present, use it to update h and the constraint scores, and do not request source again in that decision.
@@ -85,6 +85,29 @@ const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic L
 
 
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
+
+const EVIDENCE_GROUND_SYSTEM = `Verify whether the selected source evidence actually grounds an evidence-backed hypothesis against fixed acceptance criteria.
+
+q is the original request.
+goal is the active goal.
+hard and optional are immutable acceptance criteria.
+h is the proposed accumulated hypothesis.
+ev is selected exact source evidence as [evidenceIndex,path,startLine,endLine,code,claimedConstraintIndexes,why].
+
+Judge only what the supplied evidence logically establishes. Do not repair the hypothesis, search for a different mechanism, use outside repository knowledge, or give credit merely because related code is nearby.
+
+For every acceptance criterion, return a groundedness score 0..1. A high score means the selected evidence, considered jointly where necessary, materially establishes that criterion in the proposed hypothesis. Several evidence ranges may work together; no single line needs to dominate. If the hypothesis asserts a causal relationship that the selected lines do not actually establish, score that criterion below 0.9 even if the lines mention the same objects.
+
+Also return ok=1 only when every hard criterion is grounded at least 0.9 by the selected evidence set. Return only:
+{"ck":[[0,0.0]],"ok":0}.`;
+
+const ANSWER_SYNTHESIS_SYSTEM = `Write the final user-facing answer from an already completed code investigation.
+
+You receive the original request and one or more resolved goal packages. Each package contains the fixed acceptance criteria, the final evidence-backed hypothesis, constraint scores, and exact supporting source ranges.
+
+Your job is presentation only. Explain what the investigation established clearly and concisely. You may connect the supplied evidence into readable prose, but you must not invent a new mechanism, change the hypothesis, add unsupported repository facts, or cite source outside the supplied evidence. When useful, mention exact files and line ranges. Do not discuss search internals, scores, prompts, or confidence unless the user explicitly asked for them.
+
+Return only {"answer":""}.`;
 
 function symbolState(symbol, parent=null) {
   return { id:symbol.id, type:'code_symbol', name:symbol.name, symbolId:symbol.id, sourcePath:symbol.sourcePath||'', startLine:symbol.startLine||0, endLine:symbol.endLine||0, body:String(symbol.body||''), parent, parentSymbolId:parent };
@@ -456,6 +479,7 @@ function sourceEvidenceStates(state,sourceBody,evidenceRows=[]){
     if(end<start)continue;
     const offset=Math.max(0,start-(minLine||start));
     const count=Math.max(1,end-start+1);
+    const supports=arr(row?.[2]).map(Number).filter(Number.isInteger);
     out.push({
       ...state,
       id:`${state.id}:evidence:${start}-${end}`,
@@ -463,10 +487,42 @@ function sourceEvidenceStates(state,sourceBody,evidenceRows=[]){
       startLine:start,
       endLine:end,
       body:lines.slice(offset,offset+count).join('\n'),
-      evidenceWhy:text(row?.[2]||'',260)
+      evidenceSupports:supports,
+      evidenceWhy:text(row?.[3]||'',260)
     });
   }
   return dedupeStates(out);
+}
+
+async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evidenceStates,client,model,usage,log,step}){
+  const evidence=arr(evidenceStates).map((state,index)=>[
+    index,
+    state.sourcePath||'',
+    Number(state.startLine||0),
+    Number(state.endLine||state.startLine||0),
+    text(state.body||'',1600),
+    arr(state.evidenceSupports),
+    state.evidenceWhy||''
+  ]);
+  if(!evidence.length)return {scores:new Map(),ok:false};
+  const payload={
+    q:question,
+    goal:{id:goal?.id||'',kind:goal?.kind||'',text:goal?.text||''},
+    hard:arr(goal?.hardConstraints),
+    optional:arr(goal?.optionalConstraints),
+    h:hypothesis||'',
+    ev:evidence
+  };
+  const call=await modelJson(client,model,EVIDENCE_GROUND_SYSTEM,payload);addUsage(usage,call.usage);
+  const scores=new Map();
+  for(const row of arr(call.parsed?.ck)){
+    const index=Number(row?.[0]);
+    if(!Number.isInteger(index)||index<0||index>=constraints.length)continue;
+    scores.set(index,Math.max(0,Math.min(1,Number(row?.[1]||0))));
+  }
+  const ok=Number(call.parsed?.ok||0)===1;
+  log('query_v5_evidence_grounding',{step,goalId:goal?.id||'',payload,modelResponse:call.parsed,usage:call.usage});
+  return {scores,ok};
 }
 
 async function decide({
@@ -549,33 +605,55 @@ async function decide({
   // Goal closure is anchored in the accumulated hypothesis satisfying every
   // hard acceptance constraint. gs remains a model diagnostic, not the sole
   // convergence switch.
-  const goalResolutions=hardConstraintsMet?[String(activeGoalId)]:[];
   const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
   const evidenceStates=!entryStage&&sourceBody
     ? sourceEvidenceStates(currentState,sourceBody,call.parsed?.ev)
     : [];
+  let grounding=null;
+  if(!entryStage&&sourceBody&&evidenceStates.length){
+    grounding=await verifyEvidenceGrounding({
+      question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
+      constraints:fixedConstraints,evidenceStates,client,model,usage,log,step
+    });
+    for(const item of fixedConstraints){
+      if(!grounding.scores.has(item.index))continue;
+      const grounded=Number(grounding.scores.get(item.index)||0);
+      const current=Number(scoreByIndex.get(item.index)||0);
+      scoreByIndex.set(item.index,Math.min(current,grounded));
+    }
+  }
+  const groundedConstraintChecklist=!entryStage
+    ? fixedConstraints.map(item=>[item.text,Number(scoreByIndex.get(item.index)||0),item.kind])
+    : [];
+  const groundedHardScores=groundedConstraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
+  const groundedHypothesisScore=groundedHardScores.length
+    ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
+    : hypothesisScore;
+  const groundedHardConstraintsMet=!entryStage&&groundedHardScores.length>0&&groundedHardScores.every(score=>score>=GOAL_CLOSE_SCORE);
   const evidenceRanges=evidenceStates.map(item=>({
     sourcePath:item.sourcePath||'',
     startLine:Number(item.startLine||0),
     endLine:Number(item.endLine||item.startLine||0),
+    supports:arr(item.evidenceSupports),
     why:item.evidenceWhy||''
   }));
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const result={
-    explained:hardConstraintsMet&&!unresolvedOther,
+    explained:groundedHardConstraintsMet&&!unresolvedOther,
     hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:entryStage?[]:arr(call.parsed?.a),
     disputes:entryStage?[]:arr(call.parsed?.d),
     resolutions:entryStage?[]:arr(call.parsed?.r),
-    goalResolutions,
+    goalResolutions:groundedHardConstraintsMet?[String(activeGoalId)]:[],
     goalScores:[...goalScores.entries()],
     activeGoalScore,
-    hypothesisScore,
-    hardConstraintsMet,
-    constraintChecklist,
+    hypothesisScore:groundedHypothesisScore,
+    hardConstraintsMet:groundedHardConstraintsMet,
+    constraintChecklist:groundedConstraintChecklist,
     inspectSource,
     evidenceRanges,
+    evidenceGrounded:grounding?grounding.ok:null,
     supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
   };
 
@@ -583,7 +661,7 @@ async function decide({
     explained:result.explained,hypothesis:result.hypothesis,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
-    evidenceRanges:result.evidenceRanges,
+    evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,
     additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,
     goalResolutions:result.goalResolutions
   },usage:call.usage});
@@ -591,11 +669,38 @@ async function decide({
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
     action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
-    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,goals:goalView(goals),
+    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
   });
   return result;
+}
+
+async function synthesizeResolvedAnswer({question,goals,threads,client,model,usage,log}){
+  const packages=goals.map(goal=>{
+    const thread=threads.get(goal.id);
+    const evidence=dedupeStates(goal.supportStates||[]).map(state=>({
+      path:state.sourcePath||'',
+      startLine:Number(state.startLine||0),
+      endLine:Number(state.endLine||state.startLine||0),
+      code:text(state.body||'',1800),
+      supports:arr(state.evidenceSupports),
+      why:state.evidenceWhy||''
+    }));
+    return {
+      id:goal.id,kind:goal.kind,text:goal.text,
+      hardConstraints:arr(goal.hardConstraints),
+      optionalConstraints:arr(goal.optionalConstraints),
+      hypothesis:goal.summary||thread?.bestHypothesis||thread?.hypothesis||'',
+      hypothesisScore:Number(thread?.hypothesisScore||thread?.bestScore||0),
+      constraintScores:arr(thread?.bestConstraintChecklist).map(row=>({text:row[0],score:Number(row[1]||0),kind:row[2]})),
+      evidence
+    };
+  });
+  const call=await modelJson(client,model,ANSWER_SYNTHESIS_SYSTEM,{q:question,goals:packages});addUsage(usage,call.usage);
+  const answer=text(call.parsed?.answer||'',5000);
+  log('query_v5_answer_synthesis',{question,goals:packages,answer,usage:call.usage});
+  return answer;
 }
 
 async function localizeExplanation({question,explanation,evidenceStates,client,model,usage,log}){
@@ -1024,6 +1129,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
       thread.bestConstraintChecklist=decision.constraintChecklist;
     }
+    if(decision.hardConstraintsMet){
+      thread.bestHypothesis=decision.hypothesis||thread.bestHypothesis||thread.hypothesis;
+      thread.bestConstraintChecklist=decision.constraintChecklist;
+    }
     emit({
       action:'HYPOTHESIS_PROGRESS',goalId:goal.id,
       hypothesis:decision.hypothesis||thread.hypothesis,
@@ -1132,7 +1241,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
   if(allGoalsResolved(goals)){
     finalExplanation=goals.map(goal=>goal.summary).filter(Boolean).join(' ');
-    finalEvidence=dedupeStates([...goalEvidenceStates(goals),...ledgerEvidenceStates(ledger)]);
+    const resolvedEvidence=goalEvidenceStates(goals);
+    finalEvidence=dedupeStates(resolvedEvidence.length?resolvedEvidence:ledgerEvidenceStates(ledger));
   }
 
   if(!finalExplanation){
@@ -1163,9 +1273,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(seenRanges.has(key))return false;
     seenRanges.add(key);return true;
   }).map((range,index)=>({...range,rank:index+1}));
+  const synthesized=await synthesizeResolvedAnswer({question,goals,threads,client,model,usage,log});
   const locations=ranges.map(range=>`${range.sourcePath}#${range.name} ${range.startLine}-${range.endLine}${range.why?' — '+range.why:''}`).join('\n');
-  const answer=finalExplanation+(locations?'\n\n'+locations:'');
-  log('query_v5_complete',{complete:true,mode,goals:goalView(goals),explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger,{all:true}),ranges,events,usage});
+  const answer=synthesized||finalExplanation+(locations?'\n\n'+locations:'');
+  log('query_v5_complete',{complete:true,mode,goals:goalView(goals),explained:true,hypothesis:finalExplanation,answer,facts:ledgerView(ledger,{all:true}),ranges,events,usage});
   const diag=diagnostics();log('query_v5_diagnostics',diag);
   return {answer,mode,goals:goalView(goals),complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger,{all:true}),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-goals-v5',reasoningMode:mode,goals:goalView(goals),usage}};
 }
