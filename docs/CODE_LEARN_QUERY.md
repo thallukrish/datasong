@@ -10,27 +10,25 @@ The governing split is:
 
 Learn never receives the user issue, query hypothesis, relevance criteria or desired answer.
 
-Learn is frontier-lazy. It builds only the semantics needed for the next search decision. Functions of 50 lines or fewer remain coherent semantic units; statement regions are used as a chunking mechanism only for functions longer than 50 lines.
+Learn is frontier-lazy. It builds only the semantics needed for the current search decision and bounded navigation lookahead. Functions of 50 lines or fewer remain coherent semantic units; statement regions are used as a chunking mechanism only for functions longer than 50 lines.
 
 ```text
-selected function
+current visited node
         ↓
-learn function + direct semantic regions
+learn / reuse its semantics
         ↓
-Query scores the region frontier
+materialize semantic frontier up to 3 levels
         ↓
-selected region
+Query estimates branch trajectory
         ↓
-learn only that region's direct semantic children
+move only one level
+        ↓
+update the evidence-backed hypothesis
         ↓
 repeat
-
-after relevant body space is exhausted
-        ↓
-learn only the immediate call frontier
 ```
 
-Learn never expands a three-level call tree merely because a function was selected. Deeper regions and called functions are learned only when Query reaches that frontier.
+The three-level window is a lookahead horizon, not three committed traversal steps. Query may inspect those unvisited semantics only to estimate navigation potential. They do not become evidence and may not change the hypothesis until LeMap actually moves to the node.
 
 The structural graph remains authoritative for symbol identity, source coordinates, calls, containment, branches and traversal.
 
@@ -40,9 +38,9 @@ Each learned region keeps the same structural identity and source range as the a
 
 This expansion is lazy. Entry-candidate comparison does not learn every candidate's body regions. Regions are expanded only after a candidate becomes the current function, and called functions receive their regions when they later become the current root.
 
-Once a function is selected for active investigation, Query searches its semantic region hierarchy before branching into called functions or abandoning that entry candidate. Direct regions are scored as semantic navigation candidates, the highest-scoring region is visited first, and nested semantic regions are scored in the same way. A region with score 0 can be pruned; the walk is relevance-driven rather than a sequential source-code scan. Only after the function's relevant semantic body space has been exhausted may call-graph traversal or entry backtracking continue.
+Once a function is selected for active investigation, Query searches its semantic region hierarchy before branching into called functions or abandoning that entry candidate. Direct regions are immediate navigation candidates; nested regions and calls may appear in the bounded lookahead used to estimate whether a branch is strengthening, flattening, or weakening. Query still advances only one semantic hop at a time.
 
-Navigation score and goal-satisfaction score are separate. Navigation answers "where should the semantic search go next?" Goal satisfaction answers "is the accumulated evidence sufficient for this goal?" A goal closes only at 1.0. If semantics identify a material node but are insufficient to establish the needed fact, Query may explicitly request that node's exact source range and score again with that source as verification evidence.
+Navigation potential and hypothesis match are separate. Navigation asks "which immediate branch is most likely to improve the current hypothesis, especially on unresolved hard constraints?" Hypothesis match asks "how well does the accumulated evidence-backed explanation satisfy the active goal's fixed acceptance criteria?" If semantics are material but insufficient, Query may explicitly request the current node's exact source range as verification evidence.
 
 The model adds reusable semantic details such as:
 
@@ -67,9 +65,7 @@ Lazy learning does not mean learning one node at a time and it does not mean lea
 
 LeMap maintains a learned semantic frontier around the current search position.
 
-For a function of 50 lines or fewer, the function itself is the semantic unit and the next frontier is its immediate called functions. For a function longer than 50 lines, the frontier is its direct semantic body regions. For a selected region, the frontier is its direct nested semantic regions. After a large function's relevant body space has been exhausted, its frontier becomes its immediate called functions.
-
-When Query moves to one of those nodes, Learn expands only that node's next frontier and reuses semantics already persisted.
+For a function of 50 lines or fewer, the function itself is the semantic unit. For a function longer than 50 lines, regions are chunking units whose assessments feed one continuous function/thread hypothesis. Around the current visited node, Learn may expose up to three semantic levels of regions and/or calls for lookahead. When Query chooses a direction it advances only to the immediate child, then updates the hypothesis from that newly visited evidence.
 
 ## Evidence obligations
 
@@ -185,9 +181,9 @@ For a **locate** goal, Query asks whether the current evidence identifies the ex
 
 For a **describe** goal, Query asks whether the current evidence directly establishes the requested behavior or flow.
 
-For every active goal, Query receives the immutable hard and optional constraints that were created during goal decomposition. Query only scores those existing constraints against the current function or region. It cannot add, remove, rewrite, or substitute constraints based on whatever implementation mechanism it happens to encounter.
+For every active goal, Query receives the immutable hard and optional constraints that were created during goal decomposition. The thing scored against those constraints is the accumulated evidence-backed hypothesis, not the current function in isolation. A function, region, configuration node, or external boundary is evidence that may strengthen, leave unchanged, weaken, or revise that hypothesis.
 
-The fixed checklist produces a candidate-fit score separate from navigation and goal sufficiency. A clearly failed hard constraint forces candidate fit below 0.5. A candidate fit of 0.5 or greater keeps the current function as a live candidate: Query verifies it with source or a materially necessary semantic continuation before considering weaker sibling/frontier branches. After source verification, a candidate may not remain indefinitely ambiguous. If no further continuation is needed, it must either satisfy the goal or fall below the candidate-fit threshold.
+The hard-constraint scores are the authoritative convergence state. When every hard constraint reaches the evidence threshold, the goal closes. Optional constraints improve confidence but never block completion.
 
 For a **causal** goal, the derived hard constraints normally encode the conditions needed for the observed code to actually produce the reported behavior. When multiple mechanisms look superficially relevant, each is therefore tested against those request-derived constraints rather than a fixed causal template.
 
@@ -210,19 +206,21 @@ Query also maintains a rolling evidence-backed summary per goal thread, while th
 ```text
 issue
   ↓
-learned semantic evidence
+goal + fixed acceptance constraints
   ↓
-current hypothesis
+faceted entry search
   ↓
-choose the most useful branch
+visited semantic evidence
   ↓
-LeMap moves there
+update accumulated hypothesis
   ↓
-Learn extends the 3-level semantic window
+score hypothesis against constraints
   ↓
-more evidence
+3-level semantic lookahead
   ↓
-update hypothesis
+estimate branch trajectory / unresolved-constraint coverage
+  ↓
+move one level
   ↓
 repeat
 ```
@@ -277,30 +275,35 @@ The ledger is query-local. It is not written into Learn semantics merely because
 
 This prevents repeated rediscovery while still allowing the investigation to change direction.
 
-## Stop condition
+## Convergence, progress and stop condition
 
-At every meaningful code position, Query asks which unresolved evidence obligations the current evidence can resolve.
+After every visited node, Query updates the accumulated hypothesis and scores that hypothesis against the active goal's fixed hard and optional constraints.
 
 ```text
-current goals
-+ cumulative supported facts
-+ traversed path
-+ current semantic node
-+ semantic navigation candidates
-+ exact source only when explicitly requested
+previous hypothesis score
         ↓
-score active-goal evidence sufficiency
+visit one semantic node
         ↓
-all material goals resolved?
+update hypothesis from visited evidence
+        ↓
+rescore fixed constraints
+        ↓
+strengthening / flat / weakening
 ```
 
-If all material goals are resolved, exploration stops immediately.
+A score increase greater than the progress tolerance is strengthening. Little change is flat. A decrease is weakening. Flat exploration is tolerated only briefly, unless lookahead indicates that the branch can address an unresolved hard constraint.
 
-If some goals remain unresolved, Query ranks only continuations likely to resolve those remaining obligations. It does not continue merely because child calls exist.
+The semantic lookahead gives each immediate branch an expected hypothesis score plus the unresolved constraints it appears capable of improving. LeMap compares that potential with the best hypothesis already reached on the goal thread. A branch is worth exploring when it can plausibly beat the best score or resolve an unmet hard constraint.
 
-If no useful continuation exists at the current position, LeMap backtracks to a preserved alternative. If the current entry flow is exhausted, LeMap reseeds from another entry candidate.
+Backtracking preserves the best hypothesis, its constraint scores and evidence. Trying a sibling restores the hypothesis state from the branch point; evidence from the abandoned sibling is not silently carried into the new branch.
 
-The model may suggest completion, but LeMap's authoritative stop condition is the goal ledger: every material goal must have evidence-bound resolution.
+A goal closes when all of its hard constraints are sufficiently established by the accumulated evidence-backed hypothesis. Once every material goal is resolved, exploration stops immediately.
+
+## Query progress UI
+
+The Query UI exposes the convergence state directly instead of showing only raw exploration events. During a code query it shows the active goal, current accumulated hypothesis, hypothesis match, each hard and optional constraint with its score, current semantic path, semantic-lookahead branch potentials, strengthening/flat/weakening trend, best score reached, and cumulative prompt/completion/total tokens.
+
+This makes search quality observable. A healthy exploration should visibly move the hypothesis toward unresolved hard constraints; flattening or weakening should correspond to pruning/backtracking rather than continued token consumption.
 
 ## Responsibility split
 
@@ -336,33 +339,25 @@ They remain available inside LeMap for deterministic traversal and final localiz
 
 ## Query decision contract
 
-The model makes one compact decision from the currently visible evidence.
+The model receives the current evidence-backed hypothesis, fixed goal constraints, the visited semantic node, immediate candidates and bounded semantic lookahead. Lookahead is navigation-only and must never be promoted into evidence before traversal.
+
+A semantic decision returns the updated hypothesis, fixed-constraint scores, an overall hypothesis-match diagnostic, optional source-inspection request, and at most three immediate branches:
 
 ```json
 {
-  "x": 0,
-  "h": "current evidence-backed summary",
-  "z": ["G1"],
+  "h": "updated evidence-backed hypothesis",
+  "gs": [["G1", 0.8]],
+  "ck": [[0, 1.0], [1, 0.6]],
+  "hs": 0.8,
   "a": ["new established fact"],
-  "d": ["F1"],
-  "r": ["F2"],
-  "p": [[0, 0.9]]
+  "d": [],
+  "r": [],
+  "i": 0,
+  "p": [[0, 0.9, [1]]]
 }
 ```
 
-Where:
-
-- `z` contains goal IDs directly resolved by the current evidence.
-- `h` summarizes resolved goals and the unresolved remainder without inventing evidence.
-- `a` adds newly established facts as plain sentences. LeMap binds them deterministically to the current semantic window.
-- `d` marks previously established fact IDs as disputed.
-- `r` re-supports disputed facts when later evidence establishes them again.
-- `p` contains at most three continuations worth exploring next.
-- `x` is a model-side completion signal, but LeMap does not trust it by itself. LeMap stops only when the evidence-bound goal ledger shows that all material goals are resolved.
-
-Goal resolution is also evidence-bound. A model-returned goal ID is accepted only while inspecting an actual current function/window with supporting states.
-
-Candidates omitted from `p` are not selected. There is no absolute navigation-score cutoff. If the model returns ranked candidates, LeMap follows the strongest one and preserves the remaining returned candidates as alternatives. If the model returns no candidate, LeMap backtracks or advances to the next entry batch.
+The ck field scores immutable goal constraints by index. The hs field is the model's overall hypothesis-match diagnostic; LeMap also derives progress from hard-constraint scores. Each p row means "move to this immediate candidate; semantic lookahead suggests the hypothesis may reach this expected score, and these unresolved constraints may improve." LeMap moves only one hop even though the model can see deeper semantics.
 
 ## Entry selection before exploration
 
