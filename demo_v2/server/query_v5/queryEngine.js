@@ -883,12 +883,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
-    // Source is an explicit verification action from semantic search, never
-    // automatic traversal evidence. While a function still has semantic body
-    // regions to narrow through, keep searching semantics rather than dumping
-    // the whole function body.
+    // Source is an explicit verification action from semantic search. For
+    // causal goals, a live candidate (fit >= 0.5) must be verified before we
+    // abandon it for a weaker sibling. If semantics alone leave the goal below
+    // sufficiency, source inspection is therefore forced when it is available.
     const sourceAllowed=state.type==='code_region'||state.type==='code_external'||!regionCandidates.length;
-    if(decision.inspectSource&&sourceAllowed&&step<MAX_STEPS){
+    const retainCausalCandidate=goal.kind==='causal'&&decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE;
+    const shouldInspectSource=(decision.inspectSource||retainCausalCandidate)&&sourceAllowed;
+    let inspectedSource=false;
+    if(shouldInspectSource&&step<MAX_STEPS){
+      inspectedSource=true;
       emit({
         action:'SOURCE_INSPECTION',goalId:goal.id,state:state.name,
         sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,
@@ -900,7 +904,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
       });
-    }else if(decision.inspectSource&&!sourceAllowed){
+    }else if((decision.inspectSource||retainCausalCandidate)&&!sourceAllowed){
       emit({
         action:'SOURCE_DEFERRED',goalId:goal.id,state:state.name,
         reason:'Semantic child regions remain; narrow semantically before source inspection.',
@@ -963,6 +967,24 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         hypothesis:decision.hypothesis
       };
       events.push(event);emit({...event,path:[...path,warm[0].state].map(x=>x.name)});
+      continue;
+    }
+
+    // A causal candidate that still scores >= 0.5 after verification is not
+    // discarded merely because goal sufficiency is slightly lower. At this
+    // point the model must either have selected a continuation for an
+    // unresolved hard check or have enough evidence to resolve. If neither
+    // happened, stop this thread as an explicit stalled candidate instead of
+    // wandering into lower-ranked sibling/frontier branches.
+    if(goal.kind==='causal'&&decision.candidateFit>=0.5&&decision.activeGoalScore<GOAL_CLOSE_SCORE){
+      emit({
+        action:'CAUSAL_CANDIDATE_STALLED',goalId:goal.id,state:state.name,
+        candidateFit:decision.candidateFit,goalScore:decision.activeGoalScore,
+        checklist:decision.causalChecklist,inspectedSource,
+        hypothesis:decision.hypothesis,path:path.map(x=>x.name)
+      });
+      thread.stack=[];
+      thread.exhausted=true;
       continue;
     }
 
