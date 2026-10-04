@@ -297,7 +297,11 @@ The semantic lookahead gives each immediate branch an expected hypothesis score 
 
 Backtracking preserves the best hypothesis, its constraint scores and evidence. Trying a sibling restores the hypothesis state from the branch point; evidence from the abandoned sibling is not silently carried into the new branch.
 
-A goal closes when all of its hard constraints are sufficiently established by the accumulated evidence-backed hypothesis. When exact source was needed to settle the goal, closure additionally requires an evidence-grounding pass over the selected source ranges. The grounding pass may only judge the supplied hypothesis and evidence; it cannot repair the hypothesis or search for a better mechanism. Controller scores are capped by those groundedness scores, so unsupported high model scores cannot close the goal. Once every material goal is resolved, exploration stops immediately.
+A goal closes when all of its hard constraints are sufficiently established by the accumulated evidence-backed hypothesis. When exact source was needed to settle the goal, closure additionally requires an evidence-grounding pass over the selected source ranges. The grounding pass may only judge the supplied hypothesis and evidence; it cannot repair the hypothesis or search for a better mechanism. Controller scores are capped by those groundedness scores, so unsupported high model scores cannot close the goal.
+
+Best-so-far and resolved are deliberately different states. A hypothesis may remain the strongest explanation found even when one hard criterion is below threshold. If all useful branches are exhausted in that state, Query stops as `best_so_far_exhausted`, preserves that hypothesis, its fixed-constraint scores and supporting evidence, and reports the goal as unresolved. It must never promote the best available hypothesis into a solved goal merely because every alternative scored worse.
+
+Once every material goal is genuinely resolved, exploration stops immediately.
 
 ## Query progress UI
 
@@ -971,7 +975,7 @@ The current Query v5 implementation now follows the hypothesis-driven semantic-s
 | Strengthening | Continue when visited evidence improves acceptance-criteria coverage. | Improving branches remain eligible for descent. | Implemented |
 | Flattening | Tolerate little or no gain briefly only when a branch can still address an unresolved hard constraint. | Flat progress is bounded to two steps. | Implemented |
 | Weakening | Backtrack earlier when evidence moves the hypothesis away from the goal. | Weakening prevents the flat-progress exception and drives backtracking. | Implemented |
-| Best-so-far memory | Preserve the strongest explanation reached during the goal search. | Threads keep bestHypothesis, bestScore and best constraint checklist. | Implemented |
+| Best-so-far memory | Preserve the strongest explanation reached during the goal search without confusing it with proof. | Threads keep bestHypothesis, bestScore, best constraint checklist and supporting evidence. If search exhausts before all hard constraints pass, the result is explicitly best-so-far/unresolved. | Implemented |
 | Backtracking state | A sibling branch must start from the branch-point hypothesis, not from the abandoned sibling's interpretation. | Frames store baseHypothesis/baseScore and restore them on sibling traversal. | Implemented |
 | Evidence memory | Established facts survive branch-local hypothesis rollback. | The query-local evidence ledger remains cumulative across backtracking. | Implemented |
 | Alternate-branch pruning | Do not explore branches that cannot improve the best explanation or resolve an unmet hard constraint. | Branch filtering compares expected score with bestScore and targeted unresolved constraints. | Implemented |
@@ -1107,3 +1111,5 @@ The remaining work is therefore mostly calibration and observability rather than
 89. When exact source participates in convergence, selected source ranges are independently checked against the fixed criteria; source-grounded scores cap the model's proposed constraint scores.
 90. A source-inspected decision with no selected supporting ranges cannot close a goal.
 91. Final answer generation is a separate synthesis step over resolved goals, final hypotheses, scores and exact supporting source only; synthesis may improve presentation but cannot introduce a new repository explanation.
+92. Best-so-far is not resolution. Search exhaustion with any hard constraint below the close threshold returns an explicit unresolved best-so-far state even when every alternative branch is weaker.
+93. An unresolved best-so-far result retains its hypothesis, constraint scores and supporting source evidence so model weakness can fail visibly rather than being converted into a confident answer.
