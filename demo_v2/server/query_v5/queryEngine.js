@@ -1159,7 +1159,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const sourceOpportunityComplete=!decision.inspectSource||inspectedSource;
     const entryBranchDominated=Boolean(
       bestOtherEntry&&sourceOpportunityComplete&&
-      Number(decision.hypothesisScore||0)+HYPOTHESIS_DELTA_EPSILON<Number(bestOtherEntry.bestScore||0)
+      Number(decision.hypothesisScore||0)<Number(bestOtherEntry.bestScore||0)
     );
     emit({
       action:'ENTRY_BRANCH_SCORE',goalId:goal.id,
@@ -1169,6 +1169,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       incumbentEntry:bestOtherEntry?.name||'',
       incumbentScore:Number(bestOtherEntry?.bestScore||0),
       dominated:entryBranchDominated,
+      entryBranches:[...thread.entryScores.values()].map(item=>({
+        id:item.id,name:item.name,currentScore:Number(item.currentScore||0),bestScore:Number(item.bestScore||0)
+      })),
       path:path.map(x=>x.name)
     });
 
@@ -1252,6 +1255,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         entry:entryRootName,entryScore:Number(decision.hypothesisScore||0),
         incumbentEntry:bestOtherEntry.name,incumbentScore:Number(bestOtherEntry.bestScore||0),
         reason:'Entry branch fell below an already established entry-level score.',
+        entryBranches:[...thread.entryScores.values()].map(item=>({
+          id:item.id,name:item.name,currentScore:Number(item.currentScore||0),bestScore:Number(item.bestScore||0)
+        })),
         path:path.map(x=>x.name)
       });
       // Collapse any descendants of this entry back to its root frame, clear
