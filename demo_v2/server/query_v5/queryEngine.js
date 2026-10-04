@@ -59,19 +59,31 @@ ENTRY STAGE: when n is null, choose where the evidence path should begin.
 - Do not form or update h yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return h="", gs=[], ck=[], hs=0.
 - Once LeMap enters the selected entry, that entry becomes the first visited semantic evidence. The normal SEMANTIC WALK then forms or revises the hypothesis from it.
 
-SEMANTIC WALK: when n is present, treat h as the accumulated explanation for the active goal. Integrate only evidence from the current visited node (and src when supplied) into h. Do not treat unvisited lookahead nodes as evidence.
+SEMANTIC WALK: when n is present and src is absent, treat h as a provisional accumulated explanation for the active goal. Integrate only evidence from the current visited semantic node. Do not treat unvisited lookahead nodes as evidence.
 - The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace them from candidate evidence.
-- Score the UPDATED accumulated hypothesis against those fixed constraints. Return ck as [[constraintIndex,score],...] using concatenated hardConstraints then optionalConstraints, with each score 0..1. The constraint text itself must not be returned.
+- Revise h when the visited semantic evidence warrants it. Do not defend h merely because it already exists.
+- Score the resulting hypothesis against those fixed constraints. Return ck as [[constraintIndex,score],...] using concatenated hardConstraints then optionalConstraints, with each score 0..1. The constraint text itself must not be returned.
 - hs is the overall hypothesis-match score 0..1. It summarizes how well the accumulated evidence-backed hypothesis satisfies the active goal. Hard constraints dominate this score.
 - gs reports goal sufficiency as [[goalId,score]]. It should agree with the hypothesis/constraint evidence. Use 1.0 when the hypothesis is sufficient to answer the goal; do not reserve 1.0 for exhaustive repository certainty.
 - l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
 - p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. constraintIndexes are unresolved constraints that the branch appears capable of improving.
-- a contains only explicit facts established by the visited semantic node or by src when present. Every item in a must be a plain string, never an array or object.
-- src.lines contains LeMap-assigned source evidence candidates as [evidenceIndex,sourceText]. LeMap owns the source coordinates; do not invent or return line numbers.
-- ev identifies the evidence candidates from the CURRENT visited node that materially support the UPDATED hypothesis. When src is present, return ev as [[evidenceIndex,[constraintIndexes],"why"],...]. Multiple candidates may contribute together, and one candidate may support several constraints. Select only the smallest combined evidence set that supports the hypothesis and advances unresolved constraints. Do not rank candidates against one another and do not force a single-line mechanism. A hard constraint should not receive a high score unless the selected evidence set materially supports it. When src is absent, return ev=[] and the visited semantic node itself is the evidence unit.
-- When src is present, examine the whole supplied body before deciding to navigate away. Use any combination of supplied lines that jointly strengthens or revises h. If the resulting hypothesis satisfies all hard constraints, return no continuation in p. If hard constraints remain unresolved, return p only when the remaining supplied source cannot materially strengthen those constraints.
+- a contains only explicit facts established by the visited semantic node. Every item in a must be a plain string, never an array or object.
+- ev=[] while src is absent.
 - i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
-- Do not request source merely to browse. When src is present, use it to update h and the constraint scores, and do not request source again in that decision.
+- Do not request source merely to browse.
+
+SOURCE DIAGNOSIS: when src is present, stop treating h as something to confirm. h is only the previous candidate explanation.
+- Re-derive the best explanation from the supplied source plus already established facts.
+- Return assessment as one of "confirm", "revise", or "reject" describing what the supplied source does to the previous h.
+- For causal goals, explicitly test whether the proposed mechanism explains the distinguishing condition in the issue: what operation is involved, what differs in the failing case, why that difference changes behavior, and how that produces the reported symptom.
+- If the source supports a different mechanism better than h, replace h. Do not preserve an earlier explanation merely because it is plausible or already accumulated.
+- A causal hypothesis must not receive a high hard-constraint score merely because the source contains code related to the symptom. It must account for the distinguishing behavior requested by the goal.
+- src.lines contains LeMap-assigned source evidence candidates as [evidenceIndex,sourceText]. LeMap owns source coordinates; do not invent or return line numbers.
+- First determine the mechanism, then select ev as [[evidenceIndex,[constraintIndexes],"why"],...] containing only the smallest combined set of source candidates that establishes that mechanism. Multiple candidates may contribute together and one candidate may support several constraints.
+- Examine the whole supplied source before deciding that the prior h is correct. Actively look for source statements that contradict, narrow, or supersede it.
+- Score ck, hs and gs only after choosing the source-grounded h and its evidence.
+- If the source-grounded hypothesis satisfies all hard constraints, return no continuation in p. If hard constraints remain unresolved, return p only when the remaining supplied source cannot materially improve them.
+- i=0 when src is present; do not request the same source again.
 
 For causal goals, compare candidate mechanisms against the distinguishing conditions in the issue. For change goals, establish the current implementation and how the requested change applies. For describe goals, establish the requested behavior or flow. For verify goals, establish the stated constraint or consequence. Locate goals close when the semantic/structural evidence identifies the requested implementation.
 
@@ -79,7 +91,7 @@ Never invent implementation details not present in learned semantics, supported 
 For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
 For SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 Return only:
-{"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+{"assessment":"","h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
@@ -713,8 +725,11 @@ async function decide({
     why:item.evidenceWhy||''
   }));
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
+  const assessment=sourceBody&&['confirm','revise','reject'].includes(String(call.parsed?.assessment||'').toLowerCase())
+    ?String(call.parsed.assessment).toLowerCase():'';
   const result={
     explained:groundedHardConstraintsMet&&!unresolvedOther,
+    assessment,
     hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:entryStage?[]:arr(call.parsed?.a),
@@ -735,7 +750,7 @@ async function decide({
   };
 
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
-    explained:result.explained,hypothesis:result.hypothesis,
+    explained:result.explained,assessment:result.assessment,hypothesis:result.hypothesis,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
     evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
@@ -745,7 +760,7 @@ async function decide({
 
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
-    action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
+    action:'DECIDE',step,mode,assessment:result.assessment,hypothesis:result.hypothesis,explained:result.explained,
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
