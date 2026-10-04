@@ -52,7 +52,12 @@ m contains structural code matches only during entry localization.
 
 Treat this as search. Structure bootstraps the semantic space; Learn fills missing semantics; Query walks semantic functions, regions and branches. Source is not normal traversal evidence. Use exact code only when it is supplied in src or in entry-stage structural matches.
 
-ENTRY STAGE: when n is null, rank the candidate semantic entries in p. Do not form a causal/change/verification conclusion, do not add facts, do not request source, and report goal score 0. Return h="".
+ENTRY STAGE: when n is null, choose where the evidence path should begin.
+- c contains candidate entry functions/boundaries whose reusable semantics may be used only to judge where to start.
+- Rank at most 3 entries in p as [candidateIndex,entryNavigationScore]. entryNavigationScore is 0..1 and means "how promising is this as the first visited location for the active goal?"
+- Give positive scores to plausible starting entries. A score of 0 means the entry is not worth entering.
+- Do not form or update h yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return h="", gs=[], ck=[], hs=0.
+- Once LeMap enters the selected entry, that entry becomes the first visited semantic evidence. The normal SEMANTIC WALK then forms or revises the hypothesis from it.
 
 SEMANTIC WALK: when n is present, treat h as the accumulated explanation for the active goal. Integrate only evidence from the current visited node (and src when supplied) into h. Do not treat unvisited lookahead nodes as evidence.
 - The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace them from candidate evidence.
@@ -67,8 +72,11 @@ SEMANTIC WALK: when n is present, treat h as the accumulated explanation for the
 
 For causal goals, compare candidate mechanisms against the distinguishing conditions in the issue. For change goals, establish the current implementation and how the requested change applies. For describe goals, establish the requested behavior or flow. For verify goals, establish the stated constraint or consequence. Locate goals close when the semantic/structural evidence identifies the requested implementation.
 
-Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src. Return only:
-{"h":"","gs":[["G1",0.0]],"ck":[[0,0.0]],"hs":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0,[0]]]}.
+Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src.
+For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
+For SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
+Return only:
+{"h":"","gs":[],"ck":[],"hs":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
@@ -474,7 +482,7 @@ async function decide({
     const state=byIndex.get(String(row?.[0]));if(!state)continue;
     const score=Math.max(0,Math.min(1,Number(row?.[1]||0)));
     if(!(score>0))continue;
-    const targets=arr(row?.[2]).map(Number).filter(Number.isInteger);
+    const targets=entryStage?[]:arr(row?.[2]).map(Number).filter(Number.isInteger);
     picks.push({state,score,targets});
   }
   picks.sort((a,b)=>b.score-a.score);
@@ -546,7 +554,7 @@ async function decide({
     action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
-    candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets}))
+    candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
   });
   return result;
 }
