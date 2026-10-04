@@ -67,6 +67,8 @@ SEMANTIC WALK: when n is present, treat h as the accumulated explanation for the
 - l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
 - p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. constraintIndexes are unresolved constraints that the branch appears capable of improving.
 - a contains only explicit facts established by the visited semantic node or by src when present. Every item in a must be a plain string, never an array or object.
+- ev identifies the evidence from the CURRENT visited node that materially supports the UPDATED hypothesis. When src is present, return ev as [[startLine,endLine,"why"],...]. Multiple disjoint ranges may contribute together. Select the smallest combined evidence set that supports the hypothesis and advances the unresolved constraints. Do not rank lines against one another and do not force a single-line mechanism. When src is absent, return ev=[] and the visited semantic node itself is the evidence unit.
+- When src is present, examine the whole supplied body before deciding to navigate away. Use any combination of supplied lines that jointly strengthens or revises h. If the resulting hypothesis satisfies all hard constraints, return no continuation in p. If hard constraints remain unresolved, return p only when the remaining supplied source cannot materially strengthen those constraints.
 - i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
 - Do not request source merely to browse. When src is present, use it to update h and the constraint scores, and do not request source again in that decision.
 
@@ -76,7 +78,7 @@ Never invent implementation details not present in learned semantics, supported 
 For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
 For SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 Return only:
-{"h":"","gs":[],"ck":[],"hs":0.0,"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+{"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
@@ -441,6 +443,32 @@ async function decomposeGoals({question,client,model,usage,log}){
   return {goals,mode};
 }
 
+function sourceEvidenceStates(state,sourceBody,evidenceRows=[]){
+  if(!state||!sourceBody)return [];
+  const minLine=Number(state.startLine||0),maxLine=Number(state.endLine||state.startLine||0);
+  const lines=String(sourceBody||'').split(/\r?\n/);
+  const out=[];
+  for(const row of arr(evidenceRows).slice(0,12)){
+    let start=Number(row?.[0]),end=Number(row?.[1]);
+    if(!Number.isInteger(start)||!Number.isInteger(end))continue;
+    if(end<start)[start,end]=[end,start];
+    if(minLine){start=Math.max(minLine,start);end=Math.min(maxLine||end,end)}
+    if(end<start)continue;
+    const offset=Math.max(0,start-(minLine||start));
+    const count=Math.max(1,end-start+1);
+    out.push({
+      ...state,
+      id:`${state.id}:evidence:${start}-${end}`,
+      name:`${state.name} [evidence ${start}-${end}]`,
+      startLine:start,
+      endLine:end,
+      body:lines.slice(offset,offset+count).join('\n'),
+      evidenceWhy:text(row?.[2]||'',260)
+    });
+  }
+  return dedupeStates(out);
+}
+
 async function decide({
   question,mode,goals=[],activeGoalId='',hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
   candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
@@ -523,6 +551,15 @@ async function decide({
   // convergence switch.
   const goalResolutions=hardConstraintsMet?[String(activeGoalId)]:[];
   const inspectSource=!entryStage&&!sourceBody&&Number(call.parsed?.i||0)===1;
+  const evidenceStates=!entryStage&&sourceBody
+    ? sourceEvidenceStates(currentState,sourceBody,call.parsed?.ev)
+    : [];
+  const evidenceRanges=evidenceStates.map(item=>({
+    sourcePath:item.sourcePath||'',
+    startLine:Number(item.startLine||0),
+    endLine:Number(item.endLine||item.startLine||0),
+    why:item.evidenceWhy||''
+  }));
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const result={
     explained:hardConstraintsMet&&!unresolvedOther,
@@ -538,13 +575,15 @@ async function decide({
     hardConstraintsMet,
     constraintChecklist,
     inspectSource,
-    supportStates:currentState?[currentState]:[]
+    evidenceRanges,
+    supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
   };
 
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
     explained:result.explained,hypothesis:result.hypothesis,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
+    evidenceRanges:result.evidenceRanges,
     additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,
     goalResolutions:result.goalResolutions
   },usage:call.usage});
@@ -552,7 +591,7 @@ async function decide({
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
     action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,
-    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,goals:goalView(goals),
+    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
   });
@@ -991,6 +1030,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       hypothesisScore:decision.hypothesisScore,
       previousScore,delta:progress.delta,trend:progress.trend,
       bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
+      evidenceRanges:decision.evidenceRanges,
       path:path.map(x=>x.name),goals:goalView(goals)
     });
 
