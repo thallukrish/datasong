@@ -10,7 +10,7 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
     try{
       if(!queryClient)return res.status(503).json({error:'The reasoning service is not configured'});
       const question=String(req.body?.question||'').trim();if(!question)return res.status(400).json({error:'question is required'});
-      const progress={running:true,question,mode:'',goals:[],activeGoalId:'',hypothesis:'',hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
+      const progress={running:true,question,mode:'',goals:[],activeGoalId:'',hypothesis:'',hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],evidenceRanges:[],facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
       const onProgress=(event={})=>{
         const p=explorer.state.queryV5Progress||progress;
         if(typeof event.mode==='string')p.mode=event.mode;
@@ -23,6 +23,7 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(typeof event.trend==='string')p.trend=event.trend;
         if(Number.isFinite(Number(event.bestScore)))p.bestScore=Number(event.bestScore);
         if(Array.isArray(event.constraintChecklist))p.constraintChecklist=event.constraintChecklist;
+        if(Array.isArray(event.evidenceRanges))p.evidenceRanges=event.evidenceRanges;
         if(Array.isArray(event.facts))p.facts=event.facts;
         if(typeof event.explained==='boolean')p.explained=event.explained;
         if(Array.isArray(event.path))p.path=event.path;
