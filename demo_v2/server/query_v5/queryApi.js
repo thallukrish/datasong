@@ -10,7 +10,7 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
     try{
       if(!queryClient)return res.status(503).json({error:'The reasoning service is not configured'});
       const question=String(req.body?.question||'').trim();if(!question)return res.status(400).json({error:'question is required'});
-      const progress={running:true,question,mode:'',status:'searching',goals:[],activeGoalId:'',hypothesis:'',hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],evidenceRanges:[],entryBranches:[],facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
+      const progress={running:true,question,mode:'',status:'searching',goals:[],activeGoalId:'',hypothesis:'',hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],evidenceRanges:[],entryBranches:[],counterfactualValidation:null,facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
       const onProgress=(event={})=>{
         const p=explorer.state.queryV5Progress||progress;
         if(typeof event.mode==='string')p.mode=event.mode;
@@ -26,6 +26,8 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(Array.isArray(event.constraintChecklist))p.constraintChecklist=event.constraintChecklist;
         if(Array.isArray(event.evidenceRanges))p.evidenceRanges=event.evidenceRanges;
         if(Array.isArray(event.entryBranches))p.entryBranches=event.entryBranches;
+        if(event.action==='COUNTERFACTUAL_PASS'||event.action==='COUNTERFACTUAL_FAIL')p.counterfactualValidation={pass:event.action==='COUNTERFACTUAL_PASS',patch:event.patch||'',prediction:event.prediction||'',failure:event.failure||''};
+        if(event.counterfactualValidation&&typeof event.counterfactualValidation==='object')p.counterfactualValidation=event.counterfactualValidation;
         if(Array.isArray(event.facts))p.facts=event.facts;
         if(typeof event.explained==='boolean')p.explained=event.explained;
         if(Array.isArray(event.path))p.path=event.path;
@@ -34,7 +36,7 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(event.action==='LEARN_START')p.learnNodes=event.nodes||[];
         if(event.action==='LEARN_DONE')p.learnNodes=[];
         p.action=event.action||p.action;p.detail=event;
-        if(['PREPARE_TOPOLOGY','TOPOLOGY_READY','GOALS','GOAL_ACTIVE','GOAL_SEARCH','GOAL_ENTRY_SELECTION','GOAL_ENTRY_BATCH','GOALS_RESOLVED','RESEED','DESCEND','BACKTRACK','BRANCH_PRUNED','DECIDE','HYPOTHESIS_PROGRESS','HYPOTHESIS_FLAT','ENTRY_BRANCH_SCORE','ENTRY_BRANCH_PRUNED','FACTS','LEARN_START','LEARN_DONE','EXPLAINED','SEARCH_EXHAUSTED'].includes(event.action))p.events=[...(p.events||[]),event].slice(-32);
+        if(['PREPARE_TOPOLOGY','TOPOLOGY_READY','GOALS','GOAL_ACTIVE','GOAL_SEARCH','GOAL_ENTRY_SELECTION','GOAL_ENTRY_BATCH','GOALS_RESOLVED','RESEED','DESCEND','BACKTRACK','BRANCH_PRUNED','DECIDE','HYPOTHESIS_PROGRESS','HYPOTHESIS_FLAT','ENTRY_BRANCH_SCORE','ENTRY_BRANCH_PRUNED','COUNTERFACTUAL_PASS','COUNTERFACTUAL_FAIL','FACTS','LEARN_START','LEARN_DONE','EXPLAINED','SEARCH_EXHAUSTED'].includes(event.action))p.events=[...(p.events||[]),event].slice(-32);
         explorer.state.queryV5Progress=p;explorer.emit?.();
       };
       const result=await runCodeFlowQueryV5({question,repoUrl:String(req.body?.repoUrl||explorer.state?.repoUrl||''),repoCommit:String(req.body?.repoCommit||''),explorer,client:queryClient,model:queryModel,log,onProgress});
