@@ -1285,14 +1285,33 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
-    // Source remains an explicit verification action. The model requests it
-    // only when the current visited semantics materially affect the hypothesis
-    // but exact code is needed to settle an unresolved hard constraint.
+    // Source remains an explicit verification action. Normally the model
+    // requests it only when exact code is needed to settle an unresolved hard
+    // constraint. However, a positively selected entry is not allowed to
+    // disappear merely because its first semantic decision is empty. That
+    // entry has already won structural navigation and has now been visited as
+    // evidence. If the model neither forms a hypothesis, requests source, nor
+    // proposes a continuation, inspect the entry source once before abandoning
+    // the branch.
     const sourceAllowed=state.type==='code_region'||state.type==='code_external'||!regionCandidates.length;
-    const shouldInspectSource=decision.inspectSource&&sourceAllowed;
+    const selectedEntry=frame.path.length===0&&state.id===entryRootId&&Number(frame.current?.score||0)>0;
+    const emptyEntryDecision=selectedEntry&&
+      !String(decision.hypothesis||'').trim()&&
+      Number(decision.hypothesisScore||0)<=0&&
+      !decision.inspectSource&&
+      !arr(decision.picks).length;
+    const forcedEntrySource=emptyEntryDecision&&Boolean(String(state.body||state.callText||'').trim());
+    const shouldInspectSource=(decision.inspectSource&&sourceAllowed)||forcedEntrySource;
     let inspectedSource=false;
     if(shouldInspectSource&&step<MAX_STEPS){
       inspectedSource=true;
+      if(forcedEntrySource){
+        emit({
+          action:'ENTRY_SOURCE_FALLBACK',goalId:goal.id,state:state.name,
+          reason:'Selected entry produced no hypothesis, source request, or semantic continuation. Inspecting exact entry source before abandoning the branch.',
+          path:path.map(x=>x.name)
+        });
+      }
       emit({
         action:'SOURCE_INSPECTION',goalId:goal.id,state:state.name,
         sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,
