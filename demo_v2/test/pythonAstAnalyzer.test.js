@@ -339,3 +339,36 @@ class Worker:
   const tryRegion = (run.regions || []).find((region) => region.kind === 'try');
   assert.ok(tryRegion?.references?.some((ref) => ref.targetSymbolId === helper.id));
 });
+
+test('CodeTopology incrementally reuses unchanged Python files across commits', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-construct-incremental-'));
+  const repoDir = path.join(root, 'repo');
+  const cacheRoot = path.join(root, 'cache');
+  await fs.mkdir(repoDir, { recursive: true });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(repoDir, 'stable.py'), 'def stable():\n    return StableThing()\n');
+  await fs.writeFile(path.join(repoDir, 'changed.py'), 'def changed():\n    return BeforeThing()\n');
+
+  const topology = new CodeTopology({ cacheRoot });
+  topology.repoDir = repoDir;
+  topology.repoUrl = 'https://example.invalid/incremental-demo.git';
+  topology.files = ['stable.py', 'changed.py'];
+  topology.commit = '1111111111111111111111111111111111111111';
+
+  await topology.buildConstructIndex();
+  assert.equal(topology.constructIndexMeta?.incremental, false);
+  assert.ok(topology.constructIndex.some((item) => item.sourcePath === 'stable.py' && item.name === 'StableThing'));
+  assert.ok(topology.constructIndex.some((item) => item.sourcePath === 'changed.py' && item.name === 'BeforeThing'));
+
+  await fs.writeFile(path.join(repoDir, 'changed.py'), 'def changed():\n    return AfterThing()\n');
+  topology.commit = '2222222222222222222222222222222222222222';
+  await topology.buildConstructIndex();
+
+  assert.equal(topology.constructIndexMeta?.incremental, true);
+  assert.equal(topology.constructIndexMeta?.incrementalFrom, '1111111111111111111111111111111111111111');
+  assert.deepEqual(topology.constructIndexMeta?.affectedFiles, ['changed.py']);
+  assert.ok(topology.constructIndex.some((item) => item.sourcePath === 'stable.py' && item.name === 'StableThing'));
+  assert.ok(!topology.constructIndex.some((item) => item.sourcePath === 'changed.py' && item.name === 'BeforeThing'));
+  assert.ok(topology.constructIndex.some((item) => item.sourcePath === 'changed.py' && item.name === 'AfterThing'));
+});
