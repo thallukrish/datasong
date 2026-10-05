@@ -99,7 +99,31 @@ function filterFromFacetAction(action={}){
   const value=String(action?.value||'').trim();
   const match=String(action?.match||'exact').toLowerCase();
   if(!field||!value)return null;
-  if(match==='exact')return {field,regex:'^'+escapeRegex(value)+'
+  if(match==='exact')return {field,regex:'^'+escapeRegex(value)+'$',match:'exact',value};
+  if(match==='prefix')return {field,regex:'^'+escapeRegex(value),match:'prefix',value};
+  if(match==='regex'){
+    try{new RegExp(value,'i')}catch{return null}
+    return {field,regex:value,match:'regex',value};
+  }
+  return null;
+}
+
+function filterFromFacetManyAction(action={},rows=[]){
+  const field=String(action?.field||'').trim();
+  const values=arr(action?.values).map(value=>String(value||'').trim()).filter(Boolean).slice(0,4);
+  if(!field||values.length<2)return null;
+  const available=new Set(facetEntries(rows,field,'count',Math.max(FACET_LIMIT,24)).map(item=>item.value));
+  const exact=values.filter(value=>available.has(value));
+  if(exact.length<2)return null;
+  return {
+    field,
+    regex:'^(?:'+exact.map(escapeRegex).join('|')+')$',
+    match:'many',
+    value:exact.join(' | '),
+    values:exact
+  };
+}
+
 function rowsForSelection(index=[],construct='',filters=[]){
   return arr(index).filter(row=>{
     if(construct&&String(row?.constructType||'').toLowerCase()!==construct)return false;
