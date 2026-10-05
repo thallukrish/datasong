@@ -669,6 +669,8 @@ async function decide({
       })).filter(item=>item.matches.length)
     : [];
 
+  const activeGoal=arr(goals).find(goal=>goal.id===activeGoalId);
+
   const payload={
     q:question,
     g:goalView(goals),
@@ -772,7 +774,6 @@ async function decide({
     }
   }
   const activeGoalScore=entryStage?0:Number(goalScores.get(String(activeGoalId||''))||0);
-  const activeGoal=arr(goals).find(goal=>goal.id===activeGoalId);
   const fixedConstraints=[
     ...arr(activeGoal?.hardConstraints).map((value,index)=>({index,text:value,kind:'hard'})),
     ...arr(activeGoal?.optionalConstraints).map((value,index)=>({index:arr(activeGoal?.hardConstraints).length+index,text:value,kind:'support'}))
