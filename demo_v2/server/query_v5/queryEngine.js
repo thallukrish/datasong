@@ -1361,8 +1361,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         };
         events.push(batchEvent);emit(batchEvent);
 
-        const warm=decision.picks;
-        if(!warm.length)continue;
+        const warm=decision.picks.filter(pick=>Number(pick.score||0)>=0.15);
+        if(!warm.length){
+          const rejected={step,action:'GOAL_ENTRY_REJECT_WEAK',goalId:goal.id,batch:thread.batchNumber,threshold:0.15,ranking:semanticRanking};
+          events.push(rejected);emit(rejected);
+          continue;
+        }
         thread.stack.push({
           path:[],current:warm[0],alternatives:warm.slice(1),
           hypothesis:'',hypothesisScore:0,baseHypothesis:'',baseScore:0,frontierIds:[],
