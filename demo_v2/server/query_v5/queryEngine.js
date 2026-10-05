@@ -117,7 +117,11 @@ Do not invent source code. Return only:
 {"h":"","gs":[],"ck":[],"hs":0.0}.
 `;
 
-const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
+const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target].
+
+Return a ranked shortlist, not a single winner. Choose up to ${ENTRY_TRIAGE_LIMIT} distinct candidates whose supplied evidence plausibly identifies code relevant to q, ordered strongest to weakest. Preserve multiple entries when several align with different parts of the request. Score each 0..1 by expected usefulness as the starting point for semantic investigation of q. A weak but plausible candidate may remain below a stronger one; only omit candidates that are unsupported or clearly irrelevant.
+
+Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}.`;
 
 
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
@@ -1041,12 +1045,12 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
   const ranked=[];
   for(const row of arr(call.parsed?.p)){
     const candidate=byIndex.get(String(row?.[0]));if(!candidate)continue;
-    ranked.push({candidate,score:Number(row?.[1]||0)});
+    ranked.push({candidate:{...candidate,entryRankScore:Math.max(0,Math.min(1,Number(row?.[1]||0)))},score:Number(row?.[1]||0)});
   }
   ranked.sort((a,b)=>b.score-a.score);
   const selected=ranked.slice(0,ENTRY_TRIAGE_LIMIT).map(item=>item.candidate);
   const fallback=selected.length?selected:arr(candidates).slice(0,ENTRY_TRIAGE_LIMIT);
-  log('query_v5_entry_triage',{candidateCount:compact.length,selected:fallback.map(candidate=>({name:candidate?.name||candidate?.symbolName||candidate?.externalName||'',sourcePath:candidate?.sourcePath||'',startLine:Number(candidate?.startLine||0),matches:arr(candidate?.matches).slice(0,4)})),usage:call.usage});
+  log('query_v5_entry_triage',{candidateCount:compact.length,selected:fallback.map(candidate=>({name:candidate?.name||candidate?.symbolName||candidate?.externalName||'',sourcePath:candidate?.sourcePath||'',startLine:Number(candidate?.startLine||0),entryRankScore:Number(candidate?.entryRankScore||0),matches:arr(candidate?.matches).slice(0,4)})),usage:call.usage});
   return fallback;
 }
 
@@ -1226,7 +1230,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       reason:entrySelection.plan.reason,
       searches:entrySelection.plan.searches,
       patterns:entrySelection.plan.patterns,
-      candidates:entrySelection.candidates.map(item=>({name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,score:item.score,test:item.test}))
+      candidates:entrySelection.candidates.map(item=>({name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,score:item.score,test:item.test,entryRankScore:Number(item.entryRankScore||0)}))
     });
 
     const triaged=entrySelection.plan.strategy==='structured_search'
@@ -1237,13 +1241,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         const symbol=explorer.topology.symbolById.get(candidate.symbolId);
         if(!symbol)return null;
         const state=symbolState(symbol);
+        state.entryRankScore=Number(candidate.entryRankScore||0);
         const matchRegions=regexMatchRegions(symbol,candidate);
         if(matchRegions.length)state.regexMatchRegions=matchRegions;
         return state;
       }
       if(candidate.externalId){
         const boundary=externalById.get(String(candidate.externalId));
-        return boundary?externalBoundaryState(boundary):null;
+        if(!boundary)return null;
+        const state=externalBoundaryState(boundary);
+        state.entryRankScore=Number(candidate.entryRankScore||0);
+        return state;
       }
       return null;
     }).filter(Boolean));
