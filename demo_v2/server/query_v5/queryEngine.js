@@ -4,7 +4,7 @@ import { selectCodeEntries } from './codeEntrySelector.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
-const ENTRY_TRIAGE_LIMIT = 4;
+const ENTRY_TRIAGE_LIMIT = 5;
 const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
 const HYPOTHESIS_DELTA_EPSILON = 0.03;
@@ -53,12 +53,13 @@ m contains structural code matches only during entry localization.
 
 Treat this as evidence evaluation. Structure bootstraps candidate entry points; Learn fills reusable semantics; LeMap presents the current semantic evidence and immediate evidence candidates. Do not reason about graph traversal mechanics, function hierarchy, region hierarchy, DFS, or backtracking. Source is not normal traversal evidence. Use exact code only when it is supplied in src or in entry-stage structural matches.
 
-ENTRY STAGE: when n is null, choose where the evidence path should begin.
-- c contains candidate entry functions/boundaries whose reusable semantics may be used only to judge where to start.
-- Rank at most 3 entries in p as [candidateIndex,entryNavigationScore]. entryNavigationScore is 0..1 and means "how promising is this as the first visited location for the active goal?"
-- Give positive scores to plausible starting entries. A score of 0 means the entry is not worth entering.
+ENTRY STAGE: when n is null, compare the structurally shortlisted entry points using their bounded learned code semantics before traversal begins.
+- c contains up to 5 candidate entry functions/boundaries. Their reusable semantics were learned only to judge where investigation should start; they are not yet branch evidence.
+- Score EVERY supplied candidate in p as [candidateIndex,entryNavigationScore]. entryNavigationScore is 0..1 and means "how strongly does the learned meaning of this code make it a useful starting point for investigating the full active goal?"
+- Rank the candidates strongest to weakest. Use the full issue and active goal, including symptom/change/result terms, to distinguish structurally similar entries.
+- Give positive scores to every genuinely plausible starting entry. A score of 0 means the entry is not worth entering.
 - Do not form or update h yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return h="", gs=[], ck=[], hs=0.
-- Once LeMap enters the selected entry, that entry becomes the first visited semantic evidence. The normal SEMANTIC WALK then forms or revises the hypothesis from it.
+- Once LeMap enters the highest-ranked entry, that entry becomes the first visited semantic evidence. Lower-ranked positive entries remain alternatives for backtracking/reseeding. The normal SEMANTIC WALK then forms or revises the hypothesis from visited evidence.
 
 SEMANTIC WALK: when n is present and src is absent, treat h as the branch-local accumulated explanation for the active goal. Integrate only evidence from the current visited semantic node. Do not treat unvisited lookahead nodes as evidence.
 - The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace them from candidate evidence.
@@ -1286,7 +1287,18 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           question,mode,goals,activeGoalId:goal.id,hypothesis:'',ledger,path:[],
           candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit
         });
-        const batchEvent={step,action:'GOAL_ENTRY_BATCH',goalId:goal.id,batch:thread.batchNumber,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0};
+        const semanticRanking=decision.picks.map((pick,rank)=>({
+          rank:rank+1,
+          state:pick.state.name,
+          path:pick.state.sourcePath||'',
+          score:Number(pick.score||0),
+          structuralScore:Number(pick.state.entryRankScore||0)
+        }));
+        const batchEvent={
+          step,action:'GOAL_ENTRY_SEMANTIC_RANK',goalId:goal.id,batch:thread.batchNumber,
+          start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,
+          ranking:semanticRanking
+        };
         events.push(batchEvent);emit(batchEvent);
 
         const warm=decision.picks;
