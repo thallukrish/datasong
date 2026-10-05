@@ -302,3 +302,40 @@ test('CodeTopology force rebuild ignores an existing complete same-commit constr
   assert.equal(topology.constructIndexMeta?.reused, true);
   assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Other'));
 });
+
+test('Python regions only model control flow and retain assignment-wrapped self-call references', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-regions-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'worker.py'), `
+class Worker:
+    def helper(self, value):
+        return value
+
+    def run(self, value):
+        if value:
+            try:
+                result = self.helper(value)
+            except ValueError:
+                return None
+        return result
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['worker.py'] });
+  const symbols = result.symbols || [];
+  const run = symbols.find((symbol) => symbol.name === 'Worker.run');
+  const helper = symbols.find((symbol) => symbol.name === 'Worker.helper');
+
+  assert.ok(run);
+  assert.ok(helper);
+  assert.ok(run.references.some((ref) => ref.targetSymbolId === helper.id));
+
+  const regionKinds = (run.regions || []).map((region) => region.kind);
+  assert.ok(regionKinds.includes('if'));
+  assert.ok(regionKinds.includes('try'));
+  assert.ok(!regionKinds.includes('assign'));
+  assert.ok(!regionKinds.includes('return'));
+
+  const tryRegion = (run.regions || []).find((region) => region.kind === 'try');
+  assert.ok(tryRegion?.references?.some((ref) => ref.targetSymbolId === helper.id));
+});
