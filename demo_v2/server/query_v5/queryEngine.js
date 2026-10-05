@@ -60,8 +60,11 @@ ENTRY STAGE: when n is null, choose where the evidence path should begin.
 - Do not form or update h yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return h="", gs=[], ck=[], hs=0.
 - Once LeMap enters the selected entry, that entry becomes the first visited semantic evidence. The normal SEMANTIC WALK then forms or revises the hypothesis from it.
 
-SEMANTIC WALK: when n is present and src is absent, treat h as a provisional accumulated explanation for the active goal. Integrate only evidence from the current visited semantic node. Do not treat unvisited lookahead nodes as evidence.
+SEMANTIC WALK: when n is present and src is absent, treat h as the branch-local accumulated explanation for the active goal. Integrate only evidence from the current visited semantic node. Do not treat unvisited lookahead nodes as evidence.
 - The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace them from candidate evidence.
+- HYPOTHESIS INVARIANT: as soon as the current visited evidence or any immediate candidate produces a positive semantic signal above 0, h must be non-empty. If no prior hypothesis exists, form the best provisional hypothesis supported by the current visited evidence and the direction indicated by the positive candidate signal. A provisional hypothesis may be incomplete, but it must state what currently appears to explain or answer the goal.
+- Once h exists, every subsequent visited evidence item must keep, strengthen, refine, weaken, or replace it. Never return h="" while continuing a branch with positive scores.
+- Candidate scores are not a substitute for a hypothesis. If p contains any positive expectedHypothesisScore, h must describe the current best explanation that those candidates are expected to strengthen.
 - Revise h when the visited semantic evidence warrants it. Do not defend h merely because it already exists.
 - Score the resulting hypothesis against those fixed constraints. Return ck as [[constraintIndex,score],...] using concatenated hardConstraints then optionalConstraints, with each score 0..1. The constraint text itself must not be returned.
 - hs is the overall hypothesis-match score 0..1. It summarizes how well the accumulated evidence-backed hypothesis satisfies the active goal. Hard constraints dominate this score.
@@ -93,6 +96,22 @@ Never invent implementation details not present in learned semantics, supported 
 For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
 For SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 Return only:
+{"assessment":"","h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+`;
+
+const HYPOTHESIS_REPAIR_SYSTEM = `Repair an invalid semantic-walk decision. LeMap detected positive semantic signal but the model returned an empty hypothesis.
+
+q is the original request.
+goal is the active goal with immutable hardConstraints and optionalConstraints.
+previousH is the branch-local hypothesis before this evidence.
+n is the visited semantic evidence.
+c is the immediate semantic evidence candidates.
+l is bounded semantic lookahead.
+f is previously established evidence.
+
+Return the best provisional evidence-backed hypothesis now. It may be incomplete. If previousH exists, keep, refine, weaken, or replace it. If previousH is empty, form one from the visited evidence and the positive direction indicated by the candidates. Do not leave h empty when any supplied semantic signal is positive.
+
+Also return ck, hs, gs, i and p using the same meanings as the main semantic-walk contract. Do not invent source code. Return only:
 {"assessment":"","h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
@@ -667,7 +686,72 @@ async function decide({
     l:entryStage?[]:lookahead
   };
 
-  const call=await modelJson(client,model,GOAL_DECIDE_SYSTEM,payload);addUsage(usage,call.usage);
+  let call=await modelJson(client,model,GOAL_DECIDE_SYSTEM,payload);addUsage(usage,call.usage);
+
+  if(!entryStage&&!sourceBody){
+    const parsedP=arr(call.parsed?.p);
+    const positiveCandidate=parsedP.some(row=>Number(row?.[1]||0)>0);
+    const positiveSemanticSignal=
+      positiveCandidate||
+      Number(call.parsed?.hs||0)>0||
+      arr(call.parsed?.ck).some(row=>Number(row?.[1]||0)>0)||
+      arr(call.parsed?.gs).some(row=>Number(row?.[1]||0)>0);
+    const missingHypothesis=!String(call.parsed?.h||'').trim();
+
+    if(positiveSemanticSignal&&missingHypothesis){
+      log('query_v5_hypothesis_invariant_violation',{
+        step,activeGoalId,currentState:currentState?.name||'',
+        reason:'positive semantic signal with empty hypothesis',
+        modelResponse:call.parsed
+      });
+      const repairPayload={
+        q:question,
+        goal:{
+          id:activeGoal?.id||activeGoalId,
+          kind:activeGoal?.kind||'',
+          text:activeGoal?.text||'',
+          hardConstraints:arr(activeGoal?.hardConstraints),
+          optionalConstraints:arr(activeGoal?.optionalConstraints),
+          failingCase:activeGoal?.failingCase||''
+        },
+        previousH:hypothesis||'',
+        n:payload.n,
+        c:payload.c,
+        l:payload.l,
+        f:payload.f
+      };
+      const repaired=await modelJson(client,model,HYPOTHESIS_REPAIR_SYSTEM,repairPayload);
+      addUsage(usage,repaired.usage);
+      if(String(repaired.parsed?.h||'').trim()){
+        call={
+          ...repaired,
+          parsed:{
+            ...call.parsed,
+            ...repaired.parsed,
+            p:arr(repaired.parsed?.p).length?repaired.parsed.p:call.parsed?.p
+          },
+          usage:{
+            prompt:Number(call.usage?.prompt||0)+Number(repaired.usage?.prompt||0),
+            completion:Number(call.usage?.completion||0)+Number(repaired.usage?.completion||0),
+            total:Number(call.usage?.total||0)+Number(repaired.usage?.total||0)
+          }
+        };
+      }else{
+        call={
+          ...call,
+          parsed:{
+            ...call.parsed,
+            h:hypothesis||'',
+            hs:0,
+            gs:[],
+            ck:[],
+            p:[]
+          }
+        };
+      }
+    }
+  }
+
   const byIndex=new Map(candidates.map((state,index)=>[String(index),state]));
   const picks=[];
   for(const row of arr(call.parsed?.p)){
@@ -792,6 +876,21 @@ async function decide({
     evidenceCoverage:sourceBody?evidenceCoverageRatio(currentState,evidenceStates):0,
     supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
   };
+
+  if(!entryStage&&!sourceBody){
+    const hasPositiveContinuation=picks.some(pick=>Number(pick.score||0)>0);
+    if(hasPositiveContinuation&&!String(result.hypothesis||'').trim()){
+      result.picks=[];
+      result.hypothesisScore=0;
+      result.hardConstraintsMet=false;
+      result.goalResolutions=[];
+      result.explained=false;
+      log('query_v5_hypothesis_invariant_enforced',{
+        step,activeGoalId,currentState:currentState?.name||'',
+        action:'discarded positive continuations because no hypothesis was formed'
+      });
+    }
+  }
 
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
     explained:result.explained,assessment:result.assessment,hypothesis:result.hypothesis,
