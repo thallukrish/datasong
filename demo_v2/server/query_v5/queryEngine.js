@@ -1430,6 +1430,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
       });
+    }
 
     // Every entry-level branch keeps an independent score. Compare the
     // current branch against the strongest score already established by a
