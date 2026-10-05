@@ -400,21 +400,33 @@ for rec in defs.values():
     regions = []
     region_index_ref = [0]
 
+    region_types = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith)
+    if hasattr(ast, "Match"):
+        region_types = region_types + (ast.Match,)
+
     def add_regions(statements, parent_region_id=None):
         for child in statements:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
-            region_index_ref[0] += 1
-            region_id = f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index_ref[0]}"
-            kind = type(child).__name__.lower()
-            regions.append({
-                "id": region_id,
-                "kind": kind,
-                "startLine": getattr(child, "lineno", node.lineno),
-                "endLine": getattr(child, "end_lineno", getattr(child, "lineno", node.lineno)),
-                "body": source_segment(text, child),
-                "parentRegionId": parent_region_id
-            })
+
+            is_region = isinstance(child, region_types)
+            region_id = parent_region_id
+
+            if is_region:
+                region_index_ref[0] += 1
+                region_id = f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index_ref[0]}"
+                start_line = getattr(child, "lineno", node.lineno)
+                end_line = getattr(child, "end_lineno", start_line)
+                regions.append({
+                    "id": region_id,
+                    "kind": type(child).__name__.lower(),
+                    "startLine": start_line,
+                    "endLine": end_line,
+                    "body": source_segment(text, child),
+                    "parentRegionId": parent_region_id,
+                    "references": []
+                })
+
             nested_lists = []
             for field in ("body", "orelse", "finalbody"):
                 value = getattr(child, field, None)
@@ -430,6 +442,22 @@ for rec in defs.values():
                 add_regions(nested, region_id)
 
     add_regions(node.body)
+
+    for ref in refs:
+        ref_line = int(ref.get("line") or 0)
+        if ref_line <= 0:
+            continue
+        containing = [
+            region for region in regions
+            if int(region.get("startLine") or 0) <= ref_line <= int(region.get("endLine") or 0)
+        ]
+        if not containing:
+            continue
+        containing.sort(key=lambda region: (
+            int(region.get("endLine") or 0) - int(region.get("startLine") or 0),
+            -int(region.get("startLine") or 0)
+        ))
+        containing[0]["references"].append(dict(ref))
 
     symbols.append({
         "id": sid(rec["path"], rec["qualified"], node.lineno),
