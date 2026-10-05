@@ -672,19 +672,19 @@ export class CodeTopology {
 
         constructs = [
           ...previous.payload.constructs.filter(keepByPath),
-          ...Array.isArray(analyzed?.constructs) ? analyzed.constructs : []
+          ...(Array.isArray(analyzed?.constructs) ? analyzed.constructs : [])
         ];
         analysis = {
           ...previousAnalysis,
           ...analyzed,
           version:Number(analyzed?.version || previousAnalysis?.version || 0),
           symbols:[
-            ...Array.isArray(previousAnalysis?.symbols) ? previousAnalysis.symbols.filter(keepByPath) : [],
-            ...Array.isArray(analyzed?.symbols) ? analyzed.symbols : []
+            ...(Array.isArray(previousAnalysis?.symbols) ? previousAnalysis.symbols.filter(keepByPath) : []),
+            ...(Array.isArray(analyzed?.symbols) ? analyzed.symbols : [])
           ],
           externalSymbols:[
-            ...Array.isArray(previousAnalysis?.externalSymbols) ? previousAnalysis.externalSymbols.filter(keepByPath) : [],
-            ...Array.isArray(analyzed?.externalSymbols) ? analyzed.externalSymbols : []
+            ...(Array.isArray(previousAnalysis?.externalSymbols) ? previousAnalysis.externalSymbols.filter(keepByPath) : []),
+            ...(Array.isArray(analyzed?.externalSymbols) ? analyzed.externalSymbols : [])
           ],
           constructs:[]
         };
