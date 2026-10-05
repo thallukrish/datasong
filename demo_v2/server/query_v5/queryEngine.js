@@ -111,8 +111,10 @@ f is previously established evidence.
 
 Return the best provisional evidence-backed hypothesis now. It may be incomplete. If previousH exists, keep, refine, weaken, or replace it. If previousH is empty, form one from the visited evidence and the positive direction indicated by the candidates. Do not leave h empty when any supplied semantic signal is positive.
 
-Also return ck, hs, gs, i and p using the same meanings as the main semantic-walk contract. Do not invent source code. Return only:
-{"assessment":"","h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+Also return ck, hs and gs using the same meanings as the main semantic-walk contract. This repair step MUST NOT rank or select navigation candidates, request source, add facts, dispute facts, resolve facts, or choose evidence. LeMap owns the original navigation result from the main decision and will preserve it unchanged.
+
+Do not invent source code. Return only:
+{"h":"","gs":[],"ck":[],"hs":0.0}.
 `;
 
 const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target]. Choose at most ${ENTRY_TRIAGE_LIMIT} candidates whose supplied evidence most directly relates to q. Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}. Scores are 0..1.`;
@@ -704,7 +706,8 @@ async function decide({
       log('query_v5_hypothesis_invariant_violation',{
         step,activeGoalId,currentState:currentState?.name||'',
         reason:'positive semantic signal with empty hypothesis',
-        modelResponse:call.parsed
+        modelResponse:call.parsed,
+        preservedNavigation:arr(call.parsed?.p)
       });
       const repairPayload={
         q:question,
@@ -725,12 +728,15 @@ async function decide({
       const repaired=await modelJson(client,model,HYPOTHESIS_REPAIR_SYSTEM,repairPayload);
       addUsage(usage,repaired.usage);
       if(String(repaired.parsed?.h||'').trim()){
+        const originalParsed=call.parsed||{};
         call={
-          ...repaired,
+          ...call,
           parsed:{
-            ...call.parsed,
-            ...repaired.parsed,
-            p:arr(repaired.parsed?.p).length?repaired.parsed.p:call.parsed?.p
+            ...originalParsed,
+            h:repaired.parsed.h,
+            hs:repaired.parsed.hs,
+            gs:repaired.parsed.gs,
+            ck:repaired.parsed.ck
           },
           usage:{
             prompt:Number(call.usage?.prompt||0)+Number(repaired.usage?.prompt||0),
