@@ -797,10 +797,16 @@ async function decide({
     : [];
   const hardScores=constraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
   const modelHypothesisScore=!entryStage?Math.max(0,Math.min(1,Number(call.parsed?.hs||0))):0;
-  const hypothesisScore=hardScores.length
+  const semanticConstraintScore=hardScores.length
     ? hardScores.reduce((sum,value)=>sum+value,0)/hardScores.length
-    : modelHypothesisScore||activeGoalScore;
-  const hardConstraintsMet=!entryStage&&hardScores.length>0&&hardScores.every(score=>score>=GOAL_CLOSE_SCORE);
+    : 0;
+  // During semantic traversal, hs is the branch-local explanatory strength.
+  // Constraint scores remain diagnostics until exact source is inspected.
+  // Once source is present, grounded hard-constraint scores become authoritative.
+  const hypothesisScore=sourceBody
+    ? (semanticConstraintScore||modelHypothesisScore||activeGoalScore)
+    : (modelHypothesisScore||semanticConstraintScore||activeGoalScore);
+  const hardConstraintsMet=!entryStage&&Boolean(sourceBody)&&hardScores.length>0&&hardScores.every(score=>score>=GOAL_CLOSE_SCORE);
   // Goal closure is anchored in the accumulated hypothesis satisfying every
   // hard acceptance constraint. gs remains a model diagnostic, not the sole
   // convergence switch.
@@ -847,10 +853,10 @@ async function decide({
     ? fixedConstraints.map(item=>[item.text,Number(scoreByIndex.get(item.index)||0),item.kind])
     : [];
   const groundedHardScores=groundedConstraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
-  const groundedHypothesisScore=groundedHardScores.length
+  const groundedHypothesisScore=sourceBody&&groundedHardScores.length
     ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
     : hypothesisScore;
-  const groundedHardConstraintsMet=!entryStage&&groundedHardScores.length>0&&groundedHardScores.every(score=>score>=GOAL_CLOSE_SCORE);
+  const groundedHardConstraintsMet=!entryStage&&Boolean(sourceBody)&&groundedHardScores.length>0&&groundedHardScores.every(score=>score>=GOAL_CLOSE_SCORE);
   const evidenceRanges=evidenceStates.map(item=>({
     sourcePath:item.sourcePath||'',
     startLine:Number(item.startLine||0),
