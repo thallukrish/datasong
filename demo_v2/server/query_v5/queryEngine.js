@@ -51,7 +51,7 @@ c is the set of semantic navigation candidates as [candidateIndex,type,name,purp
 src is exact source for n only when you explicitly requested source inspection on the previous decision.
 m contains structural code matches only during entry localization.
 
-Treat this as search. Structure bootstraps the semantic space; Learn fills missing semantics; Query walks semantic functions, regions and branches. Source is not normal traversal evidence. Use exact code only when it is supplied in src or in entry-stage structural matches.
+Treat this as evidence evaluation. Structure bootstraps candidate entry points; Learn fills reusable semantics; LeMap presents the current semantic evidence and immediate evidence candidates. Do not reason about graph traversal mechanics, function hierarchy, region hierarchy, DFS, or backtracking. Source is not normal traversal evidence. Use exact code only when it is supplied in src or in entry-stage structural matches.
 
 ENTRY STAGE: when n is null, choose where the evidence path should begin.
 - c contains candidate entry functions/boundaries whose reusable semantics may be used only to judge where to start.
@@ -296,13 +296,20 @@ function dedupeStates(states=[]){
   return out;
 }
 
-function semanticRegionChildren(state,window){
+function semanticNavigationChildren(state,window,flowChildren=null){
   const byId=new Map(arr(window?.states).map(item=>[item.id,item]));
-  const ids=arr(window?.links)
-    .filter(link=>link?.relationship==='contains'&&String(link?.from||'')===String(state?.id||''))
-    .map(link=>link.to);
-  return dedupeStates(ids.map(id=>byId.get(id)).filter(region=>region?.type==='code_region'&&region?.kind!=='regex-match'))
-    .sort((a,b)=>Number(a.startLine||0)-Number(b.startLine||0)||Number(a.endLine||0)-Number(b.endLine||0));
+  const allowedCalls=flowChildren?.get?.(state?.symbolId)||null;
+  const children=arr(window?.links)
+    .filter(link=>['contains','calls'].includes(String(link?.relationship||''))&&String(link?.from||'')===String(state?.id||''))
+    .map(link=>({relationship:String(link.relationship||''),state:byId.get(link.to)}))
+    .filter(item=>item.state&&item.state?.kind!=='regex-match')
+    .filter(item=>item.relationship!=='calls'||item.state.type!=='code_symbol'||!allowedCalls||allowedCalls.has(item.state.symbolId))
+    .map(item=>item.state);
+  return dedupeStates(children)
+    .sort((a,b)=>{
+      const ar=a.type==='code_region'?0:1,br=b.type==='code_region'?0:1;
+      return ar-br||Number(a.startLine||0)-Number(b.startLine||0)||String(a.name||'').localeCompare(String(b.name||''));
+    });
 }
 
 function semanticLookaheadView(candidates=[],window,explorer,maxDepth=3){
@@ -1252,22 +1259,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     recordExplored(arr(learned.window?.states),`semantic_window:${goal.id}`,step);
     const path=[...frame.path,state];
 
-    const regionCandidates=semanticRegionChildren(state,learned.window)
-      .filter(region=>!thread.visited.has(region.id));
-
-    // Body-first semantic search. A function or region walks its semantic
-    // child regions before the surrounding function may branch to callees.
-    // Region nodes themselves never branch to callees; after their semantic
-    // subtree is exhausted, control returns to the containing function.
-    let next=[];
-    let navigationKind='none';
-    if(regionCandidates.length){
-      next=regionCandidates;
-      navigationKind='region';
-    }else if(state.type==='code_symbol'){
-      next=callChildren(state,explorer,flowChildren).filter(child=>!thread.visited.has(child.id));
-      navigationKind='call';
-    }
+    // Functions and regions use the same semantic navigation rule. LeMap
+    // exposes immediate nested regions and direct calls from the current
+    // evidence container; the model scores which evidence is expected to
+    // strengthen the branch-local hypothesis most.
+    const next=semanticNavigationChildren(state,learned.window,flowChildren)
+      .filter(child=>!thread.visited.has(child.id));
+    const regionCandidates=next.filter(child=>child.type==='code_region');
+    const navigationKind=next.length
+      ? (regionCandidates.length===next.length?'region':regionCandidates.length?'mixed':'call')
+      : 'none';
 
     const lookahead=semanticLookaheadView(next,learned.window,explorer,WINDOW_DEPTH);
 
@@ -1293,7 +1294,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // evidence. If the model neither forms a hypothesis, requests source, nor
     // proposes a continuation, inspect the entry source once before abandoning
     // the branch.
-    const sourceAllowed=state.type==='code_region'||state.type==='code_external'||!regionCandidates.length;
+    const sourceAllowed=state.type==='code_external'||!regionCandidates.length;
     const selectedEntry=frame.path.length===0&&state.id===entryRootId&&Number(frame.current?.score||0)>0;
     const emptyEntryDecision=selectedEntry&&
       !String(decision.hypothesis||'').trim()&&
