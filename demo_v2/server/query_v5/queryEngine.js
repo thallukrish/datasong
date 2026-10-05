@@ -70,7 +70,7 @@ SEMANTIC WALK: when n is present and src is absent, treat h as the branch-local 
 - hs is the overall hypothesis-match score 0..1. It summarizes how well the accumulated evidence-backed hypothesis satisfies the active goal. Hard constraints dominate this score.
 - gs reports goal sufficiency as [[goalId,score]]. It should agree with the hypothesis/constraint evidence. Use 1.0 when the hypothesis is sufficient to answer the goal; do not reserve 1.0 for exhaustive repository certainty.
 - l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
-- p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. constraintIndexes are unresolved constraints that the branch appears capable of improving.
+- p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. Compare it to the current hs: a candidate below hs is a weakening branch and should normally not be selected; a candidate near hs is flat evidence; a candidate above hs is strengthening evidence. constraintIndexes are unresolved constraints that the branch appears capable of improving.
 - a contains only direct observations established by the visited semantic node. For causal goals, do not put causal interpretations, explanations, inferred mechanisms, or restatements of h into a; those remain branch-local in h. Every item in a must be a plain string, never an array or object.
 - ev=[] while src is absent.
 - i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
@@ -1400,7 +1400,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // evidence. If the model neither forms a hypothesis, requests source, nor
     // proposes a continuation, inspect the entry source once before abandoning
     // the branch.
-    const sourceAllowed=state.type==='code_external'||!regionCandidates.length;
+    const sourceAllowed=true;
     const selectedEntry=frame.path.length===0&&state.id===entryRootId&&Number(frame.current?.score||0)>0;
     const emptyEntryDecision=selectedEntry&&
       !String(decision.hypothesis||'').trim()&&
@@ -1430,13 +1430,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
       });
-    }else if(decision.inspectSource&&!sourceAllowed){
-      emit({
-        action:'SOURCE_DEFERRED',goalId:goal.id,state:state.name,
-        reason:'Semantic child regions remain; narrow semantically before source inspection.',
-        path:path.map(x=>x.name)
-      });
-    }
 
     // Every entry-level branch keeps an independent score. Compare the
     // current branch against the strongest score already established by a
@@ -1657,10 +1650,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     }
 
     const warm=decision.picks.filter(pick=>{
-      const improves=pick.score>thread.bestScore+HYPOTHESIS_DELTA_EPSILON;
+      const currentScore=Number(decision.hypothesisScore||0);
+      const expectedScore=Number(pick.score||0);
+      const strengthens=expectedScore>currentScore+HYPOTHESIS_DELTA_EPSILON;
+      const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
       const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
       const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
-      return improves||(targetsUnresolved&&canSpendFlatStep);
+      return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
     });
     if(warm.length){
       thread.stack.push({
