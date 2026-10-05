@@ -64,6 +64,66 @@ function simpleName(name) {
   return pieces[pieces.length - 1] || value;
 }
 
+function pythonModuleName(sourcePath) {
+  const normalized = String(sourcePath || '').replace(/\\/g, '/');
+  const withoutExt = normalized.toLowerCase().endsWith('.py') ? normalized.slice(0, -3) : normalized;
+  const parts = withoutExt.split('/').filter(Boolean);
+  if (parts.at(-1) === '__init__') parts.pop();
+  return parts.join('.');
+}
+
+function pythonSourcePathForModule(moduleName, files=[]) {
+  const wanted = String(moduleName || '').replace(/^\.+|\.+$/g, '');
+  if (!wanted) return '';
+  const direct = wanted.replace(/\./g, '/') + '.py';
+  const init = wanted.replace(/\./g, '/') + '/__init__.py';
+  const set = new Set(files.map((file) => String(file).replace(/\\/g, '/')));
+  if (set.has(direct)) return direct;
+  if (set.has(init)) return init;
+  return '';
+}
+
+function resolveRelativePythonModule(sourcePath, level, importedModule) {
+  if (!level) return String(importedModule || '').replace(/^\.+|\.+$/g, '');
+  const current = pythonModuleName(sourcePath);
+  const packageParts = current.split('.').slice(0, -1);
+  const keep = Math.max(0, packageParts.length - Number(level || 0) + 1);
+  return [...packageParts.slice(0, keep), String(importedModule || '').replace(/^\.+|\.+$/g, '')]
+    .filter(Boolean)
+    .join('.');
+}
+
+function pythonImportsFromText(text, sourcePath, files=[]) {
+  const targets = new Set();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    let match = line.match(/^\s*import\s+(.+)$/);
+    if (match) {
+      for (const spec of match[1].split(',')) {
+        const moduleName = spec.trim().split(/\s+as\s+/i)[0].trim();
+        const target = pythonSourcePathForModule(moduleName, files);
+        if (target) targets.add(target);
+      }
+      continue;
+    }
+    match = line.match(/^\s*from\s+(\.*)([A-Za-z_][\w.]*)?\s+import\s+/);
+    if (!match) continue;
+    const level = (match[1] || '').length;
+    const moduleName = resolveRelativePythonModule(sourcePath, level, match[2] || '');
+    const target = pythonSourcePathForModule(moduleName, files);
+    if (target) targets.add(target);
+  }
+  return [...targets];
+}
+
+async function sha1File(filePath) {
+  try {
+    const data = await fs.readFile(filePath);
+    return crypto.createHash('sha1').update(data).digest('hex');
+  } catch {
+    return '';
+  }
+}
+
 function extractBraceBlock(text, start) {
   const open = text.indexOf('{', start);
   if (open < 0) return { body: text.slice(start, Math.min(text.length, start + MAX_SYMBOL_BODY_CHARS)), end: Math.min(text.length, start + MAX_SYMBOL_BODY_CHARS) };
@@ -413,6 +473,96 @@ export class CodeTopology {
     );
   }
 
+  async pythonSnapshotInputs(pythonFiles=[]) {
+    const fileHashes = {};
+    const importGraph = {};
+    for (const rel of pythonFiles) {
+      const abs = path.join(this.repoDir, rel);
+      fileHashes[rel] = await sha1File(abs);
+      const source = await fs.readFile(abs, 'utf8').catch(() => '');
+      importGraph[rel] = pythonImportsFromText(source, rel, pythonFiles);
+    }
+    return { fileHashes, importGraph };
+  }
+
+  async loadPreviousConstructIndexSnapshot({ language='python', analyzerVersion=0 }={}) {
+    if (!this.repoUrl) return null;
+    const root = path.join(this.cacheRoot, 'code-construct-index', repoKey(this.repoUrl));
+    let revisions = [];
+    try { revisions = await fs.readdir(root, { withFileTypes:true }); } catch { return null; }
+    const candidates = [];
+    for (const entry of revisions) {
+      if (!entry.isDirectory() || entry.name === String(this.commit || '')) continue;
+      const cachePath = path.join(root, entry.name, `${language}.json`);
+      try {
+        const payload = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+        const meta = payload?.meta || {};
+        const valid =
+          meta.status === 'complete' &&
+          Number(meta.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
+          Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
+          meta.fileHashes && typeof meta.fileHashes === 'object' &&
+          meta.importGraph && typeof meta.importGraph === 'object' &&
+          Array.isArray(payload?.constructs) &&
+          payload?.analysis && typeof payload.analysis === 'object';
+        if (valid) candidates.push({ payload, cachePath, createdAt:Date.parse(meta.createdAt || 0) || 0 });
+      } catch {}
+    }
+    candidates.sort((a,b)=>b.createdAt-a.createdAt);
+    return candidates[0] || null;
+  }
+
+  incrementalPythonAffectedFiles({ pythonFiles=[], currentHashes={}, currentImportGraph={}, previousMeta={} }={}) {
+    const current = new Set(pythonFiles);
+    const previousHashes = previousMeta.fileHashes || {};
+    const previousImportGraph = previousMeta.importGraph || {};
+    const changed = new Set();
+    const deleted = new Set();
+
+    for (const file of pythonFiles) {
+      if (!previousHashes[file] || previousHashes[file] !== currentHashes[file]) changed.add(file);
+    }
+    for (const file of Object.keys(previousHashes)) {
+      if (!current.has(file)) deleted.add(file);
+    }
+
+    const combinedGraph = {};
+    for (const file of new Set([...Object.keys(previousImportGraph), ...Object.keys(currentImportGraph)])) {
+      combinedGraph[file] = currentImportGraph[file] || previousImportGraph[file] || [];
+    }
+    const reverse = new Map();
+    for (const [from, targets] of Object.entries(combinedGraph)) {
+      for (const target of targets || []) {
+        if (!reverse.has(target)) reverse.set(target, new Set());
+        reverse.get(target).add(from);
+      }
+    }
+
+    const affected = new Set([...changed, ...deleted]);
+    const queue = [...affected];
+    while (queue.length) {
+      const file = queue.shift();
+      for (const dependency of combinedGraph[file] || []) {
+        if (current.has(dependency) && !affected.has(dependency)) {
+          affected.add(dependency);
+          queue.push(dependency);
+        }
+      }
+      for (const dependent of reverse.get(file) || []) {
+        if (current.has(dependent) && !affected.has(dependent)) {
+          affected.add(dependent);
+          queue.push(dependent);
+        }
+      }
+    }
+
+    return {
+      changed:[...changed],
+      deleted:[...deleted],
+      affected:[...affected].filter((file)=>current.has(file))
+    };
+  }
+
   async loadConstructIndexSnapshot({ language='python', analyzerVersion=0 }={}) {
     const cachePath = this.constructIndexCachePath(language);
     if (!cachePath) return false;
@@ -438,7 +588,7 @@ export class CodeTopology {
     }
   }
 
-  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[], analysis=null }={}) {
+  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[], analysis=null, fileHashes={}, importGraph={}, incrementalFrom='', affectedFiles=[] }={}) {
     const cachePath = this.constructIndexCachePath(language);
     if (!cachePath) return;
     const metadata = {
@@ -450,6 +600,11 @@ export class CodeTopology {
       schemaVersion: CONSTRUCT_INDEX_SCHEMA_VERSION,
       analyzerVersion: Number(analyzerVersion || 0),
       recordCount: constructs.length,
+      fileHashes,
+      importGraph,
+      incrementalFrom:String(incrementalFrom || ''),
+      affectedFiles:Array.isArray(affectedFiles)?affectedFiles:[],
+      incremental:!!incrementalFrom,
       createdAt: new Date().toISOString()
     };
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
@@ -477,26 +632,93 @@ export class CodeTopology {
     }
 
     try {
-      console.log(`[repo-index] python AST analyze files=${pythonFiles.length}`);
-      const analyzeStarted=Date.now();
-      const analyzed = await analyzePythonRepository({ repoDir: this.repoDir, files: pythonFiles });
-      console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms constructs=${Array.isArray(analyzed?.constructs)?analyzed.constructs.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
-      this.pythonAnalysis = analyzed;
-      this.constructIndex = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
-      this.constructIndexVersion = Number(analyzed?.version || 0);
+      const { fileHashes, importGraph } = await this.pythonSnapshotInputs(pythonFiles);
+      let previous = null;
+      let delta = null;
+
+      if (!this.forceConstructIndexRebuild) {
+        previous = await this.loadPreviousConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION });
+        if (previous) {
+          delta = this.incrementalPythonAffectedFiles({
+            pythonFiles,
+            currentHashes:fileHashes,
+            currentImportGraph:importGraph,
+            previousMeta:previous.payload.meta
+          });
+        }
+      }
+
+      const canIncremental = Boolean(
+        previous &&
+        delta &&
+        (delta.changed.length || delta.deleted.length) &&
+        delta.affected.length > 0 &&
+        delta.affected.length < pythonFiles.length * 0.6
+      );
+
+      let analyzed;
+      let constructs;
+      let analysis;
+
+      if (canIncremental) {
+        console.log(`[repo-index] python AST incremental previous=${previous.payload.meta.commit} changed=${delta.changed.length} deleted=${delta.deleted.length} affected=${delta.affected.length}/${pythonFiles.length}`);
+        const analyzeStarted=Date.now();
+        analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:delta.affected });
+        console.log(`[repo-index] python AST incremental complete ${Date.now()-analyzeStarted}ms constructs=${Array.isArray(analyzed?.constructs)?analyzed.constructs.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
+
+        const affectedSet = new Set([...delta.affected, ...delta.deleted]);
+        const previousAnalysis = previous.payload.analysis || {};
+        const keepByPath = (item) => item?.sourcePath && !affectedSet.has(item.sourcePath);
+
+        constructs = [
+          ...previous.payload.constructs.filter(keepByPath),
+          ...Array.isArray(analyzed?.constructs) ? analyzed.constructs : []
+        ];
+        analysis = {
+          ...previousAnalysis,
+          ...analyzed,
+          version:Number(analyzed?.version || previousAnalysis?.version || 0),
+          symbols:[
+            ...Array.isArray(previousAnalysis?.symbols) ? previousAnalysis.symbols.filter(keepByPath) : [],
+            ...Array.isArray(analyzed?.symbols) ? analyzed.symbols : []
+          ],
+          externalSymbols:[
+            ...Array.isArray(previousAnalysis?.externalSymbols) ? previousAnalysis.externalSymbols.filter(keepByPath) : [],
+            ...Array.isArray(analyzed?.externalSymbols) ? analyzed.externalSymbols : []
+          ],
+          constructs:[]
+        };
+      } else {
+        const reason = previous && delta
+          ? `delta-too-large affected=${delta.affected.length}/${pythonFiles.length}`
+          : 'no-compatible-previous-snapshot';
+        console.log(`[repo-index] python AST full analyze files=${pythonFiles.length} reason=${reason}`);
+        const analyzeStarted=Date.now();
+        analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:pythonFiles });
+        console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms constructs=${Array.isArray(analyzed?.constructs)?analyzed.constructs.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
+        constructs = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
+        analysis = analyzed;
+      }
+
+      this.pythonAnalysis = analysis;
+      this.constructIndex = constructs;
+      this.constructIndexVersion = Number(analyzed?.version || analysis?.version || 0);
       if (this.constructIndexVersion !== PYTHON_ANALYZER_VERSION) return;
+
       const persistStarted=Date.now();
       await this.persistConstructIndexSnapshot({
         language:'python',
         analyzerVersion:this.constructIndexVersion,
         constructs:this.constructIndex,
-        analysis:analyzed
+        analysis:this.pythonAnalysis,
+        fileHashes,
+        importGraph,
+        incrementalFrom:canIncremental?previous.payload.meta.commit:'',
+        affectedFiles:canIncremental?delta.affected:[]
       });
-      console.log(`[repo-index] persisted snapshot ${Date.now()-persistStarted}ms path=${this.constructIndexMeta?.cachePath||''}`);
+      console.log(`[repo-index] persisted snapshot ${Date.now()-persistStarted}ms path=${this.constructIndexMeta?.cachePath||''} incremental=${canIncremental?'yes':'no'}`);
     } catch (error) {
       console.error('[repo-index] construct index failed', error?.stack || error?.message || String(error));
-      // Structural entry indexing is an optimization. Repository preparation and
-      // ordinary root-based Query must still work when a language parser is absent.
       this.constructIndex = [];
       this.constructIndexVersion = 0;
       this.constructIndexMeta = null;
