@@ -302,8 +302,8 @@ app.post('/api/prepare-repository', async (req, res) => {
   broadcast(explorer.snapshot());
   try {
     topology.targetCommit = requestedRevision;
-    topology.forceConstructIndexRebuild = true;
-    console.log(`[profile-save] indexing repo=${repoUrl} revision=${requestedRevision||'HEAD'}`);
+    topology.forceConstructIndexRebuild = req.body?.forceReindex === true;
+    console.log(`[profile-save] indexing repo=${repoUrl} revision=${requestedRevision||'HEAD'} force=${topology.forceConstructIndexRebuild?'yes':'no'}`);
     const saveStarted=Date.now();
     const prepared = await topology.prepareIndexOnly(repoUrl);
     console.log(`[profile-save] index ready ${Date.now()-saveStarted}ms commit=${prepared?.commit||''} records=${prepared?.constructIndex?.recordCount||0}`);
@@ -319,7 +319,10 @@ app.post('/api/prepare-repository', async (req, res) => {
         reused:!!topology.constructIndexMeta.reused,
         commit:topology.constructIndexMeta.commit,
         schemaVersion:topology.constructIndexMeta.schemaVersion,
-        analyzerVersion:topology.constructIndexMeta.analyzerVersion
+        analyzerVersion:topology.constructIndexMeta.analyzerVersion,
+        incremental:!!topology.constructIndexMeta.incremental,
+        incrementalFrom:topology.constructIndexMeta.incrementalFrom||'',
+        affectedFiles:Array.isArray(topology.constructIndexMeta.affectedFiles)?topology.constructIndexMeta.affectedFiles:[]
       } : null),
       error:''
     };
