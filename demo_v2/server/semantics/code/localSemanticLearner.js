@@ -1,16 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../../query_v2/modelJson.js';
 import { materializeCodeStructure, applyCodeSemantics, semanticDetails } from './codeGraph.js';
 
-const LARGE_FUNCTION_LINE_THRESHOLD = 50;
 const MAX_LOOKAHEAD_NODES = 48;
-
-function functionLineCount(state){
-  return Math.max(0,Number(state?.endLine||0)-Number(state?.startLine||0)+1);
-}
-
-function shouldChunkFunction(state){
-  return state?.type==='code_symbol'&&functionLineCount(state)>LARGE_FUNCTION_LINE_THRESHOLD;
-}
 
 const LEARN_SYSTEM = `Learn query-independent semantics for the supplied local execution window. flowContext contains only already-learned predecessor semantics. newNodes contains raw repository code plus deterministic call relationships, and may also contain terminal externalCalls for imported APIs whose implementation is outside the repository.
 
@@ -90,13 +81,46 @@ function externalStateForRef(symbol,ref){
   };
 }
 
+function descendantRegionRanges(state,explorer){
+  if(state?.type!=='code_region')return[];
+  const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
+  const byParent=new Map();
+  for(const region of arr(symbol.regions)){
+    const parent=String(region?.parentRegionId||'');
+    if(!byParent.has(parent))byParent.set(parent,[]);
+    byParent.get(parent).push(region);
+  }
+  const out=[],queue=[String(state.regionId||state.id||'')];
+  while(queue.length){
+    const parent=queue.shift();
+    for(const region of arr(byParent.get(parent))){
+      const start=Number(region?.startLine||0),end=Number(region?.endLine||start);
+      out.push([start,end]);
+      queue.push(String(region?.id||''));
+    }
+  }
+  return out;
+}
+
 function directCallStates(state,explorer){
   if(state?.type==='code_external')return[];
   const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
-  const region=state?.type==='code_region'?{start:Number(state.startLine||0),end:Number(state.endLine||0)}:null;
-  const inRegion=(ref)=>!region||(Number(ref.line||ref.startLine||0)>=region.start&&Number(ref.line||ref.startLine||0)<=region.end);
+  const topRegions=arr(symbol.regions).filter(region=>!region?.parentRegionId);
+  const nestedRanges=descendantRegionRanges(state,explorer);
+  const lineOf=(ref)=>Number(ref?.line||ref?.startLine||0);
+  const belongsHere=(ref)=>{
+    const line=lineOf(ref);
+    if(state?.type==='code_region'){
+      if(line<Number(state.startLine||0)||line>Number(state.endLine||0))return false;
+      return !nestedRanges.some(([start,end])=>start<=line&&line<=end);
+    }
+    return !topRegions.some(region=>{
+      const start=Number(region?.startLine||0),end=Number(region?.endLine||start);
+      return start<=line&&line<=end;
+    });
+  };
   const out=[];
-  for(const ref of arr(symbol.references).filter(ref=>ref?.relation==='calls'&&inRegion(ref))){
+  for(const ref of arr(symbol.references).filter(ref=>ref?.relation==='calls'&&belongsHere(ref))){
     if(ref?.targetSymbolId){
       const target=explorer.topology?.symbolById?.get(ref.targetSymbolId);
       if(target)out.push(stateForSymbol(target,symbol.id));
@@ -119,17 +143,14 @@ export function collectLocalSemanticWindow({
 
   add(state);
 
-  // Functions up to 50 lines stay coherent semantic units. Regions are a
-  // chunking fallback only for larger functions. For navigation lookahead we
-  // may materialize up to depth levels of the region hierarchy, but Query
-  // still moves only one level at a time.
+  // Regions are semantic evidence containers for every function, regardless
+  // of function size. Query still moves one semantic level at a time.
   if(includeRootRegions&&state.type!=='code_external'){
     const maxRegionDepth=Math.max(1,Math.min(3,Number(depth)||1));
     const roots=state.type==='code_region'
       ? structuralRegionChildren(state,explorer)
-      : shouldChunkFunction(state)
-        ? structuralRegionStates(state,explorer).filter(region=>region.parent===state.id||region.parent===state.symbolId)
-        : [];
+      : structuralRegionStates(state,explorer)
+        .filter(region=>region.parent===state.id||region.parent===state.symbolId);
     const queue=roots.map(region=>({region,parentId:state.id,level:1}));
     const regionSeen=new Set();
     while(queue.length&&states.length<MAX_LOOKAHEAD_NODES){
@@ -145,23 +166,23 @@ export function collectLocalSemanticWindow({
     }
   }
 
-  // Calls are a separate frontier. Query requests them only after the relevant
-  // semantic body space for the current function has been exhausted.
+  // Calls belong to the smallest enclosing semantic container. Materialized
+  // regions therefore own calls made directly in their body; nested-region
+  // calls do not leak upward to the parent region or function.
   if(includeCallFrontier&&state.type!=='code_external'){
     const maxDepth=Math.max(1,Math.min(3,Number(depth)||1));
-    const queue=[{node:state,level:0}];
-    const callSeen=new Set([state.id]);
+    const scopeNodes=states.filter(node=>node.type==='code_symbol'||node.type==='code_region');
+    const queue=scopeNodes.map(node=>({node,level:0}));
+    const expanded=new Set();
     while(queue.length&&states.length<MAX_LOOKAHEAD_NODES){
       const {node,level}=queue.shift();
-      if(level>=maxDepth)continue;
+      if(!node?.id||expanded.has(node.id)||level>=maxDepth)continue;
+      expanded.add(node.id);
       for(const child of directCallStates(node,explorer)){
         if(states.length>=MAX_LOOKAHEAD_NODES)break;
         links.push({from:node.id,to:child.id,relationship:'calls'});
         add(child);
-        if(!callSeen.has(child.id)){
-          callSeen.add(child.id);
-          queue.push({node:child,level:level+1});
-        }
+        if(child.type==='code_symbol')queue.push({node:child,level:level+1});
       }
     }
   }
