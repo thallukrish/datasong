@@ -244,6 +244,57 @@ function topLevelConstructCounts(index=[]){
 
 function actionReason(action={}){return text(action?.reason||'',320);}
 
+function locatorTokens(question=''){
+  const stop=new Set(['the','a','an','for','to','of','in','on','with','use','using','change','modify','issue','current','evidence','obligation']);
+  return [...new Set(String(question||'').toLowerCase().match(/[a-z0-9_]+/g)||[])]
+    .filter(token=>token.length>=3&&!stop.has(token))
+    .slice(0,12);
+}
+
+function scanLocatorIndex({topology,question}){
+  const tokens=locatorTokens(question);
+  if(!tokens.length)return [];
+  const hits=[];
+  for(const row of arr(topology?.constructIndex)){
+    const fields=[
+      row?.sourcePath,row?.moduleName,row?.module,row?.name,row?.qualifiedName,
+      row?.parentClass,row?.parentFunction
+    ].map(value=>String(value||'').toLowerCase()).filter(Boolean);
+    if(!fields.length)continue;
+    const matched=tokens.filter(token=>fields.some(value=>value.includes(token)));
+    if(!matched.length)continue;
+    const distinct=matched.length;
+    // For multi-term locator queries require at least two locating terms so
+    // generic words such as "client" cannot flood the candidate pool.
+    if(tokens.length>=2&&distinct<2)continue;
+    const sourcePath=String(row?.sourcePath||'');
+    const line=Number(row?.startLine||0);
+    if(!sourcePath||!line)continue;
+    const symbol=enclosingSymbol(topology,sourcePath,line);
+    const external=!symbol?externalAtLine(topology,sourcePath,line):null;
+    const pathBonus=tokens.filter(token=>sourcePath.toLowerCase().includes(token)).length*250;
+    hits.push({
+      sourcePath,line,endLine:Number(row?.endLine||line),
+      text:text(row?.snippet||row?.canonicalSnippet||'',700),
+      pattern:'locator:'+matched.join(','),
+      kind:'structured',
+      constructType:String(row?.constructType||''),
+      weight:1,
+      structuralScore:distinct*1000+pathBonus,
+      matchQuality:{exact:distinct,prefix:0,contains:0,filters:[]},
+      symbolId:symbol?.id||'',
+      symbolName:symbol?.name||row?.parentFunction||row?.parentClass||row?.name||'',
+      externalId:external?.id||'',
+      externalName:external?.qualifiedName||external?.name||'',
+      test:isTestPath(sourcePath),
+      metadata:row
+    });
+  }
+  return hits
+    .sort((a,b)=>b.structuralScore-a.structuralScore||Number(a.test)-Number(b.test)||a.sourcePath.localeCompare(b.sourcePath))
+    .slice(0,MAX_HITS);
+}
+
 function materializeStructuredRows({topology,construct,filters,rows}){
   const hits=[];const seen=new Set();
   for(const row of arr(rows).slice(0,MAX_HITS)){
@@ -284,6 +335,9 @@ export async function walkConstructFacets({question,mode,topology,client,model,u
     break;
   }
   if(!construct)return {strategy:'root_entries',reason:'No usable structural branch selected.',history,construct:'',filters:[],rows:[]};
+  if(!filters.length&&rows.length>MATERIALIZE_AT){
+    return {strategy:'locator_fallback',reason:'Faceted walk found no credible refinement; use locator evidence across the structural index.',history,construct,filters:[],rows:[]};
+  }
   return {strategy:'structured_search',reason:'Faceted structural tree walk.',history,construct,filters,rows};
 }
 function fieldMatchQuality(row,filter){
@@ -448,6 +502,7 @@ export async function selectCodeEntries({question,mode,topology,client,model,usa
     const walked=await walkConstructFacets({question,mode,topology,client,model,usage});
     if(walked.strategy==='root_entries'){const plan={strategy:'root_entries',reason:walked.reason||'',searches:[],patterns:[],facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:[],candidates:[]});return {plan,hits:[],candidates:[],indexSummary};}
     if(walked.strategy==='pattern_search'){const hits=await scanRepositoryPatterns({topology,patterns:walked.patterns});const candidates=rankPatternEntryHits(hits);const plan={strategy:'pattern_search',reason:walked.reason||'',searches:[],patterns:walked.patterns,facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});return {plan,hits,candidates,indexSummary};}
+    if(walked.strategy==='locator_fallback'){const hits=scanLocatorIndex({topology,question});const candidates=rankPatternEntryHits(hits);const plan={strategy:'locator_fallback',reason:walked.reason||'',searches:[],patterns:[],facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});return {plan,hits,candidates,indexSummary};}
     const hits=materializeStructuredRows({topology,construct:walked.construct,filters:walked.filters,rows:walked.rows});
     const candidates=rankPatternEntryHits(hits);
     const plan={strategy:'structured_search',reason:walked.reason||'',searches:[{construct:walked.construct,weight:1,filters:walked.filters.map(({field,regex})=>({field,regex}))}],patterns:[],facetHistory:walked.history,remainingRowCount:walked.rows.length};
