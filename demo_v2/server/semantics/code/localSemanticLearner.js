@@ -21,6 +21,53 @@ function stateForSymbol(symbol,parentSymbolId=null){
   return {id:symbol.id,type:'code_symbol',name:symbol.name,symbolId:symbol.id,sourcePath:symbol.sourcePath||'',startLine:symbol.startLine||0,endLine:symbol.endLine||0,body:String(symbol.body||''),parent:parentSymbolId,parentSymbolId};
 }
 
+function stateForRegion(symbol,region){
+  const line=Number(region?.startLine||symbol?.startLine||0);
+  return {
+    id:region.id,
+    type:'code_region',
+    name:`${symbol.name} [${region.kind||'region'} @ ${line}]`,
+    symbolId:symbol.id,
+    regionId:region.id,
+    sourcePath:symbol.sourcePath||'',
+    startLine:line,
+    endLine:Number(region?.endLine||line),
+    body:String(region?.body||''),
+    kind:String(region?.kind||'region'),
+    parent:region?.parentRegionId||symbol.id,
+    parentSymbolId:symbol.id
+  };
+}
+
+function immediateRegionStates(state,explorer){
+  if(state?.type==='code_external')return[];
+  const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
+  const parentRegionId=state?.type==='code_region'?state.regionId:null;
+  return arr(symbol.regions)
+    .filter(region=>(region?.parentRegionId||null)===parentRegionId)
+    .map(region=>stateForRegion(symbol,region));
+}
+
+function descendantRegionRanges(state,explorer){
+  if(state?.type!=='code_region')return[];
+  const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
+  const byParent=new Map();
+  for(const region of arr(symbol.regions)){
+    const parent=region?.parentRegionId||null;
+    if(!byParent.has(parent))byParent.set(parent,[]);
+    byParent.get(parent).push(region);
+  }
+  const out=[],queue=[state.regionId];
+  while(queue.length){
+    const parent=queue.shift();
+    for(const region of arr(byParent.get(parent))){
+      out.push([Number(region.startLine||0),Number(region.endLine||region.startLine||0)]);
+      queue.push(region.id);
+    }
+  }
+  return out;
+}
+
 function externalStateForRef(symbol,ref){
   const line=Number(ref?.line||ref?.startLine||0),endLine=Number(ref?.endLine||line);
   const qualified=String(ref?.qualifiedName||ref?.name||ref?.simpleName||'external');
@@ -46,10 +93,19 @@ function externalStateForRef(symbol,ref){
 function directCallStates(state,explorer){
   if(state?.type==='code_external')return[];
   const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
-  const region=state?.type==='code_region'?{start:Number(state.startLine||0),end:Number(state.endLine||0)}:null;
-  const inRegion=(ref)=>!region||(Number(ref.line||ref.startLine||0)>=region.start&&Number(ref.line||ref.startLine||0)<=region.end);
+  const lineOf=(ref)=>Number(ref.line||ref.startLine||0);
+  const topRegions=arr(symbol.regions).filter(region=>!region?.parentRegionId);
+  const nestedRanges=descendantRegionRanges(state,explorer);
+  const inCurrentScope=(ref)=>{
+    const line=lineOf(ref);
+    if(state?.type==='code_region'){
+      if(line<Number(state.startLine||0)||line>Number(state.endLine||0))return false;
+      return !nestedRanges.some(([start,end])=>start<=line&&line<=end);
+    }
+    return !topRegions.some(region=>Number(region.startLine||0)<=line&&line<=Number(region.endLine||region.startLine||0));
+  };
   const out=[];
-  for(const ref of arr(symbol.references).filter(ref=>ref?.relation==='calls'&&inRegion(ref))){
+  for(const ref of arr(symbol.references).filter(ref=>ref?.relation==='calls'&&inCurrentScope(ref))){
     if(ref?.targetSymbolId){
       const target=explorer.topology?.symbolById?.get(ref.targetSymbolId);
       if(target)out.push(stateForSymbol(target,symbol.id));
@@ -60,6 +116,12 @@ function directCallStates(state,explorer){
   return out;
 }
 
+export function immediateSemanticChildren(state,explorer){
+  const regions=immediateRegionStates(state,explorer);
+  const calls=directCallStates(state,explorer);
+  return [...regions,...calls];
+}
+
 export function collectLocalSemanticWindow({state,explorer,depth=3}){
   if(!state)return{states:[],links:[]};
   const queue=[{state,level:0}],seen=new Set(),states=[],links=[];
@@ -67,8 +129,9 @@ export function collectLocalSemanticWindow({state,explorer,depth=3}){
     const current=queue.shift(),node=current.state;if(!node||seen.has(node.id))continue;
     seen.add(node.id);states.push(node);
     if(current.level>=Math.max(0,Number(depth)||0))continue;
-    for(const child of directCallStates(node,explorer)){
-      links.push({from:node.id,to:child.id,relationship:'calls'});
+    for(const child of immediateSemanticChildren(node,explorer)){
+      const relationship=child.type==='code_region'?'contains':'calls';
+      links.push({from:node.id,to:child.id,relationship});
       if(!seen.has(child.id))queue.push({state:child,level:current.level+1});
     }
   }
