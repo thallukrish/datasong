@@ -9,6 +9,22 @@ const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
 const HYPOTHESIS_DELTA_EPSILON = 0.03;
 const MAX_FLAT_STEPS = 2;
+const LOCATOR_EVIDENCE_SYSTEM = `Split a software-engineering issue into evidence used to LOCATE the existing code and evidence used later to judge the requested change, symptom, or desired result.
+
+q is the full original request.
+goal is the current evidence obligation.
+
+locatorTerms must contain only words or short phrases that identify the existing code area, API, component, subsystem, class, function, backend, entity, or behavior already present in the repository. These terms are allowed to drive structural retrieval.
+
+changeTerms are requested implementation mechanisms or proposed code changes. symptomTerms are failures or observed incorrect behavior. resultTerms are desired outcomes or acceptance behavior.
+
+Critical rule: proposed implementation details must NOT leak into locatorTerms merely because they look like code identifiers. If the request says "use X", "replace with X", "change to X", or otherwise proposes X as the solution, X belongs in changeTerms unless the request separately identifies X as existing code to locate.
+
+Preserve exact identifiers when they genuinely locate existing code. Keep lists compact. Return only:
+{"locatorTerms":[],"changeTerms":[],"symptomTerms":[],"resultTerms":[],"locatorQuery":""}
+
+locatorQuery must be a concise search phrase composed only from locatorTerms. If no reliable locator evidence exists, return locatorQuery="" rather than inventing one.`;
+
 
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
@@ -561,6 +577,33 @@ async function decomposeGoals({question,client,model,usage,log}){
   const mode=reasoningModeForGoals(goals);
   log('query_v5_goals',{question,mode,goals:goalView(goals),usage:call.usage});
   return {goals,mode};
+}
+
+async function extractLocatorEvidence({question,goal,client,model,usage,log}){
+  const call=await modelJson(client,model,LOCATOR_EVIDENCE_SYSTEM,{
+    q:question,
+    goal:{
+      id:goal?.id||'',
+      kind:goal?.kind||'',
+      text:goal?.text||'',
+      hardConstraints:arr(goal?.hardConstraints),
+      optionalConstraints:arr(goal?.optionalConstraints),
+      failingCase:goal?.failingCase||''
+    }
+  });
+  addUsage(usage,call.usage);
+  const parsed=call.parsed||{};
+  const compact=(value)=>arr(value).map(item=>text(item,120)).filter(Boolean).slice(0,12);
+  const result={
+    locatorTerms:compact(parsed.locatorTerms),
+    changeTerms:compact(parsed.changeTerms),
+    symptomTerms:compact(parsed.symptomTerms),
+    resultTerms:compact(parsed.resultTerms),
+    locatorQuery:text(parsed.locatorQuery||'',500)
+  };
+  if(!result.locatorQuery&&result.locatorTerms.length)result.locatorQuery=result.locatorTerms.join(' ');
+  log('query_v5_locator_evidence',{question,goalId:goal?.id||'',...result,usage:call.usage});
+  return result;
 }
 
 function sourceEvidenceCandidates(state,sourceBody){
@@ -1216,9 +1259,21 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(thread.searched)return;
     const goal=thread.goal;
     const searchQuestion=goalSearchQuestion(goal);
-    emit({action:'GOAL_SEARCH',goalId:goal.id,goal:goal.text,kind:goal.kind});
+    const locatorEvidence=await extractLocatorEvidence({question,goal,client,model,usage,log});
+    const locatorQuestion=locatorEvidence.locatorQuery||goal.text||question;
+    emit({
+      action:'GOAL_SEARCH',
+      goalId:goal.id,
+      goal:goal.text,
+      kind:goal.kind,
+      locatorTerms:locatorEvidence.locatorTerms,
+      changeTerms:locatorEvidence.changeTerms,
+      symptomTerms:locatorEvidence.symptomTerms,
+      resultTerms:locatorEvidence.resultTerms,
+      locatorQuery:locatorQuestion
+    });
 
-    const entrySelection=await selectCodeEntries({question:searchQuestion,mode:goal.kind,topology:explorer.topology,client,model,usage,log});
+    const entrySelection=await selectCodeEntries({question:locatorQuestion,mode:goal.kind,topology:explorer.topology,client,model,usage,log});
     thread.entrySelection=entrySelection;
     const bestEntry=entrySelection.candidates[0];
     const searchCount=entrySelection.plan.strategy==='structured_search'?entrySelection.plan.searches.length:entrySelection.plan.patterns.length;
@@ -1229,6 +1284,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       goalId:goal.id,
       strategy:entrySelection.plan.strategy,
       reason:entrySelection.plan.reason,
+      locatorQuery:locatorQuestion,
+      locatorTerms:locatorEvidence.locatorTerms,
+      changeTerms:locatorEvidence.changeTerms,
+      symptomTerms:locatorEvidence.symptomTerms,
+      resultTerms:locatorEvidence.resultTerms,
       searches:entrySelection.plan.searches,
       patterns:entrySelection.plan.patterns,
       candidates:entrySelection.candidates.map(item=>({name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,score:item.score,test:item.test,entryRankScore:Number(item.entryRankScore||0)}))
