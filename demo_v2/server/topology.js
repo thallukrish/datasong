@@ -365,7 +365,10 @@ export class CodeTopology {
         reused:!!this.constructIndexMeta.reused,
         commit:this.constructIndexMeta.commit,
         schemaVersion:this.constructIndexMeta.schemaVersion,
-        analyzerVersion:this.constructIndexMeta.analyzerVersion
+        analyzerVersion:this.constructIndexMeta.analyzerVersion,
+        incremental:!!this.constructIndexMeta.incremental,
+        incrementalFrom:this.constructIndexMeta.incrementalFrom||'',
+        affectedFiles:Array.isArray(this.constructIndexMeta.affectedFiles)?this.constructIndexMeta.affectedFiles:[]
       } : null,
       indexOnly:true,
       readme:this.repositoryReadme
