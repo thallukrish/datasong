@@ -125,7 +125,41 @@ function filterFromFacetManyAction(action={},rows=[]){
   if(exact.length<2)return null;
   return {
     field,
-    regex:'^(?:'+exact.map(escapeRegex).join('|')+')
+    regex:'^(?:'+exact.map(escapeRegex).join('|')+')$',
+    match:'many',
+    value:exact.join(' | '),
+    values:exact
+  };
+}
+
+function filterFromRankedFacetAction(action={},rows=[]){
+  const field=String(action?.field||'').trim();
+  if(!field)return null;
+  const available=new Set(facetEntries(rows,field,'count',Math.max(FACET_LIMIT,24)).map(item=>item.value));
+  const ranked=[];
+  const seen=new Set();
+  for(const row of arr(action?.values).slice(0,5)){
+    const value=String(Array.isArray(row)?row[0]:row?.value||'').trim();
+    const score=Math.max(0,Math.min(1,Number(Array.isArray(row)?row[1]:row?.score||0)));
+    if(!value||!available.has(value)||seen.has(value)||score<=0)continue;
+    seen.add(value);
+    ranked.push({value,score});
+  }
+  ranked.sort((a,b)=>b.score-a.score||a.value.localeCompare(b.value));
+  if(!ranked.length)return null;
+  const best=ranked[0].score;
+  const kept=ranked.filter(item=>item.score>=0.15&&item.score>=best-0.55).slice(0,5);
+  if(!kept.length)return null;
+  return {
+    field,
+    regex:'^(?:'+kept.map(item=>escapeRegex(item.value)).join('|')+')$',
+    match:'ranked',
+    value:kept.map(item=>item.value).join(' | '),
+    values:kept.map(item=>item.value),
+    rankedValues:kept
+  };
+}
+
 function rowsForSelection(index=[],construct='',filters=[]){
   return arr(index).filter(row=>{
     if(construct&&String(row?.constructType||'').toLowerCase()!==construct)return false;
