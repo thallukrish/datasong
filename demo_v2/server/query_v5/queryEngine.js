@@ -1,30 +1,30 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { entryCandidates } from '../semantics/code/queryDrivenSemanticFrontier.js';
-import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
+import { ensureLocalSemanticWindow, codeSemanticForState, immediateSemanticChildren } from '../semantics/code/localSemanticLearner.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
-const WINDOW_DEPTH = 3;
+const WINDOW_DEPTH = 1;
+const FLAT_SCORE_EPSILON = 0.02;
+const MAX_FLAT_STEPS = 2;
 
 const CLASSIFY_SYSTEM = `Classify the user's code request into exactly one investigation mode. Use "causal" when the user reports a bug, failure, regression, incorrect behavior, unexpected result, or asks what caused/why something went wrong. Use "query" for descriptive code questions such as how something works, where something is implemented, what happens in a flow, or what code handles something. Return {"mode":"causal"} or {"mode":"query"} only.`;
 
-const CAUSAL_DECIDE_SYSTEM = `Investigate a reported software issue from learned code semantics and the current function body when supplied. The original issue never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. b is the raw body of the current function only, when there is one. h is the rolling evidence-backed hypothesis.
+const CAUSAL_DECIDE_SYSTEM = `Evaluate semantic code evidence against a reported software issue. The issue q never changes. h is the branch-local hypothesis, hs is its previous strength from 0 to 1, f is evidence already established on this branch, s is the semantic evidence currently visible, b is the raw source for the selected evidence container, and c lists semantic evidence candidates LeMap can reveal next.
 
-Reason causally, not by topical relevance. The issue may contain multiple distinct or related failure components. Do not require one hypothesis to explain every component at once. A strong hypothesis may close one part of the issue while other parts remain unresolved.
+You do not navigate a graph and you do not need to reason about graph mechanics, DFS, functions versus regions, or backtracking. LeMap owns evidence acquisition. Your job is hypothesis evaluation.
 
-At every current function ask in this order:
-1. Can this function itself, based on its semantics and b, concretely cause the whole issue or one identifiable part of it?
-2. If yes and no downstream call is needed to establish that mechanism, set k=1 and put the concise closed cause in g. Do not continue into child calls merely because they exist.
-3. Set x=1 only when the cumulative supported evidence, including any already closed causes in f, explains the whole reported issue. Otherwise x=0 and continue investigating unresolved parts.
-4. Only rank child continuations when further execution is actually needed to establish an unresolved cause.
+For selected evidence:
+1. Form h if none exists; otherwise keep, refine, replace, strengthen, or weaken h strictly from the supplied evidence.
+2. Return y from 0 to 1 for how strongly the updated h explains q using supported evidence. Do not preserve a high score when new evidence weakens the hypothesis.
+3. Add explicit supported observations from the selected evidence to a.
+4. Set k=1 and g to a concise causal mechanism when this evidence establishes a concrete cause for a material part of q.
+5. Set x=1 only when supported evidence explains the whole issue.
+6. Score each candidate in p by the expected hypothesis strength if that evidence were examined next. Prefer candidates likely to improve explanatory strength; omit candidates unlikely to improve it.
 
-Tests, config helpers, validators, or similarly related code should score low or be omitted unless execution through them could itself cause the reported behavior.
+During entry comparison there is no selected raw evidence and each candidate is an independent fresh branch. Do not carry a hypothesis from one candidate to another. Return a empty and k=0.
 
-When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. If k=1, also include the closed causal statement in a so it becomes durable evidence. Do not return evidence IDs or slot IDs. During entry selection, where several independent windows are being compared and no current function body exists, leave a empty and set k=0. Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId].
-
-h is always the best rolling hypothesis from all evidence seen so far. It may describe one solved component plus unresolved remainder. g is only the cause closed at the current function.
-
-p is [[candidateIndex,causalScore]] for at most 3 continuations, where causalScore means how likely following that branch is to complete an unresolved causal explanation. Do not invent missing evidence. Return {"x":0,"k":0,"g":"","h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
+Mark contradicted existing facts in d=[factId] and re-supported disputed facts in r=[factId]. Do not invent evidence. Return {"x":0,"k":0,"g":"","h":"","y":0.0,"a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 
 const CAUSAL_COMPLETE_SYSTEM = `Decide whether the accumulated supported causal evidence now explains the whole reported software issue. The issue may contain multiple distinct or related parts. q is the original issue, f is the cumulative evidence ledger as [factId,status,text], and h is the rolling hypothesis.
 
@@ -32,11 +32,13 @@ Return x=1 only if the supported evidence collectively explains every material f
 
 Return {"x":0,"h":""} only.`;
 
-const QUERY_DECIDE_SYSTEM = `Investigate a code question from learned code semantics only. The original question never changes. f is the cumulative evidence ledger as [factId,status,text]. s is the semantic evidence currently visible. h is the current answer hypothesis.
+const QUERY_DECIDE_SYSTEM = `Evaluate semantic code evidence against the code question q. h is the branch-local answer hypothesis, hs is its previous strength from 0 to 1, f is evidence already established on this branch, s is the semantic evidence currently visible, b is the raw source for the selected evidence container, and c lists semantic evidence candidates LeMap can reveal next.
 
-At every position ask whether the full traversed path plus supported facts is sufficient to answer the question. Rank candidate continuations by how much following them is likely to complete the answer. When there is one current traversal window, add explicit behavior established by that current evidence to a as plain fact strings. Do not return evidence IDs or slot IDs. During entry selection leave a empty. Mark contradicted facts in d=[factId] and re-supported disputed facts in r=[factId].
+You do not navigate a graph and do not reason about traversal mechanics. LeMap owns evidence acquisition. Your job is to evaluate and improve the hypothesis.
 
-Set x=1 only when the supported facts plus traversed semantic path directly answer the question. Then h is the concise answer. Otherwise x=0 and h is the current evidence-backed answer hypothesis. p is [[candidateIndex,relevanceScore]] for at most 3 continuations. Do not invent missing evidence. Return {"x":0,"h":"","a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
+For selected evidence, form or revise h strictly from supplied evidence and return y from 0 to 1 for how strongly h answers q. Add explicit supported observations to a. Set x=1 only when the supported evidence directly answers q. Score candidates in p by the expected hypothesis strength if examined next, preferring evidence likely to improve y and omitting candidates unlikely to improve it.
+
+During entry comparison each candidate is an independent fresh branch; return a empty. Mark contradicted facts in d and re-supported disputed facts in r. Do not invent evidence. Return {"x":0,"h":"","y":0.0,"a":[],"d":[],"r":[],"p":[[0,0.0]]}.`;
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
 
 function symbolState(symbol, parent=null) {
@@ -69,20 +71,13 @@ function externalBoundaryState(boundary){
   };
 }
 
-function directCallStates(symbol,state,symbolById){
-  const region = state?.type==='code_region' ? {start:Number(state.startLine||0),end:Number(state.endLine||0)} : null;
-  return arr(symbol?.references)
-    .filter(r=>r.relation==='calls'&&r.targetSymbolId&&(!region||((Number(r.line||r.startLine||0)>=region.start)&&(Number(r.line||r.startLine||0)<=region.end))))
-    .map(r=>symbolById?.get?.(r.targetSymbolId))
-    .filter(Boolean)
-    .map(s=>symbolState(s,symbol.id));
-}
-
-function callChildren(state, explorer, flowChildren=null) {
-  const symbol=explorer.topology?.symbolById?.get(state.symbolId);
-  if(!symbol)return [];
+function evidenceChildren(state, explorer, flowChildren=null) {
+  const children=immediateSemanticChildren(state,explorer);
   const allowed=flowChildren?.get?.(state.symbolId)||null;
-  return directCallStates(symbol,state,explorer.topology.symbolById).filter(s=>!allowed||allowed.has(s.symbolId));
+  return children.filter((child)=>{
+    if(child.type!=='code_symbol'||!allowed)return true;
+    return allowed.has(child.symbolId);
+  });
 }
 
 function semanticNodeView(state,explorer){
@@ -115,12 +110,16 @@ function dedupeStates(states=[]){
   return out;
 }
 
-function ledgerView(ledger){
-  return [...ledger.values()].map(fact=>[fact.id,fact.status,fact.text]);
+function ledgerView(branchLedger){
+  return [...branchLedger.values()].map(fact=>[fact.id,fact.status,fact.text]);
 }
 
 function ledgerEvidenceStates(ledger){
-  return dedupeStates([...ledger.values()].filter(fact=>fact.status==='supported').flatMap(fact=>fact.supportStates||[]));
+  return dedupeStates([...branchLedger.values()].filter(fact=>fact.status==='supported').flatMap(fact=>fact.supportStates||[]));
+}
+
+function cloneLedger(ledger){
+  return new Map([...ledger.entries()].map(([id,fact])=>[id,{...fact,supportStates:dedupeStates(fact.supportStates||[])}]));
 }
 
 const FACT_STOP_WORDS=new Set(['a','an','and','are','as','at','be','because','by','for','from','in','is','it','of','on','or','that','the','this','to','with']);
@@ -171,7 +170,7 @@ function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],sup
   if(!boundSupport.length)return;
   for(const value of arr(additions)){
     const factText=text(value,420);if(!factText)continue;
-    const existing=[...ledger.values()].find((fact)=>{
+    const existing=[...branchLedger.values()].find((fact)=>{
       if(fact.text.toLowerCase()===factText.toLowerCase())return true;
       const sameWindow=sameSupportWindow(fact.supportStates,boundSupport);
       if(!sameWindow)return false;
@@ -184,12 +183,12 @@ function applyLedgerDecision({ledger,additions=[],disputes=[],resolutions=[],sup
       continue;
     }
     const id='F'+nextFactId.value++;
-    ledger.set(id,{id,text:factText,status:'supported',supportStates:boundSupport});
+    branchLedger.set(id,{id,text:factText,status:'supported',supportStates:boundSupport});
   }
 }
 
 async function decide({
-  question,mode,hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
+  question,mode,hypothesis='',hypothesisStrength=0,ledger,path=[],currentState=null,currentWindow=null,
   candidates=[],candidateWindows=[],explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
   const slotStates=new Map(),slots=[];
@@ -206,7 +205,8 @@ async function decide({
   const payload={
     q:question,
     h:hypothesis||'',
-    f:ledgerView(ledger),
+    hs:Number(hypothesisStrength||0),
+    f:ledgerView(branchLedger),
     s:slots,
     b:currentState?{
       name:currentState.name,
@@ -231,15 +231,16 @@ async function decide({
     causeClosed:currentState&&Number(call.parsed?.k||0)===1,
     closedCause:text(call.parsed?.g||'',700),
     hypothesis:text(call.parsed?.h||hypothesis||'',900),
+    strength:Math.max(0,Math.min(1,Number(call.parsed?.y??hypothesisStrength??0))),
     picks,
     additions:currentState?arr(call.parsed?.a):[],
     disputes:arr(call.parsed?.d),
     resolutions:arr(call.parsed?.r),
     supportStates:currentState&&currentWindow?dedupeStates(arr(currentWindow.states)):[]
   };
-  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,hypothesis:result.hypothesis,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
+  log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,hypothesis:result.hypothesis,strength:result.strength,picks:picks.map(x=>({name:x.state.name,score:x.score})),additions:result.additions,disputes:result.disputes,resolutions:result.resolutions},usage:call.usage});
   const displayPath=currentState?[...path,currentState]:path;
-  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,path:displayPath.map(x=>x.name),facts:ledgerView(ledger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
+  onProgress({action:'DECIDE',step,mode,hypothesis:result.hypothesis,hypothesisStrength:result.strength,explained:result.explained,causeClosed:result.causeClosed,closedCause:result.closedCause,path:displayPath.map(x=>x.name),facts:ledgerView(branchLedger),candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score}))});
   return result;
 }
 
@@ -272,10 +273,10 @@ async function localizeExplanation({question,explanation,evidenceStates,client,m
 }
 
 async function assessCausalCompleteness({question,hypothesis,ledger,client,model,usage,log,step}) {
-  const call=await modelJson(client,model,CAUSAL_COMPLETE_SYSTEM,{q:question,h:hypothesis||'',f:ledgerView(ledger)});
+  const call=await modelJson(client,model,CAUSAL_COMPLETE_SYSTEM,{q:question,h:hypothesis||'',f:ledgerView(branchLedger)});
   addUsage(usage,call.usage);
   const result={explained:Number(call.parsed?.x||0)===1,hypothesis:text(call.parsed?.h||hypothesis||'',900)};
-  log('query_v5_causal_completeness',{step,payload:{q:question,h:hypothesis||'',f:ledgerView(ledger)},modelResponse:call.parsed,result,usage:call.usage});
+  log('query_v5_causal_completeness',{step,payload:{q:question,h:hypothesis||'',f:ledgerView(branchLedger)},modelResponse:call.parsed,result,usage:call.usage});
   return result;
 }
 
@@ -414,7 +415,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const entries=pool.map((item)=>item.state);
   if(!entries.length)throw new Error('Prepared repository contains no code entry roots or external API boundaries.');
 
-  const visited=new Set(),entryTried=new Set(),stack=[],ledger=new Map(),nextFactId={value:1};
+  const visited=new Set(),entryTried=new Set(),stack=[],nextFactId={value:1};
   let finalExplanation='',finalEvidence=[],rollingHypothesis='';
 
   const seed=async()=>{
@@ -432,15 +433,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         windows.push(learned.window);
       }
 
-      const decision=await decide({question,mode,hypothesis:rollingHypothesis,ledger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit});
-      rollingHypothesis=decision.hypothesis||rollingHypothesis;
-      applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
-      emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:decision.hypothesis,explained:decision.explained});
+      const entryLedger=new Map();
+      const decision=await decide({question,mode,hypothesis:'',hypothesisStrength:0,ledger:entryLedger,path:[],candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit});
+      emit({action:'FACTS',facts:ledgerView(entryLedger),hypothesis:decision.hypothesis,hypothesisStrength:decision.strength,explained:decision.explained});
       const batchEvent={step,action:'ENTRY_BATCH',batch:Math.floor(offset/ENTRY_BATCH_SIZE)+1,start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,hypothesis:decision.hypothesis,explained:decision.explained};
       events.push(batchEvent);emit(batchEvent);
 
       if(decision.explained){
-        const supported=ledgerEvidenceStates(ledger);
+        const supported=ledgerEvidenceStates(entryLedger);
         if(!supported.length){
           log('query_v5_invalid_explanation',{step,reason:'explanation has no supported evidence ledger facts'});
           continue;
@@ -453,7 +453,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const warm=decision.picks;
       if(!warm.length)continue;
 
-      stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
+      stack.push({path:[],current:warm[0],alternatives:warm.slice(1),hypothesis:'',strength:0,ledger:new Map(),flatCount:0});
       const event={step,action:'RESEED',state:warm[0].state.name,hypothesis:decision.hypothesis};
       events.push(event);emit({...event,path:[warm[0].state.name]});
       return true;
@@ -466,19 +466,21 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
   while(!finalExplanation&&stack.length&&step<MAX_STEPS){
     const frame=stack.at(-1),state=frame.current.state;
+    const branchLedger=cloneLedger(frame.ledger||new Map());
     visited.add(state.id);
 
     const learned=await ensureLocalSemanticWindow({state,path:frame.path,depth:WINDOW_DEPTH,explorer,client,model,usage,log,onProgress:emit});
     recordTraversed(state,step);
     recordExplored(arr(learned.window?.states),'semantic_window',step);
     const path=[...frame.path,state];
-    const next=callChildren(state,explorer,flowChildren).filter(child=>!visited.has(child.id));
+    const next=evidenceChildren(state,explorer,flowChildren).filter(child=>!visited.has(child.id));
 
     const decision=await decide({
       question,
       mode,
       hypothesis:frame.hypothesis,
-      ledger,
+      hypothesisStrength:frame.strength||0,
+      ledger:branchLedger,
       path:frame.path,
       currentState:state,
       currentWindow:learned.window,
@@ -487,34 +489,36 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     });
 
     rollingHypothesis=decision.hypothesis||rollingHypothesis;
-    applyLedgerDecision({ledger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
-    emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:rollingHypothesis,explained:decision.explained});
+    applyLedgerDecision({ledger:branchLedger,additions:decision.additions,disputes:decision.disputes,resolutions:decision.resolutions,supportStates:decision.supportStates,nextFactId});
+    const improvement=decision.strength-Number(frame.strength||0);
+    const flatCount=improvement>FLAT_SCORE_EPSILON?0:Number(frame.flatCount||0)+1;
+    emit({action:'FACTS',facts:ledgerView(branchLedger),hypothesis:rollingHypothesis,hypothesisStrength:decision.strength,explained:decision.explained});
 
     if(decision.explained){
       finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
-      finalEvidence=dedupeStates([...ledgerEvidenceStates(ledger),...path,...arr(learned.window?.states)]);
+      finalEvidence=dedupeStates([...ledgerEvidenceStates(branchLedger),...path,...arr(learned.window?.states)]);
       break;
     }
 
     if(mode==='causal'&&decision.causeClosed){
       const closedText=decision.closedCause||decision.hypothesis||'Current function establishes one causal component of the issue.';
-      const existing=[...ledger.values()].find((fact)=>fact.text.toLowerCase()===closedText.toLowerCase());
+      const existing=[...branchLedger.values()].find((fact)=>fact.text.toLowerCase()===closedText.toLowerCase());
       if(existing){
         existing.status='supported';
         existing.supportStates=dedupeStates([...(existing.supportStates||[]),...arr(learned.window?.states)]);
       }else{
         const id='F'+nextFactId.value++;
-        ledger.set(id,{id,text:closedText,status:'supported',supportStates:dedupeStates(arr(learned.window?.states))});
+        branchLedger.set(id,{id,text:closedText,status:'supported',supportStates:dedupeStates(arr(learned.window?.states))});
       }
       const event={step,action:'CAUSE_CLOSED',state:state.name,cause:closedText,hypothesis:decision.hypothesis};
-      events.push(event);emit({...event,path:path.map(x=>x.name),facts:ledgerView(ledger)});
+      events.push(event);emit({...event,path:path.map(x=>x.name),facts:ledgerView(branchLedger)});
 
-      const completeness=await assessCausalCompleteness({question,hypothesis:rollingHypothesis,ledger,client,model,usage,log,step});
+      const completeness=await assessCausalCompleteness({question,hypothesis:rollingHypothesis,ledger:branchLedger,client,model,usage,log,step});
       rollingHypothesis=completeness.hypothesis||rollingHypothesis;
-      emit({action:'FACTS',facts:ledgerView(ledger),hypothesis:rollingHypothesis,explained:completeness.explained});
+      emit({action:'FACTS',facts:ledgerView(branchLedger),hypothesis:rollingHypothesis,explained:completeness.explained});
       if(completeness.explained){
         finalExplanation=rollingHypothesis||closedText;
-        finalEvidence=ledgerEvidenceStates(ledger);
+        finalEvidence=ledgerEvidenceStates(branchLedger);
         break;
       }
 
@@ -537,10 +541,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       continue;
     }
 
-    const warm=decision.picks;
-    if(warm.length){
-      stack.push({path,current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis});
-      const event={step,action:'DESCEND',from:state.name,to:warm[0].state.name,hypothesis:decision.hypothesis};
+    const warm=decision.picks.filter((pick)=>pick.score>decision.strength+FLAT_SCORE_EPSILON);
+    if(warm.length&&flatCount<MAX_FLAT_STEPS){
+      stack.push({path,current:warm[0],alternatives:warm.slice(1),hypothesis:decision.hypothesis,strength:decision.strength,ledger:branchLedger,flatCount});
+      const event={step,action:'DESCEND',from:state.name,to:warm[0].state.name,hypothesis:decision.hypothesis,hypothesisStrength:decision.strength};
       events.push(event);emit({...event,path:[...path,warm[0].state].map(x=>x.name)});
       continue;
     }
@@ -564,16 +568,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
   if(!finalExplanation){
     emit({action:'SEARCH_COMPLETE',explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||''});
-    log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage});
+    log('query_v5_complete',{complete:false,mode,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(stack.at(-1)?.ledger||new Map()),events,usage});
     const diag=diagnostics();log('query_v5_diagnostics',diag);
-    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the full cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(ledger),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+    return {answer:mode==='causal'?'The explored semantic evidence did not yet establish the full cause.':'The explored semantic evidence did not yet answer the code question.',mode,complete:false,explained:false,hypothesis:rollingHypothesis||stack.at(-1)?.hypothesis||'',facts:ledgerView(stack.at(-1)?.ledger||new Map()),events,usage,diagnostics:diag,sweExplore:sweExploreView([]),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
   }
 
   emit({action:'EXPLAINED',explained:true,hypothesis:finalExplanation});
   const ranges=(await localizeExplanation({question,explanation:finalExplanation,evidenceStates:finalEvidence,client,model,usage,log})).map((range,index)=>({...range,rank:index+1}));
   const locations=ranges.map(range=>`${range.sourcePath}#${range.name} ${range.startLine}-${range.endLine}${range.why?' — '+range.why:''}`).join('\n');
   const answer=finalExplanation+(locations?'\n\n'+locations:'');
-  log('query_v5_complete',{complete:true,mode,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage});
+  log('query_v5_complete',{complete:true,mode,explained:true,hypothesis:finalExplanation,facts:[],ranges,events,usage});
   const diag=diagnostics();log('query_v5_diagnostics',diag);
-  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(ledger),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(branchLedger),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
 }
