@@ -110,12 +110,12 @@ function dedupeStates(states=[]){
   return out;
 }
 
-function ledgerView(branchLedger){
-  return [...branchLedger.values()].map(fact=>[fact.id,fact.status,fact.text]);
+function ledgerView(ledger){
+  return [...ledger.values()].map(fact=>[fact.id,fact.status,fact.text]);
 }
 
 function ledgerEvidenceStates(ledger){
-  return dedupeStates([...branchLedger.values()].filter(fact=>fact.status==='supported').flatMap(fact=>fact.supportStates||[]));
+  return dedupeStates([...ledger.values()].filter(fact=>fact.status==='supported').flatMap(fact=>fact.supportStates||[]));
 }
 
 function cloneLedger(ledger){
@@ -416,7 +416,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   if(!entries.length)throw new Error('Prepared repository contains no code entry roots or external API boundaries.');
 
   const visited=new Set(),entryTried=new Set(),stack=[],nextFactId={value:1};
-  let finalExplanation='',finalEvidence=[],rollingHypothesis='';
+  let finalExplanation='',finalEvidence=[],finalFacts=[],rollingHypothesis='';
 
   const seed=async()=>{
     const remaining=entries.filter(state=>!visited.has(state.id)&&!entryTried.has(state.id));
@@ -497,6 +497,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(decision.explained){
       finalExplanation=decision.hypothesis||'The supplied semantic evidence answers the request.';
       finalEvidence=dedupeStates([...ledgerEvidenceStates(branchLedger),...path,...arr(learned.window?.states)]);
+      finalFacts=ledgerView(branchLedger);
       break;
     }
 
@@ -519,6 +520,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       if(completeness.explained){
         finalExplanation=rollingHypothesis||closedText;
         finalEvidence=ledgerEvidenceStates(branchLedger);
+        finalFacts=ledgerView(branchLedger);
         break;
       }
 
@@ -577,7 +579,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const ranges=(await localizeExplanation({question,explanation:finalExplanation,evidenceStates:finalEvidence,client,model,usage,log})).map((range,index)=>({...range,rank:index+1}));
   const locations=ranges.map(range=>`${range.sourcePath}#${range.name} ${range.startLine}-${range.endLine}${range.why?' — '+range.why:''}`).join('\n');
   const answer=finalExplanation+(locations?'\n\n'+locations:'');
-  log('query_v5_complete',{complete:true,mode,explained:true,hypothesis:finalExplanation,facts:[],ranges,events,usage});
+  log('query_v5_complete',{complete:true,mode,explained:true,hypothesis:finalExplanation,facts:finalFacts,ranges,events,usage});
   const diag=diagnostics();log('query_v5_diagnostics',diag);
-  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:ledgerView(branchLedger),ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
+  return {answer,mode,complete:true,explained:true,hypothesis:finalExplanation,facts:finalFacts,ranges,events,usage,diagnostics:diag,sweExplore:sweExploreView(ranges),investigation:{mode:'code-flow-hypothesis-v5',reasoningMode:mode,usage}};
 }
