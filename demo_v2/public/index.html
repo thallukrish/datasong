@@ -14,7 +14,7 @@ function saveProfiles(){localStorage.setItem('lemap-enterprises',JSON.stringify(
 function show(n){screen=n;['profiles','learn','map','query'].forEach(x=>$(x+'Screen').classList.toggle('hidden',x!==n));$('navProfiles').classList.toggle('active',n==='profiles');$('navLearn').classList.toggle('active',n==='learn');$('navMap').classList.toggle('active',n==='map');$('navQuery').classList.toggle('active',n==='query');controls()}
 $('navProfiles').onclick=()=>show('profiles');$('navLearn').onclick=()=>{if(!selected())return alert('Select an enterprise first.');show('learn');renderLearn()};$('navMap').onclick=()=>{if(!selected())return alert('Select an enterprise first.');show('map');renderMap()};$('navQuery').onclick=()=>{if(!selected())return alert('Select an enterprise first.');show('query')};
 function renderProfiles(){$('enterpriseList').innerHTML=profiles.map(p=>`<div class="enterprise-row"><button class="enterprise ${p.id===selectedId?'active':''}" data-e="${esc(p.id)}"><b>${esc(p.name)}</b><span>${esc(p.repoUrl||'')}</span></button><button class="reset-map" data-reset="${esc(p.id)}" title="Reset semantic map" aria-label="Reset semantic map for ${esc(p.name)}">↻</button></div>`).join('');document.querySelectorAll('[data-e]').forEach(b=>b.onclick=async()=>{selectedId=b.dataset.e;selectedArc='';selectedMap=null;renderProfiles();const p=selected();if(!p)return;const r=await fetch('/api/select-enterprise',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repoUrl:p.repoUrl,semanticProfile:p.semanticProfile||'enterprise'})}),d=await r.json().catch(()=>({}));if(!r.ok)return alert(d.error||'Could not load enterprise map');await refreshState();renderLearn()});document.querySelectorAll('[data-reset]').forEach(b=>b.onclick=async()=>{const p=profiles.find(x=>x.id===b.dataset.reset);if(!p)return;if(busy())return alert('Stop learning before resetting the semantic map.');if(!matches()||selectedId!==p.id)return alert('Select and load this enterprise before resetting its semantic map.');if(!confirm(`Reset the learned semantic map for ${p.name}?\n\nThe repository cache, deterministic topology and call-path index will be kept.`))return;const r=await fetch('/api/reset-semantic-map',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repoUrl:p.repoUrl})}),d=await r.json().catch(()=>({}));if(!r.ok)return alert(d.error||'Could not reset semantic map');selectedArc='';selectedMap=null;await refreshState();alert(`Semantic map reset successfully for ${p.name}.\n\nSemantic map: Empty\nDeterministic repository topology is retained.`);});const p=selected();$('profileEmpty').classList.toggle('hidden',!!p);$('profileDetail').classList.toggle('hidden',!p);if(p){$('profileName').textContent=p.name;$('profileDesc').textContent=p.description||'';$('learnEnterprise').textContent=p.name;$('learnRepo').textContent=p.repoUrl||''}}
-function openForm(n=false){editingNew=n;const p=n?{}:selected();$('company').value=p?.name||'';$('business').value=p?.description||'';$('repo').value=p?.repoUrl||'';$('repoCommit').value=p?.repoCommit||'';$('semanticProfile').value=p?.semanticProfile||'enterprise';$('profileForm').classList.remove('hidden')}
+function openForm(n=false){editingNew=n;const p=n?{}:selected();$('company').value=p?.name||'';$('business').value=p?.description||'';$('repo').value=p?.repoUrl||'';$('repoCommit').value=p?.repoCommit||'';$('semanticProfile').value=p?.semanticProfile||(n?'code':'enterprise');$('profileForm').classList.remove('hidden')}
 $('repoArtifact').onclick=()=>openForm(false);$('addEnterprise').onclick=()=>{selectedId='';renderProfiles();$('profileEmpty').classList.add('hidden');$('profileDetail').classList.remove('hidden');$('profileName').textContent='New enterprise';$('profileDesc').textContent='';openForm(true)};$('cancelProfile').onclick=()=>{$('profileForm').classList.add('hidden');if(editingNew){editingNew=false;renderProfiles()}};
 async function prepareSavedRepository(repoUrl,repoCommit){
   const status=$('repoPrepareStatus');
@@ -45,6 +45,20 @@ $('saveProfile').onclick=async()=>{
     else Object.assign(selected(),{name,description,repoUrl,repoCommit,semanticProfile});
     saveProfiles();
     await prepareSavedRepository(repoUrl,repoCommit);
+
+    // Keep the backend's active profile in sync with the profile just saved.
+    // Without this, a newly prepared code repo can remain attached to the
+    // previously selected enterprise runtime, and the Query screen may fall
+    // through to the legacy /api/query-map (v4) path.
+    const activate=await fetch('/api/select-enterprise',{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({repoUrl,semanticProfile})
+    });
+    const activated=await activate.json().catch(()=>({}));
+    if(!activate.ok)throw new Error(activated.error||'Could not activate saved repository profile');
+    await refreshState();
+
     editingNew=false;
     $('profileForm').classList.add('hidden');
     renderProfiles();
