@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import simpleGit from 'simple-git';
-import { createIndexesFromRows } from 'pal-executor-lib';
+import { createIndexesFromRows } from 'pal-executor-lib/indexing';
 import { analyzePythonRepository } from './languages/python/adapter.js';
 
 const CODE_EXTENSIONS = new Set([
