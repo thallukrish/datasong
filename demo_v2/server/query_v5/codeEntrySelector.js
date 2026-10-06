@@ -9,7 +9,7 @@ const CODE_CONSTRUCT_TYPES = [
   'pass','global','nonlocal','delete','await','yield','expression'
 ];
 
-const ENTRY_SELECT_SYSTEM = `Extract existing code identifiers from the issue.
+const ENTRY_SELECT_SYSTEM = `Extract identifiers from the issue that are useful for locating the existing implementation.
 
 Allowed types:
 class,function,input_param,import,assignment,call,return,exception,if,for,while,try,except,with,assert,match,case,break,continue,pass,global,nonlocal,delete,await,yield,expression,*
@@ -17,8 +17,10 @@ class,function,input_param,import,assignment,call,return,exception,if,for,while,
 Return only:
 {"matches":[{"type":"...","value":"..."}]}
 
-Use * when the construct type is unknown.
+Prefer identifiers that name implementation concepts or controls mentioned by the issue, such as a function name, parameter name, option name, class, or method.
+Use * when the construct type is uncertain rather than guessing a wrong type.
 A value may end in * when only part of the identifier is known.
+Do not return generic library construction calls from the reproduction example unless they directly identify the implementation being investigated.
 Do not invent identifiers describing the proposed fix.
 Return at most 6 matches.`;
 
@@ -198,8 +200,10 @@ export async function scanCodeStructureRowsWithPal({topology,locators=[]}){
   const byId=rowMap(rows);
   const hits=[];
   const seen=new Set();
+  const perLocatorLimit=Math.max(6,Math.floor(MAX_HITS/Math.max(1,specs.length)));
 
   for(const spec of specs){
+    let addedForSpec=0;
     const expanded=prefixValues(topology?.palUniqueIndex,spec.name);
     for(const resolvedName of expanded){
       const candidateIndexes=await palFilterRows({topology,type:spec.type,name:resolvedName});
@@ -236,9 +240,12 @@ export async function scanCodeStructureRowsWithPal({topology,locators=[]}){
           test:isTestPath(sourcePath),
           metadata:{...row,resolvedName,requestedName:spec.name,pal:true}
         });
-        if(hits.length>=MAX_HITS)return hits;
+        addedForSpec+=1;
+        if(addedForSpec>=perLocatorLimit||hits.length>=MAX_HITS)break;
       }
+      if(addedForSpec>=perLocatorLimit||hits.length>=MAX_HITS)break;
     }
+    if(hits.length>=MAX_HITS)break;
   }
   return hits;
 }
@@ -371,15 +378,32 @@ export function rankPatternEntryHits(hits=[]){
     if(!current.matches.some(item=>item.pattern===hit.pattern&&item.line===hit.line))current.matches.push({pattern:hit.pattern,line:hit.line,text:hit.text,matchQuality:hit.matchQuality||null});
     grouped.set(key,current);
   }
-  return [...grouped.values()]
+  const ranked=[...grouped.values()]
     .map(item=>{
       const score=item.hasStructured
         ? item.structuredScore+Math.min(20,item.matches.length)
         : item.score+(item.test?-50:25)+Math.min(20,item.matches.length*3);
       return {...item,score};
     })
-    .sort((a,b)=>b.score-a.score||Number(a.test)-Number(b.test)||a.sourcePath.localeCompare(b.sourcePath))
-    .slice(0,24);
+    .sort((a,b)=>b.score-a.score||Number(a.test)-Number(b.test)||a.sourcePath.localeCompare(b.sourcePath));
+
+  // Keep candidate diversity across extracted locators. A very common identifier
+  // such as xr.Dataset must not crowd every other PAL match out of model triage.
+  const chosen=[];
+  const chosenKeys=new Set();
+  const patterns=[...new Set(ranked.flatMap(item=>arr(item.matches).map(match=>match.pattern)).filter(Boolean))];
+  for(const pattern of patterns){
+    const candidate=ranked.find(item=>arr(item.matches).some(match=>match.pattern===pattern));
+    if(candidate&&!chosenKeys.has(candidate.key)){
+      chosen.push(candidate);chosenKeys.add(candidate.key);
+    }
+  }
+  for(const candidate of ranked){
+    if(chosen.length>=24)break;
+    if(chosenKeys.has(candidate.key))continue;
+    chosen.push(candidate);chosenKeys.add(candidate.key);
+  }
+  return chosen.slice(0,24);
 }
 
 function parseRelationIds(raw){
