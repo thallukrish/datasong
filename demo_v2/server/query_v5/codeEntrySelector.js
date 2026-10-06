@@ -358,7 +358,7 @@ export function rankPatternEntryHits(hits=[]){
     const key=hit.symbolId?'symbol:'+hit.symbolId:hit.externalId?'external:'+hit.externalId:'line:'+hit.sourcePath+':'+hit.line;
     const current=grouped.get(key)||{
       key,symbolId:hit.symbolId||'',externalId:hit.externalId||'',name:hit.symbolName||hit.externalName||'',
-      sourcePath:hit.sourcePath,startLine:hit.line,endLine:hit.endLine||hit.line,test:!!hit.test,score:0,structuredScore:0,hasStructured:false,matches:[]
+      sourcePath:hit.sourcePath,startLine:hit.line,endLine:hit.endLine||hit.line,test:!!hit.test,score:0,structuredScore:0,hasStructured:false,matches:[],metadata:hit.metadata||null
     };
     current.startLine=Math.min(current.startLine,hit.line);
     current.endLine=Math.max(current.endLine,hit.endLine||hit.line);
@@ -382,6 +382,83 @@ export function rankPatternEntryHits(hits=[]){
     .slice(0,24);
 }
 
+function parseRelationIds(raw){
+  if(Array.isArray(raw))return raw.map(String);
+  const value=String(raw||'').trim();
+  if(!value)return [];
+  try{
+    const parsed=JSON.parse(value);
+    if(Array.isArray(parsed))return parsed.map(String);
+  }catch{}
+  return [value];
+}
+
+function compactLineWindow(lines,startLine,endLine,pad=3,maxLines=18){
+  const start=Math.max(1,Number(startLine||1)-pad);
+  const end=Math.min(lines.length,Number(endLine||startLine||1)+pad);
+  const stop=Math.min(end,start+maxLines-1);
+  const out=[];
+  for(let line=start;line<=stop;line+=1)out.push([line,String(lines[line-1]||'').slice(0,260)]);
+  return out;
+}
+
+async function entryNeighborhood(candidate,topology){
+  const rows=arr(topology?.codeStructureRows);
+  const byId=rowMap(rows);
+  const rowId=String(candidate?.metadata?.row||'');
+  const matched=byId.get(rowId);
+  if(!matched||!topology?.repoDir)return [];
+
+  const parentId=String(matched.parent||'');
+  const parent=parentId?byId.get(parentId):null;
+  const childIds=parseRelationIds(matched.children);
+  const children=childIds.map(id=>byId.get(id)).filter(Boolean).slice(0,8);
+  const siblingIds=parent?parseRelationIds(parent.children).filter(id=>id!==rowId):[];
+  const siblings=siblingIds.map(id=>byId.get(id)).filter(Boolean).slice(0,8);
+  const related=[
+    ['match',matched],
+    ...(parent?[['parent',parent]]:[]),
+    ...children.map(row=>['child',row]),
+    ...siblings.map(row=>['sibling',row])
+  ];
+
+  const fileCache=new Map();
+  const context=[];
+  for(const [relation,row] of related){
+    const sourcePath=String(row?.file||candidate?.sourcePath||'');
+    if(!sourcePath)continue;
+    if(!fileCache.has(sourcePath)){
+      const body=await fs.readFile(path.join(topology.repoDir,sourcePath),'utf8').catch(()=>'');
+      fileCache.set(sourcePath,String(body).split(/\r?\n/));
+    }
+    const lines=fileCache.get(sourcePath);
+    const range=String(row?.line_range||'');
+    const start=Number(range.split('-')[0]||0);
+    const end=Number(range.split('-')[1]||start);
+    if(!start)continue;
+    context.push({
+      relation,
+      row:String(row?.row||''),
+      type:String(row?.type||''),
+      name:String(row?.name||''),
+      sourcePath,
+      startLine:start,
+      endLine:end,
+      lines:compactLineWindow(lines,start,end,3,18)
+    });
+  }
+  return context;
+}
+
+async function enrichEntryCandidates(candidates,topology){
+  const enriched=[];
+  for(const candidate of arr(candidates).slice(0,24)){
+    const entryContext=await entryNeighborhood(candidate,topology);
+    enriched.push({...candidate,entryContext});
+  }
+  return enriched;
+}
+
 export async function selectCodeEntries({question,mode,topology,client,model,usage,log=()=>{}}){
   const languages=[...new Set(arr(topology?.files).map(file=>path.extname(String(file||'')).toLowerCase()).filter(Boolean))].slice(0,12);
   const structuralRows=arr(topology?.codeStructureRows);
@@ -395,7 +472,8 @@ export async function selectCodeEntries({question,mode,topology,client,model,usa
       const hits=topology?.palValuesIndex&&topology?.palUniqueIndex
         ? await scanCodeStructureRowsWithPal({topology,locators:plan.locators})
         : scanCodeStructureRows({topology,locators:plan.locators});
-      const candidates=rankPatternEntryHits(hits);
+      const ranked=rankPatternEntryHits(hits);
+      const candidates=await enrichEntryCandidates(ranked,topology);
       log('query_v5_entry_selection',{plan,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});
       if(candidates.length)return {plan,hits,candidates,indexSummary:[]};
     }
