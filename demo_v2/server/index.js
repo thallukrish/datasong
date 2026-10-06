@@ -306,7 +306,7 @@ app.post('/api/prepare-repository', async (req, res) => {
     console.log(`[profile-save] indexing repo=${repoUrl} revision=${requestedRevision||'HEAD'} force=${topology.forceConstructIndexRebuild?'yes':'no'}`);
     const saveStarted=Date.now();
     const prepared = await topology.prepareIndexOnly(repoUrl);
-    console.log(`[profile-save] index ready ${Date.now()-saveStarted}ms commit=${prepared?.commit||''} records=${prepared?.constructIndex?.recordCount||0}`);
+    console.log(`[profile-save] structural CSV ready ${Date.now()-saveStarted}ms commit=${prepared?.commit||''} rows=${prepared?.constructIndex?.csvRowCount||prepared?.constructIndex?.recordCount||0}`);
     repositoryPreparation = {
       status:'ready',
       repoUrl,
