@@ -32,6 +32,37 @@ The three-level window is a lookahead horizon, not three committed traversal ste
 
 The structural graph remains authoritative for symbol identity, source coordinates, calls, containment, branches and traversal.
 
+## Structural CSV index
+
+When a code profile is saved, Python AST parsing emits one flat structural row per useful programming construct. The persisted CSV is the query entry index.
+
+```text
+row,file,line_range,type,name,parent,children,callers,callees
+```
+
+Typical rows are functions, classes, input parameters, assignments, calls, returns, exceptions, control-flow regions and expressions. `parent` is a single CSV row number. `children`, `callers` and `callees` are JSON-array cells containing row numbers, so PAL can treat them as multi-valued columns without a custom delimiter.
+
+Example:
+
+```text
+1,x.py,126-145,function,foobar,,["2","3"],[],[]
+2,x.py,126,input_param,a,1,[],[],[]
+3,x.py,126,input_param,b,1,[],[],[]
+```
+
+The index deliberately contains structural facts only. The older construct-facet index and model-driven facet walk are removed. There are no call-shape facets such as argument style, positional-count bands or loop-shape buckets.
+
+For entry localization, Query asks the model only for compact structural locators:
+
+```text
+type = function
+name = separability_matrix
+```
+
+If the identifier is useful but its syntax does not establish a construct type, Query uses `type = *`, which means search the name without constraining the type. PAL is the intended columnar execution layer for these filters. Until PAL execution is wired into Query v5, the same CSV row schema is searched directly in memory.
+
+After matching rows, LeMap expands structural context using row relationships and resolves the enclosing function/symbol. Semantic exploration starts only after this deterministic localization step.
+
 For Python, the analyzer already emits statement-level regions inside each function. When a function becomes the current investigation root, Learn now materializes those existing AST regions into the semantic graph and annotates them with query-independent semantics. The semantic graph therefore mirrors the function's structural body instead of reducing it to only function-level summaries and call edges.
 
 Each learned region keeps the same structural identity and source range as the analyzer region. Learn may use the region's raw code to create query-independent semantics, but Query normally receives only the learned purpose/effect plus structural identity. Source is fetched only for structural entry matching or an explicit source-inspection action requested by Query.
@@ -97,7 +128,7 @@ The goal model derives hard and optional constraints once, at decomposition time
 
 The decomposition is intentionally small, normally one to five goals and never more than six. It is not an execution plan. It says what must eventually be established from evidence, not which code path must be traversed.
 
-A `locate` goal is created only when locating or identifying code is itself an explicit user-requested outcome. LeMap does not create a separate locate goal merely because a causal, descriptive, change, or verification goal must first find relevant code; faceted localization is already part of every goal's investigation thread.
+A `locate` goal is created only when locating or identifying code is itself an explicit user-requested outcome. LeMap does not create a separate locate goal merely because a causal, descriptive, change, or verification goal must first find relevant code; structural CSV localization is already part of every goal's investigation thread.
 
 Goal decomposition must also be lossless. If the request is split, the goals plus their dependency relationships must collectively preserve every material condition, discriminator, scope restriction, symptom, and requested outcome from the original issue. A condition needed to identify or reason about evidence for a goal remains in that goal even if a later dependent goal also mentions it.
 
@@ -131,7 +162,7 @@ Each goal owns an independent investigation thread.
 A thread keeps its own:
 
 ```text
-faceted-search state
+structural-entry state
 entry candidates
 visited symbols
 DFS stack
@@ -146,7 +177,7 @@ This means two goals that are unrelated in code space do not have to share one t
 
 ```text
 G1
-→ faceted search
+→ structural CSV search
 → entry A
 → Learn
 → Query
@@ -167,7 +198,7 @@ The scheduler therefore operates at two levels:
 ```text
 issue
 → choose schedulable unresolved goal
-→ run that goal's faceted search / traversal thread
+→ run that goal's structural entry search / traversal thread
 → resolve goal or exhaust its thread
 → choose next schedulable goal
 → stop when all material goals are resolved
@@ -208,7 +239,7 @@ issue
   ↓
 goal + fixed acceptance constraints
   ↓
-faceted entry search
+structural CSV entry search
   ↓
 visited semantic evidence
   ↓
