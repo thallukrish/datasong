@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeEntrySelectionPlan, scanRepositoryPatterns, scanCodeStructureRows, rankPatternEntryHits } from '../server/query_v5/codeEntrySelector.js';
+import { normalizeEntrySelectionPlan, scanRepositoryPatterns, scanCodeStructureRows, scanCodeStructureRowsWithPal, rankPatternEntryHits } from '../server/query_v5/codeEntrySelector.js';
 
 test('entry selection normalizes exact structural locators', () => {
   const plan=normalizeEntrySelectionPlan({
@@ -60,6 +60,77 @@ test('wildcard type searches the PAL name index without constraining type', () =
   const hits=scanCodeStructureRows({topology,locators:[{type:'*',name:'a'}]});
   assert.equal(hits.length,1);
   assert.equal(hits[0].symbolId,'fn');
+});
+
+
+test('PAL FILTER resolves typed exact structural locators', async () => {
+  const topology={
+    codeStructureRows:[
+      {row:1,file:'x.py',line_range:'10-20',type:'function',name:'foobar',parent:'',children:'["2"]'},
+      {row:2,file:'x.py',line_range:'10',type:'input_param',name:'a',parent:'1',children:'[]'}
+    ],
+    palUniqueIndex:{
+      type:['function','input_param'],
+      name:['foobar','a']
+    },
+    palValuesIndex:{
+      type:[['0','function'],['1','input_param']],
+      name:[['0','foobar'],['1','a']]
+    },
+    symbols:[
+      {id:'fn',name:'foobar',sourcePath:'x.py',startLine:10,endLine:20}
+    ],
+    externalSymbols:[]
+  };
+  const hits=await scanCodeStructureRowsWithPal({topology,locators:[{type:'input_param',name:'a'}]});
+  assert.equal(hits.length,1);
+  assert.equal(hits[0].symbolId,'fn');
+  assert.deepEqual(hits[0].matchQuality.filters,['pal']);
+});
+
+test('PAL FILTER wildcard type searches all construct types', async () => {
+  const topology={
+    codeStructureRows:[
+      {row:1,file:'x.py',line_range:'10-20',type:'function',name:'target',parent:'',children:'[]'},
+      {row:2,file:'x.py',line_range:'30-31',type:'assignment',name:'target',parent:'',children:'[]'}
+    ],
+    palUniqueIndex:{type:['function','assignment'],name:['target']},
+    palValuesIndex:{
+      type:[['0','function'],['1','assignment']],
+      name:[['0-1','target']]
+    },
+    symbols:[
+      {id:'fn',name:'target',sourcePath:'x.py',startLine:10,endLine:20},
+      {id:'as',name:'target',sourcePath:'x.py',startLine:30,endLine:31}
+    ],
+    externalSymbols:[]
+  };
+  const hits=await scanCodeStructureRowsWithPal({topology,locators:[{type:'*',name:'target'}]});
+  assert.equal(hits.length,2);
+});
+
+test('LeMap suffix wildcard expands from PAL unique values then FILTERs exact values', async () => {
+  const topology={
+    codeStructureRows:[
+      {row:1,file:'x.py',line_range:'10-20',type:'function',name:'validate_user',parent:'',children:'[]'},
+      {row:2,file:'x.py',line_range:'30-40',type:'function',name:'prevalidate_order',parent:'',children:'[]'},
+      {row:3,file:'x.py',line_range:'50-60',type:'function',name:'render',parent:'',children:'[]'}
+    ],
+    palUniqueIndex:{type:['function'],name:['validate_user','prevalidate_order','render']},
+    palValuesIndex:{
+      type:[['0-2','function']],
+      name:[['0','validate_user'],['1','prevalidate_order'],['2','render']]
+    },
+    symbols:[
+      {id:'a',name:'validate_user',sourcePath:'x.py',startLine:10,endLine:20},
+      {id:'b',name:'prevalidate_order',sourcePath:'x.py',startLine:30,endLine:40},
+      {id:'c',name:'render',sourcePath:'x.py',startLine:50,endLine:60}
+    ],
+    externalSymbols:[]
+  };
+  const hits=await scanCodeStructureRowsWithPal({topology,locators:[{type:'function',name:'validate*'}]});
+  assert.equal(hits.length,2);
+  assert.deepEqual(new Set(hits.map(hit=>hit.symbolId)),new Set(['a','b']));
 });
 
 test('regex fallback maps source matches to enclosing symbols and ranks production above tests', async () => {
