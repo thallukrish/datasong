@@ -299,6 +299,8 @@ export class CodeTopology {
     this.pythonAnalysis = null;
     this.codeStructureFacts = [];
     this.codeStructureRows = [];
+    this.palUniqueIndex = null;
+    this.palValuesIndex = null;
     this.forceConstructIndexRebuild = false;
   }
 
@@ -494,6 +496,99 @@ export class CodeTopology {
     );
   }
 
+  codeStructureUniqueIndexPath(language='python') {
+    const csvPath = this.codeStructureCsvPath(language);
+    return csvPath ? csvPath.replace(/\.csv$/i, '.uniqueIndex.json') : '';
+  }
+
+  codeStructureValuesIndexPath(language='python') {
+    const csvPath = this.codeStructureCsvPath(language);
+    return csvPath ? csvPath.replace(/\.csv$/i, '.valuesIndex.json') : '';
+  }
+
+  buildPalIndexes(rows=[]) {
+    const columns = ['row', 'file', 'line_range', 'type', 'name', 'parent', 'children', 'callers', 'callees'];
+    const uniqueSets = Object.fromEntries(columns.map((column) => [column, new Set()]));
+    const rowValuePairs = Object.fromEntries(columns.map((column) => [column, []]));
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i] || {};
+      for (const column of columns) {
+        const raw = row[column];
+        if (raw === null || raw === undefined || raw === '') continue;
+        const value = String(raw);
+        uniqueSets[column].add(value);
+        rowValuePairs[column].push([String(i), value]);
+      }
+    }
+
+    const compress = (pairs=[]) => {
+      if (!pairs.length) return [];
+      const sorted = pairs.slice().sort((a,b)=>Number(a[0])-Number(b[0]));
+      const out = [];
+      let i = 0;
+      while (i < sorted.length) {
+        const start = Number(sorted[i][0]);
+        const value = sorted[i][1];
+        let end = start;
+        let j = i + 1;
+        while (j < sorted.length && Number(sorted[j][0]) === end + 1 && sorted[j][1] === value) {
+          end = Number(sorted[j][0]);
+          j += 1;
+        }
+        out.push([start === end ? String(start) : `${start}-${end}`, value]);
+        i = j;
+      }
+      return out;
+    };
+
+    return {
+      uniqueIndex:Object.fromEntries(columns.map((column)=>[column,[...uniqueSets[column]]])),
+      valuesIndex:Object.fromEntries(columns.map((column)=>[column,compress(rowValuePairs[column])]))
+    };
+  }
+
+  async persistPalIndexes({ language='python', rows=[] }={}) {
+    const uniqueIndexPath = this.codeStructureUniqueIndexPath(language);
+    const valuesIndexPath = this.codeStructureValuesIndexPath(language);
+    if (!uniqueIndexPath || !valuesIndexPath) return { uniqueIndexPath:'', valuesIndexPath:'' };
+
+    const { uniqueIndex, valuesIndex } = this.buildPalIndexes(rows);
+    await fs.mkdir(path.dirname(uniqueIndexPath), { recursive:true });
+
+    const writeAtomic = async (targetPath, payload) => {
+      const tempPath = `${targetPath}.${process.pid}.tmp`;
+      await fs.writeFile(tempPath, JSON.stringify(payload), 'utf8');
+      await fs.rm(targetPath, { force:true });
+      await fs.rename(tempPath, targetPath);
+    };
+
+    await writeAtomic(uniqueIndexPath, uniqueIndex);
+    await writeAtomic(valuesIndexPath, valuesIndex);
+    this.palUniqueIndex = uniqueIndex;
+    this.palValuesIndex = valuesIndex;
+    return { uniqueIndexPath, valuesIndexPath };
+  }
+
+  async loadPalIndexes(language='python') {
+    const uniqueIndexPath = this.codeStructureUniqueIndexPath(language);
+    const valuesIndexPath = this.codeStructureValuesIndexPath(language);
+    if (!uniqueIndexPath || !valuesIndexPath) return false;
+    try {
+      const [uniqueIndex, valuesIndex] = await Promise.all([
+        fs.readFile(uniqueIndexPath, 'utf8').then(JSON.parse),
+        fs.readFile(valuesIndexPath, 'utf8').then(JSON.parse)
+      ]);
+      this.palUniqueIndex = uniqueIndex;
+      this.palValuesIndex = valuesIndex;
+      return true;
+    } catch {
+      this.palUniqueIndex = null;
+      this.palValuesIndex = null;
+      return false;
+    }
+  }
+
   materializeCodeStructureRows(codeFacts=[], analysis=null) {
     const facts = (Array.isArray(codeFacts) ? codeFacts : [])
       .filter((fact) => fact?.factId && fact?.sourcePath)
@@ -669,13 +764,14 @@ export class CodeTopology {
 
       const rows = await this.loadCodeStructureCsv(language);
       if (!rows.length && Number(meta?.csvRowCount || 0) > 0) return false;
+      if (!(await this.loadPalIndexes(language))) return false;
 
       this.constructIndex = [];
       this.pythonAnalysis = null;
       this.codeStructureFacts = [];
       this.codeStructureRows = rows;
       this.constructIndexVersion = Number(meta.analyzerVersion || 0);
-      this.constructIndexMeta = { ...meta, cachePath:metaPath, metaPath, csvPath, csvRowCount:rows.length, reused:true };
+      this.constructIndexMeta = { ...meta, cachePath:metaPath, metaPath, csvPath, uniqueIndexPath:this.codeStructureUniqueIndexPath(language), valuesIndexPath:this.codeStructureValuesIndexPath(language), csvRowCount:rows.length, reused:true };
       return true;
     } catch {
       return false;
@@ -720,6 +816,8 @@ export class CodeTopology {
     this.pythonAnalysis = null;
     this.codeStructureFacts = [];
     this.codeStructureRows = [];
+    this.palUniqueIndex = null;
+    this.palValuesIndex = null;
     const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
     if (!pythonFiles.length) return;
 
@@ -744,6 +842,7 @@ export class CodeTopology {
 
       const persistStarted = Date.now();
       const csvPath = await this.persistCodeStructureCsv({ language:'python', rows:this.codeStructureRows });
+      const { uniqueIndexPath, valuesIndexPath } = await this.persistPalIndexes({ language:'python', rows:this.codeStructureRows });
       const metaPath = await this.persistCodeStructureMeta({
         language:'python',
         analyzerVersion:this.constructIndexVersion,
@@ -764,10 +863,12 @@ export class CodeTopology {
         cachePath:metaPath,
         metaPath,
         csvPath,
+        uniqueIndexPath,
+        valuesIndexPath,
         reused:false
       };
       this.codeStructureFacts = [];
-      console.log(`[repo-index] persisted structural CSV ${Date.now()-persistStarted}ms csv=${csvPath} meta=${metaPath}`);
+      console.log(`[repo-index] persisted structural CSV + PAL indexes ${Date.now()-persistStarted}ms csv=${csvPath} unique=${uniqueIndexPath} values=${valuesIndexPath} meta=${metaPath}`);
     } catch (error) {
       console.error('[repo-index] structural CSV index failed', error?.stack || error?.message || String(error));
       this.constructIndex = [];
