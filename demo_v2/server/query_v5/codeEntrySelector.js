@@ -22,7 +22,7 @@ A value may end in * when only part of the identifier is known.
 Do not invent identifiers describing the proposed fix.
 Return at most 6 matches.`;
 
-const MAX_PATTERNSconst MAX_PATTERNS = 8;
+const MAX_PATTERNS = 8;
 const MAX_HITS = 80;
 const MAX_FILE_BYTES = 750_000;
 
