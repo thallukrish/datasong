@@ -384,86 +384,6 @@ def construct_name(node):
     return ""
 
 
-def expression_kind(node):
-    if node is None:
-        return "implicit"
-    if isinstance(node, ast.Constant):
-        if node.value == 0:
-            return "zero"
-        if node.value == 1:
-            return "one"
-        return "literal"
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "len":
-        return "collection_length"
-    if isinstance(node, ast.Name):
-        return "variable"
-    return "expression"
-
-def call_facets(node):
-    positional = len(node.args)
-    keyword = len([kw for kw in node.keywords if kw.arg])
-    if positional and keyword:
-        argument_style = "mixed"
-    elif keyword:
-        argument_style = "keyword"
-    elif positional:
-        argument_style = "positional"
-    else:
-        argument_style = "none"
-    if positional == 0:
-        positional_band = "0"
-    elif positional == 1:
-        positional_band = "1"
-    elif positional <= 3:
-        positional_band = "2_3"
-    else:
-        positional_band = "many"
-    call_kind = "method" if isinstance(node.func, ast.Attribute) else "function"
-    return {
-        "callKind": call_kind,
-        "argumentStyle": argument_style,
-        "positionalCountBand": positional_band
-    }
-
-def loop_facets(node):
-    if isinstance(node, ast.While):
-        return {"loopKind": "conditional"}
-    if not isinstance(node, (ast.For, ast.AsyncFor)):
-        return {}
-    iterator = node.iter
-    if isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name) and iterator.func.id == "range":
-        args = list(iterator.args)
-        if len(args) == 1:
-            start = None
-            end = args[0]
-            step = None
-        elif len(args) >= 2:
-            start = args[0]
-            end = args[1]
-            step = args[2] if len(args) >= 3 else None
-        else:
-            start = end = step = None
-        return {
-            "loopKind": "counted",
-            "startKind": "zero" if start is None else expression_kind(start),
-            "endKind": expression_kind(end),
-            "incrementKind": "one" if step is None else expression_kind(step)
-        }
-    return {"loopKind": "collection"}
-
-def construct_type(node):
-    if isinstance(node, ast.ClassDef): return "class"
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)): return "function"
-    if isinstance(node, (ast.For, ast.AsyncFor, ast.While)): return "loop"
-    if isinstance(node, ast.If): return "condition"
-    if isinstance(node, ast.Call): return "call"
-    if isinstance(node, (ast.Import, ast.ImportFrom)): return "import"
-    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)): return "assignment"
-    if isinstance(node, ast.Return): return "return"
-    if isinstance(node, ast.Raise): return "exception"
-    return ""
-
-
 def fact_type(node):
     if isinstance(node, ast.ClassDef): return "class"
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)): return "function"
@@ -624,74 +544,6 @@ code_facts = []
 for mod, info in modules.items():
     code_facts.extend(build_code_facts(mod, info))
 
-constructs = []
-for mod, info in modules.items():
-    text = info["text"]
-    scope_stack = []
-
-    class ConstructVisitor(ast.NodeVisitor):
-        def add(self, node, ctype, name=""):
-            parent_function = next((scope for scope in reversed(scope_stack) if scope["kind"] == "function"), None)
-            parent_class = next((scope for scope in reversed(scope_stack) if scope["kind"] == "class"), None)
-            snippet = source_segment(text, node)
-            try:
-                canonical_snippet = ast.unparse(node)
-            except Exception:
-                canonical_snippet = snippet
-            record = {
-                "constructType": ctype,
-                "name": name or construct_name(node),
-                "sourcePath": info["path"],
-                "startLine": getattr(node, "lineno", 0),
-                "endLine": getattr(node, "end_lineno", getattr(node, "lineno", 0)),
-                "snippet": snippet,
-                "canonicalSnippet": canonical_snippet,
-                "parentFunction": parent_function["name"] if parent_function else "",
-                "parentClass": parent_class["name"] if parent_class else "",
-                "moduleName": mod
-            }
-            if isinstance(node, ast.Call):
-                external = external_call_info(mod, node, record["name"])
-                if external:
-                    record["external"] = True
-                    record["module"] = external.get("importModule", "")
-                    record["qualifiedName"] = external.get("qualifiedName", "")
-                    record["keywordArgs"] = external.get("keywordArgs", [])
-                else:
-                    record["external"] = False
-                    record["keywordArgs"] = [kw.arg for kw in node.keywords if kw.arg]
-                record.update(call_facets(node))
-            if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
-                record.update(loop_facets(node))
-            constructs.append(record)
-
-        def visit_ClassDef(self, node):
-            self.add(node, "class", node.name)
-            for deco in node.decorator_list:
-                self.add(deco, "decorator", ast.unparse(deco) if hasattr(ast, "unparse") else "")
-            scope_stack.append({"kind": "class", "name": node.name})
-            self.generic_visit(node)
-            scope_stack.pop()
-
-        def visit_FunctionDef(self, node):
-            self.add(node, "function", node.name)
-            for deco in node.decorator_list:
-                self.add(deco, "decorator", ast.unparse(deco) if hasattr(ast, "unparse") else "")
-            scope_stack.append({"kind": "function", "name": node.name})
-            self.generic_visit(node)
-            scope_stack.pop()
-
-        def visit_AsyncFunctionDef(self, node):
-            self.visit_FunctionDef(node)
-
-        def generic_visit(self, node):
-            ctype = construct_type(node)
-            if ctype and not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-                self.add(node, ctype)
-            super().generic_visit(node)
-
-    ConstructVisitor().visit(info["tree"])
-
 symbols = []
 for rec in defs.values():
     node = rec["node"]
@@ -810,4 +662,4 @@ for rec in defs.values():
         "regions": regions
     })
 
-print(json.dumps({"version": 6, "symbols": symbols, "externalSymbols": external_symbols, "constructs": constructs, "codeFacts": code_facts}, ensure_ascii=False))
+print(json.dumps({"version": 6, "symbols": symbols, "externalSymbols": external_symbols, "codeFacts": code_facts}, ensure_ascii=False))
