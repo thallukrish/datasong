@@ -52,7 +52,7 @@ Example:
 
 The index deliberately contains structural facts only. The older construct-facet index and model-driven facet walk are removed. There are no call-shape facets such as argument style, positional-count bands or loop-shape buckets.
 
-Persistence is intentionally minimal. The structural directory contains `python.csv` plus a small `python.meta.json` manifest containing cache identity such as commit, analyzer version, file hashes and import graph. The old `python.json` snapshot that duplicated `codeFacts` and AST analysis is removed on the next successful rebuild. AST symbol/region analysis is kept in memory for the current process and is rehydrated lazily for Query when a cached CSV is loaded.
+Persistence is intentionally minimal. The structural directory contains `python.csv`, PAL's `python.uniqueIndex.json` and `python.valuesIndex.json` sidecars, plus a small `python.meta.json` manifest containing cache identity such as commit, analyzer version, file hashes and import graph. The old `python.json` snapshot that duplicated `codeFacts` and AST analysis is removed on the next successful rebuild. AST symbol/region analysis is kept in memory for the current process and is rehydrated lazily for Query when a cached CSV is loaded.
 
 For entry localization, Query asks the model only for compact structural locators:
 
@@ -61,7 +61,7 @@ type = function
 name = separability_matrix
 ```
 
-If the identifier is useful but its syntax does not establish a construct type, Query uses `type = *`, which means search the name without constraining the type. PAL is the intended columnar execution layer for these filters. Until PAL execution is wired into Query v5, the same CSV row schema is searched directly in memory.
+If the identifier is useful but its syntax does not establish a construct type, Query uses `type = *`, which means search the name without constraining the type. PAL is the columnar execution layer for these filters. Save builds the PAL sidecars immediately after writing the structural CSV. Query v5 loads the persisted `valuesIndex` and intersects exact `name` and `type` matches there before materializing the matching CSV rows.
 
 After matching rows, LeMap expands structural context using row relationships and resolves the enclosing function/symbol. Semantic exploration starts only after this deterministic localization step.
 
