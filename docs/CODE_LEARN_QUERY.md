@@ -52,6 +52,8 @@ Example:
 
 The index deliberately contains structural facts only. The older construct-facet index and model-driven facet walk are removed. There are no call-shape facets such as argument style, positional-count bands or loop-shape buckets.
 
+Persistence is intentionally minimal. The structural directory contains `python.csv` plus a small `python.meta.json` manifest containing cache identity such as commit, analyzer version, file hashes and import graph. The old `python.json` snapshot that duplicated `codeFacts` and AST analysis is removed on the next successful rebuild. AST symbol/region analysis is kept in memory for the current process and is rehydrated lazily for Query when a cached CSV is loaded.
+
 For entry localization, Query asks the model only for compact structural locators:
 
 ```text
