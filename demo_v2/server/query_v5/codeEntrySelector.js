@@ -375,7 +375,7 @@ export function rankPatternEntryHits(hits=[]){
     }else{
       current.score+=Number(hit.weight||1)*10;
     }
-    if(!current.matches.some(item=>item.pattern===hit.pattern&&item.line===hit.line))current.matches.push({pattern:hit.pattern,line:hit.line,text:hit.text,matchQuality:hit.matchQuality||null});
+    if(!current.matches.some(item=>item.pattern===hit.pattern&&item.line===hit.line))current.matches.push({pattern:hit.pattern,line:hit.line,text:hit.text,matchQuality:hit.matchQuality||null,metadata:hit.metadata||null});
     grouped.set(key,current);
   }
   const ranked=[...grouped.values()]
@@ -417,61 +417,118 @@ function parseRelationIds(raw){
   return [value];
 }
 
-function compactLineWindow(lines,startLine,endLine,pad=3,maxLines=18){
-  const start=Math.max(1,Number(startLine||1)-pad);
-  const end=Math.min(lines.length,Number(endLine||startLine||1)+pad);
-  const stop=Math.min(end,start+maxLines-1);
+function compactLineWindow(lines,line,pad=3){
+  const center=Math.max(1,Number(line||1));
+  const start=Math.max(1,center-pad);
+  const end=Math.min(lines.length,center+pad);
   const out=[];
-  for(let line=start;line<=stop;line+=1)out.push([line,String(lines[line-1]||'').slice(0,260)]);
+  for(let n=start;n<=end;n+=1)out.push([n,String(lines[n-1]||'').slice(0,260)]);
+  return out;
+}
+
+function rowDescriptor(row){
+  if(!row)return null;
+  return [
+    String(row?.type||''),
+    String(row?.name||''),
+    String(row?.row||'')
+  ];
+}
+
+function parentChain(row,byId,limit=8){
+  const out=[];
+  let current=row;
+  const seen=new Set();
+  while(current&&out.length<limit){
+    const parentId=String(current?.parent||'');
+    if(!parentId||seen.has(parentId))break;
+    seen.add(parentId);
+    const parent=byId.get(parentId);
+    if(!parent)break;
+    out.push(rowDescriptor(parent));
+    current=parent;
+  }
+  return out;
+}
+
+function childChain(anchor,byId,limit=12){
+  if(!anchor)return [];
+  const out=[];
+  const queue=parseRelationIds(anchor.children).map(id=>({id,depth:1}));
+  const seen=new Set();
+  while(queue.length&&out.length<limit){
+    const item=queue.shift();
+    if(!item?.id||seen.has(item.id))continue;
+    seen.add(item.id);
+    const row=byId.get(String(item.id));
+    if(!row)continue;
+    out.push([item.depth,...rowDescriptor(row)]);
+    if(item.depth<2){
+      for(const id of parseRelationIds(row.children))queue.push({id:String(id),depth:item.depth+1});
+    }
+  }
   return out;
 }
 
 async function entryNeighborhood(candidate,topology){
   const rows=arr(topology?.codeStructureRows);
   const byId=rowMap(rows);
-  const rowId=String(candidate?.metadata?.row||'');
-  const matched=byId.get(rowId);
-  if(!matched||!topology?.repoDir)return [];
+  if(!rows.length||!topology?.repoDir)return null;
 
-  const parentId=String(matched.parent||'');
-  const parent=parentId?byId.get(parentId):null;
-  const childIds=parseRelationIds(matched.children);
-  const children=childIds.map(id=>byId.get(id)).filter(Boolean).slice(0,8);
-  const siblingIds=parent?parseRelationIds(parent.children).filter(id=>id!==rowId):[];
-  const siblings=siblingIds.map(id=>byId.get(id)).filter(Boolean).slice(0,8);
-  const related=[
-    ['match',matched],
-    ...(parent?[['parent',parent]]:[]),
-    ...children.map(row=>['child',row]),
-    ...siblings.map(row=>['sibling',row])
-  ];
+  const defaultRow=byId.get(String(candidate?.metadata?.row||''));
+  const anchor=defaultRow?functionAnchor(defaultRow,byId):null;
+  const structuralAnchor=anchor||defaultRow;
+  if(!structuralAnchor)return null;
 
-  const fileCache=new Map();
-  const context=[];
-  for(const [relation,row] of related){
-    const sourcePath=String(row?.file||candidate?.sourcePath||'');
-    if(!sourcePath)continue;
-    if(!fileCache.has(sourcePath)){
-      const body=await fs.readFile(path.join(topology.repoDir,sourcePath),'utf8').catch(()=>'');
-      fileCache.set(sourcePath,String(body).split(/\r?\n/));
-    }
-    const lines=fileCache.get(sourcePath);
-    const range=String(row?.line_range||'');
-    const start=Number(range.split('-')[0]||0);
-    const end=Number(range.split('-')[1]||start);
-    if(!start)continue;
-    context.push({
-      relation,
-      row:String(row?.row||''),
+  const sourcePath=String(candidate?.sourcePath||structuralAnchor?.file||'');
+  const body=sourcePath
+    ? await fs.readFile(path.join(topology.repoDir,sourcePath),'utf8').catch(()=>'')
+    : '';
+  const lines=String(body||'').split(/\r?\n/);
+
+  // Keep only last-mile source around actual PAL matches. One window per
+  // distinct locator, capped to three, each exactly +/-3 lines.
+  const matchWindows=[];
+  const seenPatterns=new Set();
+  for(const match of arr(candidate?.matches)){
+    const pattern=String(match?.pattern||'');
+    if(pattern&&seenPatterns.has(pattern))continue;
+    if(pattern)seenPatterns.add(pattern);
+
+    const row=byId.get(String(match?.metadata?.row||''))||defaultRow;
+    const matchLine=Number(match?.line||String(row?.line_range||'').split('-')[0]||0);
+    if(!matchLine)continue;
+    matchWindows.push({
+      locator:pattern,
       type:String(row?.type||''),
       name:String(row?.name||''),
-      sourcePath,
-      startLine:start,
-      endLine:end,
-      lines:compactLineWindow(lines,start,end,3,18)
+      row:String(row?.row||''),
+      line:matchLine,
+      lines:compactLineWindow(lines,matchLine,3)
     });
+    if(matchWindows.length>=3)break;
   }
-  return context;
+
+  if(!matchWindows.length&&defaultRow){
+    const line=Number(String(defaultRow?.line_range||'').split('-')[0]||0);
+    if(line){
+      matchWindows.push({
+        locator:'',
+        type:String(defaultRow?.type||''),
+        name:String(defaultRow?.name||''),
+        row:String(defaultRow?.row||''),
+        line,
+        lines:compactLineWindow(lines,line,3)
+      });
+    }
+  }
+
+  return {
+    function:[String(structuralAnchor?.type||''),String(structuralAnchor?.name||candidate?.name||''),String(structuralAnchor?.row||'')],
+    parents:parentChain(defaultRow||structuralAnchor,byId,8),
+    children:childChain(structuralAnchor,byId,12),
+    matches:matchWindows
+  };
 }
 
 async function enrichEntryCandidates(candidates,topology){
