@@ -2,26 +2,21 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 
-const ENTRY_SELECT_SYSTEM = `Act like a software engineer who has been handed a change request against an existing codebase. First understand what existing code the request is referring to. Distinguish evidence that identifies existing code from descriptions of symptoms, current or desired behavior, rationale, examples, and proposed implementation changes. Use the strongest evidence that identifies existing code to navigate LeMap's structural index. Do not assume that an identifier, API, method, configuration value, or mechanism mentioned as a proposed solution already exists in the current repository revision. Once candidate code has been located, the other parts of the request may help judge whether that code is the intended subject, but entry selection must still localize rather than infer causality.
+const ENTRY_SELECT_SYSTEM = `Locate existing code from the issue using LeMap's structural CSV rows.
 
-Navigate the structural index only to reduce the search space before semantic exploration. Do not force ambiguity into one branch. A broad or weakly constrained request may legitimately match several structural buckets.
+Each row has:
+row, file, line_range, type, name, parent, children, callers, callees.
 
-The first payload gives top-level construct counts. Choose one construct when structural localization is useful. Subsequent payloads give the current filtered row count plus compact facets. Each facet value may include up to two representative source samples.
+Return only exact identifiers that the issue gives enough evidence to search for. Prefer a typed locator when syntax makes the type clear. Use type "*" when the name is useful but the construct type is uncertain. Do not infer proposed implementation identifiers as if they already exist.
 
-At a facet step, rank up to 5 values from ONE supplied facet by how plausibly they identify code relevant to the request. Scores are 0..1. Preserve multiple values whenever more than one is plausible. Return only values actually present in the supplied facet. A single value is appropriate only when the supplied query/evidence clearly makes it substantially stronger than alternatives. Do not choose a bucket merely because its name sounds generally related to the subsystem.
+Return one of:
+{"action":"locate","locators":[{"type":"function|class|input_param|call|assignment|if|for|while|try|except|with|return|exception|expression|*","name":"exact name"}],"reason":""}
+{"action":"pattern_search","patterns":[{"pattern":"regex","kind":"regex","weight":1}],"reason":""}
+{"action":"root_entries","reason":""}
 
-Use {"action":"rank_refine","field":"","values":[["exact facet value",0.0]],"facetSort":"count|alpha","reason":""}. LeMap will preserve the returned values together and the later entry-ranking stage will choose among the resulting concrete candidates.
-
-You may request alphabetical or frequency ordering. Materialize rows once the remaining set is sufficiently small. Do not keep refining from frequency alone, and do not invent semantics, structure, or relationships not present in the payload. Use root_entries when structural localization is not useful. Use pattern_search only when no structural index is available.
-
-Return one JSON action using only fields and values present in the payload: {"action":"select_construct","construct":"","reason":""}, {"action":"rank_refine","field":"","values":[["",0.0]],"facetSort":"count|alpha","reason":""}, {"action":"browse_facets","facetSort":"count|alpha","reason":""}, {"action":"show_rows","reason":""}, {"action":"pattern_search","patterns":[{"pattern":"","kind":"regex","weight":1}],"reason":""}, or {"action":"root_entries","reason":""}.`;
+Keep locators compact and exact. Up to 6 locators.`;
 
 const MAX_PATTERNS = 8;
-const MAX_SEARCHES = 6;
-const MAX_FILTERS = 4;
-const MAX_FACET_STEPS = 3;
-const MATERIALIZE_AT = 24;
-const FACET_LIMIT = 12;
 const MAX_HITS = 80;
 const MAX_FILE_BYTES = 750_000;
 
@@ -37,387 +32,39 @@ function normalizedPatterns(items=[]){
     const kind=String(item?.kind||'regex').toLowerCase();
     if(kind!=='regex')continue;
     const weight=Math.max(1,Math.min(5,Number(item?.weight||1)));
+    try{new RegExp(pattern,'i')}catch{continue}
     out.push({pattern,kind:'regex',weight});
   }
   return out;
 }
 
-function normalizedSearches(items=[],availableTypes=new Set()){
+function normalizedLocators(items=[]){
   const out=[];
-  for(const item of arr(items).slice(0,MAX_SEARCHES)){
-    const construct=String(item?.construct||'').trim().toLowerCase();
-    if(!construct||(availableTypes.size&&!availableTypes.has(construct)))continue;
-    const filters=[];
-    for(const filter of arr(item?.filters).slice(0,MAX_FILTERS)){
-      const field=String(filter?.field||'').trim();
-      const regex=String(filter?.regex||'').trim();
-      if(!field||!regex||regex.length>220)continue;
-      try{new RegExp(regex,'i')}catch{continue}
-      filters.push({field,regex});
-    }
-    if(!filters.length)continue;
-    const weight=Math.max(1,Math.min(5,Number(item?.weight||1)));
-    out.push({construct,weight,filters});
+  const seen=new Set();
+  for(const item of arr(items).slice(0,6)){
+    const type=String(item?.type||'*').trim().toLowerCase()||'*';
+    const name=String(item?.name||'').trim();
+    if(!name||name.length>180)continue;
+    const key=`${type}|${name}`;
+    if(seen.has(key))continue;
+    seen.add(key);
+    out.push({type,name});
   }
   return out;
 }
 
-function facetValues(rows,field,limit=12){
-  const counts=new Map();
-  for(const row of rows){
-    const raw=row?.[field];
-    const values=Array.isArray(raw)?raw:[raw];
-    for(const value of values){
-      const key=String(value??'').trim();
-      if(!key||key.length>120)continue;
-      counts.set(key,(counts.get(key)||0)+1);
-    }
-  }
-  return [...counts.entries()]
-    .sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))
-    .slice(0,limit)
-    .map(([value,count])=>[value,count]);
-}
-
-export function constructIndexSummary(index=[]){
-  const grouped=new Map();
-  for(const row of arr(index)){
-    const type=String(row?.constructType||'').trim().toLowerCase();
-    if(!type)continue;
-    if(!grouped.has(type))grouped.set(type,[]);
-    grouped.get(type).push(row);
-  }
-  return [...grouped.entries()].map(([construct,rows])=>{
-    const fields=[...new Set(rows.flatMap(row=>Object.keys(row||{})).filter(key=>!['constructType','sourcePath','startLine','endLine'].includes(key)))].sort();
-    const facets={};
-    for(const field of ['name','module','qualifiedName','parentFunction','parentClass','keywordArgs']){
-      const values=facetValues(rows,field);
-      if(values.length)facets[field]=values;
-    }
-    return {construct,count:rows.length,fields,facets};
-  }).sort((a,b)=>b.count-a.count||a.construct.localeCompare(b.construct));
-}
-
-function escapeRegex(value=''){
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-}
-
-function filterFromFacetAction(action={}){
-  const field=String(action?.field||'').trim();
-  const value=String(action?.value||'').trim();
-  const match=String(action?.match||'exact').toLowerCase();
-  if(!field||!value)return null;
-  if(match==='exact')return {field,regex:'^'+escapeRegex(value)+'$',match:'exact',value};
-  if(match==='prefix')return {field,regex:'^'+escapeRegex(value),match:'prefix',value};
-  if(match==='regex'){
-    try{new RegExp(value,'i')}catch{return null}
-    return {field,regex:value,match:'regex',value};
-  }
-  return null;
-}
-
-function filterFromFacetManyAction(action={},rows=[]){
-  const field=String(action?.field||'').trim();
-  const values=arr(action?.values).map(value=>String(value||'').trim()).filter(Boolean).slice(0,4);
-  if(!field||values.length<2)return null;
-  const available=new Set(facetEntries(rows,field,'count',Math.max(FACET_LIMIT,24)).map(item=>item.value));
-  const exact=values.filter(value=>available.has(value));
-  if(exact.length<2)return null;
-  return {
-    field,
-    regex:'^(?:'+exact.map(escapeRegex).join('|')+')$',
-    match:'many',
-    value:exact.join(' | '),
-    values:exact
-  };
-}
-
-function filterFromRankedFacetAction(action={},rows=[]){
-  const field=String(action?.field||'').trim();
-  if(!field)return null;
-  const available=new Set(facetEntries(rows,field,'count',Math.max(FACET_LIMIT,24)).map(item=>item.value));
-  const ranked=[];
-  const seen=new Set();
-  for(const row of arr(action?.values).slice(0,5)){
-    const value=String(Array.isArray(row)?row[0]:row?.value||'').trim();
-    const score=Math.max(0,Math.min(1,Number(Array.isArray(row)?row[1]:row?.score||0)));
-    if(!value||!available.has(value)||seen.has(value)||score<=0)continue;
-    seen.add(value);
-    ranked.push({value,score});
-  }
-  ranked.sort((a,b)=>b.score-a.score||a.value.localeCompare(b.value));
-  if(!ranked.length)return null;
-  const best=ranked[0].score;
-  const kept=ranked.filter(item=>item.score>=0.15&&item.score>=best-0.55).slice(0,5);
-  if(!kept.length)return null;
-  return {
-    field,
-    regex:'^(?:'+kept.map(item=>escapeRegex(item.value)).join('|')+')$',
-    match:'ranked',
-    value:kept.map(item=>item.value).join(' | '),
-    values:kept.map(item=>item.value),
-    rankedValues:kept
-  };
-}
-
-function rowsForSelection(index=[],construct='',filters=[]){
-  return arr(index).filter(row=>{
-    if(construct&&String(row?.constructType||'').toLowerCase()!==construct)return false;
-    return filters.every(filter=>!!fieldMatchQuality(row,filter));
-  });
-}
-
-function facetSampleText(row={}){
-  return text(row?.canonicalSnippet||row?.snippet||'',120);
-}
-
-function facetSampleShape(row={}){
-  return JSON.stringify({
-    constructType:row?.constructType||'',
-    callKind:row?.callKind||'',
-    argumentStyle:row?.argumentStyle||'',
-    keywordArgs:arr(row?.keywordArgs).map(String).sort(),
-    loopKind:row?.loopKind||'',
-    startKind:row?.startKind||'',
-    endKind:row?.endKind||'',
-    incrementKind:row?.incrementKind||''
-  });
-}
-
-function representativeFacetSamples(rows=[],limit=2){
-  const out=[];
-  const seenText=new Set();
-  const seenShape=new Set();
-  const candidates=arr(rows).filter(row=>facetSampleText(row));
-  for(const row of candidates){
-    const sample=facetSampleText(row);
-    const shape=facetSampleShape(row);
-    if(seenText.has(sample)||seenShape.has(shape))continue;
-    out.push(sample);seenText.add(sample);seenShape.add(shape);
-    if(out.length>=limit)return out;
-  }
-  for(const row of candidates){
-    const sample=facetSampleText(row);
-    if(seenText.has(sample))continue;
-    out.push(sample);seenText.add(sample);
-    if(out.length>=limit)break;
-  }
-  return out;
-}
-
-function facetEntries(rows,field,sort='count',limit=FACET_LIMIT){
-  const groups=new Map();
-  for(const row of rows){
-    const raw=row?.[field];
-    const values=Array.isArray(raw)?raw:[raw];
-    for(const value of values){
-      const key=String(value??'').trim();
-      if(!key||key.length>120)continue;
-      if(!groups.has(key))groups.set(key,[]);
-      groups.get(key).push(row);
-    }
-  }
-  const entries=[...groups.entries()].map(([value,matchingRows])=>({
-    value,
-    count:matchingRows.length,
-    samples:representativeFacetSamples(matchingRows,2)
-  }));
-  entries.sort(sort==='alpha'
-    ?(x,y)=>x.value.localeCompare(y.value)||y.count-x.count
-    :(x,y)=>y.count-x.count||x.value.localeCompare(y.value));
-  return entries.slice(0,limit);
-}
-
-function facetView(rows=[],sort='count'){
-  const excluded=new Set(['constructType','sourcePath','startLine','endLine','snippet','canonicalSnippet']);
-  const fields=[...new Set(rows.flatMap(row=>Object.keys(row||{})).filter(key=>!excluded.has(key)))].sort();
-  const facets={};
-  for(const field of fields){const values=facetEntries(rows,field,sort);if(values.length)facets[field]=values;}
-  return {count:rows.length,fields:Object.keys(facets),facets,sort};
-}
-
-function topLevelConstructCounts(index=[]){
-  const counts=new Map();
-  for(const row of arr(index)){const type=String(row?.constructType||'').trim().toLowerCase();if(type)counts.set(type,(counts.get(type)||0)+1);}
-  return [...counts.entries()].sort((x,y)=>y[1]-x[1]||x[0].localeCompare(y[0])).map(([construct,count])=>({construct,count}));
-}
-
-function actionReason(action={}){return text(action?.reason||'',320);}
-
-function locatorTokens(question=''){
-  const stop=new Set(['the','a','an','for','to','of','in','on','with','use','using','change','modify','issue','current','evidence','obligation']);
-  return [...new Set(String(question||'').toLowerCase().match(/[a-z0-9_]+/g)||[])]
-    .filter(token=>token.length>=3&&!stop.has(token))
-    .slice(0,12);
-}
-
-function scanLocatorIndex({topology,question}){
-  const tokens=locatorTokens(question);
-  if(!tokens.length)return [];
-  const hits=[];
-  for(const row of arr(topology?.constructIndex)){
-    const fields=[
-      row?.sourcePath,row?.moduleName,row?.module,row?.name,row?.qualifiedName,
-      row?.parentClass,row?.parentFunction
-    ].map(value=>String(value||'').toLowerCase()).filter(Boolean);
-    if(!fields.length)continue;
-    const matched=tokens.filter(token=>fields.some(value=>value.includes(token)));
-    if(!matched.length)continue;
-    const distinct=matched.length;
-    // For multi-term locator queries require at least two locating terms so
-    // generic words such as "client" cannot flood the candidate pool.
-    if(tokens.length>=2&&distinct<2)continue;
-    const sourcePath=String(row?.sourcePath||'');
-    const line=Number(row?.startLine||0);
-    if(!sourcePath||!line)continue;
-    const symbol=enclosingSymbol(topology,sourcePath,line);
-    const external=!symbol?externalAtLine(topology,sourcePath,line):null;
-    const pathBonus=tokens.filter(token=>sourcePath.toLowerCase().includes(token)).length*250;
-    hits.push({
-      sourcePath,line,endLine:Number(row?.endLine||line),
-      text:text(row?.snippet||row?.canonicalSnippet||'',700),
-      pattern:'locator:'+matched.join(','),
-      kind:'structured',
-      constructType:String(row?.constructType||''),
-      weight:1,
-      structuralScore:distinct*1000+pathBonus,
-      matchQuality:{exact:distinct,prefix:0,contains:0,filters:[]},
-      symbolId:symbol?.id||'',
-      symbolName:symbol?.name||row?.parentFunction||row?.parentClass||row?.name||'',
-      externalId:external?.id||'',
-      externalName:external?.qualifiedName||external?.name||'',
-      test:isTestPath(sourcePath),
-      metadata:row
-    });
-  }
-  return hits
-    .sort((a,b)=>b.structuralScore-a.structuralScore||Number(a.test)-Number(b.test)||a.sourcePath.localeCompare(b.sourcePath))
-    .slice(0,MAX_HITS);
-}
-
-function materializeStructuredRows({topology,construct,filters,rows}){
-  const hits=[];const seen=new Set();
-  for(const row of arr(rows).slice(0,MAX_HITS)){
-    const filterMatches=filters.map(filter=>fieldMatchQuality(row,filter)).filter(Boolean);
-    const exactCount=filterMatches.filter(match=>match.quality==='exact').length;
-    const prefixCount=filterMatches.filter(match=>match.quality==='prefix').length;
-    const containsCount=filterMatches.filter(match=>match.quality==='contains').length;
-    const structuralScore=exactCount*1000+prefixCount*100+containsCount*10+filters.length*5+1;
-    const line=Number(row?.startLine||0);const sourcePath=String(row?.sourcePath||'');
-    const key=[sourcePath,line,construct].join('|');if(seen.has(key))continue;seen.add(key);
-    const symbol=enclosingSymbol(topology,sourcePath,line);const external=!symbol?externalAtLine(topology,sourcePath,line):null;
-    hits.push({sourcePath,line,endLine:Number(row?.endLine||line),text:text(row?.snippet||'',700),pattern:filters.length?filters.map(filter=>filter.field+'~'+filter.regex).join(' & '):construct,kind:'structured',constructType:construct,weight:1,structuralScore,matchQuality:{exact:exactCount,prefix:prefixCount,contains:containsCount,filters:filterMatches},symbolId:symbol?.id||'',symbolName:symbol?.name||row?.parentFunction||row?.parentClass||'',externalId:external?.id||'',externalName:external?.qualifiedName||external?.name||'',test:isTestPath(sourcePath),metadata:row});
-  }
-  return hits;
-}
-
-export async function walkConstructFacets({question,mode,topology,client,model,usage}){
-  const index=arr(topology?.constructIndex);
-  if(!index.length)return {strategy:'unavailable',history:[],construct:'',filters:[],rows:[]};
-  const counts=topLevelConstructCounts(index);const history=[];let construct='';let filters=[];let rows=index;let facetSort='count';
-  for(let step=0;step<MAX_FACET_STEPS;step++){
-    const payload=construct?{q:question,mode,step:step+1,selected:{construct,filters:filters.map(({field,match,value})=>({field,match,value}))},current:facetView(rows,facetSort),canMaterialize:true}:{q:question,mode,step:step+1,constructs:counts};
-    const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,payload);addUsage(usage,call.usage);
-    const action=call.parsed||{};history.push({step:step+1,action,usage:call.usage,currentCount:rows.length});
-    const kind=String(action?.action||'').toLowerCase();
-    if(!construct){
-      if(kind==='select_construct'){const wanted=String(action?.construct||'').toLowerCase();if(!counts.some(item=>item.construct===wanted))break;construct=wanted;rows=rowsForSelection(index,construct,filters);if(rows.length<=MATERIALIZE_AT)break;continue;}
-      if(kind==='pattern_search')return {strategy:'pattern_search',patterns:normalizedPatterns(action?.patterns),reason:actionReason(action),history,construct:'',filters:[],rows:[]};
-      if(kind==='root_entries')return {strategy:'root_entries',reason:actionReason(action),history,construct:'',filters:[],rows:[]};
-      break;
-    }
-    if(kind==='show_rows')break;
-    if(kind==='root_entries')return {strategy:'root_entries',reason:actionReason(action),history,construct,filters,rows:[]};
-    if(kind==='browse_facets'){facetSort=String(action?.facetSort||facetSort).toLowerCase()==='alpha'?'alpha':'count';continue;}
-    if(kind==='rank_refine'){facetSort=String(action?.facetSort||facetSort).toLowerCase()==='alpha'?'alpha':'count';const filter=filterFromRankedFacetAction(action,rows);const availableFields=new Set(facetView(rows,facetSort).fields);if(!filter||!availableFields.has(filter.field))break;filters=[...filters,filter];rows=rowsForSelection(index,construct,filters);if(rows.length<=MATERIALIZE_AT)break;continue;}
-    if(kind==='refine_many'){facetSort=String(action?.facetSort||facetSort).toLowerCase()==='alpha'?'alpha':'count';const filter=filterFromFacetManyAction(action,rows);const availableFields=new Set(facetView(rows,facetSort).fields);if(!filter||!availableFields.has(filter.field))break;filters=[...filters,filter];rows=rowsForSelection(index,construct,filters);if(rows.length<=MATERIALIZE_AT)break;continue;}
-    if(kind==='refine'){facetSort=String(action?.facetSort||facetSort).toLowerCase()==='alpha'?'alpha':'count';const filter=filterFromFacetAction(action);const availableFields=new Set(facetView(rows,facetSort).fields);if(!filter||!availableFields.has(filter.field))break;filters=[...filters,filter];rows=rowsForSelection(index,construct,filters);if(rows.length<=MATERIALIZE_AT)break;continue;}
-    break;
-  }
-  if(!construct)return {strategy:'root_entries',reason:'No usable structural branch selected.',history,construct:'',filters:[],rows:[]};
-  if(!filters.length&&rows.length>MATERIALIZE_AT){
-    return {strategy:'locator_fallback',reason:'Faceted walk found no credible refinement; use locator evidence across the structural index.',history,construct,filters:[],rows:[]};
-  }
-  return {strategy:'structured_search',reason:'Faceted structural tree walk.',history,construct,filters,rows};
-}
-function fieldMatchQuality(row,filter){
-  let matcher;
-  try{matcher=new RegExp(filter.regex,'i')}catch{return null}
-  const raw=row?.[filter.field];
-  const values=filter.field==='snippet'
-    ? [raw,row?.canonicalSnippet]
-    : Array.isArray(raw)?raw:[raw];
-  let best=null;
-  for(const value of values){
-    const candidate=String(value??'');
-    matcher.lastIndex=0;
-    const match=matcher.exec(candidate);
-    if(!match)continue;
-    const quality=match.index===0&&match[0].length===candidate.length?'exact':match.index===0?'prefix':'contains';
-    const rank=quality==='exact'?3:quality==='prefix'?2:1;
-    if(!best||rank>best.rank)best={field:filter.field,regex:filter.regex,value:candidate,quality,rank};
-  }
-  return best;
-}
-
-export function scanConstructIndex({topology,searches=[]}){
-  const index=arr(topology?.constructIndex);
-  if(!index.length)return [];
-  const availableTypes=new Set(index.map(row=>String(row?.constructType||'').toLowerCase()).filter(Boolean));
-  const specs=normalizedSearches(searches,availableTypes);
-  const hits=[];
-  const seen=new Set();
-  for(const spec of specs){
-    for(const row of index){
-      if(hits.length>=MAX_HITS)break;
-      if(String(row?.constructType||'').toLowerCase()!==spec.construct)continue;
-      const filterMatches=spec.filters.map(filter=>fieldMatchQuality(row,filter));
-      if(filterMatches.some(match=>!match))continue;
-      const exactCount=filterMatches.filter(match=>match.quality==='exact').length;
-      const prefixCount=filterMatches.filter(match=>match.quality==='prefix').length;
-      const containsCount=filterMatches.filter(match=>match.quality==='contains').length;
-      const structuralScore=exactCount*1000+prefixCount*100+containsCount*10+spec.filters.length*5+Number(spec.weight||1);
-      const line=Number(row?.startLine||0);
-      const sourcePath=String(row?.sourcePath||'');
-      const key=[sourcePath,line,spec.construct,JSON.stringify(spec.filters)].join('|');
-      if(seen.has(key))continue;
-      seen.add(key);
-      const symbol=enclosingSymbol(topology,sourcePath,line);
-      const external=!symbol?externalAtLine(topology,sourcePath,line):null;
-      hits.push({
-        sourcePath,
-        line,
-        endLine:Number(row?.endLine||line),
-        text:text(row?.snippet||'',700),
-        pattern:spec.filters.map(filter=>`${filter.field}~${filter.regex}`).join(' & '),
-        kind:'structured',
-        constructType:spec.construct,
-        weight:spec.weight,
-        structuralScore,
-        matchQuality:{exact:exactCount,prefix:prefixCount,contains:containsCount,filters:filterMatches},
-        symbolId:symbol?.id||'',
-        symbolName:symbol?.name||row?.parentFunction||row?.parentClass||'',
-        externalId:external?.id||'',
-        externalName:external?.qualifiedName||external?.name||'',
-        test:isTestPath(sourcePath),
-        metadata:row
-      });
-    }
-  }
-  return hits;
-}
-
-export function normalizeEntrySelectionPlan(parsed={},indexSummary=[]){
-  const requested=String(parsed?.strategy||'root_entries').toLowerCase();
-  const availableTypes=new Set(arr(indexSummary).map(item=>String(item?.construct||'').toLowerCase()).filter(Boolean));
-  const searches=requested==='structured_search'?normalizedSearches(parsed?.searches,availableTypes):[];
+export function normalizeEntrySelectionPlan(parsed={}){
+  const requested=String(parsed?.action||parsed?.strategy||'root_entries').toLowerCase();
+  const locators=requested==='locate'||requested==='structured_search'
+    ? normalizedLocators(parsed?.locators||parsed?.searches)
+    : [];
   const patterns=requested==='pattern_search'?normalizedPatterns(parsed?.patterns):[];
-  const strategy=searches.length?'structured_search':patterns.length?'pattern_search':'root_entries';
-  return {strategy,reason:text(parsed?.reason||'',320),searches,patterns};
+  const strategy=locators.length?'structured_search':patterns.length?'pattern_search':'root_entries';
+  return {strategy,reason:text(parsed?.reason||'',320),locators,patterns};
 }
 
-function matcherFor(spec){
-  try{return new RegExp(spec.pattern,'i')}catch{return null}
+function parseLineStart(range=''){
+  return Number(String(range||'').split('-')[0]||0);
 }
 
 function enclosingSymbol(topology,sourcePath,line){
@@ -432,6 +79,78 @@ function externalAtLine(topology,sourcePath,line){
     Number(boundary?.startLine||0)<=line &&
     Number(boundary?.endLine||boundary?.startLine||0)>=line
   )||null;
+}
+
+function rowMap(rows=[]){
+  return new Map(arr(rows).map(row=>[String(row?.row||''),row]).filter(([key])=>key));
+}
+
+function functionAnchor(row,rowsById){
+  let current=row;
+  const seen=new Set();
+  while(current){
+    const id=String(current?.row||'');
+    if(id&&seen.has(id))break;
+    if(id)seen.add(id);
+    if(String(current?.type||'').toLowerCase()==='function')return current;
+    const parent=String(current?.parent||'');
+    if(!parent)break;
+    current=rowsById.get(parent);
+  }
+  return null;
+}
+
+export function scanCodeStructureRows({topology,locators=[]}){
+  const rows=arr(topology?.codeStructureRows);
+  if(!rows.length)return [];
+  const specs=normalizedLocators(locators);
+  const byId=rowMap(rows);
+  const hits=[];
+  const seen=new Set();
+
+  for(const spec of specs){
+    for(const row of rows){
+      const rowType=String(row?.type||'').trim().toLowerCase();
+      const rowName=String(row?.name||'').trim();
+      if(spec.type!=='*'&&rowType!==spec.type)continue;
+      if(rowName!==spec.name)continue;
+
+      const anchor=functionAnchor(row,byId);
+      const sourcePath=String((anchor||row)?.file||'');
+      const line=parseLineStart((anchor||row)?.line_range);
+      if(!sourcePath||!line)continue;
+
+      const symbol=enclosingSymbol(topology,sourcePath,line);
+      const external=!symbol?externalAtLine(topology,sourcePath,line):null;
+      const key=`${spec.type}|${spec.name}|${sourcePath}|${line}`;
+      if(seen.has(key))continue;
+      seen.add(key);
+
+      hits.push({
+        sourcePath,
+        line,
+        endLine:Number(String((anchor||row)?.line_range||line).split('-')[1]||line),
+        text:`${rowType} ${rowName}`,
+        pattern:`${spec.type}:${spec.name}`,
+        kind:'structured',
+        weight:1,
+        structuralScore:(spec.type==='*'?500:1000)+(rowType==='function'?50:0),
+        matchQuality:{exact:spec.type==='*'?1:2,prefix:0,contains:0,filters:[]},
+        symbolId:symbol?.id||'',
+        symbolName:symbol?.name||anchor?.name||'',
+        externalId:external?.id||'',
+        externalName:external?.qualifiedName||external?.name||'',
+        test:isTestPath(sourcePath),
+        metadata:row
+      });
+      if(hits.length>=MAX_HITS)return hits;
+    }
+  }
+  return hits;
+}
+
+function matcherFor(spec){
+  try{return new RegExp(spec.pattern,'i')}catch{return null}
 }
 
 export async function scanRepositoryPatterns({topology,patterns=[]}){
@@ -450,6 +169,7 @@ export async function scanRepositoryPatterns({topology,patterns=[]}){
     for(let index=0;index<lines.length&&hits.length<MAX_HITS;index++){
       const lineText=lines[index],line=index+1;
       for(const spec of specs){
+        spec.matcher.lastIndex=0;
         if(!spec.matcher.test(lineText))continue;
         const symbol=enclosingSymbol(topology,sourcePath,line);
         const external=!symbol?externalAtLine(topology,sourcePath,line):null;
@@ -497,20 +217,45 @@ export function rankPatternEntryHits(hits=[]){
 
 export async function selectCodeEntries({question,mode,topology,client,model,usage,log=()=>{}}){
   const languages=[...new Set(arr(topology?.files).map(file=>path.extname(String(file||'')).toLowerCase()).filter(Boolean))].slice(0,12);
-  const indexSummary=constructIndexSummary(topology?.constructIndex);
-  if(indexSummary.length){
-    const walked=await walkConstructFacets({question,mode,topology,client,model,usage});
-    if(walked.strategy==='root_entries'){const plan={strategy:'root_entries',reason:walked.reason||'',searches:[],patterns:[],facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:[],candidates:[]});return {plan,hits:[],candidates:[],indexSummary};}
-    if(walked.strategy==='pattern_search'){const hits=await scanRepositoryPatterns({topology,patterns:walked.patterns});const candidates=rankPatternEntryHits(hits);const plan={strategy:'pattern_search',reason:walked.reason||'',searches:[],patterns:walked.patterns,facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});return {plan,hits,candidates,indexSummary};}
-    if(walked.strategy==='locator_fallback'){const hits=scanLocatorIndex({topology,question});const candidates=rankPatternEntryHits(hits);const plan={strategy:'locator_fallback',reason:walked.reason||'',searches:[],patterns:[],facetHistory:walked.history};log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});return {plan,hits,candidates,indexSummary};}
-    const hits=materializeStructuredRows({topology,construct:walked.construct,filters:walked.filters,rows:walked.rows});
-    const candidates=rankPatternEntryHits(hits);
-    const plan={strategy:'structured_search',reason:walked.reason||'',searches:[{construct:walked.construct,weight:1,filters:walked.filters.map(({field,regex})=>({field,regex}))}],patterns:[],facetHistory:walked.history,remainingRowCount:walked.rows.length};
-    log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates});
-    return {plan,hits,candidates,indexSummary};
+  const structuralRows=arr(topology?.codeStructureRows);
+
+  if(structuralRows.length){
+    const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{
+      q:question,
+      mode,
+      languages,
+      index:{available:true,columns:['row','file','line_range','type','name','parent','children','callers','callees']}
+    });
+    addUsage(usage,call.usage);
+    const plan=normalizeEntrySelectionPlan(call.parsed||{});
+
+    if(plan.strategy==='structured_search'){
+      const hits=scanCodeStructureRows({topology,locators:plan.locators});
+      const candidates=rankPatternEntryHits(hits);
+      log('query_v5_entry_selection',{plan,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});
+      if(candidates.length)return {plan,hits,candidates,indexSummary:[]};
+    }
+
+    if(plan.strategy==='pattern_search'){
+      const hits=await scanRepositoryPatterns({topology,patterns:plan.patterns});
+      const candidates=rankPatternEntryHits(hits);
+      log('query_v5_entry_selection',{plan,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});
+      return {plan,hits,candidates,indexSummary:[]};
+    }
+
+    const fallback={strategy:'root_entries',reason:plan.reason||'No exact structural row matched.',locators:plan.locators||[],patterns:[]};
+    log('query_v5_entry_selection',{plan:fallback,hits:[],candidates:[],usage:call.usage});
+    return {plan:fallback,hits:[],candidates:[],indexSummary:[]};
   }
-  const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question,mode,languages,index:{available:false}});addUsage(usage,call.usage);
-  const action=call.parsed||{};const kind=String(action?.action||'').toLowerCase();const patterns=kind==='pattern_search'?normalizedPatterns(action?.patterns):[];
-  if(patterns.length){const hits=await scanRepositoryPatterns({topology,patterns});const candidates=rankPatternEntryHits(hits);const plan={strategy:'pattern_search',reason:actionReason(action),searches:[],patterns};log('query_v5_entry_selection',{plan,indexSummary,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});return {plan,hits,candidates,indexSummary};}
-  const plan={strategy:'root_entries',reason:actionReason(action),searches:[],patterns:[]};log('query_v5_entry_selection',{plan,indexSummary,hits:[],candidates:[],usage:call.usage});return {plan,hits:[],candidates:[],indexSummary};
+
+  const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question,mode,languages,index:{available:false}});
+  addUsage(usage,call.usage);
+  const plan=normalizeEntrySelectionPlan(call.parsed||{});
+  if(plan.strategy==='pattern_search'){
+    const hits=await scanRepositoryPatterns({topology,patterns:plan.patterns});
+    const candidates=rankPatternEntryHits(hits);
+    log('query_v5_entry_selection',{plan,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});
+    return {plan,hits,candidates,indexSummary:[]};
+  }
+  return {plan:{strategy:'root_entries',reason:plan.reason||'',locators:[],patterns:[]},hits:[],candidates:[],indexSummary:[]};
 }
