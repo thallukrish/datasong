@@ -693,6 +693,7 @@ export class CodeTopology {
         Number(meta.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
         Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
         Array.isArray(payload?.constructs) &&
+        Array.isArray(payload?.codeFacts) &&
         payload?.analysis && typeof payload.analysis === 'object';
       if (!valid) return false;
       this.constructIndex = payload.constructs;
