@@ -1181,7 +1181,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const revisionMismatch=requestedCommit&&(!loadedCommit||!loadedCommit.toLowerCase().startsWith(requestedCommit.toLowerCase()));
   const sameRepo=String(explorer.topology?.repoUrl||'').trim()===wanted;
   const localTopologyReady=sameRepo&&!revisionMismatch
-    &&Array.isArray(explorer.topology?.constructIndex)&&explorer.topology.constructIndex.length>0
+    &&Array.isArray(explorer.topology?.codeStructureRows)&&explorer.topology.codeStructureRows.length>0
     &&Number(explorer.topology?.symbolById?.size||0)>0;
 
   if(!localTopologyReady){
@@ -1193,7 +1193,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       ? await explorer.topology.prepareCodeQuery(wanted)
       : await explorer.topology.prepare(wanted);
     console.log(`[query-v5] query-local topology ready ${Date.now()-prepareStarted}ms globalCallPaths=${preparedResult?.codeQueryTopology?'skipped':'prepared'}`);
-    emit({action:'TOPOLOGY_READY',mode:'',detail:'Structural query topology ready. Starting faceted entry selection.'});
+    emit({action:'TOPOLOGY_READY',mode:'',detail:'Structural query topology ready. Starting structural CSV entry selection.'});
     const prepared=String(preparedResult?.commit||explorer.topology?.commit||'').trim();
     if(requestedCommit&&!prepared.toLowerCase().startsWith(requestedCommit.toLowerCase()))throw new Error('Prepared repository revision does not match the requested Query v5 commit.');
     explorer.state.repoUrl=wanted;
@@ -1322,7 +1322,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const hasConcreteStructuralEntries=entrySelection.plan.strategy==='structured_search'&&selectedEntries.length>0;
     thread.entryTiers=hasConcreteStructuralEntries?[selectedEntries]:(selectedEntries.length?[selectedEntries,fallbackEntries]:[fallbackEntries]);
     thread.searched=true;
-    console.log(`[query-v5] goal=${goal.id} facetedEntries=${selectedEntries.length} localWindowDepth=${WINDOW_DEPTH}`);
+    console.log(`[query-v5] goal=${goal.id} structuralEntries=${selectedEntries.length} localWindowDepth=${WINDOW_DEPTH}`);
   };
 
   const seedGoal=async(thread)=>{
