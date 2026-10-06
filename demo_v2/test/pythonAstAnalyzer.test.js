@@ -170,12 +170,22 @@ def build():
   );
   const condition = (result.constructs || []).find((item) => item.constructType === 'condition');
 
-  assert.equal(result.version, 5);
+  assert.equal(result.version, 6);
   assert.equal(call?.parentFunction, 'build');
   assert.deepEqual(call?.keywordArgs, ['default', 'initial']);
   assert.match(call?.snippet || '', /Field\(default=['"]x['"], initial=/);
   assert.match(call?.canonicalSnippet || '', /Field\(default=['"]x['"], initial=/);
   assert.match(condition?.snippet || '', /if value is not None/);
+
+  const facts = result.codeFacts || [];
+  const functionFact = facts.find((item) => item.type === 'function' && item.name === 'build');
+  const assignmentFact = facts.find((item) => item.type === 'assignment' && item.name === 'value');
+  const callFact = facts.find((item) => item.type === 'call' && item.name === 'Field');
+  assert.ok(functionFact);
+  assert.ok(assignmentFact);
+  assert.ok(callFact);
+  assert.equal(assignmentFact.parentFactId, functionFact.factId);
+  assert.equal(callFact.parentFactId, assignmentFact.factId);
 });
 
 
@@ -197,6 +207,12 @@ test('CodeTopology reuses complete construct index snapshots by commit', async (
   await topology.buildConstructIndex();
   assert.equal(topology.constructIndexMeta?.reused, false);
   assert.ok(topology.constructIndex.some((item) => item.constructType === 'call' && item.name === 'Field'));
+  assert.ok(topology.constructIndexMeta?.csvPath);
+  assert.ok(Number(topology.constructIndexMeta?.csvRowCount || 0) > 0);
+  const csv = await fs.readFile(topology.constructIndexMeta.csvPath, 'utf8');
+  assert.match(csv, /^row,file,line_range,type,name,parent,children,callers,callees/m);
+  assert.match(csv, /,function,build,/);
+  assert.match(csv, /,call,Field,/);
   const firstCount = topology.constructIndex.length;
 
   await fs.writeFile(path.join(repoDir, 'main.py'), 'def build():\n    return Other()\n');
