@@ -44,7 +44,7 @@ The current working query path is:
 demo_v2/server/query_v4/*
 ```
 
-The code-semantic profile also has a separate Query-v5 path documented in `docs/CODE_LEARN_QUERY.md`. Its Learn stage is query-independent and maintains a lazily expanded three-level semantic execution window for code traversal. On profile Save, Python repositories are also parsed into the flat structural CSV described there. Query v5 now localizes entry points from that CSV; the older model-driven construct-facet walk has been removed.
+The code-semantic profile also has a separate Query-v5 path documented in `docs/CODE_LEARN_QUERY.md`. Its Learn stage is query-independent and maintains a lazily expanded three-level semantic execution window for code traversal. On profile Save, Python repositories are parsed into the flat structural CSV described there, then PAL-compatible `uniqueIndex` and `valuesIndex` sidecars are written beside it. Query v5 uses the persisted PAL `valuesIndex` for exact structural entry localization; the older model-driven construct-facet walk has been removed.
 
 The current working learning/persistence path is centered under:
 
