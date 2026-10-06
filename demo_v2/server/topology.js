@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import simpleGit from 'simple-git';
+import { createIndexesFromRows } from 'pal-executor-lib';
 import { analyzePythonRepository } from './languages/python/adapter.js';
 
 const CODE_EXTENSIONS = new Set([
@@ -511,72 +512,11 @@ export class CodeTopology {
   }
 
   buildPalIndexes(rows=[]) {
-    // "row" is a structural identifier used by relation columns. PAL already
-    // addresses records by zero-based physical row, so indexing row itself only
-    // creates a large 1:1 identity index with no query value.
-    const columns = ['file', 'line_range', 'type', 'name', 'parent', 'children', 'callers', 'callees'];
-    const multiValueColumns = new Set(['children', 'callers', 'callees']);
-    const uniqueSets = Object.fromEntries(columns.map((column) => [column, new Set()]));
-    const rowValuePairs = Object.fromEntries(columns.map((column) => [column, []]));
-
-    const indexValues = (column, raw) => {
-      if (raw === null || raw === undefined || raw === '') return [];
-      if (!multiValueColumns.has(column)) return [String(raw)];
-
-      if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
-      const text = String(raw).trim();
-      if (!text || text === '[]') return [];
-      try {
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
-      } catch {}
-      return [text];
-    };
-
-    for (let i = 0; i < rows.length; i += 1) {
-      const row = rows[i] || {};
-      for (const column of columns) {
-        const values = indexValues(column, row[column]);
-        for (const value of values) {
-          uniqueSets[column].add(value);
-          rowValuePairs[column].push([String(i), value]);
-        }
-      }
-    }
-
-    const compress = (pairs=[]) => {
-      if (!pairs.length) return [];
-      // Compression is only safe within the same value. Multiple values can
-      // legitimately point at the same physical row for relation columns.
-      const byValue = new Map();
-      for (const [rowIndex, value] of pairs) {
-        if (!byValue.has(value)) byValue.set(value, []);
-        byValue.get(value).push(Number(rowIndex));
-      }
-
-      const out = [];
-      for (const [value, rowIndexes] of byValue) {
-        const sorted = [...new Set(rowIndexes)].sort((a,b)=>a-b);
-        let i = 0;
-        while (i < sorted.length) {
-          const start = sorted[i];
-          let end = start;
-          let j = i + 1;
-          while (j < sorted.length && sorted[j] === end + 1) {
-            end = sorted[j];
-            j += 1;
-          }
-          out.push([start === end ? String(start) : `${start}-${end}`, value]);
-          i = j;
-        }
-      }
-      return out.sort((a,b)=>Number(String(a[0]).split('-')[0])-Number(String(b[0]).split('-')[0]));
-    };
-
-    return {
-      uniqueIndex:Object.fromEntries(columns.map((column)=>[column,[...uniqueSets[column]]])),
-      valuesIndex:Object.fromEntries(columns.map((column)=>[column,compress(rowValuePairs[column])]))
-    };
+    return createIndexesFromRows(rows, {
+      headers:['row','file','line_range','type','name','parent','children','callers','callees'],
+      excludeColumns:['row'],
+      multiValueColumns:['children','callers','callees']
+    });
   }
 
   async persistPalIndexes({ language='python', rows=[] }={}) {
