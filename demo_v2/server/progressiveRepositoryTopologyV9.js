@@ -51,8 +51,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemaByName = new Map();
 
     const prep = await super.prepareIndexOnly(repoUrl);
-    if (!Array.isArray(this.constructIndex) || !this.constructIndex.length || !this.pythonAnalysis) {
-      console.log('[code-query-prepare] structural index unavailable; falling back to full topology preparation');
+    if (!Array.isArray(this.codeStructureRows) || !this.codeStructureRows.length || !this.pythonAnalysis) {
+      console.log('[code-query-prepare] structural CSV unavailable; falling back to full topology preparation');
       return this.prepare(repoUrl);
     }
 
