@@ -129,10 +129,21 @@ def parent(a, b):
 
   const uniqueIndex = JSON.parse(await fs.readFile(topology.constructIndexMeta.uniqueIndexPath, 'utf8'));
   const valuesIndex = JSON.parse(await fs.readFile(topology.constructIndexMeta.valuesIndexPath, 'utf8'));
+  assert.equal(uniqueIndex.row, undefined);
+  assert.equal(valuesIndex.row, undefined);
   assert.ok(uniqueIndex.type.includes('function'));
   assert.ok(uniqueIndex.name.includes('parent'));
   assert.ok(valuesIndex.type.some((entry) => entry[1] === 'function'));
   assert.ok(valuesIndex.name.some((entry) => entry[1] === 'parent'));
+
+  const parentRow = topology.codeStructureRows.find((row) => row.type === 'function' && row.name === 'parent');
+  const childRow = topology.codeStructureRows.find((row) => row.type === 'function' && row.name === 'child');
+  assert.ok(parentRow);
+  assert.ok(childRow);
+  assert.ok(uniqueIndex.callees.includes(String(childRow.row)));
+  assert.ok(valuesIndex.callees.some((entry) => entry[1] === String(childRow.row)));
+  assert.ok(uniqueIndex.callers.includes(String(parentRow.row)));
+  assert.ok(valuesIndex.callers.some((entry) => entry[1] === String(parentRow.row)));
 });
 
 test('CodeTopology reuses same-commit structural CSV cache without a duplicated AST snapshot', async (t) => {
