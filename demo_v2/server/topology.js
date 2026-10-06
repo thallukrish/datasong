@@ -350,11 +350,11 @@ export class CodeTopology {
     stage('enumerate-files',t,`tracked=${tracked.length} code=${this.files.length} python=${this.files.filter(file=>String(file).toLowerCase().endsWith('.py')).length}`);
 
     t=Date.now();
-    console.log('[repo-index] building structural construct index');
+    console.log('[repo-index] building structural CSV index');
     await this.buildConstructIndex();
-    stage('construct-index',t,`records=${this.constructIndex.length} reused=${this.constructIndexMeta?.reused?'yes':'no'}`);
+    stage('structural-csv',t,`rows=${this.codeStructureRows.length} reused=${this.constructIndexMeta?.reused?'yes':'no'}`);
 
-    console.log(`[repo-index] DONE ${Date.now()-startedAt}ms commit=${this.commit} records=${this.constructIndex.length}`);
+    console.log(`[repo-index] DONE ${Date.now()-startedAt}ms commit=${this.commit} rows=${this.codeStructureRows.length}`);
     return {
       repoUrl:this.repoUrl,
       commit:this.commit,
@@ -475,7 +475,7 @@ export class CodeTopology {
     if (!revision || !this.repoUrl) return '';
     return path.join(
       this.cacheRoot,
-      'code-construct-index',
+      'code-structural-csv',
       repoKey(this.repoUrl),
       revision,
       `${language}.json`
@@ -488,7 +488,7 @@ export class CodeTopology {
     if (!revision || !this.repoUrl) return '';
     return path.join(
       this.cacheRoot,
-      'code-construct-index',
+      'code-structural-csv',
       repoKey(this.repoUrl),
       revision,
       `${language}.csv`
@@ -602,7 +602,7 @@ export class CodeTopology {
 
   async loadPreviousConstructIndexSnapshot({ language='python', analyzerVersion=0 }={}) {
     if (!this.repoUrl) return null;
-    const root = path.join(this.cacheRoot, 'code-construct-index', repoKey(this.repoUrl));
+    const root = path.join(this.cacheRoot, 'code-structural-csv', repoKey(this.repoUrl));
     let revisions = [];
     try { revisions = await fs.readdir(root, { withFileTypes:true }); } catch { return null; }
     const candidates = [];
@@ -618,7 +618,6 @@ export class CodeTopology {
           Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
           meta.fileHashes && typeof meta.fileHashes === 'object' &&
           meta.importGraph && typeof meta.importGraph === 'object' &&
-          Array.isArray(payload?.constructs) &&
           Array.isArray(payload?.codeFacts) &&
           payload?.analysis && typeof payload.analysis === 'object';
         if (valid) candidates.push({ payload, cachePath, createdAt:Date.parse(meta.createdAt || 0) || 0 });
@@ -690,11 +689,10 @@ export class CodeTopology {
         meta.commit === this.commit &&
         Number(meta.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
         Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
-        Array.isArray(payload?.constructs) &&
         Array.isArray(payload?.codeFacts) &&
         payload?.analysis && typeof payload.analysis === 'object';
       if (!valid) return false;
-      this.constructIndex = payload.constructs;
+      this.constructIndex = [];
       this.pythonAnalysis = payload.analysis;
       if (Array.isArray(this.pythonAnalysis?.constructs)) this.pythonAnalysis.constructs = [];
       if (Array.isArray(this.pythonAnalysis?.codeFacts)) this.pythonAnalysis.codeFacts = [];
@@ -709,7 +707,7 @@ export class CodeTopology {
     }
   }
 
-  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[], codeFacts=[], analysis=null, fileHashes={}, importGraph={}, incrementalFrom='', affectedFiles=[] }={}) {
+  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, codeFacts=[], analysis=null, fileHashes={}, importGraph={}, incrementalFrom='', affectedFiles=[] }={}) {
     const cachePath = this.constructIndexCachePath(language);
     if (!cachePath) return;
     const metadata = {
@@ -720,7 +718,7 @@ export class CodeTopology {
       language,
       schemaVersion: CONSTRUCT_INDEX_SCHEMA_VERSION,
       analyzerVersion: Number(analyzerVersion || 0),
-      recordCount: constructs.length,
+      recordCount: Array.isArray(codeFacts) ? codeFacts.length : 0,
       csvRowCount: Array.isArray(codeFacts) ? codeFacts.length : 0,
       fileHashes,
       importGraph,
@@ -734,7 +732,7 @@ export class CodeTopology {
     const compactAnalysis = analysis && typeof analysis === 'object'
       ? { ...analysis, constructs: [], codeFacts: [] }
       : analysis;
-    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs, codeFacts, analysis:compactAnalysis }), 'utf8');
+    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, codeFacts, analysis:compactAnalysis }), 'utf8');
     await fs.rm(cachePath, { force:true });
     await fs.rename(tempPath, cachePath);
     this.codeStructureFacts = Array.isArray(codeFacts) ? codeFacts : [];
@@ -754,7 +752,7 @@ export class CodeTopology {
     if (!pythonFiles.length) return;
 
     if (!this.forceConstructIndexRebuild && await this.loadConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) {
-      console.log(`[repo-index] cache hit language=python records=${this.constructIndex.length}`);
+      console.log(`[repo-index] cache hit language=python rows=${this.codeStructureRows.length}`);
       return;
     }
 
@@ -784,7 +782,6 @@ export class CodeTopology {
       );
 
       let analyzed;
-      let constructs;
       let codeFacts;
       let analysis;
 
@@ -792,16 +789,12 @@ export class CodeTopology {
         console.log(`[repo-index] python AST incremental previous=${previous.payload.meta.commit} changed=${delta.changed.length} deleted=${delta.deleted.length} affected=${delta.affected.length}/${pythonFiles.length}`);
         const analyzeStarted=Date.now();
         analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:delta.affected });
-        console.log(`[repo-index] python AST incremental complete ${Date.now()-analyzeStarted}ms constructs=${Array.isArray(analyzed?.constructs)?analyzed.constructs.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
+        console.log(`[repo-index] python AST incremental complete ${Date.now()-analyzeStarted}ms facts=${Array.isArray(analyzed?.codeFacts)?analyzed.codeFacts.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
 
         const affectedSet = new Set([...delta.affected, ...delta.deleted]);
         const previousAnalysis = previous.payload.analysis || {};
         const keepByPath = (item) => item?.sourcePath && !affectedSet.has(item.sourcePath);
 
-        constructs = [
-          ...previous.payload.constructs.filter(keepByPath),
-          ...(Array.isArray(analyzed?.constructs) ? analyzed.constructs : [])
-        ];
         codeFacts = [
           ...(Array.isArray(previous.payload.codeFacts) ? previous.payload.codeFacts.filter(keepByPath) : []),
           ...(Array.isArray(analyzed?.codeFacts) ? analyzed.codeFacts : [])
@@ -828,14 +821,13 @@ export class CodeTopology {
         console.log(`[repo-index] python AST full analyze files=${pythonFiles.length} reason=${reason}`);
         const analyzeStarted=Date.now();
         analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:pythonFiles });
-        console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms constructs=${Array.isArray(analyzed?.constructs)?analyzed.constructs.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
-        constructs = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
+        console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms facts=${Array.isArray(analyzed?.codeFacts)?analyzed.codeFacts.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
         codeFacts = Array.isArray(analyzed?.codeFacts) ? analyzed.codeFacts : [];
         analysis = analyzed;
       }
 
       this.pythonAnalysis = analysis;
-      this.constructIndex = constructs;
+      this.constructIndex = [];
       this.codeStructureFacts = Array.isArray(codeFacts) ? codeFacts : [];
       this.codeStructureRows = this.materializeCodeStructureRows(this.codeStructureFacts, this.pythonAnalysis);
       this.constructIndexVersion = Number(analyzed?.version || analysis?.version || 0);
@@ -845,7 +837,6 @@ export class CodeTopology {
       await this.persistConstructIndexSnapshot({
         language:'python',
         analyzerVersion:this.constructIndexVersion,
-        constructs:this.constructIndex,
         codeFacts:this.codeStructureFacts,
         analysis:this.pythonAnalysis,
         fileHashes,
@@ -855,7 +846,7 @@ export class CodeTopology {
       });
       console.log(`[repo-index] persisted snapshot ${Date.now()-persistStarted}ms path=${this.constructIndexMeta?.cachePath||''} incremental=${canIncremental?'yes':'no'}`);
     } catch (error) {
-      console.error('[repo-index] construct index failed', error?.stack || error?.message || String(error));
+      console.error('[repo-index] structural CSV index failed', error?.stack || error?.message || String(error));
       this.constructIndex = [];
       this.constructIndexVersion = 0;
       this.constructIndexMeta = null;
