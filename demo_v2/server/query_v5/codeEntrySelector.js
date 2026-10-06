@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 
-const ENTRY_SELECT_SYSTEM = `Locate existing code from the issue using LeMap's structural CSV rows.
+const ENTRY_SELECT_SYSTEM = `Locate existing code from the issue using LeMap's PAL-indexed structural CSV rows.
 
 Each row has:
 row, file, line_range, type, name, parent, children, callers, callees.
@@ -100,21 +100,70 @@ function functionAnchor(row,rowsById){
   return null;
 }
 
+function expandPalRange(range=''){
+  const text=String(range||'');
+  const match=text.match(/^(\d+)(?:-(\d+))?$/);
+  if(!match)return [];
+  const start=Number(match[1]);
+  const end=Number(match[2]||match[1]);
+  if(!Number.isInteger(start)||!Number.isInteger(end)||end<start)return [];
+  const out=[];
+  for(let i=start;i<=end;i+=1)out.push(i);
+  return out;
+}
+
+function palRowsForValue(valuesIndex,column,value){
+  const entries=valuesIndex?.[column];
+  if(!Array.isArray(entries))return null;
+  const wanted=String(value);
+  const out=[];
+  for(const entry of entries){
+    if(!Array.isArray(entry)||entry.length<2)continue;
+    if(String(entry[1])!==wanted)continue;
+    out.push(...expandPalRange(entry[0]));
+  }
+  return out;
+}
+
 export function scanCodeStructureRows({topology,locators=[]}){
   const rows=arr(topology?.codeStructureRows);
   if(!rows.length)return [];
   const specs=normalizedLocators(locators);
   const byId=rowMap(rows);
+  const valuesIndex=topology?.palValuesIndex&&typeof topology.palValuesIndex==='object'
+    ? topology.palValuesIndex
+    : null;
   const hits=[];
   const seen=new Set();
 
   for(const spec of specs){
-    for(const row of rows){
+    let candidateIndexes=null;
+    if(valuesIndex){
+      const nameRows=palRowsForValue(valuesIndex,'name',spec.name);
+      if(Array.isArray(nameRows)){
+        if(spec.type==='*'){
+          candidateIndexes=nameRows;
+        }else{
+          const typeRows=palRowsForValue(valuesIndex,'type',spec.type);
+          if(Array.isArray(typeRows)){
+            const typeSet=new Set(typeRows);
+            candidateIndexes=nameRows.filter((index)=>typeSet.has(index));
+          }
+        }
+      }
+    }
+
+    const candidates=Array.isArray(candidateIndexes)
+      ? candidateIndexes.map((index)=>rows[index]).filter(Boolean)
+      : rows.filter((row)=>{
+          const rowType=String(row?.type||'').trim().toLowerCase();
+          const rowName=String(row?.name||'').trim();
+          return (spec.type==='*'||rowType===spec.type)&&rowName===spec.name;
+        });
+
+    for(const row of candidates){
       const rowType=String(row?.type||'').trim().toLowerCase();
       const rowName=String(row?.name||'').trim();
-      if(spec.type!=='*'&&rowType!==spec.type)continue;
-      if(rowName!==spec.name)continue;
-
       const anchor=functionAnchor(row,byId);
       const sourcePath=String((anchor||row)?.file||'');
       const line=parseLineStart((anchor||row)?.line_range);
@@ -224,7 +273,7 @@ export async function selectCodeEntries({question,mode,topology,client,model,usa
       q:question,
       mode,
       languages,
-      index:{available:true,columns:['row','file','line_range','type','name','parent','children','callers','callees']}
+      index:{available:true,engine:topology?.palValuesIndex?'pal':'rows',columns:['row','file','line_range','type','name','parent','children','callers','callees']}
     });
     addUsage(usage,call.usage);
     const plan=normalizeEntrySelectionPlan(call.parsed||{});
