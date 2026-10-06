@@ -128,7 +128,7 @@ def parent(a, b):
   assert.match(csv, /"\[""[0-9]+""/);
 });
 
-test('CodeTopology reuses same-commit structural snapshot and regenerates the CSV', async (t) => {
+test('CodeTopology reuses same-commit structural CSV cache without a duplicated AST snapshot', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-structure-cache-'));
   const repoDir = path.join(root, 'repo');
   const cacheRoot = path.join(root, 'cache');
@@ -146,10 +146,23 @@ test('CodeTopology reuses same-commit structural snapshot and regenerates the CS
   await topology.buildConstructIndex();
   assert.equal(topology.constructIndexMeta?.reused, false);
 
-  await fs.rm(topology.constructIndexMeta.csvPath, { force:true });
+  const csvPath = topology.constructIndexMeta.csvPath;
+  const metaPath = topology.constructIndexMeta.metaPath;
+  const legacyPath = path.join(path.dirname(metaPath), 'python.json');
+
+  const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
+  assert.equal(meta.commit, topology.commit);
+  assert.equal(meta.csvRowCount, topology.codeStructureRows.length);
+  assert.equal(meta.codeFacts, undefined);
+  assert.equal(meta.analysis, undefined);
+  await assert.rejects(fs.readFile(legacyPath, 'utf8'));
+
+  topology.pythonAnalysis = null;
+  topology.codeStructureRows = [];
   await topology.buildConstructIndex();
 
   assert.equal(topology.constructIndexMeta?.reused, true);
-  const csv = await fs.readFile(topology.constructIndexMeta.csvPath, 'utf8');
+  assert.equal(topology.pythonAnalysis, null);
+  const csv = await fs.readFile(csvPath, 'utf8');
   assert.match(csv, /,function,build,/);
 });
