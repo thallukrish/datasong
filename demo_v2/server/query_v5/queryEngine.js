@@ -124,11 +124,17 @@ const ENTRY_TRIAGE_SYSTEM = `Confirm the strongest structural code entry matches
 q is the issue.
 g contains structural search groups as:
 [type,value,[[candidateIndex,name,path,context],...]]
-Each group is one identifier extracted from the issue, for example ["call","merge",...], ["input_param","combine_attrs",...], or ["*","override",...].
-Compare evidence across ALL groups. Do not let one common identifier dominate simply because it produced many matches.
+Each group is one identifier extracted from the issue.
+context is compact:
+- function: enclosing function [type,name,row]
+- parents: ancestor chain as [type,name,row]
+- children: bounded descendant chain as [depth,type,name,row]
+- matches: only the exact matched statement neighborhoods, each +/-3 source lines
+
+Compare evidence across ALL groups. The source around the actual match is the strongest last-mile evidence. Parent/child chains are orientation only. Do not let one common identifier dominate because it produced many matches.
 
 Rank and return up to 3 candidate indexes overall that best identify the implementation relevant to the issue.
-Use only supplied source context. Do not infer missing code or proposed implementation.
+Use only supplied evidence. Do not infer missing code or proposed implementation.
 Return only {"p":[[candidateIndex,score]]}.`;
 
 
@@ -1088,18 +1094,26 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
   if(!shortlist.length)return source.slice(0,ENTRY_TRIAGE_LIMIT);
 
   const indexByKey=new Map(shortlist.map((candidate,index)=>[candidateKey(candidate),index]));
-  const candidateRows=shortlist.map((candidate,index)=>[
-    index,
-    candidate?.name||candidate?.symbolName||candidate?.externalName||'',
-    candidate?.sourcePath||'',
-    arr(candidate?.entryContext).slice(0,18).map(item=>[
-      item?.relation||'',
-      item?.type||'',
-      item?.name||'',
-      item?.sourcePath||'',
-      arr(item?.lines).slice(0,18)
-    ])
-  ]);
+  const candidateRows=shortlist.map((candidate,index)=>{
+    const ctx=candidate?.entryContext||{};
+    return [
+      index,
+      candidate?.name||candidate?.symbolName||candidate?.externalName||'',
+      candidate?.sourcePath||'',
+      {
+        function:arr(ctx?.function).slice(0,3),
+        parents:arr(ctx?.parents).slice(0,8),
+        children:arr(ctx?.children).slice(0,12),
+        matches:arr(ctx?.matches).slice(0,3).map(match=>[
+          match?.locator||'',
+          match?.type||'',
+          match?.name||'',
+          Number(match?.line||0),
+          arr(match?.lines).slice(0,7)
+        ])
+      }
+    ];
+  });
 
   const grouped=[...locatorGroups.entries()].map(([key,groupCandidates])=>{
     const split=key.indexOf(':');
