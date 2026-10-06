@@ -18,15 +18,15 @@ function openForm(n=false){editingNew=n;const p=n?{}:selected();$('company').val
 $('repoArtifact').onclick=()=>openForm(false);$('addEnterprise').onclick=()=>{selectedId='';renderProfiles();$('profileEmpty').classList.add('hidden');$('profileDetail').classList.remove('hidden');$('profileName').textContent='New enterprise';$('profileDesc').textContent='';openForm(true)};$('cancelProfile').onclick=()=>{$('profileForm').classList.add('hidden');if(editingNew){editingNew=false;renderProfiles()}};
 async function prepareSavedRepository(repoUrl,repoCommit){
   const status=$('repoPrepareStatus');
-  if(status)status.textContent='Preparing repository and code index…';
+  if(status)status.textContent='Preparing repository and structural CSV…';
   $('status').textContent='indexing repository';
   try{
     const r=await fetch('/api/prepare-repository',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({repoUrl,repoCommit})});
     const d=await r.json().catch(()=>({}));
     if(!r.ok)throw new Error(d.error||'Could not prepare repository');
-    const count=d.constructIndex?.recordCount;
+    const count=d.constructIndex?.csvRowCount ?? d.constructIndex?.recordCount;
     const reuse=d.constructIndex?.reused?' · reused cached index':'';
-    if(status)status.textContent=`Code index ready${Number.isFinite(count)?' · '+count+' constructs':''}${reuse}`;
+    if(status)status.textContent=`Structural CSV ready${Number.isFinite(count)?' · '+count+' rows':''}${reuse}`;
     $('status').textContent='ready';
     await refreshState();
     return d;
