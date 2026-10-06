@@ -4,7 +4,7 @@ import { selectCodeEntries } from './codeEntrySelector.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
-const ENTRY_TRIAGE_LIMIT = 5;
+const ENTRY_TRIAGE_LIMIT = 3;
 const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
 const HYPOTHESIS_DELTA_EPSILON = 0.03;
@@ -134,11 +134,9 @@ Do not invent source code. Return only:
 {"h":"","gs":[],"ck":[],"hs":0.0}.
 `;
 
-const ENTRY_TRIAGE_SYSTEM = `Rank structural entry matches before any semantic Learn expansion. q is the original issue or question. c contains compact matched source candidates as [index,name,path,[[line,source],...],target].
+const ENTRY_TRIAGE_SYSTEM = `Confirm the strongest structural code entry matches for the issue. q is the issue. c contains candidates as [index,name,path,context], where context contains the matched construct plus bounded parent, child and sibling source windows.
 
-Return a ranked shortlist, not a single winner. Choose up to ${ENTRY_TRIAGE_LIMIT} distinct candidates whose supplied evidence plausibly identifies code relevant to q, ordered strongest to weakest. Preserve multiple entries when several align with different parts of the request. Score each 0..1 by expected usefulness as the starting point for semantic investigation of q. A weak but plausible candidate may remain below a stronger one; only omit candidates that are unsupported or clearly irrelevant.
-
-Prefer explicit evidence over inferred structure. Do not invent intermediate components, relationships, behavior, or missing implementation that are not present in c. Return {"p":[[candidateIndex,score]]}.`;
+Rank and return up to 3 candidates that best match the issue. Use only supplied source context. Do not infer missing code or proposed implementation. Return only {"p":[[candidateIndex,score]]}.`;
 
 
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
@@ -1080,10 +1078,15 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
     index,
     candidate?.name||candidate?.symbolName||candidate?.externalName||'',
     candidate?.sourcePath||'',
-    arr(candidate?.matches).slice(0,4).map(match=>[Number(match?.line||0),text(match?.text||'',220)]),
-    candidate?.metadata?.qualifiedName||candidate?.externalName||''
+    arr(candidate?.entryContext).slice(0,18).map(item=>[
+      item?.relation||'',
+      item?.type||'',
+      item?.name||'',
+      item?.sourcePath||'',
+      arr(item?.lines).slice(0,18)
+    ])
   ]);
-  if(compact.length<=ENTRY_TRIAGE_LIMIT)return arr(candidates);
+  if(compact.length<=1)return arr(candidates).slice(0,ENTRY_TRIAGE_LIMIT);
   const call=await modelJson(client,model,ENTRY_TRIAGE_SYSTEM,{q:question,c:compact});addUsage(usage,call.usage);
   const byIndex=new Map(arr(candidates).map((candidate,index)=>[String(index),candidate]));
   const ranked=[];
