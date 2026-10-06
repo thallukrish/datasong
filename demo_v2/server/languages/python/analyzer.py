@@ -593,6 +593,7 @@ def build_code_facts(mod, info):
         selected.append({
             "_node": node,
             "factId": fact_id,
+            "ordinal": ordinal,
             "sourcePath": source_path,
             "startLine": start,
             "endLine": end,
