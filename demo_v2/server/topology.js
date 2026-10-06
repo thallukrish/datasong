@@ -16,7 +16,7 @@ const MAX_SEARCH_RESULTS = 12;
 const MAX_ENTRY_SYMBOLS = 24;
 const MAX_README_CHARS = 5000;
 const CONSTRUCT_INDEX_SCHEMA_VERSION = 1;
-const PYTHON_ANALYZER_VERSION = 5;
+const PYTHON_ANALYZER_VERSION = 6;
 
 function normalizeRepoUrl(repoUrl) {
   return String(repoUrl || '').trim().replace(/\/$/, '');
@@ -297,6 +297,8 @@ export class CodeTopology {
     this.constructIndexVersion = 0;
     this.constructIndexMeta = null;
     this.pythonAnalysis = null;
+    this.codeStructureFacts = [];
+    this.codeStructureRows = [];
     this.forceConstructIndexRebuild = false;
   }
 
@@ -366,6 +368,8 @@ export class CodeTopology {
         commit:this.constructIndexMeta.commit,
         schemaVersion:this.constructIndexMeta.schemaVersion,
         analyzerVersion:this.constructIndexMeta.analyzerVersion,
+        csvPath:this.constructIndexMeta.csvPath||'',
+        csvRowCount:Number(this.constructIndexMeta.csvRowCount||0),
         incremental:!!this.constructIndexMeta.incremental,
         incrementalFrom:this.constructIndexMeta.incrementalFrom||'',
         affectedFiles:Array.isArray(this.constructIndexMeta.affectedFiles)?this.constructIndexMeta.affectedFiles:[]
@@ -420,7 +424,9 @@ export class CodeTopology {
         reused: !!this.constructIndexMeta.reused,
         commit: this.constructIndexMeta.commit,
         schemaVersion: this.constructIndexMeta.schemaVersion,
-        analyzerVersion: this.constructIndexMeta.analyzerVersion
+        analyzerVersion: this.constructIndexMeta.analyzerVersion,
+        csvPath: this.constructIndexMeta.csvPath || '',
+        csvRowCount: Number(this.constructIndexMeta.csvRowCount || 0)
       } : null,
       root: this.repositoryOrientation(),
       readme: this.repositoryReadme
@@ -476,6 +482,114 @@ export class CodeTopology {
     );
   }
 
+
+  codeStructureCsvPath(language='python') {
+    const revision = String(this.commit || '').trim();
+    if (!revision || !this.repoUrl) return '';
+    return path.join(
+      this.cacheRoot,
+      'code-construct-index',
+      repoKey(this.repoUrl),
+      revision,
+      `${language}.csv`
+    );
+  }
+
+  materializeCodeStructureRows(codeFacts=[], analysis=null) {
+    const facts = (Array.isArray(codeFacts) ? codeFacts : [])
+      .filter((fact) => fact?.factId && fact?.sourcePath)
+      .slice()
+      .sort((a, b) =>
+        String(a.sourcePath).localeCompare(String(b.sourcePath)) ||
+        Number(a.startLine || 0) - Number(b.startLine || 0) ||
+        Number(a.endLine || 0) - Number(b.endLine || 0) ||
+        String(a.type || '').localeCompare(String(b.type || '')) ||
+        String(a.name || '').localeCompare(String(b.name || '')) ||
+        String(a.factId).localeCompare(String(b.factId))
+      );
+
+    const rowByFactId = new Map(facts.map((fact, index) => [fact.factId, index + 1]));
+    const rows = facts.map((fact, index) => {
+      const start = Number(fact.startLine || 0);
+      const end = Number(fact.endLine || start);
+      const children = (Array.isArray(fact.childFactIds) ? fact.childFactIds : [])
+        .map((id) => rowByFactId.get(id))
+        .filter(Boolean)
+        .sort((a, b) => a - b);
+      return {
+        row: index + 1,
+        file: String(fact.sourcePath || ''),
+        line_range: start === end ? String(start) : `${start}-${end}`,
+        type: String(fact.type || ''),
+        name: String(fact.name || ''),
+        parent: rowByFactId.get(fact.parentFactId) || '',
+        children: children.join(','),
+        callers: '',
+        callees: ''
+      };
+    });
+
+    const functionRowByLocation = new Map();
+    for (const row of rows) {
+      if (row.type !== 'function') continue;
+      const start = Number(String(row.line_range).split('-')[0] || 0);
+      functionRowByLocation.set(`${row.file}:${start}`, row.row);
+    }
+
+    const symbols = Array.isArray(analysis?.symbols) ? analysis.symbols : [];
+    const symbolById = new Map(symbols.filter((symbol) => symbol?.id).map((symbol) => [symbol.id, symbol]));
+    const callers = new Map();
+    const callees = new Map();
+    const addRelation = (map, from, to) => {
+      if (!from || !to) return;
+      if (!map.has(from)) map.set(from, new Set());
+      map.get(from).add(to);
+    };
+
+    for (const symbol of symbols) {
+      const sourceRow = functionRowByLocation.get(`${symbol.sourcePath}:${Number(symbol.startLine || 0)}`);
+      if (!sourceRow) continue;
+      for (const ref of Array.isArray(symbol.references) ? symbol.references : []) {
+        if (!ref?.targetSymbolId) continue;
+        const target = symbolById.get(ref.targetSymbolId);
+        if (!target) continue;
+        const targetRow = functionRowByLocation.get(`${target.sourcePath}:${Number(target.startLine || 0)}`);
+        if (!targetRow) continue;
+        addRelation(callees, sourceRow, targetRow);
+        addRelation(callers, targetRow, sourceRow);
+      }
+    }
+
+    for (const row of rows) {
+      row.callers = [...(callers.get(row.row) || [])].sort((a, b) => a - b).join(',');
+      row.callees = [...(callees.get(row.row) || [])].sort((a, b) => a - b).join(',');
+    }
+    return rows;
+  }
+
+  serializeCodeStructureCsv(rows=[]) {
+    const columns = ['row', 'file', 'line_range', 'type', 'name', 'parent', 'children', 'callers', 'callees'];
+    const cell = (value) => {
+      const text = String(value ?? '');
+      return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+    };
+    return [
+      columns.join(','),
+      ...(Array.isArray(rows) ? rows : []).map((row) => columns.map((column) => cell(row?.[column])).join(','))
+    ].join('\n') + '\n';
+  }
+
+  async persistCodeStructureCsv({ language='python', rows=[] }={}) {
+    const csvPath = this.codeStructureCsvPath(language);
+    if (!csvPath) return '';
+    await fs.mkdir(path.dirname(csvPath), { recursive: true });
+    const tempPath = `${csvPath}.${process.pid}.tmp`;
+    await fs.writeFile(tempPath, this.serializeCodeStructureCsv(rows), 'utf8');
+    await fs.rm(csvPath, { force:true });
+    await fs.rename(tempPath, csvPath);
+    return csvPath;
+  }
+
   async pythonSnapshotInputs(pythonFiles=[]) {
     const fileHashes = {};
     const importGraph = {};
@@ -507,6 +621,7 @@ export class CodeTopology {
           meta.fileHashes && typeof meta.fileHashes === 'object' &&
           meta.importGraph && typeof meta.importGraph === 'object' &&
           Array.isArray(payload?.constructs) &&
+          Array.isArray(payload?.codeFacts) &&
           payload?.analysis && typeof payload.analysis === 'object';
         if (valid) candidates.push({ payload, cachePath, createdAt:Date.parse(meta.createdAt || 0) || 0 });
       } catch {}
@@ -583,15 +698,19 @@ export class CodeTopology {
       this.constructIndex = payload.constructs;
       this.pythonAnalysis = payload.analysis;
       if (Array.isArray(this.pythonAnalysis?.constructs)) this.pythonAnalysis.constructs = [];
+      if (Array.isArray(this.pythonAnalysis?.codeFacts)) this.pythonAnalysis.codeFacts = [];
+      this.codeStructureFacts = payload.codeFacts;
+      this.codeStructureRows = this.materializeCodeStructureRows(this.codeStructureFacts, this.pythonAnalysis);
+      const csvPath = await this.persistCodeStructureCsv({ language, rows:this.codeStructureRows });
       this.constructIndexVersion = Number(meta.analyzerVersion || 0);
-      this.constructIndexMeta = { ...meta, cachePath, reused: true };
+      this.constructIndexMeta = { ...meta, cachePath, csvPath, csvRowCount:this.codeStructureRows.length, reused: true };
       return true;
     } catch {
       return false;
     }
   }
 
-  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[], analysis=null, fileHashes={}, importGraph={}, incrementalFrom='', affectedFiles=[] }={}) {
+  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, constructs=[], codeFacts=[], analysis=null, fileHashes={}, importGraph={}, incrementalFrom='', affectedFiles=[] }={}) {
     const cachePath = this.constructIndexCachePath(language);
     if (!cachePath) return;
     const metadata = {
@@ -603,6 +722,7 @@ export class CodeTopology {
       schemaVersion: CONSTRUCT_INDEX_SCHEMA_VERSION,
       analyzerVersion: Number(analyzerVersion || 0),
       recordCount: constructs.length,
+      csvRowCount: Array.isArray(codeFacts) ? codeFacts.length : 0,
       fileHashes,
       importGraph,
       incrementalFrom:String(incrementalFrom || ''),
@@ -613,12 +733,15 @@ export class CodeTopology {
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
     const tempPath = `${cachePath}.${process.pid}.tmp`;
     const compactAnalysis = analysis && typeof analysis === 'object'
-      ? { ...analysis, constructs: [] }
+      ? { ...analysis, constructs: [], codeFacts: [] }
       : analysis;
-    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs, analysis:compactAnalysis }), 'utf8');
+    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, constructs, codeFacts, analysis:compactAnalysis }), 'utf8');
     await fs.rm(cachePath, { force:true });
     await fs.rename(tempPath, cachePath);
-    this.constructIndexMeta = { ...metadata, cachePath, reused: false };
+    this.codeStructureFacts = Array.isArray(codeFacts) ? codeFacts : [];
+    this.codeStructureRows = this.materializeCodeStructureRows(this.codeStructureFacts, compactAnalysis);
+    const csvPath = await this.persistCodeStructureCsv({ language, rows:this.codeStructureRows });
+    this.constructIndexMeta = { ...metadata, cachePath, csvPath, csvRowCount:this.codeStructureRows.length, reused: false };
   }
 
   async buildConstructIndex() {
@@ -626,6 +749,8 @@ export class CodeTopology {
     this.constructIndexVersion = 0;
     this.constructIndexMeta = null;
     this.pythonAnalysis = null;
+    this.codeStructureFacts = [];
+    this.codeStructureRows = [];
     const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
     if (!pythonFiles.length) return;
 
@@ -661,6 +786,7 @@ export class CodeTopology {
 
       let analyzed;
       let constructs;
+      let codeFacts;
       let analysis;
 
       if (canIncremental) {
@@ -677,6 +803,10 @@ export class CodeTopology {
           ...previous.payload.constructs.filter(keepByPath),
           ...(Array.isArray(analyzed?.constructs) ? analyzed.constructs : [])
         ];
+        codeFacts = [
+          ...(Array.isArray(previous.payload.codeFacts) ? previous.payload.codeFacts.filter(keepByPath) : []),
+          ...(Array.isArray(analyzed?.codeFacts) ? analyzed.codeFacts : [])
+        ];
         analysis = {
           ...previousAnalysis,
           ...analyzed,
@@ -689,7 +819,8 @@ export class CodeTopology {
             ...(Array.isArray(previousAnalysis?.externalSymbols) ? previousAnalysis.externalSymbols.filter(keepByPath) : []),
             ...(Array.isArray(analyzed?.externalSymbols) ? analyzed.externalSymbols : [])
           ],
-          constructs:[]
+          constructs:[],
+          codeFacts:[]
         };
       } else {
         const reason = previous && delta
@@ -700,11 +831,14 @@ export class CodeTopology {
         analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:pythonFiles });
         console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms constructs=${Array.isArray(analyzed?.constructs)?analyzed.constructs.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
         constructs = Array.isArray(analyzed?.constructs) ? analyzed.constructs : [];
+        codeFacts = Array.isArray(analyzed?.codeFacts) ? analyzed.codeFacts : [];
         analysis = analyzed;
       }
 
       this.pythonAnalysis = analysis;
       this.constructIndex = constructs;
+      this.codeStructureFacts = Array.isArray(codeFacts) ? codeFacts : [];
+      this.codeStructureRows = this.materializeCodeStructureRows(this.codeStructureFacts, this.pythonAnalysis);
       this.constructIndexVersion = Number(analyzed?.version || analysis?.version || 0);
       if (this.constructIndexVersion !== PYTHON_ANALYZER_VERSION) return;
 
@@ -713,6 +847,7 @@ export class CodeTopology {
         language:'python',
         analyzerVersion:this.constructIndexVersion,
         constructs:this.constructIndex,
+        codeFacts:this.codeStructureFacts,
         analysis:this.pythonAnalysis,
         fileHashes,
         importGraph,
