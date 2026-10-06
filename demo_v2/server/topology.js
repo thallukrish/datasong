@@ -371,6 +371,8 @@ export class CodeTopology {
         schemaVersion:this.constructIndexMeta.schemaVersion,
         analyzerVersion:this.constructIndexMeta.analyzerVersion,
         csvPath:this.constructIndexMeta.csvPath||'',
+        uniqueIndexPath:this.constructIndexMeta.uniqueIndexPath||'',
+        valuesIndexPath:this.constructIndexMeta.valuesIndexPath||'',
         csvRowCount:Number(this.constructIndexMeta.csvRowCount||0),
         incremental:!!this.constructIndexMeta.incremental,
         incrementalFrom:this.constructIndexMeta.incrementalFrom||'',
@@ -428,6 +430,8 @@ export class CodeTopology {
         schemaVersion: this.constructIndexMeta.schemaVersion,
         analyzerVersion: this.constructIndexMeta.analyzerVersion,
         csvPath: this.constructIndexMeta.csvPath || '',
+        uniqueIndexPath: this.constructIndexMeta.uniqueIndexPath || '',
+        valuesIndexPath: this.constructIndexMeta.valuesIndexPath || '',
         csvRowCount: Number(this.constructIndexMeta.csvRowCount || 0)
       } : null,
       root: this.repositoryOrientation(),
