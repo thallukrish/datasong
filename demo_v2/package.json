@@ -12,6 +12,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "openai": "^5.12.2",
+    "pal-executor-lib": "github:thallukrish/pal-client-lib#441c358afb966c585d4055fa513cd73cf9531574",
     "simple-git": "^3.28.0"
   }
 }
