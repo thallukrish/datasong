@@ -5,6 +5,8 @@ import { selectCodeEntries } from './codeEntrySelector.js';
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
 const ENTRY_TRIAGE_LIMIT = 3;
+const ENTRY_PER_LOCATOR_LIMIT = 2;
+const ENTRY_CONFIRM_CANDIDATE_LIMIT = 8;
 const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
 const HYPOTHESIS_DELTA_EPSILON = 0.03;
@@ -1041,7 +1043,52 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
   const source=arr(candidates);
   if(source.length<=1)return source.slice(0,ENTRY_TRIAGE_LIMIT);
 
-  const candidateRows=source.map((candidate,index)=>[
+  const candidateKey=(candidate)=>String(
+    candidate?.symbolId||
+    candidate?.externalId||
+    `${candidate?.sourcePath||''}:${Number(candidate?.startLine||0)}:${candidate?.name||''}`
+  );
+
+  const locatorGroups=new Map();
+  for(const candidate of source){
+    const patterns=[...new Set(arr(candidate?.matches)
+      .map(match=>String(match?.pattern||''))
+      .filter(Boolean))];
+    for(const pattern of (patterns.length?patterns:['*:*'])){
+      if(!locatorGroups.has(pattern))locatorGroups.set(pattern,[]);
+      locatorGroups.get(pattern).push(candidate);
+    }
+  }
+
+  const candidateScore=(candidate)=>Math.max(
+    Number(candidate?.score||0),
+    Number(candidate?.structuredScore||0),
+    Number(candidate?.entryRankScore||0)
+  );
+
+  // Preserve locator diversity deterministically before asking the model:
+  // at most 2 strongest candidates for each (type,value), deduped by enclosing
+  // function/boundary, then at most 8 candidates total.
+  const shortlist=[];
+  const shortlistedKeys=new Set();
+  for(const [,groupCandidates] of locatorGroups){
+    const strongest=[...groupCandidates]
+      .sort((a,b)=>candidateScore(b)-candidateScore(a))
+      .slice(0,ENTRY_PER_LOCATOR_LIMIT);
+    for(const candidate of strongest){
+      const key=candidateKey(candidate);
+      if(shortlistedKeys.has(key))continue;
+      shortlistedKeys.add(key);
+      shortlist.push(candidate);
+      if(shortlist.length>=ENTRY_CONFIRM_CANDIDATE_LIMIT)break;
+    }
+    if(shortlist.length>=ENTRY_CONFIRM_CANDIDATE_LIMIT)break;
+  }
+
+  if(!shortlist.length)return source.slice(0,ENTRY_TRIAGE_LIMIT);
+
+  const indexByKey=new Map(shortlist.map((candidate,index)=>[candidateKey(candidate),index]));
+  const candidateRows=shortlist.map((candidate,index)=>[
     index,
     candidate?.name||candidate?.symbolName||candidate?.externalName||'',
     candidate?.sourcePath||'',
@@ -1054,27 +1101,26 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
     ])
   ]);
 
-  const groups=new Map();
-  source.forEach((candidate,index)=>{
-    const patterns=[...new Set(arr(candidate?.matches).map(match=>String(match?.pattern||'')).filter(Boolean))];
-    const keys=patterns.length?patterns:['*:*'];
-    for(const key of keys){
-      if(!groups.has(key))groups.set(key,[]);
-      groups.get(key).push(candidateRows[index]);
-    }
-  });
-
-  const grouped=[...groups.entries()].map(([key,rows])=>{
+  const grouped=[...locatorGroups.entries()].map(([key,groupCandidates])=>{
     const split=key.indexOf(':');
     const type=split>=0?key.slice(0,split):'*';
     const value=split>=0?key.slice(split+1):key;
-    return [type||'*',value||'',rows.slice(0,8)];
-  });
+    const rows=[];
+    for(const candidate of [...groupCandidates].sort((a,b)=>candidateScore(b)-candidateScore(a))){
+      const index=indexByKey.get(candidateKey(candidate));
+      if(index===undefined)continue;
+      rows.push(candidateRows[index]);
+      if(rows.length>=ENTRY_PER_LOCATOR_LIMIT)break;
+    }
+    return [type||'*',value||'',rows];
+  }).filter(group=>group[2].length);
+
+  if(shortlist.length<=1)return shortlist.slice(0,ENTRY_TRIAGE_LIMIT);
 
   const call=await modelJson(client,model,ENTRY_TRIAGE_SYSTEM,{q:question,g:grouped});
   addUsage(usage,call.usage);
 
-  const byIndex=new Map(source.map((candidate,index)=>[String(index),candidate]));
+  const byIndex=new Map(shortlist.map((candidate,index)=>[String(index),candidate]));
   const ranked=[];
   const seen=new Set();
   for(const row of arr(call.parsed?.p)){
@@ -1088,11 +1134,14 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
   }
   ranked.sort((a,b)=>b.score-a.score);
   const selected=ranked.slice(0,ENTRY_TRIAGE_LIMIT).map(item=>item.candidate);
-  const fallback=selected.length?selected:source.slice(0,ENTRY_TRIAGE_LIMIT);
+  const fallback=selected.length?selected:shortlist.slice(0,ENTRY_TRIAGE_LIMIT);
 
   log('query_v5_entry_triage',{
+    perLocatorLimit:ENTRY_PER_LOCATOR_LIMIT,
+    confirmationCandidateLimit:ENTRY_CONFIRM_CANDIDATE_LIMIT,
     groups:grouped.map(group=>({type:group[0],value:group[1],candidateCount:group[2].length})),
-    candidateCount:source.length,
+    sourceCandidateCount:source.length,
+    confirmationCandidateCount:shortlist.length,
     selected:fallback.map(candidate=>({
       name:candidate?.name||candidate?.symbolName||candidate?.externalName||'',
       sourcePath:candidate?.sourcePath||'',
