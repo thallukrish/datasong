@@ -126,6 +126,13 @@ def parent(a, b):
   assert.match(csv, /,function,parent,/);
   assert.match(csv, /,input_param,a,/);
   assert.match(csv, /"\[""[0-9]+""/);
+
+  const uniqueIndex = JSON.parse(await fs.readFile(topology.constructIndexMeta.uniqueIndexPath, 'utf8'));
+  const valuesIndex = JSON.parse(await fs.readFile(topology.constructIndexMeta.valuesIndexPath, 'utf8'));
+  assert.ok(uniqueIndex.type.includes('function'));
+  assert.ok(uniqueIndex.name.includes('parent'));
+  assert.ok(valuesIndex.type.some((entry) => entry[1] === 'function'));
+  assert.ok(valuesIndex.name.some((entry) => entry[1] === 'parent'));
 });
 
 test('CodeTopology reuses same-commit structural CSV cache without a duplicated AST snapshot', async (t) => {
@@ -156,13 +163,19 @@ test('CodeTopology reuses same-commit structural CSV cache without a duplicated 
   assert.equal(meta.codeFacts, undefined);
   assert.equal(meta.analysis, undefined);
   await assert.rejects(fs.readFile(legacyPath, 'utf8'));
+  await fs.access(topology.constructIndexMeta.uniqueIndexPath);
+  await fs.access(topology.constructIndexMeta.valuesIndexPath);
 
   topology.pythonAnalysis = null;
   topology.codeStructureRows = [];
+  topology.palUniqueIndex = null;
+  topology.palValuesIndex = null;
   await topology.buildConstructIndex();
 
   assert.equal(topology.constructIndexMeta?.reused, true);
   assert.equal(topology.pythonAnalysis, null);
+  assert.ok(topology.palUniqueIndex?.name);
+  assert.ok(topology.palValuesIndex?.name);
   const csv = await fs.readFile(csvPath, 'utf8');
   assert.match(csv, /,function,build,/);
 });
