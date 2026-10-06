@@ -61,7 +61,7 @@ type = function
 name = separability_matrix
 ```
 
-If the identifier is useful but its syntax does not establish a construct type, Query uses `type = *`, which means search the name without constraining the type. PAL is the columnar execution layer for these filters. Save builds the PAL sidecars immediately after writing the structural CSV. Query v5 loads the persisted `valuesIndex` and intersects exact `name` and `type` matches there before materializing the matching CSV rows.
+If the identifier is useful but its syntax does not establish a construct type, Query uses `type = *`, which means search the name without constraining the type. PAL is the columnar execution layer for these filters. Save builds the PAL sidecars immediately after writing the structural CSV by calling `createIndexesFromRows` exported by `pal-executor-lib` (the `pal-client-lib` repository), rather than maintaining a DataSong copy of PAL indexing logic. Query v5 loads the persisted `valuesIndex` and intersects exact `name` and `type` matches there before materializing the matching CSV rows.
 
 After matching rows, LeMap expands structural context using row relationships and resolves the enclosing function/symbol. Semantic exploration starts only after this deterministic localization step.
 
