@@ -20,12 +20,16 @@ test('entry selection normalizes exact structural locators', () => {
   ]);
 });
 
-test('structural CSV search resolves a parameter row to its parent function', () => {
+test('structural CSV search resolves a parameter row through the PAL values index', () => {
   const topology={
     codeStructureRows:[
       {row:1,file:'x.py',line_range:'10-20',type:'function',name:'foobar',parent:'',children:'["2"]'},
       {row:2,file:'x.py',line_range:'10',type:'input_param',name:'a',parent:1,children:'[]'}
     ],
+    palValuesIndex:{
+      type:[['0','function'],['1','input_param']],
+      name:[['0','foobar'],['1','a']]
+    },
     symbols:[
       {id:'fn',name:'foobar',sourcePath:'x.py',startLine:10,endLine:20}
     ],
@@ -38,12 +42,16 @@ test('structural CSV search resolves a parameter row to its parent function', ()
   assert.equal(hits[0].line,10);
 });
 
-test('wildcard type searches the name across structural columns', () => {
+test('wildcard type searches the PAL name index without constraining type', () => {
   const topology={
     codeStructureRows:[
       {row:1,file:'x.py',line_range:'10-20',type:'function',name:'foobar',parent:'',children:'["2"]'},
       {row:2,file:'x.py',line_range:'10',type:'input_param',name:'a',parent:1,children:'[]'}
     ],
+    palValuesIndex:{
+      type:[['0','function'],['1','input_param']],
+      name:[['0','foobar'],['1','a']]
+    },
     symbols:[
       {id:'fn',name:'foobar',sourcePath:'x.py',startLine:10,endLine:20}
     ],
