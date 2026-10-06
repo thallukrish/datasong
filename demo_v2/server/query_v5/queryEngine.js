@@ -117,9 +117,17 @@ Do not invent source code. Return only:
 {"h":"","gs":[],"ck":[],"hs":0.0}.
 `;
 
-const ENTRY_TRIAGE_SYSTEM = `Confirm the strongest structural code entry matches for the issue. q is the issue. c contains candidates as [index,name,path,context], where context contains the matched construct plus bounded parent, child and sibling source windows.
+const ENTRY_TRIAGE_SYSTEM = `Confirm the strongest structural code entry matches for the issue.
 
-Rank and return up to 3 candidates that best match the issue. Use only supplied source context. Do not infer missing code or proposed implementation. Return only {"p":[[candidateIndex,score]]}.`;
+q is the issue.
+g contains structural search groups as:
+[type,value,[[candidateIndex,name,path,context],...]]
+Each group is one identifier extracted from the issue, for example ["call","merge",...], ["input_param","combine_attrs",...], or ["*","override",...].
+Compare evidence across ALL groups. Do not let one common identifier dominate simply because it produced many matches.
+
+Rank and return up to 3 candidate indexes overall that best identify the implementation relevant to the issue.
+Use only supplied source context. Do not infer missing code or proposed implementation.
+Return only {"p":[[candidateIndex,score]]}.`;
 
 
 const LOCALIZE_SYSTEM = `Given an issue, its evidence-backed explanation, and raw source evidence selected by LeMap, identify only the exact source ranges that materially support that explanation. Return {"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}. Use only supplied evidence refs.`;
@@ -1030,7 +1038,10 @@ async function localizeExplanation({question,explanation,evidenceStates,client,m
 }
 
 async function triageEntryCandidates({question,candidates=[],client,model,usage,log}){
-  const compact=arr(candidates).map((candidate,index)=>[
+  const source=arr(candidates);
+  if(source.length<=1)return source.slice(0,ENTRY_TRIAGE_LIMIT);
+
+  const candidateRows=source.map((candidate,index)=>[
     index,
     candidate?.name||candidate?.symbolName||candidate?.externalName||'',
     candidate?.sourcePath||'',
@@ -1042,18 +1053,55 @@ async function triageEntryCandidates({question,candidates=[],client,model,usage,
       arr(item?.lines).slice(0,18)
     ])
   ]);
-  if(compact.length<=1)return arr(candidates).slice(0,ENTRY_TRIAGE_LIMIT);
-  const call=await modelJson(client,model,ENTRY_TRIAGE_SYSTEM,{q:question,c:compact});addUsage(usage,call.usage);
-  const byIndex=new Map(arr(candidates).map((candidate,index)=>[String(index),candidate]));
+
+  const groups=new Map();
+  source.forEach((candidate,index)=>{
+    const patterns=[...new Set(arr(candidate?.matches).map(match=>String(match?.pattern||'')).filter(Boolean))];
+    const keys=patterns.length?patterns:['*:*'];
+    for(const key of keys){
+      if(!groups.has(key))groups.set(key,[]);
+      groups.get(key).push(candidateRows[index]);
+    }
+  });
+
+  const grouped=[...groups.entries()].map(([key,rows])=>{
+    const split=key.indexOf(':');
+    const type=split>=0?key.slice(0,split):'*';
+    const value=split>=0?key.slice(split+1):key;
+    return [type||'*',value||'',rows.slice(0,8)];
+  });
+
+  const call=await modelJson(client,model,ENTRY_TRIAGE_SYSTEM,{q:question,g:grouped});
+  addUsage(usage,call.usage);
+
+  const byIndex=new Map(source.map((candidate,index)=>[String(index),candidate]));
   const ranked=[];
+  const seen=new Set();
   for(const row of arr(call.parsed?.p)){
-    const candidate=byIndex.get(String(row?.[0]));if(!candidate)continue;
-    ranked.push({candidate:{...candidate,entryRankScore:Math.max(0,Math.min(1,Number(row?.[1]||0)))},score:Number(row?.[1]||0)});
+    const index=String(row?.[0]);
+    if(seen.has(index))continue;
+    const candidate=byIndex.get(index);
+    if(!candidate)continue;
+    seen.add(index);
+    const score=Math.max(0,Math.min(1,Number(row?.[1]||0)));
+    ranked.push({candidate:{...candidate,entryRankScore:score},score});
   }
   ranked.sort((a,b)=>b.score-a.score);
   const selected=ranked.slice(0,ENTRY_TRIAGE_LIMIT).map(item=>item.candidate);
-  const fallback=selected.length?selected:arr(candidates).slice(0,ENTRY_TRIAGE_LIMIT);
-  log('query_v5_entry_triage',{candidateCount:compact.length,selected:fallback.map(candidate=>({name:candidate?.name||candidate?.symbolName||candidate?.externalName||'',sourcePath:candidate?.sourcePath||'',startLine:Number(candidate?.startLine||0),entryRankScore:Number(candidate?.entryRankScore||0),matches:arr(candidate?.matches).slice(0,4)})),usage:call.usage});
+  const fallback=selected.length?selected:source.slice(0,ENTRY_TRIAGE_LIMIT);
+
+  log('query_v5_entry_triage',{
+    groups:grouped.map(group=>({type:group[0],value:group[1],candidateCount:group[2].length})),
+    candidateCount:source.length,
+    selected:fallback.map(candidate=>({
+      name:candidate?.name||candidate?.symbolName||candidate?.externalName||'',
+      sourcePath:candidate?.sourcePath||'',
+      startLine:Number(candidate?.startLine||0),
+      entryRankScore:Number(candidate?.entryRankScore||0),
+      matches:arr(candidate?.matches).slice(0,4)
+    })),
+    usage:call.usage
+  });
   return fallback;
 }
 
