@@ -704,6 +704,12 @@ export class CodeTopology {
     await fs.writeFile(tempPath, JSON.stringify(metadata), 'utf8');
     await fs.rm(metaPath, { force:true });
     await fs.rename(tempPath, metaPath);
+
+    // Remove the pre-CSV snapshot format if it exists. It duplicated codeFacts
+    // and AST analysis beside python.csv and could be tens of megabytes.
+    const legacySnapshotPath = path.join(path.dirname(metaPath), `${language}.json`);
+    await fs.rm(legacySnapshotPath, { force:true });
+
     return metaPath;
   }
 
