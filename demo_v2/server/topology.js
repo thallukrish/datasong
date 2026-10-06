@@ -501,10 +501,8 @@ export class CodeTopology {
       .slice()
       .sort((a, b) =>
         String(a.sourcePath).localeCompare(String(b.sourcePath)) ||
+        Number(a.ordinal || 0) - Number(b.ordinal || 0) ||
         Number(a.startLine || 0) - Number(b.startLine || 0) ||
-        Number(a.endLine || 0) - Number(b.endLine || 0) ||
-        String(a.type || '').localeCompare(String(b.type || '')) ||
-        String(a.name || '').localeCompare(String(b.name || '')) ||
         String(a.factId).localeCompare(String(b.factId))
       );
 
