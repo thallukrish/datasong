@@ -463,6 +463,166 @@ def construct_type(node):
     if isinstance(node, ast.Raise): return "exception"
     return ""
 
+
+def fact_type(node):
+    if isinstance(node, ast.ClassDef): return "class"
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)): return "function"
+    if isinstance(node, ast.arg): return "input_param"
+    if isinstance(node, (ast.Import, ast.ImportFrom)): return "import"
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)): return "assignment"
+    if isinstance(node, ast.Call): return "call"
+    if isinstance(node, ast.Return): return "return"
+    if isinstance(node, ast.Raise): return "exception"
+    if isinstance(node, ast.If): return "if"
+    if isinstance(node, (ast.For, ast.AsyncFor)): return "for"
+    if isinstance(node, ast.While): return "while"
+    if isinstance(node, ast.Try): return "try"
+    if isinstance(node, ast.ExceptHandler): return "except"
+    if isinstance(node, (ast.With, ast.AsyncWith)): return "with"
+    if isinstance(node, ast.Assert): return "assert"
+    if hasattr(ast, "Match") and isinstance(node, ast.Match): return "match"
+    if hasattr(ast, "match_case") and isinstance(node, ast.match_case): return "case"
+    if isinstance(node, ast.Break): return "break"
+    if isinstance(node, ast.Continue): return "continue"
+    if isinstance(node, ast.Pass): return "pass"
+    if isinstance(node, ast.Global): return "global"
+    if isinstance(node, ast.Nonlocal): return "nonlocal"
+    if isinstance(node, ast.Delete): return "delete"
+    if isinstance(node, ast.Await): return "await"
+    if isinstance(node, (ast.Yield, ast.YieldFrom)): return "yield"
+    if isinstance(node, (ast.Lambda, ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp,
+                         ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        return "expression"
+    return ""
+
+def fact_name(node, ctype, owner_name="", region_number=0):
+    try:
+        if ctype in ("function", "class"):
+            return node.name
+        if ctype == "input_param":
+            return node.arg
+        if ctype == "call":
+            return ast.unparse(node.func)
+        if ctype == "assignment":
+            target = node.targets[0] if isinstance(node, ast.Assign) and node.targets else getattr(node, "target", None)
+            return ast.unparse(target) if target is not None else ""
+        if ctype == "import":
+            return ast.unparse(node)
+        if ctype == "exception":
+            exc = getattr(node, "exc", None)
+            if isinstance(exc, ast.Call):
+                return ast.unparse(exc.func)
+            return ast.unparse(exc) if exc is not None else "raise"
+        if ctype == "except":
+            exc = getattr(node, "type", None)
+            return ast.unparse(exc) if exc is not None else "except"
+        if ctype in ("if", "for", "while", "try", "with", "match", "case"):
+            base = owner_name or "module"
+            return f"{base}_region_{region_number}"
+        if ctype == "return":
+            value = getattr(node, "value", None)
+            return ast.unparse(value) if value is not None else "return"
+        if ctype == "assert":
+            return ast.unparse(node.test)
+        if ctype in ("global", "nonlocal"):
+            return ",".join(node.names)
+        if ctype == "delete":
+            return ",".join(ast.unparse(target) for target in node.targets)
+        if ctype in ("expression", "await", "yield"):
+            return ast.unparse(node)
+        return ctype
+    except Exception:
+        return ctype
+
+def node_lines(node, fallback=0):
+    start = int(getattr(node, "lineno", fallback) or fallback or 0)
+    end = int(getattr(node, "end_lineno", start) or start)
+    if hasattr(ast, "match_case") and isinstance(node, ast.match_case):
+        pattern = getattr(node, "pattern", None)
+        if pattern is not None:
+            start = int(getattr(pattern, "lineno", start) or start)
+            end = max(end, int(getattr(pattern, "end_lineno", start) or start))
+        body = getattr(node, "body", None) or []
+        if body:
+            end = max(end, int(getattr(body[-1], "end_lineno", getattr(body[-1], "lineno", end)) or end))
+    return start, end
+
+def build_code_facts(mod, info):
+    tree = info["tree"]
+    source_path = info["path"]
+    parents = {}
+    ordered_nodes = []
+
+    def walk(node, parent=None):
+        if parent is not None:
+            parents[node] = parent
+        ordered_nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            walk(child, node)
+
+    walk(tree)
+
+    selected = []
+    selected_set = set()
+    region_counts = {}
+    scope_for_node = {}
+
+    def owner_for(node):
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                return cur.name
+            cur = parents.get(cur)
+        return ""
+
+    for ordinal, node in enumerate(ordered_nodes, start=1):
+        ctype = fact_type(node)
+        if not ctype:
+            continue
+        start, end = node_lines(node)
+        if start <= 0:
+            continue
+        owner = owner_for(node)
+        region_number = 0
+        if ctype in ("if", "for", "while", "try", "with", "match", "case"):
+            region_key = owner or "<module>"
+            region_counts[region_key] = region_counts.get(region_key, 0) + 1
+            region_number = region_counts[region_key]
+        name = fact_name(node, ctype, owner, region_number)
+        fact_id = f"{source_path}:{ordinal}:{start}:{end}:{ctype}"
+        selected.append({
+            "_node": node,
+            "factId": fact_id,
+            "sourcePath": source_path,
+            "startLine": start,
+            "endLine": end,
+            "type": ctype,
+            "name": name,
+            "parentFactId": "",
+            "childFactIds": []
+        })
+        selected_set.add(node)
+        scope_for_node[node] = fact_id
+
+    by_node = {row["_node"]: row for row in selected}
+    for row in selected:
+        node = row["_node"]
+        cur = parents.get(node)
+        while cur is not None and cur not in selected_set:
+            cur = parents.get(cur)
+        if cur is not None:
+            parent = by_node[cur]
+            row["parentFactId"] = parent["factId"]
+            parent["childFactIds"].append(row["factId"])
+
+    for row in selected:
+        row.pop("_node", None)
+    return selected
+
+code_facts = []
+for mod, info in modules.items():
+    code_facts.extend(build_code_facts(mod, info))
+
 constructs = []
 for mod, info in modules.items():
     text = info["text"]
@@ -649,4 +809,4 @@ for rec in defs.values():
         "regions": regions
     })
 
-print(json.dumps({"version": 5, "symbols": symbols, "externalSymbols": external_symbols, "constructs": constructs}, ensure_ascii=False))
+print(json.dumps({"version": 6, "symbols": symbols, "externalSymbols": external_symbols, "constructs": constructs, "codeFacts": code_facts}, ensure_ascii=False))
