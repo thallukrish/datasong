@@ -9,23 +9,6 @@ const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
 const HYPOTHESIS_DELTA_EPSILON = 0.03;
 const MAX_FLAT_STEPS = 2;
-const LOCATOR_EVIDENCE_SYSTEM = `Split a software-engineering issue into evidence used to LOCATE the existing code and evidence used later to judge the requested change, symptom, or desired result.
-
-q is the full original request.
-goal is the current evidence obligation.
-
-locatorTerms must contain only words or short phrases that identify the existing code area, API, component, subsystem, class, function, backend, entity, or behavior already present in the repository. These terms are allowed to drive structural retrieval.
-
-changeTerms are requested implementation mechanisms or proposed code changes. symptomTerms are failures or observed incorrect behavior. resultTerms are desired outcomes or acceptance behavior.
-
-Critical rule: proposed implementation details must NOT leak into locatorTerms merely because they look like code identifiers. If the request says "use X", "replace with X", "change to X", or otherwise proposes X as the solution, X belongs in changeTerms unless the request separately identifies X as existing code to locate.
-
-Preserve exact identifiers when they genuinely locate existing code. Keep lists compact. Return only:
-{"locatorTerms":[],"changeTerms":[],"symptomTerms":[],"resultTerms":[],"locatorQuery":""}
-
-locatorQuery must be a concise search phrase composed only from locatorTerms. If no reliable locator evidence exists, return locatorQuery="" rather than inventing one.`;
-
-
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
 Use:
@@ -575,33 +558,6 @@ async function decomposeGoals({question,client,model,usage,log}){
   const mode=reasoningModeForGoals(goals);
   log('query_v5_goals',{question,mode,goals:goalView(goals),usage:call.usage});
   return {goals,mode};
-}
-
-async function extractLocatorEvidence({question,goal,client,model,usage,log}){
-  const call=await modelJson(client,model,LOCATOR_EVIDENCE_SYSTEM,{
-    q:question,
-    goal:{
-      id:goal?.id||'',
-      kind:goal?.kind||'',
-      text:goal?.text||'',
-      hardConstraints:arr(goal?.hardConstraints),
-      optionalConstraints:arr(goal?.optionalConstraints),
-      failingCase:goal?.failingCase||''
-    }
-  });
-  addUsage(usage,call.usage);
-  const parsed=call.parsed||{};
-  const compact=(value)=>arr(value).map(item=>text(item,120)).filter(Boolean).slice(0,12);
-  const result={
-    locatorTerms:compact(parsed.locatorTerms),
-    changeTerms:compact(parsed.changeTerms),
-    symptomTerms:compact(parsed.symptomTerms),
-    resultTerms:compact(parsed.resultTerms),
-    locatorQuery:text(parsed.locatorQuery||'',500)
-  };
-  if(!result.locatorQuery&&result.locatorTerms.length)result.locatorQuery=result.locatorTerms.join(' ');
-  log('query_v5_locator_evidence',{question,goalId:goal?.id||'',...result,usage:call.usage});
-  return result;
 }
 
 function sourceEvidenceCandidates(state,sourceBody){
@@ -1262,50 +1218,40 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(thread.searched)return;
     const goal=thread.goal;
     const searchQuestion=goalSearchQuestion(goal);
-    const locatorEvidence=await extractLocatorEvidence({question,goal,client,model,usage,log});
-    const locatorQuestion=locatorEvidence.locatorQuery||goal.text||question;
+
     emit({
       action:'GOAL_SEARCH',
       goalId:goal.id,
       goal:goal.text,
       kind:goal.kind,
-      locatorTerms:locatorEvidence.locatorTerms,
-      changeTerms:locatorEvidence.changeTerms,
-      symptomTerms:locatorEvidence.symptomTerms,
-      resultTerms:locatorEvidence.resultTerms,
-      locatorQuery:locatorQuestion
+      query:searchQuestion
     });
 
-    const entrySelection=await selectCodeEntries({question:locatorQuestion,mode:goal.kind,topology:explorer.topology,client,model,usage,log});
+    // The new entry path is deliberately direct:
+    // goal-aware issue text -> tiny construct extractor -> PAL FILTER -> local-code confirmation.
+    const entrySelection=await selectCodeEntries({
+      question:searchQuestion,
+      mode:goal.kind,
+      topology:explorer.topology,
+      client,model,usage,log
+    });
     thread.entrySelection=entrySelection;
     const bestEntry=entrySelection.candidates[0];
-    const searchCount=entrySelection.plan.strategy==='structured_search'?entrySelection.plan.searches.length:entrySelection.plan.patterns.length;
+    const searchCount=entrySelection.plan.strategy==='structured_search'
+      ? entrySelection.plan.searches.length
+      : entrySelection.plan.patterns.length;
     console.log(`[goal-entry-search] goal=${goal.id} ${entrySelection.plan.strategy} searches=${searchCount} hits=${entrySelection.hits.length} candidates=${entrySelection.candidates.length}${bestEntry?` best=${bestEntry.sourcePath}#${bestEntry.name||bestEntry.symbolId||bestEntry.externalId||'match'}:${bestEntry.startLine}`:''}`);
-
-    emit({
-      action:'GOAL_ENTRY_SELECTION',
-      goalId:goal.id,
-      strategy:entrySelection.plan.strategy,
-      reason:entrySelection.plan.reason,
-      locatorQuery:locatorQuestion,
-      locatorTerms:locatorEvidence.locatorTerms,
-      changeTerms:locatorEvidence.changeTerms,
-      symptomTerms:locatorEvidence.symptomTerms,
-      resultTerms:locatorEvidence.resultTerms,
-      searches:entrySelection.plan.searches,
-      patterns:entrySelection.plan.patterns,
-      candidates:entrySelection.candidates.map(item=>({name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,score:item.score,test:item.test,entryRankScore:Number(item.entryRankScore||0)}))
-    });
 
     const triaged=entrySelection.plan.strategy==='structured_search'
       ? await triageEntryCandidates({question:searchQuestion,candidates:entrySelection.candidates,client,model,usage,log})
-      : entrySelection.candidates;
-    const selectedEntries=dedupeStates(triaged.map((candidate)=>{
+      : entrySelection.candidates.slice(0,ENTRY_TRIAGE_LIMIT);
+
+    const selectedEntries=dedupeStates(triaged.slice(0,ENTRY_TRIAGE_LIMIT).map((candidate)=>{
       if(candidate.symbolId){
         const symbol=explorer.topology.symbolById.get(candidate.symbolId);
         if(!symbol)return null;
         const state=symbolState(symbol);
-        state.entryRankScore=Number(candidate.entryRankScore||0);
+        state.entryRankScore=Number(candidate.entryRankScore||candidate.score||0);
         const matchRegions=regexMatchRegions(symbol,candidate);
         if(matchRegions.length)state.regexMatchRegions=matchRegions;
         return state;
@@ -1314,72 +1260,87 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         const boundary=externalById.get(String(candidate.externalId));
         if(!boundary)return null;
         const state=externalBoundaryState(boundary);
-        state.entryRankScore=Number(candidate.entryRankScore||0);
+        state.entryRankScore=Number(candidate.entryRankScore||candidate.score||0);
         return state;
       }
       return null;
     }).filter(Boolean));
 
-    const selectedIds=new Set(selectedEntries.map(state=>state.id));
-    const fallbackEntries=fallbackPool.filter(state=>!selectedIds.has(state.id));
-    const hasConcreteStructuralEntries=entrySelection.plan.strategy==='structured_search'&&selectedEntries.length>0;
-    thread.entryTiers=hasConcreteStructuralEntries?[selectedEntries]:(selectedEntries.length?[selectedEntries,fallbackEntries]:[fallbackEntries]);
+    emit({
+      action:'GOAL_ENTRY_SELECTION',
+      goalId:goal.id,
+      strategy:entrySelection.plan.strategy,
+      reason:entrySelection.plan.reason,
+      searches:entrySelection.plan.searches,
+      patterns:entrySelection.plan.patterns,
+      candidates:selectedEntries.map(item=>({
+        name:item.name,path:item.sourcePath,start:item.startLine,end:item.endLine,
+        entryRankScore:Number(item.entryRankScore||0)
+      }))
+    });
+
+    // PAL/local confirmation owns entry selection. Semantic exploration starts
+    // from these top three entries directly. Fall back to generic roots only
+    // when structural localization produced no usable entry.
+    thread.entryTiers=selectedEntries.length?[selectedEntries]:[fallbackPool];
     thread.searched=true;
-    console.log(`[query-v5] goal=${goal.id} structuralEntries=${selectedEntries.length} localWindowDepth=${WINDOW_DEPTH}`);
+    console.log(`[query-v5] goal=${goal.id} palEntries=${selectedEntries.length} localWindowDepth=${WINDOW_DEPTH}`);
   };
 
   const seedGoal=async(thread)=>{
     await prepareGoalEntries(thread);
     const goal=thread.goal;
+
     for(const tier of thread.entryTiers){
-      const remaining=tier.filter(state=>!thread.visited.has(state.id)&&!thread.entryTried.has(state.id));
-      if(!remaining.length)continue;
-      for(let offset=0;offset<remaining.length;offset+=ENTRY_BATCH_SIZE){
-        thread.batchNumber+=1;
-        const candidates=remaining.slice(offset,offset+ENTRY_BATCH_SIZE);
-        for(const candidate of candidates)thread.entryTried.add(candidate.id);
+      const candidates=tier
+        .filter(state=>!thread.visited.has(state.id)&&!thread.entryTried.has(state.id))
+        .slice(0,ENTRY_TRIAGE_LIMIT);
+      if(!candidates.length)continue;
 
-        const windows=[];
-        for(const candidate of candidates){
-          const learned=await ensureLocalSemanticWindow({state:candidate,path:[],depth:WINDOW_DEPTH,highlightRegions:arr(candidate.regexMatchRegions),includeRootRegions:false,explorer,client,model,usage,log,onProgress:emit});
-          recordExplored(arr(learned.window?.states),`entry_window:${goal.id}`,step);
-          windows.push(learned.window);
-        }
+      thread.batchNumber+=1;
+      for(const candidate of candidates)thread.entryTried.add(candidate.id);
 
-        const decision=await decide({
-          question,mode,goals,activeGoalId:goal.id,hypothesis:'',ledger,path:[],
-          candidates,candidateWindows:windows,explorer,client,model,usage,log,step:++step,onProgress:emit
-        });
-        const semanticRanking=decision.picks.map((pick,rank)=>({
-          rank:rank+1,
-          state:pick.state.name,
-          path:pick.state.sourcePath||'',
-          score:Number(pick.score||0),
-          structuralScore:Number(pick.state.entryRankScore||0)
-        }));
-        const batchEvent={
-          step,action:'GOAL_ENTRY_SEMANTIC_RANK',goalId:goal.id,batch:thread.batchNumber,
-          start:offset,count:candidates.length,bestNavigation:decision.picks[0]?.score||0,
-          ranking:semanticRanking
-        };
-        events.push(batchEvent);emit(batchEvent);
+      // No second semantic "entry ranking" pass here. PAL + bounded source
+      // confirmation already produced the entry order. Semantic reasoning now
+      // begins only after an entry is actually visited, so hypothesis updates
+      // remain evidence-backed.
+      const ranked=candidates.map((state,index)=>({
+        state,
+        score:Math.max(0.25,Number(state.entryRankScore||0),1-(index*0.15)),
+        targets:[]
+      }));
 
-        const warm=decision.picks.filter(pick=>Number(pick.score||0)>=0.15);
-        if(!warm.length){
-          const rejected={step,action:'GOAL_ENTRY_REJECT_WEAK',goalId:goal.id,batch:thread.batchNumber,threshold:0.15,ranking:semanticRanking};
-          events.push(rejected);emit(rejected);
-          continue;
-        }
-        thread.stack.push({
-          path:[],current:warm[0],alternatives:warm.slice(1),
-          hypothesis:'',hypothesisScore:0,baseHypothesis:'',baseScore:0,frontierIds:[],
-          entryRootId:warm[0].state.id,entryRootName:warm[0].state.name
-        });
-        const event={step,action:'RESEED',goalId:goal.id,state:warm[0].state.name,hypothesis:''};
-        events.push(event);emit({...event,path:[warm[0].state.name]});
-        return true;
-      }
+      thread.stack.push({
+        path:[],
+        current:ranked[0],
+        alternatives:ranked.slice(1),
+        hypothesis:'',
+        hypothesisScore:0,
+        baseHypothesis:'',
+        baseScore:0,
+        frontierIds:[],
+        entryRootId:ranked[0].state.id,
+        entryRootName:ranked[0].state.name
+      });
+
+      const event={
+        step,
+        action:'RESEED',
+        goalId:goal.id,
+        state:ranked[0].state.name,
+        hypothesis:'',
+        entries:ranked.map((item,index)=>({
+          rank:index+1,
+          name:item.state.name,
+          path:item.state.sourcePath||'',
+          structuralScore:Number(item.state.entryRankScore||0)
+        }))
+      };
+      events.push(event);
+      emit({...event,path:[ranked[0].state.name]});
+      return true;
     }
+
     thread.exhausted=true;
     return false;
   };
