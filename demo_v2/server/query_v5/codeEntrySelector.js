@@ -1,22 +1,28 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { executeSteps } from 'pal-executor-lib';
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 
-const ENTRY_SELECT_SYSTEM = `Locate existing code from the issue using LeMap's PAL-indexed structural CSV rows.
+const CODE_CONSTRUCT_TYPES = [
+  'class','function','input_param','import','assignment','call','return','exception',
+  'if','for','while','try','except','with','assert','match','case','break','continue',
+  'pass','global','nonlocal','delete','await','yield','expression'
+];
 
-Each row has:
-row, file, line_range, type, name, parent, children, callers, callees.
+const ENTRY_SELECT_SYSTEM = `Extract existing code identifiers from the issue.
 
-Return only exact identifiers that the issue gives enough evidence to search for. Prefer a typed locator when syntax makes the type clear. Use type "*" when the name is useful but the construct type is uncertain. Do not infer proposed implementation identifiers as if they already exist.
+Allowed types:
+class,function,input_param,import,assignment,call,return,exception,if,for,while,try,except,with,assert,match,case,break,continue,pass,global,nonlocal,delete,await,yield,expression,*
 
-Return one of:
-{"action":"locate","locators":[{"type":"function|class|input_param|call|assignment|if|for|while|try|except|with|return|exception|expression|*","name":"exact name"}],"reason":""}
-{"action":"pattern_search","patterns":[{"pattern":"regex","kind":"regex","weight":1}],"reason":""}
-{"action":"root_entries","reason":""}
+Return only:
+{"matches":[{"type":"...","value":"..."}]}
 
-Keep locators compact and exact. Up to 6 locators.`;
+Use * when the construct type is unknown.
+A value may end in * when only part of the identifier is known.
+Do not invent identifiers describing the proposed fix.
+Return at most 6 matches.`;
 
-const MAX_PATTERNS = 8;
+const MAX_PATTERNSconst MAX_PATTERNS = 8;
 const MAX_HITS = 80;
 const MAX_FILE_BYTES = 750_000;
 
@@ -43,7 +49,8 @@ function normalizedLocators(items=[]){
   const seen=new Set();
   for(const item of arr(items).slice(0,6)){
     const type=String(item?.type||'*').trim().toLowerCase()||'*';
-    const name=String(item?.name||'').trim();
+    if(type!=='*'&&!CODE_CONSTRUCT_TYPES.includes(type))continue;
+    const name=String(item?.value??item?.name??'').trim();
     if(!name||name.length>180)continue;
     const key=`${type}|${name}`;
     if(seen.has(key))continue;
@@ -55,12 +62,10 @@ function normalizedLocators(items=[]){
 
 export function normalizeEntrySelectionPlan(parsed={}){
   const requested=String(parsed?.action||parsed?.strategy||'root_entries').toLowerCase();
-  const locators=requested==='locate'||requested==='structured_search'
-    ? normalizedLocators(parsed?.locators||parsed?.searches)
-    : [];
+  const locators=normalizedLocators(parsed?.matches||parsed?.locators||parsed?.searches);
   const patterns=requested==='pattern_search'?normalizedPatterns(parsed?.patterns):[];
   const strategy=locators.length?'structured_search':patterns.length?'pattern_search':'root_entries';
-  return {strategy,reason:text(parsed?.reason||'',320),locators,patterns};
+  return {strategy,reason:text(parsed?.reason||'',320),locators,searches:locators,patterns};
 }
 
 function parseLineStart(range=''){
@@ -123,6 +128,119 @@ function palRowsForValue(valuesIndex,column,value){
     out.push(...expandPalRange(entry[0]));
   }
   return out;
+}
+
+function palIndexDataset(topology){
+  const values={};
+  for(const [column,entries] of Object.entries(topology?.palValuesIndex||{})){
+    if(!Array.isArray(entries))continue;
+    values[column]=new Map(entries.map(entry=>[String(entry?.[0]??''),entry?.[1]]));
+  }
+  const unique=new Map();
+  for(const [column,items] of Object.entries(topology?.palUniqueIndex||{})){
+    unique.set(column,new Set(arr(items)));
+  }
+  const headers=Object.keys(topology?.palValuesIndex||{});
+  return {
+    dataset_name:'lem_code_structure',
+    model:'local',
+    llm_key:'local',
+    dataset_description:'LeMap structural code rows',
+    columnHeaders:headers,
+    column_types:'',
+    columnInsights:{},
+    rowCount:arr(topology?.codeStructureRows).length,
+    valuesIndex:values,
+    uniqueIndex:unique,
+    attributesOriginalMap:Object.fromEntries(headers.map(column=>[column,column]))
+  };
+}
+
+function palString(value=''){
+  return "'" + String(value).replace(/\\/g,'\\\\').replace(/'/g,"\\'") + "'";
+}
+
+function prefixValues(uniqueIndex,value){
+  const raw=String(value||'').trim();
+  if(!raw.endsWith('*'))return [raw];
+  const needle=raw.slice(0,-1).toLowerCase();
+  const values=arr(uniqueIndex?.name);
+  return values.filter(item=>String(item).toLowerCase().includes(needle)).slice(0,40);
+}
+
+function palResultRows(result,output='lem_entry_filter'){
+  const value=result?.context?.[output]?.value;
+  const ranges=Array.isArray(value)?value:[];
+  return [...new Set(ranges.flatMap(expandPalRange))];
+}
+
+async function palFilterRows({topology,type='*',name=''}) {
+  if(!topology?.palValuesIndex||!topology?.palUniqueIndex)return null;
+  const output='lem_entry_filter';
+  const expression=type==='*'
+    ? `data.name == ${palString(name)}`
+    : `data.type == ${palString(type)} && data.name == ${palString(name)}`;
+  const result=await executeSteps([{
+    step:1,
+    command:'FILTER',
+    input:'data',
+    output,
+    details:{expression}
+  }],{dataset:palIndexDataset(topology)});
+  if(result?.error)throw new Error(`PAL FILTER failed: ${result.error}`);
+  return palResultRows(result,output);
+}
+
+export async function scanCodeStructureRowsWithPal({topology,locators=[]}){
+  const rows=arr(topology?.codeStructureRows);
+  if(!rows.length)return [];
+  const specs=normalizedLocators(locators);
+  const byId=rowMap(rows);
+  const hits=[];
+  const seen=new Set();
+
+  for(const spec of specs){
+    const expanded=prefixValues(topology?.palUniqueIndex,spec.name);
+    for(const resolvedName of expanded){
+      const candidateIndexes=await palFilterRows({topology,type:spec.type,name:resolvedName});
+      if(!Array.isArray(candidateIndexes))continue;
+      for(const index of candidateIndexes){
+        const row=rows[index];
+        if(!row)continue;
+        const rowType=String(row?.type||'').trim().toLowerCase();
+        const rowName=String(row?.name||'').trim();
+        const anchor=functionAnchor(row,byId);
+        const sourcePath=String((anchor||row)?.file||'');
+        const line=parseLineStart((anchor||row)?.line_range);
+        if(!sourcePath||!line)continue;
+        const symbol=enclosingSymbol(topology,sourcePath,line);
+        const external=!symbol?externalAtLine(topology,sourcePath,line):null;
+        const prefix=String(spec.name).endsWith('*');
+        const key=`${spec.type}|${resolvedName}|${sourcePath}|${line}`;
+        if(seen.has(key))continue;
+        seen.add(key);
+        hits.push({
+          sourcePath,
+          line,
+          endLine:Number(String((anchor||row)?.line_range||line).split('-')[1]||line),
+          text:`${rowType} ${rowName}`,
+          pattern:`${spec.type}:${spec.name}`,
+          kind:'structured',
+          weight:1,
+          structuralScore:(spec.type==='*'?(prefix?600:750):(prefix?850:1000))+(rowType==='function'?50:0),
+          matchQuality:{exact:prefix?0:(spec.type==='*'?1:2),prefix:prefix?1:0,contains:0,filters:['pal']},
+          symbolId:symbol?.id||'',
+          symbolName:symbol?.name||anchor?.name||'',
+          externalId:external?.id||'',
+          externalName:external?.qualifiedName||external?.name||'',
+          test:isTestPath(sourcePath),
+          metadata:{...row,resolvedName,requestedName:spec.name,pal:true}
+        });
+        if(hits.length>=MAX_HITS)return hits;
+      }
+    }
+  }
+  return hits;
 }
 
 export function scanCodeStructureRows({topology,locators=[]}){
@@ -269,17 +387,14 @@ export async function selectCodeEntries({question,mode,topology,client,model,usa
   const structuralRows=arr(topology?.codeStructureRows);
 
   if(structuralRows.length){
-    const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{
-      q:question,
-      mode,
-      languages,
-      index:{available:true,engine:topology?.palValuesIndex?'pal':'rows',columns:['row','file','line_range','type','name','parent','children','callers','callees']}
-    });
+    const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question});
     addUsage(usage,call.usage);
     const plan=normalizeEntrySelectionPlan(call.parsed||{});
 
     if(plan.strategy==='structured_search'){
-      const hits=scanCodeStructureRows({topology,locators:plan.locators});
+      const hits=topology?.palValuesIndex&&topology?.palUniqueIndex
+        ? await scanCodeStructureRowsWithPal({topology,locators:plan.locators})
+        : scanCodeStructureRows({topology,locators:plan.locators});
       const candidates=rankPatternEntryHits(hits);
       log('query_v5_entry_selection',{plan,hits:hits.slice(0,MAX_HITS),candidates,usage:call.usage});
       if(candidates.length)return {plan,hits,candidates,indexSummary:[]};
@@ -297,7 +412,7 @@ export async function selectCodeEntries({question,mode,topology,client,model,usa
     return {plan:fallback,hits:[],candidates:[],indexSummary:[]};
   }
 
-  const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question,mode,languages,index:{available:false}});
+  const call=await modelJson(client,model,ENTRY_SELECT_SYSTEM,{q:question});
   addUsage(usage,call.usage);
   const plan=normalizeEntrySelectionPlan(call.parsed||{});
   if(plan.strategy==='pattern_search'){
