@@ -51,7 +51,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemaByName = new Map();
 
     const prep = await super.prepareIndexOnly(repoUrl);
-    if (!Array.isArray(this.codeStructureRows) || !this.codeStructureRows.length || !this.pythonAnalysis) {
+    if (!Array.isArray(this.codeStructureRows) || !this.codeStructureRows.length) {
       console.log('[code-query-prepare] structural CSV unavailable; falling back to full topology preparation');
       return this.prepare(repoUrl);
     }
