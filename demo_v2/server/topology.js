@@ -470,7 +470,7 @@ export class CodeTopology {
     }
   }
 
-  constructIndexCachePath(language='python') {
+  codeStructureMetaPath(language='python') {
     const revision = String(this.commit || '').trim();
     if (!revision || !this.repoUrl) return '';
     return path.join(
@@ -478,10 +478,9 @@ export class CodeTopology {
       'code-structural-csv',
       repoKey(this.repoUrl),
       revision,
-      `${language}.json`
+      `${language}.meta.json`
     );
   }
-
 
   codeStructureCsvPath(language='python') {
     const revision = String(this.commit || '').trim();
@@ -577,6 +576,50 @@ export class CodeTopology {
     ].join('\n') + '\n';
   }
 
+  parseCodeStructureCsv(text='') {
+    const records = [];
+    let row = [];
+    let cell = '';
+    let quoted = false;
+    const pushCell = () => { row.push(cell); cell = ''; };
+    const pushRow = () => {
+      pushCell();
+      if (row.some((value) => value !== '')) records.push(row);
+      row = [];
+    };
+
+    const input = String(text || '');
+    for (let i = 0; i < input.length; i += 1) {
+      const ch = input[i];
+      if (quoted) {
+        if (ch === '"' && input[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+        } else if (ch === '"') {
+          quoted = false;
+        } else {
+          cell += ch;
+        }
+        continue;
+      }
+      if (ch === '"') quoted = true;
+      else if (ch === ',') pushCell();
+      else if (ch === '\n') pushRow();
+      else if (ch !== '\r') cell += ch;
+    }
+    if (cell.length || row.length) pushRow();
+    if (!records.length) return [];
+
+    const headers = records.shift();
+    return records.map((values) => {
+      const out = {};
+      headers.forEach((header, index) => { out[header] = values[index] ?? ''; });
+      out.row = Number(out.row || 0);
+      out.parent = out.parent === '' ? '' : Number(out.parent || 0);
+      return out;
+    });
+  }
+
   async persistCodeStructureCsv({ language='python', rows=[] }={}) {
     const csvPath = this.codeStructureCsvPath(language);
     if (!csvPath) return '';
@@ -586,6 +629,17 @@ export class CodeTopology {
     await fs.rm(csvPath, { force:true });
     await fs.rename(tempPath, csvPath);
     return csvPath;
+  }
+
+  async loadCodeStructureCsv(language='python') {
+    const csvPath = this.codeStructureCsvPath(language);
+    if (!csvPath) return [];
+    try {
+      const text = await fs.readFile(csvPath, 'utf8');
+      return this.parseCodeStructureCsv(text);
+    } catch {
+      return [];
+    }
   }
 
   async pythonSnapshotInputs(pythonFiles=[]) {
@@ -600,145 +654,57 @@ export class CodeTopology {
     return { fileHashes, importGraph };
   }
 
-  async loadPreviousConstructIndexSnapshot({ language='python', analyzerVersion=0 }={}) {
-    if (!this.repoUrl) return null;
-    const root = path.join(this.cacheRoot, 'code-structural-csv', repoKey(this.repoUrl));
-    let revisions = [];
-    try { revisions = await fs.readdir(root, { withFileTypes:true }); } catch { return null; }
-    const candidates = [];
-    for (const entry of revisions) {
-      if (!entry.isDirectory() || entry.name === String(this.commit || '')) continue;
-      const cachePath = path.join(root, entry.name, `${language}.json`);
-      try {
-        const payload = JSON.parse(await fs.readFile(cachePath, 'utf8'));
-        const meta = payload?.meta || {};
-        const valid =
-          meta.status === 'complete' &&
-          Number(meta.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
-          Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
-          meta.fileHashes && typeof meta.fileHashes === 'object' &&
-          meta.importGraph && typeof meta.importGraph === 'object' &&
-          Array.isArray(payload?.codeFacts) &&
-          payload?.analysis && typeof payload.analysis === 'object';
-        if (valid) candidates.push({ payload, cachePath, createdAt:Date.parse(meta.createdAt || 0) || 0 });
-      } catch {}
-    }
-    candidates.sort((a,b)=>b.createdAt-a.createdAt);
-    return candidates[0] || null;
-  }
-
-  incrementalPythonAffectedFiles({ pythonFiles=[], currentHashes={}, currentImportGraph={}, previousMeta={} }={}) {
-    const current = new Set(pythonFiles);
-    const previousHashes = previousMeta.fileHashes || {};
-    const previousImportGraph = previousMeta.importGraph || {};
-    const changed = new Set();
-    const deleted = new Set();
-
-    for (const file of pythonFiles) {
-      if (!previousHashes[file] || previousHashes[file] !== currentHashes[file]) changed.add(file);
-    }
-    for (const file of Object.keys(previousHashes)) {
-      if (!current.has(file)) deleted.add(file);
-    }
-
-    const combinedGraph = {};
-    for (const file of new Set([...Object.keys(previousImportGraph), ...Object.keys(currentImportGraph)])) {
-      combinedGraph[file] = currentImportGraph[file] || previousImportGraph[file] || [];
-    }
-    const reverse = new Map();
-    for (const [from, targets] of Object.entries(combinedGraph)) {
-      for (const target of targets || []) {
-        if (!reverse.has(target)) reverse.set(target, new Set());
-        reverse.get(target).add(from);
-      }
-    }
-
-    const affected = new Set([...changed, ...deleted]);
-    const queue = [...affected];
-    while (queue.length) {
-      const file = queue.shift();
-      for (const dependency of combinedGraph[file] || []) {
-        if (current.has(dependency) && !affected.has(dependency)) {
-          affected.add(dependency);
-          queue.push(dependency);
-        }
-      }
-      for (const dependent of reverse.get(file) || []) {
-        if (current.has(dependent) && !affected.has(dependent)) {
-          affected.add(dependent);
-          queue.push(dependent);
-        }
-      }
-    }
-
-    return {
-      changed:[...changed],
-      deleted:[...deleted],
-      affected:[...affected].filter((file)=>current.has(file))
-    };
-  }
-
-  async loadConstructIndexSnapshot({ language='python', analyzerVersion=0 }={}) {
-    const cachePath = this.constructIndexCachePath(language);
-    if (!cachePath) return false;
+  async loadCodeStructureCache({ language='python', analyzerVersion=0 }={}) {
+    const metaPath = this.codeStructureMetaPath(language);
+    const csvPath = this.codeStructureCsvPath(language);
+    if (!metaPath || !csvPath) return false;
     try {
-      const payload = JSON.parse(await fs.readFile(cachePath, 'utf8'));
-      const meta = payload?.meta || {};
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
       const valid =
-        meta.status === 'complete' &&
-        meta.commit === this.commit &&
-        Number(meta.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
-        Number(meta.analyzerVersion || 0) === Number(analyzerVersion || 0) &&
-        Array.isArray(payload?.codeFacts) &&
-        payload?.analysis && typeof payload.analysis === 'object';
+        meta?.status === 'complete' &&
+        meta?.commit === this.commit &&
+        Number(meta?.schemaVersion || 0) === CONSTRUCT_INDEX_SCHEMA_VERSION &&
+        Number(meta?.analyzerVersion || 0) === Number(analyzerVersion || 0);
       if (!valid) return false;
+
+      const rows = await this.loadCodeStructureCsv(language);
+      if (!rows.length && Number(meta?.csvRowCount || 0) > 0) return false;
+
       this.constructIndex = [];
-      this.pythonAnalysis = payload.analysis;
-      if (Array.isArray(this.pythonAnalysis?.constructs)) this.pythonAnalysis.constructs = [];
-      if (Array.isArray(this.pythonAnalysis?.codeFacts)) this.pythonAnalysis.codeFacts = [];
-      this.codeStructureFacts = payload.codeFacts;
-      this.codeStructureRows = this.materializeCodeStructureRows(this.codeStructureFacts, this.pythonAnalysis);
-      const csvPath = await this.persistCodeStructureCsv({ language, rows:this.codeStructureRows });
+      this.pythonAnalysis = null;
+      this.codeStructureFacts = [];
+      this.codeStructureRows = rows;
       this.constructIndexVersion = Number(meta.analyzerVersion || 0);
-      this.constructIndexMeta = { ...meta, cachePath, csvPath, csvRowCount:this.codeStructureRows.length, reused: true };
+      this.constructIndexMeta = { ...meta, cachePath:metaPath, metaPath, csvPath, csvRowCount:rows.length, reused:true };
       return true;
     } catch {
       return false;
     }
   }
 
-  async persistConstructIndexSnapshot({ language='python', analyzerVersion=0, codeFacts=[], analysis=null, fileHashes={}, importGraph={}, incrementalFrom='', affectedFiles=[] }={}) {
-    const cachePath = this.constructIndexCachePath(language);
-    if (!cachePath) return;
+  async persistCodeStructureMeta({ language='python', analyzerVersion=0, rowCount=0, fileHashes={}, importGraph={} }={}) {
+    const metaPath = this.codeStructureMetaPath(language);
+    if (!metaPath) return '';
     const metadata = {
-      status: 'complete',
-      repoUrl: this.repoUrl,
-      requestedRevision: String(this.targetCommit || ''),
-      commit: this.commit,
+      status:'complete',
+      repoUrl:this.repoUrl,
+      requestedRevision:String(this.targetCommit || ''),
+      commit:this.commit,
       language,
-      schemaVersion: CONSTRUCT_INDEX_SCHEMA_VERSION,
-      analyzerVersion: Number(analyzerVersion || 0),
-      recordCount: Array.isArray(codeFacts) ? codeFacts.length : 0,
-      csvRowCount: Array.isArray(codeFacts) ? codeFacts.length : 0,
+      schemaVersion:CONSTRUCT_INDEX_SCHEMA_VERSION,
+      analyzerVersion:Number(analyzerVersion || 0),
+      recordCount:Number(rowCount || 0),
+      csvRowCount:Number(rowCount || 0),
       fileHashes,
       importGraph,
-      incrementalFrom:String(incrementalFrom || ''),
-      affectedFiles:Array.isArray(affectedFiles)?affectedFiles:[],
-      incremental:!!incrementalFrom,
-      createdAt: new Date().toISOString()
+      createdAt:new Date().toISOString()
     };
-    await fs.mkdir(path.dirname(cachePath), { recursive: true });
-    const tempPath = `${cachePath}.${process.pid}.tmp`;
-    const compactAnalysis = analysis && typeof analysis === 'object'
-      ? { ...analysis, constructs: [], codeFacts: [] }
-      : analysis;
-    await fs.writeFile(tempPath, JSON.stringify({ meta: metadata, codeFacts, analysis:compactAnalysis }), 'utf8');
-    await fs.rm(cachePath, { force:true });
-    await fs.rename(tempPath, cachePath);
-    this.codeStructureFacts = Array.isArray(codeFacts) ? codeFacts : [];
-    this.codeStructureRows = this.materializeCodeStructureRows(this.codeStructureFacts, compactAnalysis);
-    const csvPath = await this.persistCodeStructureCsv({ language, rows:this.codeStructureRows });
-    this.constructIndexMeta = { ...metadata, cachePath, csvPath, csvRowCount:this.codeStructureRows.length, reused: false };
+    await fs.mkdir(path.dirname(metaPath), { recursive:true });
+    const tempPath = `${metaPath}.${process.pid}.tmp`;
+    await fs.writeFile(tempPath, JSON.stringify(metadata), 'utf8');
+    await fs.rm(metaPath, { force:true });
+    await fs.rename(tempPath, metaPath);
+    return metaPath;
   }
 
   async buildConstructIndex() {
@@ -751,106 +717,59 @@ export class CodeTopology {
     const pythonFiles = this.files.filter((file) => String(file).toLowerCase().endsWith('.py'));
     if (!pythonFiles.length) return;
 
-    if (!this.forceConstructIndexRebuild && await this.loadConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) {
+    if (!this.forceConstructIndexRebuild && await this.loadCodeStructureCache({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION })) {
       console.log(`[repo-index] cache hit language=python rows=${this.codeStructureRows.length}`);
       return;
     }
 
     try {
       const { fileHashes, importGraph } = await this.pythonSnapshotInputs(pythonFiles);
-      let previous = null;
-      let delta = null;
+      console.log(`[repo-index] python AST full analyze files=${pythonFiles.length}`);
+      const analyzeStarted = Date.now();
+      const analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:pythonFiles });
+      console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms facts=${Array.isArray(analyzed?.codeFacts)?analyzed.codeFacts.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
 
-      if (!this.forceConstructIndexRebuild) {
-        previous = await this.loadPreviousConstructIndexSnapshot({ language:'python', analyzerVersion:PYTHON_ANALYZER_VERSION });
-        if (previous) {
-          delta = this.incrementalPythonAffectedFiles({
-            pythonFiles,
-            currentHashes:fileHashes,
-            currentImportGraph:importGraph,
-            previousMeta:previous.payload.meta
-          });
-        }
-      }
-
-      const canIncremental = Boolean(
-        previous &&
-        delta &&
-        (delta.changed.length || delta.deleted.length) &&
-        delta.affected.length > 0 &&
-        delta.affected.length < pythonFiles.length * 0.6
-      );
-
-      let analyzed;
-      let codeFacts;
-      let analysis;
-
-      if (canIncremental) {
-        console.log(`[repo-index] python AST incremental previous=${previous.payload.meta.commit} changed=${delta.changed.length} deleted=${delta.deleted.length} affected=${delta.affected.length}/${pythonFiles.length}`);
-        const analyzeStarted=Date.now();
-        analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:delta.affected });
-        console.log(`[repo-index] python AST incremental complete ${Date.now()-analyzeStarted}ms facts=${Array.isArray(analyzed?.codeFacts)?analyzed.codeFacts.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
-
-        const affectedSet = new Set([...delta.affected, ...delta.deleted]);
-        const previousAnalysis = previous.payload.analysis || {};
-        const keepByPath = (item) => item?.sourcePath && !affectedSet.has(item.sourcePath);
-
-        codeFacts = [
-          ...(Array.isArray(previous.payload.codeFacts) ? previous.payload.codeFacts.filter(keepByPath) : []),
-          ...(Array.isArray(analyzed?.codeFacts) ? analyzed.codeFacts : [])
-        ];
-        analysis = {
-          ...previousAnalysis,
-          ...analyzed,
-          version:Number(analyzed?.version || previousAnalysis?.version || 0),
-          symbols:[
-            ...(Array.isArray(previousAnalysis?.symbols) ? previousAnalysis.symbols.filter(keepByPath) : []),
-            ...(Array.isArray(analyzed?.symbols) ? analyzed.symbols : [])
-          ],
-          externalSymbols:[
-            ...(Array.isArray(previousAnalysis?.externalSymbols) ? previousAnalysis.externalSymbols.filter(keepByPath) : []),
-            ...(Array.isArray(analyzed?.externalSymbols) ? analyzed.externalSymbols : [])
-          ],
-          constructs:[],
-          codeFacts:[]
-        };
-      } else {
-        const reason = previous && delta
-          ? `delta-too-large affected=${delta.affected.length}/${pythonFiles.length}`
-          : 'no-compatible-previous-snapshot';
-        console.log(`[repo-index] python AST full analyze files=${pythonFiles.length} reason=${reason}`);
-        const analyzeStarted=Date.now();
-        analyzed = await analyzePythonRepository({ repoDir:this.repoDir, files:pythonFiles });
-        console.log(`[repo-index] python AST complete ${Date.now()-analyzeStarted}ms facts=${Array.isArray(analyzed?.codeFacts)?analyzed.codeFacts.length:0} symbols=${Array.isArray(analyzed?.symbols)?analyzed.symbols.length:0}`);
-        codeFacts = Array.isArray(analyzed?.codeFacts) ? analyzed.codeFacts : [];
-        analysis = analyzed;
-      }
-
-      this.pythonAnalysis = analysis;
-      this.constructIndex = [];
-      this.codeStructureFacts = Array.isArray(codeFacts) ? codeFacts : [];
-      this.codeStructureRows = this.materializeCodeStructureRows(this.codeStructureFacts, this.pythonAnalysis);
-      this.constructIndexVersion = Number(analyzed?.version || analysis?.version || 0);
+      const codeFacts = Array.isArray(analyzed?.codeFacts) ? analyzed.codeFacts : [];
+      this.pythonAnalysis = analyzed;
+      this.codeStructureFacts = codeFacts;
+      this.codeStructureRows = this.materializeCodeStructureRows(codeFacts, analyzed);
+      this.constructIndexVersion = Number(analyzed?.version || 0);
       if (this.constructIndexVersion !== PYTHON_ANALYZER_VERSION) return;
 
-      const persistStarted=Date.now();
-      await this.persistConstructIndexSnapshot({
+      const persistStarted = Date.now();
+      const csvPath = await this.persistCodeStructureCsv({ language:'python', rows:this.codeStructureRows });
+      const metaPath = await this.persistCodeStructureMeta({
         language:'python',
         analyzerVersion:this.constructIndexVersion,
-        codeFacts:this.codeStructureFacts,
-        analysis:this.pythonAnalysis,
+        rowCount:this.codeStructureRows.length,
         fileHashes,
-        importGraph,
-        incrementalFrom:canIncremental?previous.payload.meta.commit:'',
-        affectedFiles:canIncremental?delta.affected:[]
+        importGraph
       });
-      console.log(`[repo-index] persisted snapshot ${Date.now()-persistStarted}ms path=${this.constructIndexMeta?.cachePath||''} incremental=${canIncremental?'yes':'no'}`);
+      this.constructIndexMeta = {
+        status:'complete',
+        repoUrl:this.repoUrl,
+        requestedRevision:String(this.targetCommit || ''),
+        commit:this.commit,
+        language:'python',
+        schemaVersion:CONSTRUCT_INDEX_SCHEMA_VERSION,
+        analyzerVersion:this.constructIndexVersion,
+        recordCount:this.codeStructureRows.length,
+        csvRowCount:this.codeStructureRows.length,
+        cachePath:metaPath,
+        metaPath,
+        csvPath,
+        reused:false
+      };
+      this.codeStructureFacts = [];
+      console.log(`[repo-index] persisted structural CSV ${Date.now()-persistStarted}ms csv=${csvPath} meta=${metaPath}`);
     } catch (error) {
       console.error('[repo-index] structural CSV index failed', error?.stack || error?.message || String(error));
       this.constructIndex = [];
       this.constructIndexVersion = 0;
       this.constructIndexMeta = null;
       this.pythonAnalysis = null;
+      this.codeStructureFacts = [];
+      this.codeStructureRows = [];
     }
   }
 
