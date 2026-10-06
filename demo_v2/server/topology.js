@@ -521,9 +521,9 @@ export class CodeTopology {
         type: String(fact.type || ''),
         name: String(fact.name || ''),
         parent: rowByFactId.get(fact.parentFactId) || '',
-        children: children.join(','),
-        callers: '',
-        callees: ''
+        children: JSON.stringify(children.map(String)),
+        callers: '[]',
+        callees: '[]'
       };
     });
 
@@ -559,8 +559,8 @@ export class CodeTopology {
     }
 
     for (const row of rows) {
-      row.callers = [...(callers.get(row.row) || [])].sort((a, b) => a - b).join(',');
-      row.callees = [...(callees.get(row.row) || [])].sort((a, b) => a - b).join(',');
+      row.callers = JSON.stringify([...(callers.get(row.row) || [])].sort((a, b) => a - b).map(String));
+      row.callees = JSON.stringify([...(callees.get(row.row) || [])].sort((a, b) => a - b).map(String));
     }
     return rows;
   }
