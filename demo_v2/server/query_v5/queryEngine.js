@@ -1302,9 +1302,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
   const loadedCommit=String(explorer.topology?.commit||explorer.state?.commit||'').trim();
   const revisionMismatch=requestedCommit&&(!loadedCommit||!loadedCommit.toLowerCase().startsWith(requestedCommit.toLowerCase()));
   const sameRepo=String(explorer.topology?.repoUrl||'').trim()===wanted;
+  const hasExecutableTopology=
+    Number(explorer.topology?.symbolById?.size||0)>0 ||
+    arr(explorer.topology?.moduleRegions).some(item=>arr(item?.regions).length>0);
   const localTopologyReady=sameRepo&&!revisionMismatch
     &&Array.isArray(explorer.topology?.codeStructureRows)&&explorer.topology.codeStructureRows.length>0
-    &&Number(explorer.topology?.symbolById?.size||0)>0;
+    &&hasExecutableTopology;
 
   if(!localTopologyReady){
     explorer.topology.targetCommit=requestedCommit;
