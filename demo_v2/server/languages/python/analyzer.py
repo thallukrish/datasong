@@ -82,7 +82,7 @@ def build_regions(statements, text, id_prefix, fallback_line=1):
                 return
             start_line = getattr(meaningful[0], "lineno", fallback_line)
             end_line = getattr(meaningful[-1], "end_lineno", getattr(meaningful[-1], "lineno", start_line))
-            next_region("block", start_line, end_line, parent_region_id)
+            next_region("region", start_line, end_line, parent_region_id)
 
         for child in statement_list:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -572,7 +572,6 @@ def build_code_facts(mod, info):
     selected = []
     selected_set = set()
     region_counts = {}
-    scope_for_node = {}
 
     def owner_for(node):
         cur = parents.get(node)
@@ -610,17 +609,167 @@ def build_code_facts(mod, info):
             "childFactIds": []
         })
         selected_set.add(node)
-        scope_for_node[node] = fact_id
 
     by_node = {row["_node"]: row for row in selected}
+
+    # First establish the ordinary AST containment relation for all concrete
+    # constructs. Synthetic region rows below only re-parent the top-level
+    # constructs that fall inside a straight-line statement group.
     for row in selected:
         node = row["_node"]
         cur = parents.get(node)
         while cur is not None and cur not in selected_set:
             cur = parents.get(cur)
         if cur is not None:
-            parent = by_node[cur]
-            row["parentFactId"] = parent["factId"]
+            row["parentFactId"] = by_node[cur]["factId"]
+
+    structured_statements = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith)
+    if hasattr(ast, "Match"):
+        structured_statements = structured_statements + (ast.Match,)
+
+    synthetic_regions = []
+    synthetic_count = 0
+
+    def container_fact_id(container_node):
+        row = by_node.get(container_node)
+        return row["factId"] if row is not None else ""
+
+    def selected_descendants(statement):
+        nodes = set()
+        stack = [statement]
+        while stack:
+            current = stack.pop()
+            if current in selected_set:
+                nodes.add(current)
+            for child in ast.iter_child_nodes(current):
+                if child is not statement and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue
+                stack.append(child)
+        return nodes
+
+    def add_straight_region(statement_group, container_node):
+        nonlocal synthetic_count
+        if not statement_group:
+            return
+        meaningful = [
+            statement for statement in statement_group
+            if not (
+                isinstance(statement, ast.Expr) and
+                isinstance(getattr(statement, "value", None), ast.Constant) and
+                isinstance(statement.value.value, str)
+            )
+        ]
+        if not meaningful:
+            return
+
+        synthetic_count += 1
+        start = int(getattr(meaningful[0], "lineno", 0) or 0)
+        end = int(getattr(meaningful[-1], "end_lineno", getattr(meaningful[-1], "lineno", start)) or start)
+        if start <= 0:
+            return
+
+        container = container_fact_id(container_node)
+        if isinstance(container_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            scope_name = getattr(container_node, "name", "scope")
+            region_name = f"{source_path}#{scope_name}#region_{synthetic_count}"
+        else:
+            owner = owner_for(meaningful[0])
+            if owner:
+                region_name = f"{source_path}#{owner}#region_{synthetic_count}"
+            else:
+                region_name = f"{source_path}#region_{synthetic_count}"
+
+        first_ordinal = min(
+            (by_node[node]["ordinal"] for statement in meaningful for node in selected_descendants(statement) if node in by_node),
+            default=len(ordered_nodes) + synthetic_count
+        )
+        fact_id = f"{source_path}:region:{synthetic_count}:{start}:{end}"
+        region_row = {
+            "_node": None,
+            "factId": fact_id,
+            "ordinal": float(first_ordinal) - 0.25,
+            "sourcePath": source_path,
+            "startLine": start,
+            "endLine": end,
+            "type": "region",
+            "name": region_name,
+            "parentFactId": container,
+            "childFactIds": []
+        }
+        synthetic_regions.append(region_row)
+
+        inside = set()
+        for statement in meaningful:
+            inside.update(selected_descendants(statement))
+
+        # Only roots of the grouped statements move under the region. Their
+        # existing descendants (for example call under assignment) keep their
+        # exact construct-to-construct containment.
+        for node in inside:
+            row = by_node.get(node)
+            if row is None:
+                continue
+            parent_id = row.get("parentFactId", "")
+            parent_node = parents.get(node)
+            selected_parent = None
+            while parent_node is not None and parent_node not in selected_set:
+                parent_node = parents.get(parent_node)
+            if parent_node is not None:
+                selected_parent = parent_node
+            if selected_parent not in inside and parent_id == container:
+                row["parentFactId"] = fact_id
+            elif selected_parent is None and not container:
+                row["parentFactId"] = fact_id
+
+    def group_statement_list(statements, container_node=None):
+        straight = []
+
+        def flush():
+            nonlocal straight
+            add_straight_region(straight, container_node)
+            straight = []
+
+        for statement in statements:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                flush()
+                # Definitions are already first-class constructs. Their bodies
+                # get their own straight-line regions.
+                group_statement_list(getattr(statement, "body", []) or [], statement)
+                continue
+
+            if isinstance(statement, structured_statements):
+                flush()
+
+                for field in ("body", "orelse", "finalbody"):
+                    nested = getattr(statement, field, None)
+                    if isinstance(nested, list) and nested:
+                        group_statement_list(nested, statement)
+
+                for handler in getattr(statement, "handlers", []) or []:
+                    if getattr(handler, "body", None):
+                        group_statement_list(handler.body, handler)
+
+                for case in getattr(statement, "cases", []) or []:
+                    if getattr(case, "body", None):
+                        group_statement_list(case.body, case)
+                continue
+
+            straight.append(statement)
+
+        flush()
+
+    group_statement_list(tree.body, None)
+    selected.extend(synthetic_regions)
+
+    # Rebuild children after region insertion/re-parenting so CSV parent and
+    # children columns describe one canonical containment hierarchy.
+    by_fact_id = {row["factId"]: row for row in selected}
+    for row in selected:
+        row["childFactIds"] = []
+    for row in selected:
+        parent_id = row.get("parentFactId", "")
+        parent = by_fact_id.get(parent_id)
+        if parent is not None:
             parent["childFactIds"].append(row["factId"])
 
     for row in selected:
@@ -726,7 +875,7 @@ for mod, info in modules.items():
         })
 
 print(json.dumps({
-    "version": 7,
+    "version": 8,
     "symbols": symbols,
     "externalSymbols": external_symbols,
     "codeFacts": code_facts,
