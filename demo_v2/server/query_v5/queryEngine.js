@@ -105,7 +105,8 @@ For causal goals, compare candidate mechanisms against the distinguishing condit
 
 Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src.
 For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
-For SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
+For CAUSAL SEMANTIC WALK return p rows as [candidateIndex,expectedEvidenceRelevance,[]].
+For NON-CAUSAL SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 Return only:
 {"assessment":"","er":0.0,"hc":"","cx":0,"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
