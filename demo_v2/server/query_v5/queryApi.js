@@ -17,14 +17,19 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(typeof event.status==='string')p.status=event.status;
         if(Array.isArray(event.goals))p.goals=event.goals;
         if(typeof event.goalId==='string')p.activeGoalId=event.goalId;
-        if(typeof event.hypothesis==='string')p.hypothesis=event.hypothesis;
-        if(Array.isArray(event.hypothesisList))p.hypothesisList=event.hypothesisList;
+        const activeGoal=(p.goals||[]).find(g=>g[0]===p.activeGoalId);
+        const causal=p.mode==='causal'||activeGoal?.[1]==='causal';
+        const committedCausal=['HYPOTHESIS_PROGRESS','GOALS_RESOLVED','SEARCH_EXHAUSTED','EXPLAINED'].includes(event.action);
+        if(!causal||committedCausal){
+          if(typeof event.hypothesis==='string')p.hypothesis=event.hypothesis;
+          if(Array.isArray(event.hypothesisList))p.hypothesisList=event.hypothesisList;
+          if(Number.isFinite(Number(event.hypothesisScore)))p.hypothesisScore=Number(event.hypothesisScore);
+          if(Number.isFinite(Number(event.previousScore)))p.previousScore=Number(event.previousScore);
+          if(Number.isFinite(Number(event.delta)))p.delta=Number(event.delta);
+          if(typeof event.trend==='string')p.trend=event.trend;
+          if(Number.isFinite(Number(event.bestScore)))p.bestScore=Number(event.bestScore);
+        }
         if(Number.isFinite(Number(event.evidenceRelevance)))p.evidenceRelevance=Number(event.evidenceRelevance);
-        if(Number.isFinite(Number(event.hypothesisScore)))p.hypothesisScore=Number(event.hypothesisScore);
-        if(Number.isFinite(Number(event.previousScore)))p.previousScore=Number(event.previousScore);
-        if(Number.isFinite(Number(event.delta)))p.delta=Number(event.delta);
-        if(typeof event.trend==='string')p.trend=event.trend;
-        if(Number.isFinite(Number(event.bestScore)))p.bestScore=Number(event.bestScore);
         if(Array.isArray(event.constraintChecklist))p.constraintChecklist=event.constraintChecklist;
         if(Array.isArray(event.evidenceRanges))p.evidenceRanges=event.evidenceRanges;
         if(Array.isArray(event.entryBranches))p.entryBranches=event.entryBranches;
