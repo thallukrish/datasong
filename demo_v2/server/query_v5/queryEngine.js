@@ -998,8 +998,11 @@ async function decide({
     ? fixedConstraints.map(item=>[item.text,Number(scoreByIndex.get(item.index)||0),item.kind])
     : [];
   const groundedHardScores=groundedConstraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
-  const groundedHypothesisScore=sourceBody&&activeGoal?.kind==='causal'
-    ? modelHypothesisScore
+  const proposedCausalContribution=activeGoal?.kind==='causal'
+    ? String(call.parsed?.hc||'').trim()
+    : '';
+  const groundedHypothesisScore=activeGoal?.kind==='causal'
+    ? (proposedCausalContribution?modelHypothesisScore:Number(previousHypothesisScore||0))
     : sourceBody&&groundedHardScores.length
       ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
       : hypothesisScore;
@@ -1730,8 +1733,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const causalSemanticWeakening=goal.kind==='causal'&&Boolean(decision.contribution)&&
       thread.hypothesisContributions.length>0&&
       Number(decision.hypothesisScore||0)<Number(thread.hypothesisScore||0)-HYPOTHESIS_DELTA_EPSILON;
+    const causalEvidenceImportant=goal.kind==='causal'&&
+      Number(decision.evidenceRelevance||0)>=CAUSAL_EVIDENCE_RELEVANCE_MIN;
     const causalContributionNeedsSource=goal.kind==='causal'&&Boolean(decision.contribution)&&
-      !causalSemanticWeakening&&Boolean(String(state.body||state.callText||'').trim());
+      causalEvidenceImportant&&!causalSemanticWeakening&&
+      Boolean(String(state.body||state.callText||'').trim());
     const shouldInspectSource=(decision.inspectSource&&sourceAllowed)||forcedEntrySource||causalContributionNeedsSource;
     let inspectedSource=false;
     if(shouldInspectSource&&step<MAX_STEPS){
@@ -1764,10 +1770,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       });
     }
 
-    // Causal hypotheses are an ordered list of accepted contributions.
-    // The current node is tentatively appended by the model and the WHOLE list
-    // is rescored against the reported issue. A weakening or source-ungrounded
-    // contribution is removed and its branch is not pursued.
+    // Causal navigation has two independent evaluations:
+    // 1. evidenceRelevance says whether the CURRENT node matters to the issue.
+    // 2. hypothesisScore says whether the accepted evidence list plus hc fits
+    //    the ORIGINAL issue better as a whole.
     let causalContributionRejected=false;
     let causalContributionRejectReason='';
     if(goal.kind==='causal'){
@@ -1775,34 +1781,40 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const priorScore=Number(thread.hypothesisScore||0);
       const claim=String(decision.contribution||'').trim();
       const tentativeScore=Number(decision.hypothesisScore||0);
-      const weakening=Boolean(claim)&&priorContributions.length>0&&
-        tentativeScore<priorScore-HYPOTHESIS_DELTA_EPSILON;
-      const sourceUngrounded=Boolean(claim)&&inspectedSource&&decision.evidenceGrounded!==true;
       const sourceDroppedContribution=inspectedSource&&causalContributionNeedsSource&&!claim;
 
-      if((claim&&(weakening||sourceUngrounded))||sourceDroppedContribution){
+      const evaluation=evaluateCausalContribution({
+        priorContributions,
+        priorScore,
+        contribution:claim,
+        evidenceRelevance:decision.evidenceRelevance,
+        tentativeScore,
+        inspectedSource,
+        sourceGrounded:decision.evidenceGrounded,
+        epsilon:HYPOTHESIS_DELTA_EPSILON
+      });
+
+      if(sourceDroppedContribution||evaluation.rejected){
         causalContributionRejected=true;
         causalContributionRejectReason=sourceDroppedContribution
           ? 'Exact source did not support the causal contribution proposed from semantic evidence.'
-          : weakening
-            ? 'Adding this contribution reduced alignment of the accumulated causal hypothesis to the reported issue.'
-            : 'Exact source did not ground this proposed causal contribution.';
+          : evaluation.reason;
         decision.contribution='';
         decision.causalHypothesisComplete=false;
-        decision.hypothesis=thread.hypothesis||'';
+        decision.hypothesis=causalHypothesisText(priorContributions);
         decision.hypothesisScore=priorScore;
-        decision.picks=[];
         decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
         decision.causalContributionRejected=true;
         emit({
           action:'CAUSAL_CONTRIBUTION_REJECTED',goalId:goal.id,state:state.name,
+          evidenceRelevance:Number(decision.evidenceRelevance||0),
           previousScore:priorScore,tentativeScore,
           reason:causalContributionRejectReason,
-          hypothesis:thread.hypothesis||'',
+          hypothesis:decision.hypothesis,
           hypothesisList:priorContributions.map(item=>item.claim),
           path:path.map(x=>x.name)
         });
-      }else if(claim){
+      }else if(claim&&evaluation.accepted){
         const accepted={
           claim,
           stateId:state.id,
@@ -1810,24 +1822,31 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           startLine:Number(state.startLine||0),
           endLine:Number(state.endLine||state.startLine||0),
           sourceGrounded:inspectedSource?decision.evidenceGrounded===true:false,
+          evidenceRelevance:Number(decision.evidenceRelevance||0),
           supportStates:dedupeStates(decision.supportStates||[])
         };
         thread.hypothesisContributions=[...priorContributions,accepted];
+        thread.hypothesisScore=Number(evaluation.score||tentativeScore||priorScore);
+        thread.hypothesis=causalHypothesisText(thread.hypothesisContributions);
         frame.hypothesisContributions=arr(thread.hypothesisContributions);
+        decision.hypothesis=thread.hypothesis;
+        decision.hypothesisScore=thread.hypothesisScore;
         decision.supportStates=dedupeStates(thread.hypothesisContributions.flatMap(item=>arr(item?.supportStates)));
         emit({
           action:'CAUSAL_CONTRIBUTION_ACCEPTED',goalId:goal.id,state:state.name,
-          contribution:accepted.claim,previousScore:priorScore,
-          hypothesisScore:Number(decision.hypothesisScore||0),
+          contribution:accepted.claim,
+          evidenceRelevance:accepted.evidenceRelevance,
+          previousScore:priorScore,
+          hypothesisScore:thread.hypothesisScore,
           sourceGrounded:accepted.sourceGrounded,
           hypothesisList:thread.hypothesisContributions.map(item=>item.claim),
           complete:!!decision.causalHypothesisComplete,
           path:path.map(x=>x.name)
         });
-      }else if(priorContributions.length){
-        // A visited node that adds nothing does not rewrite the accepted causal
-        // hypothesis or inherit its evidence.
-        decision.hypothesis=thread.hypothesis||decision.hypothesis||'';
+      }else{
+        // A navigation-only node may be highly relevant without adding causal
+        // evidence. Keep the accepted hypothesis list and its score unchanged.
+        decision.hypothesis=causalHypothesisText(priorContributions);
         decision.hypothesisScore=priorScore;
         decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
       }
@@ -1853,7 +1872,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       .filter(item=>item.id!==entryRootId)
       .sort((a,b)=>Number(b.bestScore||0)-Number(a.bestScore||0))[0]||null;
     const sourceOpportunityComplete=!decision.inspectSource||inspectedSource;
-    const entryBranchDominated=Boolean(
+    const entryBranchDominated=goal.kind!=='causal'&&Boolean(
       bestOtherEntry&&sourceOpportunityComplete&&
       Number(decision.hypothesisScore||0)<Number(bestOtherEntry.bestScore||0)
     );
@@ -1975,6 +1994,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       action:'HYPOTHESIS_PROGRESS',goalId:goal.id,
       hypothesis:decision.hypothesis||thread.hypothesis,
       hypothesisList:arr(thread.hypothesisContributions).map(item=>item.claim),
+      evidenceRelevance:Number(decision.evidenceRelevance||0),
       hypothesisScore:decision.hypothesisScore,
       previousScore,delta:progress.delta,trend:progress.trend,
       bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
@@ -2032,23 +2052,33 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
       .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
       .map(item=>item.index));
-    if(entryBranchDominated||decision.causalRejected||causalContributionRejected){
+    if(causalContributionRejected||decision.causalRejected){
+      frame.frontierIds=[];
+      emit({
+        action:'BRANCH_PRUNED',goalId:goal.id,state:state.name,
+        reason:causalContributionRejected
+          ? causalContributionRejectReason
+          : 'Counterfactual intervention failed to validate this causal diagnosis.',
+        evidenceRelevance:Number(decision.evidenceRelevance||0),
+        hypothesisScore:Number(thread.hypothesisScore||0),
+        hypothesisList:arr(thread.hypothesisContributions).map(item=>item.claim),
+        path:path.map(x=>x.name)
+      });
+      await resumeThread(thread);
+      continue;
+    }
+
+    if(entryBranchDominated){
       emit({
         action:'ENTRY_BRANCH_PRUNED',goalId:goal.id,
         entry:entryRootName,entryScore:Number(decision.hypothesisScore||0),
         incumbentEntry:bestOtherEntry?.name||'',incumbentScore:Number(bestOtherEntry?.bestScore||0),
-        reason:causalContributionRejected
-          ? causalContributionRejectReason
-          : decision.causalRejected
-            ? 'Counterfactual intervention failed to validate this causal diagnosis.'
-            : 'Entry branch fell below an already established entry-level score.',
+        reason:'Entry branch fell below an already established entry-level score.',
         entryBranches:[...thread.entryScores.values()].map(item=>({
           id:item.id,name:item.name,currentScore:Number(item.currentScore||0),bestScore:Number(item.bestScore||0)
         })),
         path:path.map(x=>x.name)
       });
-      // Collapse any descendants of this entry back to its root frame, clear
-      // its semantic frontier, and let normal backtracking try the next entry.
       while(thread.stack.length>1&&thread.stack.at(-1).entryRootId===entryRootId){
         thread.stack.pop();
       }
@@ -2058,15 +2088,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       continue;
     }
 
-    const warm=decision.picks.filter(pick=>{
-      const currentScore=Number(decision.hypothesisScore||0);
-      const expectedScore=Number(pick.score||0);
-      const strengthens=expectedScore>currentScore+HYPOTHESIS_DELTA_EPSILON;
-      const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
-      const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
-      const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
-      return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
-    });
+    const warm=goal.kind==='causal'
+      ? causalNavigationPicks(decision.picks)
+      : decision.picks.filter(pick=>{
+          const currentScore=Number(decision.hypothesisScore||0);
+          const expectedScore=Number(pick.score||0);
+          const strengthens=expectedScore>currentScore+HYPOTHESIS_DELTA_EPSILON;
+          const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
+          const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
+          const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
+          return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
+        });
     if(warm.length){
       thread.stack.push({
         path,current:warm[0],alternatives:warm.slice(1),
@@ -2100,7 +2132,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // Flat exploration is tolerated briefly only while a branch still appears
     // capable of resolving an unmet hard constraint. Otherwise backtrack and
     // compare alternate branch potential with the best hypothesis seen so far.
-    if(thread.flatSteps>=MAX_FLAT_STEPS){
+    if(goal.kind!=='causal'&&thread.flatSteps>=MAX_FLAT_STEPS){
       emit({
         action:'HYPOTHESIS_FLAT',goalId:goal.id,state:state.name,
         hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,
