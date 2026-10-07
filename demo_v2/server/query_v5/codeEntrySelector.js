@@ -162,12 +162,15 @@ function palString(value=''){
   return "'" + String(value).replace(/\\/g,'\\\\').replace(/'/g,"\\'") + "'";
 }
 
-function prefixValues(uniqueIndex,value){
+function prefixValues(uniqueIndex,type,value){
   const raw=String(value||'').trim();
   if(!raw.endsWith('*'))return [raw];
   const needle=raw.slice(0,-1).toLowerCase();
-  const values=arr(uniqueIndex?.name);
-  return values.filter(item=>String(item).toLowerCase().includes(needle)).slice(0,40);
+  const column=type!=='*'&&Array.isArray(uniqueIndex?.[type])?type:'name';
+  const values=arr(uniqueIndex?.[column]);
+  return values
+    .filter(item=>String(item).toLowerCase().startsWith(needle))
+    .slice(0,40);
 }
 
 function palResultRows(result,output='lem_entry_filter'){
@@ -204,7 +207,7 @@ export async function scanCodeStructureRowsWithPal({topology,locators=[]}){
 
   for(const spec of specs){
     let addedForSpec=0;
-    const expanded=prefixValues(topology?.palUniqueIndex,spec.name);
+    const expanded=prefixValues(topology?.palUniqueIndex,spec.type,spec.name);
     for(const resolvedName of expanded){
       const candidateIndexes=await palFilterRows({topology,type:spec.type,name:resolvedName});
       if(!Array.isArray(candidateIndexes))continue;
