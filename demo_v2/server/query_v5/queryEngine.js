@@ -185,10 +185,11 @@ const CAUSAL_MECHANISM_GROUND_SYSTEM = `Verify whether exact source evidence gro
 
 q is the original request.
 goal is the active causal goal and its frozen failingCase.
-h is the proposed causal hypothesis.
+hl is the already accepted causal contribution list.
+hc is the CURRENT proposed causal contribution from the visited node.
 ev is selected exact source evidence as [evidenceIndex,path,startLine,endLine,code,claimedConstraintIndexes,why].
 
-This is deliberately narrower than behavioral/testcase validation. Judge only whether the supplied source establishes the mechanism claimed by h: the operation, branch, data flow, mutation, dispatch, state transition, or other code behavior that could cause the reported symptom.
+This is deliberately narrower than behavioral/testcase validation. Judge only whether the supplied source establishes the mechanism claimed by hc: the operation, branch, data flow, mutation, dispatch, state transition, or other code behavior that could cause the reported symptom.
 
 Do not require this local source to independently reproduce the complete failing testcase, exact final output, non-regression behavior, or desired fixed behavior. Those are validated later by a counterfactual intervention against the frozen failingCase.
 
@@ -752,7 +753,7 @@ async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evi
   return {scores,ok};
 }
 
-async function verifyCausalMechanismGrounding({question,goal,hypothesis,evidenceStates,client,model,usage,log,step}){
+async function verifyCausalMechanismGrounding({question,goal,hypothesisContributions=[],contribution='',evidenceStates,client,model,usage,log,step}){
   const evidence=arr(evidenceStates).map((state,index)=>[
     index,
     state.sourcePath||'',
@@ -766,7 +767,8 @@ async function verifyCausalMechanismGrounding({question,goal,hypothesis,evidence
   const payload={
     q:question,
     goal:{id:goal?.id||'',kind:goal?.kind||'',text:goal?.text||'',failingCase:goal?.failingCase||''},
-    h:hypothesis||'',
+    hl:arr(hypothesisContributions).map(item=>item?.claim||'').filter(Boolean),
+    hc:String(contribution||''),
     ev:evidence
   };
   const call=await modelJson(client,model,CAUSAL_MECHANISM_GROUND_SYSTEM,payload);addUsage(usage,call.usage);
@@ -969,7 +971,8 @@ async function decide({
     if(activeGoal?.kind==='causal'){
       causalMechanismGrounding=evidenceStates.length
         ? await verifyCausalMechanismGrounding({
-            question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
+            question,goal:activeGoal,hypothesisContributions,
+            contribution:text(call.parsed?.hc||'',700),
             evidenceStates,client,model,usage,log,step
           })
         : {score:0,ok:false,why:''};
@@ -1775,15 +1778,19 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const priorContributions=arr(thread.hypothesisContributions);
       const priorScore=Number(thread.hypothesisScore||0);
       const claim=String(decision.contribution||'').trim();
+      const tentativeScore=Number(decision.hypothesisScore||0);
       const weakening=Boolean(claim)&&priorContributions.length>0&&
-        Number(decision.hypothesisScore||0)<priorScore-HYPOTHESIS_DELTA_EPSILON;
+        tentativeScore<priorScore-HYPOTHESIS_DELTA_EPSILON;
       const sourceUngrounded=Boolean(claim)&&inspectedSource&&decision.evidenceGrounded!==true;
+      const sourceDroppedContribution=inspectedSource&&causalContributionNeedsSource&&!claim;
 
-      if(claim&&(weakening||sourceUngrounded)){
+      if((claim&&(weakening||sourceUngrounded))||sourceDroppedContribution){
         causalContributionRejected=true;
-        causalContributionRejectReason=weakening
-          ? 'Adding this contribution reduced alignment of the accumulated causal hypothesis to the reported issue.'
-          : 'Exact source did not ground this proposed causal contribution.';
+        causalContributionRejectReason=sourceDroppedContribution
+          ? 'Exact source did not support the causal contribution proposed from semantic evidence.'
+          : weakening
+            ? 'Adding this contribution reduced alignment of the accumulated causal hypothesis to the reported issue.'
+            : 'Exact source did not ground this proposed causal contribution.';
         decision.contribution='';
         decision.causalHypothesisComplete=false;
         decision.hypothesis=thread.hypothesis||'';
@@ -1793,7 +1800,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         decision.causalContributionRejected=true;
         emit({
           action:'CAUSAL_CONTRIBUTION_REJECTED',goalId:goal.id,state:state.name,
-          previousScore:priorScore,tentativeScore:Number(call?.parsed?.hs||0),
+          previousScore:priorScore,tentativeScore,
           reason:causalContributionRejectReason,
           hypothesis:thread.hypothesis||'',
           hypothesisList:priorContributions.map(item=>item.claim),
