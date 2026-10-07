@@ -1,7 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 import { selectCodeEntries } from './codeEntrySelector.js';
-import { causalHypothesisText, causalNavigationPicks, evaluateCausalContribution, isCausalEvidenceRelevant } from './causalEvidence.js';
+import { causalHypothesisText, evaluateCausalContribution, isCausalEvidenceRelevant } from './causalEvidence.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
@@ -79,7 +79,7 @@ SEMANTIC WALK: when n is present and src is absent, evaluate the current visited
 - Score fixed constraints in ck as diagnostics. For causal goals hs is NOT derived from ck; it is the alignment of the causal evidence list to the original issue.
 - gs reports goal sufficiency as [[goalId,score]].
 - l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only.
-- p ranks at most 3 immediate semantic continuations. For causal goals return [candidateIndex,expectedEvidenceRelevance,[]], where expectedEvidenceRelevance estimates LEVEL 1 relevance of evidence likely to be found by entering that candidate. Do not compare candidate relevance to hs. For non-causal goals retain [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
+- p ranks at most 3 immediate semantic continuations. For causal goals return [candidateIndex,expectedHypothesisScore,[]], where expectedHypothesisScore estimates the OVERALL issue-alignment of the accumulated accepted evidence if useful evidence from that candidate is added. Compare it to the current accepted hypothesis score ps/hs: higher means strengthening, near-equal means flat, lower means weakening. LEVEL 1 local relevance is reported only for the CURRENT visited evidence in er and must not replace this accumulated-hypothesis navigation score. For non-causal goals retain [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 - a contains only direct observations established by the visited semantic node. For causal goals, causal interpretations belong in hc, not a.
 - ev=[] while src is absent.
 - i=1 requests exact source for the CURRENT semantic node when its semantics are important and exact code is needed to establish or reject hc or another material claim. Otherwise i=0.
@@ -105,7 +105,7 @@ For causal goals, compare candidate mechanisms against the distinguishing condit
 
 Never invent implementation details not present in learned semantics, supported facts, entry structural matches, or supplied src.
 For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
-For CAUSAL SEMANTIC WALK return p rows as [candidateIndex,expectedEvidenceRelevance,[]].
+For CAUSAL SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[]].
 For NON-CAUSAL SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 Return only:
 {"assessment":"","er":0.0,"hc":"","cx":0,"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
@@ -1687,9 +1687,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     recordExplored(arr(learned.window?.states),`semantic_window:${goal.id}`,step);
     const path=[...frame.path,state];
 
-    // Functions and regions use the same semantic navigation rule. For causal
-    // goals candidates are ranked by expected LOCAL evidence relevance. The
-    // accumulated causal hypothesis score is evaluated separately.
+    // Functions and regions use the same semantic navigation rule. The current
+    // causal node gets a LOCAL evidence relevance score, but navigation is
+    // driven by whether adding evidence along a candidate is expected to
+    // strengthen, flatten, or weaken the OVERALL accumulated hypothesis.
     const next=semanticNavigationChildren(state,learned.window,flowChildren)
       .filter(child=>!thread.visited.has(child.id));
     const regionCandidates=next.filter(child=>child.type==='code_region');
@@ -2075,17 +2076,20 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       continue;
     }
 
-    const warm=goal.kind==='causal'
-      ? causalNavigationPicks(decision.picks)
-      : decision.picks.filter(pick=>{
-          const currentScore=Number(decision.hypothesisScore||0);
-          const expectedScore=Number(pick.score||0);
-          const strengthens=expectedScore>currentScore+HYPOTHESIS_DELTA_EPSILON;
-          const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
-          const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
-          const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
-          return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
-        });
+    const warm=decision.picks.filter(pick=>{
+      const currentScore=Number(decision.hypothesisScore||0);
+      const expectedScore=Number(pick.score||0);
+      const strengthens=expectedScore>currentScore+HYPOTHESIS_DELTA_EPSILON;
+      const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
+      const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
+      const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
+
+      // Causal navigation follows the expected change in the accumulated
+      // hypothesis score. A flat causal branch gets only a small exploration
+      // budget; a weakening branch is not followed.
+      if(goal.kind==='causal')return strengthens||(staysFlat&&canSpendFlatStep);
+      return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
+    });
     if(warm.length){
       thread.stack.push({
         path,current:warm[0],alternatives:warm.slice(1),
@@ -2119,7 +2123,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // Flat exploration is tolerated briefly only while a branch still appears
     // capable of resolving an unmet hard constraint. Otherwise backtrack and
     // compare alternate branch potential with the best hypothesis seen so far.
-    if(goal.kind!=='causal'&&thread.flatSteps>=MAX_FLAT_STEPS){
+    if(thread.flatSteps>=MAX_FLAT_STEPS){
       emit({
         action:'HYPOTHESIS_FLAT',goalId:goal.id,state:state.name,
         hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,
