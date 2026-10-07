@@ -56,3 +56,18 @@ test('causal hypothesis display is derived only from accepted contributions', ()
     'A -> B'
   );
 });
+
+test('accepted causal score never decreases',()=>{
+  const flat=evaluateCausalContribution({
+    priorContributions:[{claim:'A'}],
+    priorScore:0.72,
+    contribution:'B',
+    evidenceRelevance:0.9,
+    tentativeScore:0.70,
+    inspectedSource:true,
+    sourceGrounded:true,
+    epsilon:0.03
+  });
+  assert.equal(flat.accepted,true);
+  assert.equal(flat.score,0.72);
+});
