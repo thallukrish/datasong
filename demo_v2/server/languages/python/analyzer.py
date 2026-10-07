@@ -30,6 +30,93 @@ def source_segment(text, node):
     end = max(start + 1, getattr(node, "end_lineno", getattr(node, "lineno", 1)))
     return "\n".join(lines[start:end])
 
+def source_span(text, start_line, end_line):
+    lines = text.splitlines()
+    start = max(0, int(start_line or 1) - 1)
+    end = max(start + 1, int(end_line or start_line or 1))
+    return "\n".join(lines[start:end])
+
+def build_regions(statements, text, id_prefix, fallback_line=1):
+    \"\"\"Build semantic regions from both control-flow blocks and straight-line code.
+
+    Consecutive ordinary statements become a single `block` region. Control-flow
+    constructs remain explicit regions and recursively own regions for the
+    statements inside them. Nested function/class definitions are separate
+    symbols and therefore terminate the current straight-line block.
+    \"\"\"
+    regions = []
+    region_index = [0]
+    region_types = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith)
+    if hasattr(ast, "Match"):
+        region_types = region_types + (ast.Match,)
+
+    def next_region(kind, start_line, end_line, parent_region_id):
+        region_index[0] += 1
+        region_id = f"{id_prefix}:region:{region_index[0]}"
+        regions.append({
+            "id": region_id,
+            "kind": kind,
+            "startLine": int(start_line or fallback_line),
+            "endLine": int(end_line or start_line or fallback_line),
+            "body": source_span(text, start_line or fallback_line, end_line or start_line or fallback_line),
+            "parentRegionId": parent_region_id,
+            "references": []
+        })
+        return region_id
+
+    def is_docstring_statement(statement):
+        return (
+            isinstance(statement, ast.Expr) and
+            isinstance(getattr(statement, "value", None), ast.Constant) and
+            isinstance(statement.value.value, str)
+        )
+
+    def walk(statement_list, parent_region_id=None):
+        straight = []
+
+        def flush_straight():
+            nonlocal straight
+            meaningful = [item for item in straight if not is_docstring_statement(item)]
+            straight = []
+            if not meaningful:
+                return
+            start_line = getattr(meaningful[0], "lineno", fallback_line)
+            end_line = getattr(meaningful[-1], "end_lineno", getattr(meaningful[-1], "lineno", start_line))
+            next_region("block", start_line, end_line, parent_region_id)
+
+        for child in statement_list:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                flush_straight()
+                continue
+
+            if isinstance(child, region_types):
+                flush_straight()
+                start_line = getattr(child, "lineno", fallback_line)
+                end_line = getattr(child, "end_lineno", start_line)
+                region_id = next_region(type(child).__name__.lower(), start_line, end_line, parent_region_id)
+
+                nested_lists = []
+                for field in ("body", "orelse", "finalbody"):
+                    value = getattr(child, field, None)
+                    if isinstance(value, list) and value:
+                        nested_lists.append(value)
+                for handler in getattr(child, "handlers", []) or []:
+                    if getattr(handler, "body", None):
+                        nested_lists.append(handler.body)
+                for case in getattr(child, "cases", []) or []:
+                    if getattr(case, "body", None):
+                        nested_lists.append(case.body)
+                for nested in nested_lists:
+                    walk(nested, region_id)
+                continue
+
+            straight.append(child)
+
+        flush_straight()
+
+    walk(statements)
+    return regions
+
 modules = {}
 for item in requested:
     p = (root / item).resolve()
@@ -581,51 +668,12 @@ for rec in defs.values():
                 seen_refs.add(key)
 
     signature = ("async " if isinstance(node, ast.AsyncFunctionDef) else "") + f"def {rec['qualified']}({params_text(node)}):"
-    regions = []
-    region_index_ref = [0]
-
-    region_types = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith)
-    if hasattr(ast, "Match"):
-        region_types = region_types + (ast.Match,)
-
-    def add_regions(statements, parent_region_id=None):
-        for child in statements:
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue
-
-            is_region = isinstance(child, region_types)
-            region_id = parent_region_id
-
-            if is_region:
-                region_index_ref[0] += 1
-                region_id = f"{sid(rec['path'], rec['qualified'], node.lineno)}:region:{region_index_ref[0]}"
-                start_line = getattr(child, "lineno", node.lineno)
-                end_line = getattr(child, "end_lineno", start_line)
-                regions.append({
-                    "id": region_id,
-                    "kind": type(child).__name__.lower(),
-                    "startLine": start_line,
-                    "endLine": end_line,
-                    "body": source_segment(text, child),
-                    "parentRegionId": parent_region_id,
-                    "references": []
-                })
-
-            nested_lists = []
-            for field in ("body", "orelse", "finalbody"):
-                value = getattr(child, field, None)
-                if isinstance(value, list) and value:
-                    nested_lists.append(value)
-            for handler in getattr(child, "handlers", []) or []:
-                if getattr(handler, "body", None):
-                    nested_lists.append(handler.body)
-            for case in getattr(child, "cases", []) or []:
-                if getattr(case, "body", None):
-                    nested_lists.append(case.body)
-            for nested in nested_lists:
-                add_regions(nested, region_id)
-
-    add_regions(node.body)
+    regions = build_regions(
+        node.body,
+        text,
+        sid(rec["path"], rec["qualified"], node.lineno),
+        node.lineno
+    )
 
     for ref in refs:
         ref_line = int(ref.get("line") or 0)
@@ -662,4 +710,25 @@ for rec in defs.values():
         "regions": regions
     })
 
-print(json.dumps({"version": 6, "symbols": symbols, "externalSymbols": external_symbols, "codeFacts": code_facts}, ensure_ascii=False))
+module_regions = []
+for mod, info in modules.items():
+    regions = build_regions(
+        info["tree"].body,
+        info["text"],
+        f"module:{info['path']}",
+        1
+    )
+    if regions:
+        module_regions.append({
+            "moduleName": mod,
+            "sourcePath": info["path"],
+            "regions": regions
+        })
+
+print(json.dumps({
+    "version": 7,
+    "symbols": symbols,
+    "externalSymbols": external_symbols,
+    "codeFacts": code_facts,
+    "moduleRegions": module_regions
+}, ensure_ascii=False))
