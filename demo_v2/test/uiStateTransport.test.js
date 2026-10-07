@@ -22,3 +22,10 @@ test('browser renders initial state before opening SSE', () => {
   assert.match(page, /function startEvents\(\)\{const es=new EventSource\('\/api\/events'\)/);
   assert.match(page, /fetch\('\/api\/state'\)\.then\(r=>r\.json\(\)\)\.then\(s=>\{state=s;controls\(\);renderLearn\(\);if\(screen==='map'\)renderMap\(\);startEvents\(\)\}\)/);
 });
+
+test('causal UI shows evidence list and hides acceptance criteria', () => {
+  const causalUi = fs.readFileSync(path.join(here, '../public/queryCausalProgress.js'), 'utf8');
+  assert.match(causalUi, /accepted causal evidence forming the hypothesis/);
+  assert.match(page, /isCausal\s*\? causalEvidence/);
+  assert.doesNotMatch(page, /acceptance criteria diagnostics/);
+});
