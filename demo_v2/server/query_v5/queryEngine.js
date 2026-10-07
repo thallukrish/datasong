@@ -13,12 +13,14 @@ const HYPOTHESIS_DELTA_EPSILON = 0.03;
 const MAX_FLAT_STEPS = 2;
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
-Use:
-- locate only when locating or identifying code is itself an explicit requested outcome. Do not create a locate goal merely because another goal will need to find code; every investigation already performs structural localization as part of its own search.
-- describe for understanding existing behavior or flow.
-- causal for explaining why a reported condition, failure, regression, incorrect behavior, or unexpected result occurs.
-- change for establishing what existing implementation a requested modification applies to and how.
-- verify for checking a stated constraint, compatibility requirement, side effect, or consequence.
+Treat these as the primary issue intents:
+- causal: the user reports a symptom such as wrong behavior, error, exception, crash, regression, or failing testcase and wants the root cause. Localization, understanding candidate code, and testing a minimal corrective intervention are internal stages of this one causal investigation, not separate goals unless the user explicitly asks for those outputs independently.
+- locate: the user explicitly asks where particular existing code or behavior is implemented.
+- change: the user explicitly asks to modify existing behavior/code. The investigation must locate the relevant implementation, understand the source-backed behavior at that site, and establish the requested modification against that source.
+- describe: the user asks how existing code works or what it does.
+- verify: use only when the user explicitly asks to check a separate stated constraint, compatibility requirement, side effect, or consequence.
+
+Do not create locate, describe, change, or verify subgoals merely because a causal investigation internally needs to locate code, understand it, hypothesize a fix, and test whether that fix removes the symptom. Those are stages of causal diagnosis.
 
 Prefer the smallest coherent goal set. If one goal can preserve and answer the complete request, do not split it.
 
@@ -80,6 +82,8 @@ SEMANTIC WALK: when n is present and src is absent, treat h as the branch-local 
 
 SOURCE DIAGNOSIS: when src is present, stop treating h as something to confirm. h is only the previous candidate explanation.
 - Re-derive the best explanation from the supplied source plus already established facts.
+- For a causal goal, use this stage to establish the local mechanism in source. Do not demand that one local source range prove the complete failing testcase or desired corrected behavior; LeMap performs that behavioral validation only after the mechanism is source-grounded.
+- For a change goal, identify what the existing source does at the requested change site and state the source-backed modification needed to satisfy the requested change. Do not turn it into a causal bug diagnosis unless the request itself is causal.
 - Return assessment as one of "confirm", "revise", or "reject" describing what the supplied source does to the previous h.
 - For causal goals, explicitly test whether the proposed mechanism explains the distinguishing condition in the issue: what operation is involved, what differs in the failing case, why that difference changes behavior, and how that produces the reported symptom.
 - If the source supports a different mechanism better than h, replace h. Do not preserve an earlier explanation merely because it is plausible or already accumulated.
@@ -168,6 +172,21 @@ For every acceptance criterion, return a groundedness score 0..1. A high score m
 
 Also return ok=1 only when every hard criterion is grounded at least 0.9 by the selected evidence set. Return only:
 {"ck":[[0,0.0]],"ok":0}.`;
+
+const CAUSAL_MECHANISM_GROUND_SYSTEM = `Verify whether exact source evidence grounds the proposed causal mechanism itself.
+
+q is the original request.
+goal is the active causal goal and its frozen failingCase.
+h is the proposed causal hypothesis.
+ev is selected exact source evidence as [evidenceIndex,path,startLine,endLine,code,claimedConstraintIndexes,why].
+
+This is deliberately narrower than behavioral/testcase validation. Judge only whether the supplied source establishes the mechanism claimed by h: the operation, branch, data flow, mutation, dispatch, state transition, or other code behavior that could cause the reported symptom.
+
+Do not require this local source to independently reproduce the complete failing testcase, exact final output, non-regression behavior, or desired fixed behavior. Those are validated later by a counterfactual intervention against the frozen failingCase.
+
+Return score 0..1 for how strongly the exact source grounds h as the causal mechanism, and ok=1 only when score >= 0.9. A nearby or merely plausible code location is not enough.
+Return only:
+{"score":0.0,"ok":0,"why":""}.`;
 
 const COUNTERFACTUAL_VALIDATE_SYSTEM = `Validate a proposed causal diagnosis by deriving the smallest hypothetical code change implied by that diagnosis and testing whether that intervention would fix the exact reported failing condition.
 
@@ -725,6 +744,31 @@ async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evi
   return {scores,ok};
 }
 
+async function verifyCausalMechanismGrounding({question,goal,hypothesis,evidenceStates,client,model,usage,log,step}){
+  const evidence=arr(evidenceStates).map((state,index)=>[
+    index,
+    state.sourcePath||'',
+    Number(state.startLine||0),
+    Number(state.endLine||state.startLine||0),
+    text(state.body||'',1600),
+    arr(state.evidenceSupports),
+    state.evidenceWhy||''
+  ]);
+  if(!evidence.length)return {score:0,ok:false,why:''};
+  const payload={
+    q:question,
+    goal:{id:goal?.id||'',kind:goal?.kind||'',text:goal?.text||'',failingCase:goal?.failingCase||''},
+    h:hypothesis||'',
+    ev:evidence
+  };
+  const call=await modelJson(client,model,CAUSAL_MECHANISM_GROUND_SYSTEM,payload);addUsage(usage,call.usage);
+  const score=Math.max(0,Math.min(1,Number(call.parsed?.score||0)));
+  const ok=Number(call.parsed?.ok||0)===1&&score>=GOAL_CLOSE_SCORE;
+  const why=text(call.parsed?.why||'',600);
+  log('query_v5_causal_mechanism_grounding',{step,goalId:goal?.id||'',payload,result:{score,ok,why},usage:call.usage});
+  return {score,ok,why};
+}
+
 async function decide({
   question,mode,goals=[],activeGoalId='',branchId='',hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
   candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
@@ -901,8 +945,20 @@ async function decide({
     }
   }
   let grounding=null;
+  let causalMechanismGrounding=null;
   if(!entryStage&&sourceBody){
-    if(evidenceStates.length){
+    if(activeGoal?.kind==='causal'){
+      causalMechanismGrounding=evidenceStates.length
+        ? await verifyCausalMechanismGrounding({
+            question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
+            evidenceStates,client,model,usage,log,step
+          })
+        : {score:0,ok:false,why:''};
+      // Keep the immutable symptom/behavior constraints as diagnostics here.
+      // Local source is responsible only for grounding the causal mechanism.
+      // The failing case and desired behavior are tested by the later
+      // counterfactual intervention.
+    }else if(evidenceStates.length){
       grounding=await verifyEvidenceGrounding({
         question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
         constraints:fixedConstraints,evidenceStates,client,model,usage,log,step
@@ -914,19 +970,19 @@ async function decide({
       }
     }else{
       grounding={scores:new Map(),ok:false};
-      for(const item of fixedConstraints){
-        scoreByIndex.set(item.index,0);
-      }
+      for(const item of fixedConstraints)scoreByIndex.set(item.index,0);
     }
   }
   const groundedConstraintChecklist=!entryStage
     ? fixedConstraints.map(item=>[item.text,Number(scoreByIndex.get(item.index)||0),item.kind])
     : [];
   const groundedHardScores=groundedConstraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
-  const groundedHypothesisScore=sourceBody&&groundedHardScores.length
-    ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
-    : hypothesisScore;
-  const groundedHardConstraintsMet=!entryStage&&Boolean(sourceBody)&&groundedHardScores.length>0&&groundedHardScores.every(score=>score>=GOAL_CLOSE_SCORE);
+  const groundedHypothesisScore=sourceBody&&activeGoal?.kind==='causal'
+    ? Number(causalMechanismGrounding?.score||0)
+    : sourceBody&&groundedHardScores.length
+      ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
+      : hypothesisScore;
+  const groundedHardConstraintsMet=!entryStage&&Boolean(sourceBody)&&activeGoal?.kind!=='causal'&&groundedHardScores.length>0&&groundedHardScores.every(score=>score>=GOAL_CLOSE_SCORE);
   const evidenceRanges=evidenceStates.map(item=>({
     sourcePath:item.sourcePath||'',
     startLine:Number(item.startLine||0),
@@ -954,7 +1010,12 @@ async function decide({
     constraintChecklist:groundedConstraintChecklist,
     inspectSource,
     evidenceRanges,
-    evidenceGrounded:grounding?grounding.ok:null,
+    evidenceGrounded:activeGoal?.kind==='causal'
+      ? (causalMechanismGrounding?causalMechanismGrounding.ok:null)
+      : (grounding?grounding.ok:null),
+    causalMechanismGrounded:activeGoal?.kind==='causal'?Boolean(causalMechanismGrounding?.ok):null,
+    causalMechanismScore:activeGoal?.kind==='causal'?Number(causalMechanismGrounding?.score||0):null,
+    causalMechanismWhy:activeGoal?.kind==='causal'?String(causalMechanismGrounding?.why||''):null,
     evidenceReselected,
     evidenceCoverage:sourceBody?evidenceCoverageRatio(currentState,evidenceStates):0,
     supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
@@ -979,7 +1040,7 @@ async function decide({
     explained:result.explained,assessment:result.assessment,hypothesis:result.hypothesis,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
-    evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
+    evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
     additions:result.additions,disputes:result.disputes,resolutions:result.resolutions,
     goalResolutions:result.goalResolutions
   },usage:call.usage});
@@ -987,7 +1048,7 @@ async function decide({
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
     action:'DECIDE',step,mode,assessment:result.assessment,hypothesis:result.hypothesis,explained:result.explained,
-    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
+    goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
   });
@@ -1714,13 +1775,15 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       return improves||targetsWeak;
     });
     const sourceGroundedCandidate=Boolean(
-      inspectedSource&&decision.evidenceRanges?.length&&decision.evidenceGrounded!==null
+      inspectedSource&&decision.evidenceRanges?.length&&decision.evidenceGrounded===true
     );
-    const bestCausalCandidate=sourceGroundedCandidate&&
-      Number(decision.hypothesisScore||0)>=Number(thread.bestScore||0)&&
-      !hasPromisingContinuation;
-    const shouldCounterfactuallyValidate=goal.kind==='causal'&&
-      (decision.hardConstraintsMet||bestCausalCandidate);
+    // Causal flow has two distinct gates:
+    // 1. exact source establishes the proposed mechanism
+    // 2. counterfactual validation tests that mechanism against the frozen
+    //    symptom/failing case and desired behavior.
+    // Once gate 1 passes, validate behavior immediately instead of continuing
+    // to roam the graph merely because local source cannot prove global output.
+    const shouldCounterfactuallyValidate=goal.kind==='causal'&&sourceGroundedCandidate;
 
     if(shouldCounterfactuallyValidate){
       const cfKey=[
