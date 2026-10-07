@@ -8,8 +8,9 @@ import { GOAL_DECIDE_SYSTEM } from '../server/query_v5/goalDecisionPrompt.js';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const engine=fs.readFileSync(path.join(here,'../server/query_v5/queryEngine.js'),'utf8');
 
-test('causal decision prompt uses local relevance and accumulated hypothesis scoring',()=>{
-  assert.match(GOAL_DECIDE_SYSTEM,/LEVEL 1 — CURRENT EVIDENCE RELEVANCE/);
+test('causal decision prompt uses binary local contribution and accumulated hypothesis scoring',()=>{
+  assert.match(GOAL_DECIDE_SYSTEM,/LEVEL 1 — CURRENT EVIDENCE CONTRIBUTION/);
+  assert.match(GOAL_DECIDE_SYSTEM,/For causal goals er is binary/);
   assert.match(GOAL_DECIDE_SYSTEM,/LEVEL 2 — OVERALL HYPOTHESIS ALIGNMENT/);
   assert.match(GOAL_DECIDE_SYSTEM,/Navigation is driven by the expected CHANGE in the OVERALL hypothesis/);
   assert.match(GOAL_DECIDE_SYSTEM,/pc\nFor SOURCE VERIFICATION only/);
@@ -41,4 +42,12 @@ test('causal candidate scoring is predictive rather than requiring established e
   assert.match(GOAL_DECIDE_SYSTEM,/You are not required to already prove the candidate's mechanism before giving it a positive score/);
   assert.match(GOAL_DECIDE_SYSTEM,/When hl is empty and ps=0, a promising candidate may still receive a strong positive expectedHypothesisScore/);
   assert.match(GOAL_DECIDE_SYSTEM,/Do not set candidates to zero merely because no contribution has yet been accepted/);
+});
+
+test('top-level causal entries reset branch-local hypothesis state',()=>{
+  assert.match(engine,/Each top-level entry is an independent causal hypothesis branch/);
+  assert.match(engine,/thread\.hypothesis='';\s*thread\.hypothesisScore=0;\s*thread\.hypothesisContributions=\[\];\s*thread\.flatSteps=0/);
+  assert.match(engine,/entryVisited:new Map\(\)/);
+  assert.match(engine,/thread\.flatSteps>=MAX_FLAT_STEPS/);
+  assert.match(GOAL_DECIDE_SYSTEM,/An entry may remain below another entry's best score while its own hs is still increasing/);
 });

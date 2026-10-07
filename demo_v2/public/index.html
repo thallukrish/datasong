@@ -154,7 +154,7 @@ function queryProgressMarkup(p){
     (goalTitle?'<div class="label">active goal</div><div class="qhypothesis">'+goalTitle+'</div>':'')+
     '<div class="qgrid">'+
       '<div class="qmetric"><span class="label">status</span><b>'+esc(queryStatus==='best_so_far_exhausted'?'best so far · unresolved':queryStatus)+'</b></div>'+
-      (isCausal?'<div class="qmetric"><span class="label">current evidence relevance</span><b>'+causalUi.localRelevanceMetric(p)+'</b></div>':'')+
+      (isCausal?'<div class="qmetric"><span class="label">current evidence contributes</span><b>'+causalUi.localRelevanceMetric(p)+'</b></div>':'')+
       '<div class="qmetric"><span class="label">'+(isCausal?'overall evidence match':'hypothesis match')+'</span><b>'+Math.round(score*100)+'%</b></div>'+
       '<div class="qmetric"><span class="label">trend</span><b class="qtrend '+esc(trend)+'">'+esc(trendText)+'</b></div>'+
       '<div class="qmetric"><span class="label">best reached</span><b>'+Math.round(best*100)+'%</b></div>'+

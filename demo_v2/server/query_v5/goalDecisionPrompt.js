@@ -53,19 +53,19 @@ CORE CAUSAL MODEL
 
 For causal goals there are exactly two evaluations.
 
-LEVEL 1 — CURRENT EVIDENCE RELEVANCE
+LEVEL 1 — CURRENT EVIDENCE CONTRIBUTION
 
 Evaluate only n.
 
-Return er from 0..1 answering:
-"How important is this CURRENT visited evidence to investigating or explaining the reported issue?"
+For causal goals er is binary:
+- er=1 means the CURRENT visited node establishes one concrete fact that contributes to the causal explanation.
+- er=0 means it does not establish such a contribution.
 
-High er is allowed even when n explains only one small part of the cause.
-A delegation, dispatch, branch condition, mutation, data transformation, recursive call, or other mechanism can be highly relevant without being a complete cause.
+If er=1, return exactly one minimal contribution in hc.
+hc must state only what this node actually establishes. It is one evidence contribution, not a root-cause theory and not a prediction about unvisited code.
 
-If n supports one distinct causal contribution, return it in hc.
-If n is useful only for navigation and does not itself establish a causal contribution, return hc="".
-Do not invent hc merely because er is high.
+If the node is useful only as a route toward other evidence, return er=0 and hc="".
+Do not assign fractional causal relevance scores.
 
 LEVEL 2 — OVERALL HYPOTHESIS ALIGNMENT
 
@@ -79,8 +79,8 @@ Return hs from 0..1 answering:
 
 If hc is empty, hs MUST equal ps because the accepted hypothesis did not change.
 
-A node may have high er while hl + hc makes the overall explanation worse.
-In that case er can remain high while hs decreases.
+A locally valid contribution may still make the accumulated explanation worse.
+In that case er remains 1 but hs may decrease, so LeMap can reject that contribution.
 
 cx=1 only when hl + hc forms a coherent end-to-end causal explanation of the distinguishing reported condition through the relevant code behavior to the observed symptom.
 Otherwise cx=0.
@@ -109,7 +109,9 @@ Compare each expectedHypothesisScore with the current overall score ps:
 When hl is empty and ps=0, a promising candidate may still receive a strong positive expectedHypothesisScore if visiting it is likely to reveal the first useful causal evidence.
 Do not set candidates to zero merely because no contribution has yet been accepted.
 
-Use er only for the CURRENT visited node.
+Each top-level entry function is an independent causal branch. When LeMap starts another entry, hl and ps are reset for that entry. Compare navigation against that entry's own current ps. An entry may remain below another entry's best score while its own hs is still increasing. Flat or weakening progress should cause LeMap to leave that path after its small flat-step budget.
+
+er is only the binary contribution decision for the CURRENT visited node.
 Do not use er as the candidate navigation score.
 Do not add any unvisited lookahead evidence to hl.
 Do not claim a lookahead mechanism as established evidence.
@@ -139,7 +141,7 @@ When src is present:
 - do not require this one source range to prove every hard constraint or the final corrected behavior
 - after verifying hc, score the tentative overall list hl + hc in hs
 - if hc="", hs MUST equal ps
-- return er again from the exact source
+- return er=1 only if the exact source grounds pc as a local contribution; otherwise return er=0
 - i=0 because this source is already being inspected
 
 NON-CAUSAL GOALS
@@ -159,8 +161,9 @@ GENERAL RULES
 - Never rewrite immutable hardConstraints, optionalConstraints, or failingCase.
 - Never use h as causal evidence.
 - Never drop or replace accepted hl entries during evaluation of a new node.
-- A current node can be relevant without contributing causal evidence.
-- A contribution can be locally relevant yet reduce the overall hypothesis score.
+- For causal goals, local evidence is binary: it either contributes one source-groundable fact or it does not.
+- hc must be the smallest causal fact established by the current node, not a speculative end-to-end diagnosis.
+- A valid local contribution may still reduce the overall hypothesis score and therefore be rejected from hl.
 - Exact source verification checks the current contribution, not the entire causal story.
 - Counterfactual validation of the complete causal story happens later and is outside this prompt.
 

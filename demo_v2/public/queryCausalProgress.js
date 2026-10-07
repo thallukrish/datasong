@@ -17,7 +17,7 @@
         const meta=[
           where,
           row.sourceGrounded===true?'source grounded':'',
-          Number(row.evidenceRelevance||0)>0?'local relevance '+Math.round(Number(row.evidenceRelevance||0)*100)+'%':''
+          Number(row.evidenceRelevance||0)>0?'local contribution yes':''
         ].filter(Boolean).join(' · ');
         return '<div class="qstep done">✓ '+(index+1)+'. '+escapeHtml(row.claim||'')+
           (meta?'<div class="small">'+escapeHtml(meta)+'</div>':'')+
@@ -27,8 +27,7 @@
   }
 
   function localRelevanceMetric(progress){
-    const value=Math.max(0,Math.min(1,Number(progress?.evidenceRelevance||0)));
-    return Math.round(value*100)+'%';
+    return Number(progress?.evidenceRelevance||0)>0?'yes':'no';
   }
 
   window.LeMapCausalProgress={

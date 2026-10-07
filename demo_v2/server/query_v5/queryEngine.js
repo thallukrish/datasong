@@ -1373,6 +1373,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     entrySelection:null,
     entryTiers:[],
     visited:new Set(),
+    entryVisited:new Map(),
     entryTried:new Set(),
     stack:[],
     batchNumber:0,
@@ -1488,7 +1489,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
     for(const tier of thread.entryTiers){
       const candidates=tier
-        .filter(state=>!thread.visited.has(state.id)&&!thread.entryTried.has(state.id))
+        .filter(state=>!thread.entryTried.has(state.id))
         .slice(0,ENTRY_TRIAGE_LIMIT);
       if(!candidates.length)continue;
 
@@ -1515,6 +1516,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         baseHypothesis:'',
         baseScore:0,
         baseHypothesisContributions:[],
+        flatSteps:0,
+        baseFlatSteps:0,
         frontierIds:[],
         entryRootId:ranked[0].state.id,
         entryRootName:ranked[0].state.name
@@ -1551,8 +1554,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       // switching to one of the parent's siblings), revisit it while any of its
       // previously exposed semantic frontier remains unvisited. The next Query
       // decision will rescore only those remaining candidates.
+      const activeVisited=thread.entryVisited.get(top.entryRootId)||new Set();
       const pendingFrontier=arr(top.frontierIds)
-        .filter(id=>id&&!thread.visited.has(id));
+        .filter(id=>id&&!activeVisited.has(id));
       if(pendingFrontier.length){
         const event={
           step,action:'SEMANTIC_FRONTIER_REVISIT',goalId:thread.goal.id,
@@ -1567,30 +1571,36 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         top.current=top.alternatives.shift();
         top.frontierIds=[];
         if(top.path.length===0){
+          // Each top-level entry is an independent causal hypothesis branch.
           top.entryRootId=top.current.state.id;
           top.entryRootName=top.current.state.name;
-        }
-        if(thread.goal.kind!=='causal'){
+          thread.hypothesis='';
+          thread.hypothesisScore=0;
+          thread.hypothesisContributions=[];
+          thread.flatSteps=0;
+        }else{
+          // A sibling semantic branch restarts from the causal state at its
+          // parent. Evidence collected only on the abandoned sibling is not
+          // carried across.
           thread.hypothesis=top.baseHypothesis||'';
           thread.hypothesisScore=Number(top.baseScore||0);
           thread.hypothesisContributions=arr(top.baseHypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+          thread.flatSteps=Number(top.baseFlatSteps||0);
         }
-        // Causal evidence is cumulative once accepted and source-grounded.
-        // Backtracking changes only where we navigate next, not the evidence list.
         top.hypothesis=thread.hypothesis;
         top.hypothesisScore=thread.hypothesisScore;
         top.hypothesisContributions=arr(thread.hypothesisContributions);
+        top.flatSteps=thread.flatSteps;
         const event={step,action:'BACKTRACK',goalId:thread.goal.id,to:top.current.state.name,hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,bestScore:thread.bestScore};
         events.push(event);emit({...event,path:[...top.path,top.current.state].map(x=>x.name)});
         return true;
       }
       thread.stack.pop();
       const parent=thread.stack.at(-1);
-      if(thread.goal.kind!=='causal'){
-        thread.hypothesis=parent?.hypothesis||'';
-        thread.hypothesisScore=Number(parent?.hypothesisScore||0);
-        thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
-      }
+      thread.hypothesis=parent?.hypothesis||'';
+      thread.hypothesisScore=Number(parent?.hypothesisScore||0);
+      thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+      thread.flatSteps=Number(parent?.flatSteps||0);
     }
     return seedGoal(thread);
   };
@@ -1610,6 +1620,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
     const frame=thread.stack.at(-1);
     const state=frame.current.state;
+    const entryRootId=frame.entryRootId||state.id;
+    const entryRootName=frame.entryRootName||state.name;
+    let entryVisited=thread.entryVisited.get(entryRootId);
+    if(!entryVisited){
+      entryVisited=new Set();
+      thread.entryVisited.set(entryRootId,entryVisited);
+    }
+    entryVisited.add(state.id);
     thread.visited.add(state.id);
 
     const learned=await ensureLocalSemanticWindow({
@@ -1630,7 +1648,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // driven by whether adding evidence along a candidate is expected to
     // strengthen, flatten, or weaken the OVERALL accumulated hypothesis.
     const next=semanticNavigationChildren(state,learned.window,flowChildren)
-      .filter(child=>!thread.visited.has(child.id));
+      .filter(child=>!entryVisited.has(child.id));
     const regionCandidates=next.filter(child=>child.type==='code_region');
     const navigationKind=next.length
       ? (regionCandidates.length===next.length?'region':regionCandidates.length?'mixed':'call')
@@ -1642,9 +1660,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // return only the top few navigation picks; the unreturned candidates must
     // remain searchable after those picks are exhausted.
     frame.frontierIds=next.map(candidate=>candidate.id);
-
-    const entryRootId=frame.entryRootId||state.id;
-    const entryRootName=frame.entryRootName||state.name;
 
     let decision=await decide({
       question,mode,goals,activeGoalId:goal.id,branchId:entryRootId,hypothesis:thread.hypothesis||frame.hypothesis,
@@ -1791,11 +1806,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       }
     }
 
-    // Every entry-level branch keeps an independent score. Compare the
-    // current branch against the strongest score already established by a
-    // different entry. Only compare after the current node has had its normal
-    // chance to inspect source when requested. If it is already below another
-    // entry branch, do not spend more traversal on its descendants.
+    // Every top-level entry keeps an independent causal list and score.
+    // The strongest other entry is an incumbent benchmark only. A causal
+    // entry may remain below it while its own score is still strengthening;
+    // pruning is driven by this entry's trend, not by absolute rank.
     const entryPrevious=thread.entryScores.get(entryRootId)||{
       id:entryRootId,name:entryRootName,bestScore:0,currentScore:0
     };
@@ -1905,6 +1919,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
     thread.hypothesisScore=decision.hypothesisScore;
     thread.flatSteps=progress.trend==='flat'?thread.flatSteps+1:0;
+    frame.flatSteps=thread.flatSteps;
     if(!decision.causalRejected&&decision.hypothesisScore>thread.bestScore){
       thread.bestScore=decision.hypothesisScore;
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
@@ -2030,11 +2045,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
       const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
       const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
+      const causalFlatExhausted=goal.kind==='causal'&&thread.flatSteps>=MAX_FLAT_STEPS;
 
-      // Causal navigation follows the expected change in the accumulated
-      // hypothesis score. A flat causal branch gets only a small exploration
-      // budget; a weakening branch is not followed.
-      if(goal.kind==='causal')return strengthens||(staysFlat&&canSpendFlatStep);
+      // Causal navigation is branch-local. Keep following an entry while its
+      // accumulated score is growing. Flat progress gets only two hops; once
+      // that budget is exhausted, leave the path. Weakening is never followed.
+      if(goal.kind==='causal')return !causalFlatExhausted&&(strengthens||(staysFlat&&canSpendFlatStep));
       return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
     });
     if(warm.length){
@@ -2044,6 +2060,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         hypothesisContributions:arr(thread.hypothesisContributions),
         baseHypothesis:thread.hypothesis||decision.hypothesis,baseScore:thread.hypothesisScore,
         baseHypothesisContributions:arr(thread.hypothesisContributions),
+        flatSteps:thread.flatSteps,baseFlatSteps:thread.flatSteps,
         navigationKind,frontierIds:[],
         entryRootId,entryRootName
       });
