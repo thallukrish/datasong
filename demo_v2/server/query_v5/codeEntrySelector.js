@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { executeSteps } from 'pal-executor-lib';
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
+import { expandPalRange, palRowsForValue, resolvePalStructuralLocator } from './palStructuralLookup.js';
 
 const CODE_CONSTRUCT_TYPES = [
   'class','function','input_param','import','assignment','call','return','exception',
@@ -107,95 +107,6 @@ function functionAnchor(row,rowsById){
   return null;
 }
 
-function expandPalRange(range=''){
-  const text=String(range||'');
-  const match=text.match(/^(\d+)(?:-(\d+))?$/);
-  if(!match)return [];
-  const start=Number(match[1]);
-  const end=Number(match[2]||match[1]);
-  if(!Number.isInteger(start)||!Number.isInteger(end)||end<start)return [];
-  const out=[];
-  for(let i=start;i<=end;i+=1)out.push(i);
-  return out;
-}
-
-function palRowsForValue(valuesIndex,column,value){
-  const entries=valuesIndex?.[column];
-  if(!Array.isArray(entries))return null;
-  const wanted=String(value);
-  const out=[];
-  for(const entry of entries){
-    if(!Array.isArray(entry)||entry.length<2)continue;
-    if(String(entry[1])!==wanted)continue;
-    out.push(...expandPalRange(entry[0]));
-  }
-  return out;
-}
-
-function palIndexDataset(topology){
-  const values={};
-  for(const [column,entries] of Object.entries(topology?.palValuesIndex||{})){
-    if(!Array.isArray(entries))continue;
-    values[column]=new Map(entries.map(entry=>[String(entry?.[0]??''),entry?.[1]]));
-  }
-  const unique=new Map();
-  for(const [column,items] of Object.entries(topology?.palUniqueIndex||{})){
-    unique.set(column,new Set(arr(items)));
-  }
-  const headers=Object.keys(topology?.palValuesIndex||{});
-  return {
-    dataset_name:'lem_code_structure',
-    model:'local',
-    llm_key:'local',
-    dataset_description:'LeMap structural code rows',
-    columnHeaders:headers,
-    column_types:'',
-    columnInsights:{},
-    rowCount:arr(topology?.codeStructureRows).length,
-    valuesIndex:values,
-    uniqueIndex:unique,
-    attributesOriginalMap:Object.fromEntries(headers.map(column=>[column,column]))
-  };
-}
-
-function palString(value=''){
-  return "'" + String(value).replace(/\\/g,'\\\\').replace(/'/g,"\\'") + "'";
-}
-
-function prefixValues(uniqueIndex,type,value){
-  const raw=String(value||'').trim();
-  if(!raw.endsWith('*'))return [raw];
-  const needle=raw.slice(0,-1).toLowerCase();
-  const column=type!=='*'&&Array.isArray(uniqueIndex?.[type])?type:'name';
-  const values=arr(uniqueIndex?.[column]);
-  return values
-    .filter(item=>String(item).toLowerCase().startsWith(needle))
-    .slice(0,40);
-}
-
-function palResultRows(result,output='lem_entry_filter'){
-  const value=result?.context?.[output]?.value;
-  const ranges=Array.isArray(value)?value:[];
-  return [...new Set(ranges.flatMap(expandPalRange))];
-}
-
-async function palFilterRows({topology,type='*',name=''}) {
-  if(!topology?.palValuesIndex||!topology?.palUniqueIndex)return null;
-  const output='lem_entry_filter';
-  const expression=type==='*'
-    ? `data.name == ${palString(name)}`
-    : `data.type == ${palString(type)} && data.name == ${palString(name)}`;
-  const result=await executeSteps([{
-    step:1,
-    command:'FILTER',
-    input:'data',
-    output,
-    details:{expression}
-  }],{dataset:palIndexDataset(topology)});
-  if(result?.error)throw new Error(`PAL FILTER failed: ${result.error}`);
-  return palResultRows(result,output);
-}
-
 export async function scanCodeStructureRowsWithPal({topology,locators=[]}){
   const rows=arr(topology?.codeStructureRows);
   if(!rows.length)return [];
@@ -207,9 +118,15 @@ export async function scanCodeStructureRowsWithPal({topology,locators=[]}){
 
   for(const spec of specs){
     let addedForSpec=0;
-    const expanded=prefixValues(topology?.palUniqueIndex,spec.type,spec.name);
-    for(const resolvedName of expanded){
-      const candidateIndexes=await palFilterRows({topology,type:spec.type,name:resolvedName});
+    const resolved=await resolvePalStructuralLocator({
+      topology,
+      type:spec.type,
+      name:spec.name,
+      maxNames:40
+    });
+    for(const match of resolved){
+      const resolvedName=match.name;
+      const candidateIndexes=match.rows;
       if(!Array.isArray(candidateIndexes))continue;
       for(const index of candidateIndexes){
         const row=rows[index];
