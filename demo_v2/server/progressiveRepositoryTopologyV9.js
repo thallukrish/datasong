@@ -24,6 +24,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemas = [];
     this.entitySchemaByName = new Map();
     this.externalSymbols = [];
+    this.moduleRegions = [];
   }
 
   async prepareIndexOnly(repoUrl) {
@@ -33,6 +34,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemas = [];
     this.entitySchemaByName = new Map();
     this.externalSymbols = [];
+    this.moduleRegions = [];
     this.symbols = [];
     this.symbolById.clear();
     this.nameIndex.clear();
@@ -61,6 +63,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.nameIndex.clear();
     this.callers.clear();
     this.externalSymbols = [];
+    this.moduleRegions = [];
 
     const t=Date.now();
     const pythonAst = await this.augmentPythonAstGraph();
@@ -130,6 +133,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.pythonAnalysis = result;
     const pythonSymbols = Array.isArray(result?.symbols) ? result.symbols : [];
     this.externalSymbols = Array.isArray(result?.externalSymbols) ? result.externalSymbols : [];
+    this.moduleRegions = Array.isArray(result?.moduleRegions) ? result.moduleRegions : [];
     if (!pythonSymbols.length) return { version: Number(result?.version || 1), symbolCount: 0, externalSymbolCount: this.externalSymbols.length, resolvedCallCount: 0, unresolvedCallCount: 0 };
 
     const pythonPaths = new Set(pythonSymbols.map((symbol) => symbol.sourcePath));
