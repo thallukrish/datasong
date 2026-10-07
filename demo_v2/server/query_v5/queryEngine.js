@@ -1,7 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 import { selectCodeEntries } from './codeEntrySelector.js';
-import { CAUSAL_EVIDENCE_RELEVANCE_MIN, causalHypothesisText, causalNavigationPicks, evaluateCausalContribution } from './causalEvidence.js';
+import { causalHypothesisText, causalNavigationPicks, evaluateCausalContribution, isCausalEvidenceRelevant } from './causalEvidence.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
@@ -1734,7 +1734,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.hypothesisContributions.length>0&&
       Number(decision.hypothesisScore||0)<Number(thread.hypothesisScore||0)-HYPOTHESIS_DELTA_EPSILON;
     const causalEvidenceImportant=goal.kind==='causal'&&
-      Number(decision.evidenceRelevance||0)>=CAUSAL_EVIDENCE_RELEVANCE_MIN;
+      isCausalEvidenceRelevant(decision.evidenceRelevance);
     const causalContributionNeedsSource=goal.kind==='causal'&&Boolean(decision.contribution)&&
       causalEvidenceImportant&&!causalSemanticWeakening&&
       Boolean(String(state.body||state.callText||'').trim());
