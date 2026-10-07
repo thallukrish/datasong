@@ -364,7 +364,8 @@ export function rankPatternEntryHits(hits=[]){
   for(const hit of arr(hits)){
     const key=hit.symbolId?'symbol:'+hit.symbolId:hit.externalId?'external:'+hit.externalId:'line:'+hit.sourcePath+':'+hit.line;
     const current=grouped.get(key)||{
-      key,symbolId:hit.symbolId||'',externalId:hit.externalId||'',name:hit.symbolName||hit.externalName||'',
+      key,symbolId:hit.symbolId||'',externalId:hit.externalId||'',
+      name:hit.symbolName||hit.externalName||hit.metadata?.name||'',
       sourcePath:hit.sourcePath,startLine:hit.line,endLine:hit.endLine||hit.line,test:!!hit.test,score:0,structuredScore:0,hasStructured:false,matches:[],metadata:hit.metadata||null
     };
     current.startLine=Math.min(current.startLine,hit.line);
