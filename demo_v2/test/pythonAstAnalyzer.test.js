@@ -75,7 +75,7 @@ def foobar(a, b):
 `);
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
-  assert.equal(result.version, 6);
+  assert.equal(result.version, 7);
   assert.equal(result.constructs, undefined);
 
   const facts = result.codeFacts || [];
@@ -94,6 +94,44 @@ def foobar(a, b):
   assert.ok(region?.name.startsWith('foobar_region_'));
   assert.ok(fn.childFactIds.includes(a.factId));
   assert.ok(fn.childFactIds.includes(b.factId));
+});
+
+test('Python AST analyzer groups straight-line statements into function and module regions', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-regions-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'main.py'), `
+CONFIG = {}
+LIMIT = 10
+
+def build(x):
+    value = x + 1
+    doubled = value * 2
+    if doubled:
+        result = doubled
+        return result
+    final = 0
+    return final
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
+  const build = (result.symbols || []).find((symbol) => symbol.name === 'build');
+  const blocks = (build?.regions || []).filter((region) => region.kind === 'block');
+  const conditional = (build?.regions || []).find((region) => region.kind === 'if');
+
+  assert.ok(build);
+  assert.ok(blocks.some((region) => /value = x \+ 1/.test(region.body) && /doubled = value \* 2/.test(region.body)));
+  assert.ok(conditional);
+  assert.ok(blocks.some((region) => region.parentRegionId === conditional.id && /result = doubled/.test(region.body)));
+  assert.ok(blocks.some((region) => /final = 0/.test(region.body) && /return final/.test(region.body)));
+
+  const file = (result.moduleRegions || []).find((item) => item.sourcePath === 'main.py');
+  assert.ok(file);
+  assert.ok((file.regions || []).some((region) =>
+    region.kind === 'block' &&
+    /CONFIG = \{\}/.test(region.body) &&
+    /LIMIT = 10/.test(region.body)
+  ));
 });
 
 test('CodeTopology persists structural CSV with JSON-array relation cells', async (t) => {
