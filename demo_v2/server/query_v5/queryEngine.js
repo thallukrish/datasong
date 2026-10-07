@@ -882,7 +882,7 @@ async function decide({
     ? sourceEvidenceStates(currentState,sourceBody,call.parsed?.ev,sourceCandidates)
     : [];
   let evidenceReselected=false;
-  if(!entryStage&&sourceBody&&evidenceStates.length){
+  if(!entryStage&&sourceBody&&evidenceStates.length&&activeGoal?.kind!=='causal'){
     const functionLines=Math.max(1,Number(currentState?.endLine||0)-Number(currentState?.startLine||0)+1);
     const coverage=evidenceCoverageRatio(currentState,evidenceStates);
     if(functionLines>=8&&coverage>=0.8){
