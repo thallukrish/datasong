@@ -206,6 +206,51 @@ function symbolState(symbol, parent=null) {
   return { id:symbol.id, type:'code_symbol', name:symbol.name, symbolId:symbol.id, sourcePath:symbol.sourcePath||'', startLine:symbol.startLine||0, endLine:symbol.endLine||0, body:String(symbol.body||''), parent, parentSymbolId:parent };
 }
 
+function moduleRegionState(owner,region){
+  const kind=String(region?.kind||'region');
+  const startLine=Number(region?.startLine||0);
+  const sourcePath=String(owner?.sourcePath||'');
+  return {
+    id:region.id,
+    regionId:region.id,
+    type:'code_region',
+    name:`${sourcePath} [${kind} @ ${startLine}]`,
+    symbolId:'',
+    sourcePath,
+    startLine,
+    endLine:Number(region?.endLine||startLine),
+    body:String(region?.body||''),
+    parent:region?.parentRegionId||null,
+    parentSymbolId:null,
+    kind,
+    moduleLevel:true,
+    references:arr(region?.references)
+  };
+}
+
+function enclosingModuleRegion(topology,sourcePath,line){
+  const owner=arr(topology?.moduleRegions)
+    .find(item=>String(item?.sourcePath||'')===String(sourcePath||''));
+  if(!owner)return null;
+  const candidates=arr(owner.regions)
+    .filter(region=>Number(region?.startLine||0)<=Number(line||0)&&Number(region?.endLine||region?.startLine||0)>=Number(line||0))
+    .sort((a,b)=>
+      (Number(a.endLine||0)-Number(a.startLine||0))-(Number(b.endLine||0)-Number(b.startLine||0))
+    );
+  return candidates.length?moduleRegionState(owner,candidates[0]):null;
+}
+
+function fallbackModuleRegions(topology,limit=20){
+  const out=[];
+  for(const owner of arr(topology?.moduleRegions)){
+    for(const region of arr(owner?.regions).filter(region=>!region?.parentRegionId)){
+      out.push(moduleRegionState(owner,region));
+      if(out.length>=limit)return out;
+    }
+  }
+  return out;
+}
+
 function regexMatchRegions(symbol,candidate){
   const matches=arr(candidate?.matches).filter(match=>Number(match?.line||0)>0);
   if(!symbol||!matches.length)return [];
@@ -1295,7 +1340,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     .sort((a,b)=>b.priority-a.priority||String(a.state.name||'').localeCompare(String(b.state.name||'')))
     .slice(0,20)
     .map(item=>item.state);
-  const fallbackPool=[...fallbackRoots,...externalEntries];
+  const moduleEntries=fallbackModuleRegions(explorer.topology,20);
+  const fallbackPool=[...fallbackRoots,...moduleEntries,...externalEntries];
   const externalById=new Map(arr(explorer.topology?.externalSymbols).map(boundary=>[String(boundary?.id||''),boundary]));
 
   const ledger=new Map(),nextFactId={value:1};
@@ -1380,6 +1426,15 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         const state=externalBoundaryState(boundary);
         state.entryRankScore=Number(candidate.entryRankScore||candidate.score||0);
         return state;
+      }
+      const moduleRegion=enclosingModuleRegion(
+        explorer.topology,
+        candidate.sourcePath||candidate?.metadata?.file||'',
+        Number(candidate.startLine||String(candidate?.metadata?.line_range||'').split('-')[0]||0)
+      );
+      if(moduleRegion){
+        moduleRegion.entryRankScore=Number(candidate.entryRankScore||candidate.score||0);
+        return moduleRegion;
       }
       return null;
     }).filter(Boolean));
