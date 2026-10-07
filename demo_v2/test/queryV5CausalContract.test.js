@@ -35,3 +35,10 @@ test('source verification receives the exact semantic contribution as pc',()=>{
 test('generic h-based evidence reselect is not used for causal source verification',()=>{
   assert.match(engine,/sourceBody&&evidenceStates\.length&&activeGoal\?\.kind!=='causal'/);
 });
+
+test('causal candidate scoring is predictive rather than requiring established evidence',()=>{
+  assert.match(GOAL_DECIDE_SYSTEM,/This is a SEARCH PREDICTION, not established evidence/);
+  assert.match(GOAL_DECIDE_SYSTEM,/You are not required to already prove the candidate's mechanism before giving it a positive score/);
+  assert.match(GOAL_DECIDE_SYSTEM,/When hl is empty and ps=0, a promising candidate may still receive a strong positive expectedHypothesisScore/);
+  assert.match(GOAL_DECIDE_SYSTEM,/Do not set candidates to zero merely because no contribution has yet been accepted/);
+});
