@@ -75,7 +75,7 @@ def foobar(a, b):
 `);
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
-  assert.equal(result.version, 9);
+  assert.equal(result.version, 11);
   assert.equal(result.constructs, undefined);
 
   const facts = result.codeFacts || [];
@@ -89,8 +89,10 @@ def foobar(a, b):
   assert.ok(fn);
   assert.equal(a?.parentFactId, fn.factId);
   assert.equal(b?.parentFactId, fn.factId);
-  assert.equal(assignment?.parentFactId, fn.factId);
-  assert.equal(call?.parentFactId, assignment.factId);
+  const straight = facts.find((item) => item.type === 'region' && item.startLine === assignment?.startLine);
+  assert.ok(straight);
+  assert.equal(assignment?.parentFactId, straight.factId);
+  assert.equal(call?.parentFactId, straight.factId);
   assert.ok(region?.name.startsWith('foobar_region_'));
   assert.ok(fn.childFactIds.includes(a.factId));
   assert.ok(fn.childFactIds.includes(b.factId));
@@ -122,7 +124,7 @@ def build(x):
   assert.ok(build);
   assert.ok(blocks.some((region) => /value = x \+ 1/.test(region.body) && /doubled = value \* 2/.test(region.body)));
   assert.ok(conditional);
-  assert.ok(blocks.some((region) => region.parentRegionId === conditional.id && /result = doubled/.test(region.body)));
+  assert.ok(!blocks.some((region) => region.parentRegionId === conditional.id));
   assert.ok(blocks.some((region) => /final = 0/.test(region.body) && /return final/.test(region.body)));
 
   const file = (result.moduleRegions || []).find((item) => item.sourcePath === 'main.py');
@@ -178,9 +180,10 @@ def build(x):
   assert.equal(functionRegion.parent, buildRow.row);
   assert.equal(valueRow.parent, functionRegion.row);
   assert.equal(ifRow.parent, buildRow.row);
-  assert.equal(nestedRegion.parent, ifRow.row);
+  assert.equal(nestedRegion, undefined);
   assert.equal(trailingRegion.parent, buildRow.row);
-  assert.equal(helperCall.parent, rows.find((row) => row.type === 'assignment' && row.name === 'result').row);
+  assert.equal(rows.find((row) => row.type === 'assignment' && row.name === 'result').parent, ifRow.row);
+  assert.equal(helperCall.parent, ifRow.row);
 });
 
 test('CodeTopology persists structural CSV with JSON-array relation cells', async (t) => {
