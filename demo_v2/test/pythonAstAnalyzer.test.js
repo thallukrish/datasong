@@ -223,12 +223,10 @@ def parent(a, b):
   assert.equal(valuesIndex.row, undefined);
   assert.ok(uniqueIndex.type.includes('function'));
   assert.ok(uniqueIndex.name.includes('parent'));
-  assert.ok(uniqueIndex.function.includes('parent'));
-  assert.ok(uniqueIndex.function.includes('child'));
-  assert.ok(!uniqueIndex.function.includes('a'));
+  assert.equal(uniqueIndex.function, undefined);
   assert.ok(valuesIndex.type.some((entry) => entry[1] === 'function'));
   assert.ok(valuesIndex.name.some((entry) => entry[1] === 'parent'));
-  assert.ok(valuesIndex.function.some((entry) => entry[1] === 'parent'));
+  assert.equal(valuesIndex.function, undefined);
 
   const parentRow = topology.codeStructureRows.find((row) => row.type === 'function' && row.name === 'parent');
   const childRow = topology.codeStructureRows.find((row) => row.type === 'function' && row.name === 'child');
