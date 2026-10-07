@@ -350,8 +350,10 @@ def iter_scope_calls(node):
     for child in ast.iter_child_nodes(node):
         yield from iter_scope_calls(child)
 
+module_references = {}
 for mod, info in modules.items():
-    seen_external_scope_calls = set()
+    seen_scope_calls = set()
+    module_references[info["path"]] = []
     for top in info["tree"].body:
         if isinstance(top, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -369,16 +371,45 @@ for mod, info in modules.items():
                 target = None
             else:
                 target = None
-            if target or not display:
+            if not display:
                 continue
+
+            line = getattr(call, "lineno", 0)
+            end_line = getattr(call, "end_lineno", line)
+            if target:
+                target_id = sid(target["path"], target["qualified"], target["node"].lineno)
+                key = (info["path"], scope_name, line, target_id)
+                if key in seen_scope_calls:
+                    continue
+                seen_scope_calls.add(key)
+                module_references[info["path"]].append({
+                    "name": display or target["qualified"],
+                    "simpleName": target["name"],
+                    "relation": "calls",
+                    "targetSymbolId": target_id,
+                    "resolution": "python_ast",
+                    "line": line,
+                    "endLine": end_line
+                })
+                continue
+
             external = external_call_info(mod, call, display)
             if not external:
                 continue
-            line = getattr(call, "lineno", 0)
             key = (info["path"], scope_name, line, external["qualifiedName"])
-            if key in seen_external_scope_calls:
+            if key in seen_scope_calls:
                 continue
-            seen_external_scope_calls.add(key)
+            seen_scope_calls.add(key)
+            ref = {
+                "name": display,
+                "simpleName": display.split(".")[-1],
+                "relation": "calls",
+                "resolution": "external_import",
+                "line": line,
+                "endLine": end_line,
+                **external
+            }
+            module_references[info["path"]].append(ref)
             external_symbols.append({
                 "id": f"external-call:{info['path']}#{quote(scope_name, safe='')}@{line}:{quote(external['qualifiedName'], safe='')}",
                 "localName": display,
@@ -389,7 +420,7 @@ for mod, info in modules.items():
                 "qualifiedName": external["qualifiedName"],
                 "sourcePath": info["path"],
                 "startLine": line,
-                "endLine": getattr(call, "end_lineno", line),
+                "endLine": end_line,
                 "reExported": False,
                 "kind": "external-call",
                 "scopeKind": "class-body" if isinstance(top, ast.ClassDef) else "module-body",
@@ -867,6 +898,22 @@ for mod, info in modules.items():
         f"module:{info['path']}",
         1
     )
+    refs = module_references.get(info["path"], [])
+    for ref in refs:
+        ref_line = int(ref.get("line") or 0)
+        if ref_line <= 0:
+            continue
+        containing = [
+            region for region in regions
+            if int(region.get("startLine") or 0) <= ref_line <= int(region.get("endLine") or 0)
+        ]
+        if not containing:
+            continue
+        containing.sort(key=lambda region: (
+            int(region.get("endLine") or 0) - int(region.get("startLine") or 0),
+            -int(region.get("startLine") or 0)
+        ))
+        containing[0]["references"].append(dict(ref))
     if regions:
         module_regions.append({
             "moduleName": mod,
@@ -875,7 +922,7 @@ for mod, info in modules.items():
         })
 
 print(json.dumps({
-    "version": 8,
+    "version": 9,
     "symbols": symbols,
     "externalSymbols": external_symbols,
     "codeFacts": code_facts,
