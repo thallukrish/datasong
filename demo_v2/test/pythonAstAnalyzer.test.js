@@ -75,7 +75,7 @@ def foobar(a, b):
 `);
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
-  assert.equal(result.version, 11);
+  assert.equal(result.version, 12);
   assert.equal(result.constructs, undefined);
 
   const facts = result.codeFacts || [];
@@ -279,4 +279,56 @@ test('CodeTopology reuses same-commit structural CSV cache without a duplicated 
   assert.ok(topology.palValuesIndex?.name);
   const csv = await fs.readFile(csvPath, 'utf8');
   assert.match(csv, /,function,build,/);
+});
+
+
+test('Python AST analyzer resolves function-valued dictionary dispatch calls', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-dict-dispatch-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'main.py'), `
+def add(left, right):
+    return left + right
+
+def stack(left, right):
+    return (left, right)
+
+_ops = {
+    "+": add,
+    "&": stack,
+}
+
+def dynamic(op, left, right):
+    return _ops[op](left, right)
+
+def literal(left, right):
+    return _ops["&"](left, right)
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
+  assert.equal(result.version, 12);
+
+  const byName = new Map((result.symbols || []).map((symbol) => [symbol.name, symbol]));
+  const dynamic = byName.get('dynamic');
+  const literal = byName.get('literal');
+  const add = byName.get('add');
+  const stack = byName.get('stack');
+
+  const dynamicDispatch = (dynamic?.references || []).filter((ref) =>
+    ref.resolution === 'python_ast_dict_dispatch' &&
+    ref.dispatchTable === '_ops'
+  );
+  assert.deepEqual(
+    new Set(dynamicDispatch.map((ref) => ref.targetSymbolId)),
+    new Set([add?.id, stack?.id])
+  );
+  assert.ok(dynamicDispatch.every((ref) => ref.dispatchSelector === 'op'));
+
+  const literalDispatch = (literal?.references || []).filter((ref) =>
+    ref.resolution === 'python_ast_dict_dispatch' &&
+    ref.dispatchTable === '_ops'
+  );
+  assert.equal(literalDispatch.length, 1);
+  assert.equal(literalDispatch[0]?.targetSymbolId, stack?.id);
+  assert.equal(literalDispatch[0]?.dispatchKey, '&');
 });
