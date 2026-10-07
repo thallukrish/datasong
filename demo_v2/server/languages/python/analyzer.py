@@ -340,6 +340,85 @@ def external_call_info(mod, call, display):
         "viaModule": via_module
     }
 
+def literal_dispatch_key(node):
+    if isinstance(node, ast.Constant):
+        try:
+            hash(node.value)
+            return node.value
+        except Exception:
+            return None
+    return None
+
+def resolve_callable_expr(mod, node):
+    if isinstance(node, ast.Name):
+        return resolve_name(mod, node.id)
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        imp = imports.get(mod, {}).get(node.value.id)
+        if imp and imp["kind"] == "module":
+            return module_defs.get(imp["module"], {}).get(node.attr)
+    return None
+
+# Statically materialize module-level dictionaries whose values are known
+# repository callables. A dynamic call such as handlers[key](...) can then
+# expose deterministic candidate call edges to every callable stored in the
+# dictionary. A literal key narrows the edge to that one item.
+dispatch_tables = {}
+for mod, info in modules.items():
+    tables = {}
+    for statement in info["tree"].body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        value = getattr(statement, "value", None)
+        if not names or not isinstance(value, ast.Dict):
+            continue
+        items = []
+        for key_node, value_node in zip(value.keys, value.values):
+            if key_node is None:
+                continue
+            target = resolve_callable_expr(mod, value_node)
+            if not target:
+                continue
+            try:
+                value_text = ast.unparse(value_node)
+            except Exception:
+                value_text = target["qualified"]
+            items.append({
+                "key": literal_dispatch_key(key_node),
+                "keyKnown": isinstance(key_node, ast.Constant),
+                "target": target,
+                "valueText": value_text
+            })
+        if items:
+            for name in names:
+                tables[name] = items
+    dispatch_tables[mod] = tables
+
+def resolve_subscript_dispatch(mod, call):
+    func = getattr(call, "func", None)
+    if not isinstance(func, ast.Subscript) or not isinstance(func.value, ast.Name):
+        return []
+    table_name = func.value.id
+    items = dispatch_tables.get(mod, {}).get(table_name, [])
+    if not items:
+        return []
+    requested_key = literal_dispatch_key(func.slice)
+    key_is_literal = isinstance(func.slice, ast.Constant)
+    selected = items
+    if key_is_literal:
+        selected = [item for item in items if item.get("keyKnown") and item.get("key") == requested_key]
+    try:
+        selector = ast.unparse(func.slice)
+    except Exception:
+        selector = ""
+    return [{
+        **item,
+        "tableName": table_name,
+        "selector": selector,
+        "selectorLiteral": key_is_literal
+    } for item in selected]
+
 def iter_scope_calls(node):
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
         return
@@ -368,6 +447,7 @@ for mod, info in modules.items():
         scope_name = top.name if isinstance(top, ast.ClassDef) else "<module>"
         for call in iter_scope_calls(top):
             display = ""
+            dispatch_targets = []
             if isinstance(call.func, ast.Name):
                 display = call.func.id
                 target = resolve_name(mod, display)
@@ -377,6 +457,13 @@ for mod, info in modules.items():
                 except Exception:
                     display = call.func.attr
                 target = None
+            elif isinstance(call.func, ast.Subscript):
+                try:
+                    display = ast.unparse(call.func)
+                except Exception:
+                    display = ""
+                target = None
+                dispatch_targets = resolve_subscript_dispatch(mod, call)
             else:
                 target = None
             if not display:
@@ -399,6 +486,28 @@ for mod, info in modules.items():
                     "line": line,
                     "endLine": end_line
                 })
+                continue
+
+            if dispatch_targets:
+                for item in dispatch_targets:
+                    dispatch_target = item["target"]
+                    target_id = sid(dispatch_target["path"], dispatch_target["qualified"], dispatch_target["node"].lineno)
+                    key = (info["path"], scope_name, line, target_id)
+                    if key in seen_scope_calls:
+                        continue
+                    seen_scope_calls.add(key)
+                    module_references[info["path"]].append({
+                        "name": display,
+                        "simpleName": dispatch_target["name"],
+                        "relation": "calls",
+                        "targetSymbolId": target_id,
+                        "resolution": "python_ast_dict_dispatch",
+                        "dispatchTable": item["tableName"],
+                        "dispatchSelector": item["selector"],
+                        "dispatchKey": item["key"] if item.get("keyKnown") else None,
+                        "line": line,
+                        "endLine": end_line
+                    })
                 continue
 
             external = external_call_info(mod, call, display)
@@ -851,6 +960,7 @@ for rec in defs.values():
     for call in [n for n in ast.walk(node) if isinstance(n, ast.Call)]:
         target = None
         display = ""
+        dispatch_targets = []
         if isinstance(call.func, ast.Name):
             display = call.func.id
             target = resolve_name(rec["module"], display)
@@ -860,11 +970,39 @@ for rec in defs.values():
             except Exception:
                 display = call.func.attr
             target = resolve_attribute(rec, call.func, inferred)
+        elif isinstance(call.func, ast.Subscript):
+            try:
+                display = ast.unparse(call.func)
+            except Exception:
+                display = ""
+            dispatch_targets = resolve_subscript_dispatch(rec["module"], call)
         if target:
             target_id = sid(target["path"], target["qualified"], target["node"].lineno)
             key = ("calls", target_id)
             if key not in seen_refs:
                 refs.append({"name": display or target["qualified"], "simpleName": target["name"], "relation": "calls", "targetSymbolId": target_id, "resolution": "python_ast", "line": getattr(call, "lineno", 0), "endLine": getattr(call, "end_lineno", getattr(call, "lineno", 0))})
+                seen_refs.add(key)
+        elif dispatch_targets:
+            line = getattr(call, "lineno", 0)
+            end_line = getattr(call, "end_lineno", line)
+            for item in dispatch_targets:
+                dispatch_target = item["target"]
+                target_id = sid(dispatch_target["path"], dispatch_target["qualified"], dispatch_target["node"].lineno)
+                key = ("calls", target_id)
+                if key in seen_refs:
+                    continue
+                refs.append({
+                    "name": display,
+                    "simpleName": dispatch_target["name"],
+                    "relation": "calls",
+                    "targetSymbolId": target_id,
+                    "resolution": "python_ast_dict_dispatch",
+                    "dispatchTable": item["tableName"],
+                    "dispatchSelector": item["selector"],
+                    "dispatchKey": item["key"] if item.get("keyKnown") else None,
+                    "line": line,
+                    "endLine": end_line
+                })
                 seen_refs.add(key)
         elif display:
             external = external_call_info(rec["module"], call, display)
@@ -952,7 +1090,7 @@ for mod, info in modules.items():
         })
 
 print(json.dumps({
-    "version": 11,
+    "version": 12,
     "symbols": symbols,
     "externalSymbols": external_symbols,
     "codeFacts": code_facts,
