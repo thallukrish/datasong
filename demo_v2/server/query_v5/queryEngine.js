@@ -1686,10 +1686,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     recordExplored(arr(learned.window?.states),`semantic_window:${goal.id}`,step);
     const path=[...frame.path,state];
 
-    // Functions and regions use the same semantic navigation rule. LeMap
-    // exposes immediate nested regions and direct calls from the current
-    // evidence container; the model scores which evidence is expected to
-    // strengthen the branch-local hypothesis most.
+    // Functions and regions use the same semantic navigation rule. For causal
+    // goals candidates are ranked by expected LOCAL evidence relevance. The
+    // accumulated causal hypothesis score is evaluated separately.
     const next=semanticNavigationChildren(state,learned.window,flowChildren)
       .filter(child=>!thread.visited.has(child.id));
     const regionCandidates=next.filter(child=>child.type==='code_region');
@@ -1826,18 +1825,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           supportStates:dedupeStates(decision.supportStates||[])
         };
         thread.hypothesisContributions=[...priorContributions,accepted];
-        thread.hypothesisScore=Number(evaluation.score||tentativeScore||priorScore);
-        thread.hypothesis=causalHypothesisText(thread.hypothesisContributions);
         frame.hypothesisContributions=arr(thread.hypothesisContributions);
-        decision.hypothesis=thread.hypothesis;
-        decision.hypothesisScore=thread.hypothesisScore;
+        decision.hypothesis=causalHypothesisText(thread.hypothesisContributions);
+        decision.hypothesisScore=Number(evaluation.score||tentativeScore||priorScore);
         decision.supportStates=dedupeStates(thread.hypothesisContributions.flatMap(item=>arr(item?.supportStates)));
         emit({
           action:'CAUSAL_CONTRIBUTION_ACCEPTED',goalId:goal.id,state:state.name,
           contribution:accepted.claim,
           evidenceRelevance:accepted.evidenceRelevance,
           previousScore:priorScore,
-          hypothesisScore:thread.hypothesisScore,
+          hypothesisScore:Number(decision.hypothesisScore||0),
           sourceGrounded:accepted.sourceGrounded,
           hypothesisList:thread.hypothesisContributions.map(item=>item.claim),
           complete:!!decision.causalHypothesisComplete,
@@ -1890,19 +1887,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       path:path.map(x=>x.name)
     });
 
-    // Counterfactual validation is both the final gate for an otherwise
-    // resolved causal diagnosis and the last discriminator for a source-
-    // grounded best hypothesis that is about to run out of useful branches.
-    const unresolvedBeforeCounterfactual=new Set(decision.constraintChecklist
-      .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
-      .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
-      .map(item=>item.index));
-    const bestReference=Math.max(Number(thread.bestScore||0),Number(decision.hypothesisScore||0));
-    const hasPromisingContinuation=decision.picks.some(pick=>{
-      const improves=Number(pick.score||0)>bestReference+HYPOTHESIS_DELTA_EPSILON;
-      const targetsWeak=arr(pick.targets).some(index=>unresolvedBeforeCounterfactual.has(index));
-      return improves||targetsWeak;
-    });
+    // Counterfactual validation is the final causal gate after the accepted
+    // evidence list is complete and every contribution is source-grounded.
     const acceptedCausalContributions=arr(thread.hypothesisContributions);
     const causalChainSourceGrounded=acceptedCausalContributions.length>0&&
       acceptedCausalContributions.every(item=>item?.sourceGrounded===true);
