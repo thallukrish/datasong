@@ -37,12 +37,13 @@ def source_span(text, start_line, end_line):
     return "\n".join(lines[start:end])
 
 def build_regions(statements, text, id_prefix, fallback_line=1):
-    \"\"\"Build semantic regions from both control-flow blocks and straight-line code.
+    \"\"\"Build semantic navigation containers without duplicating AST containers.
 
-    Consecutive ordinary statements become a single `block` region. Control-flow
-    constructs remain explicit regions and recursively own regions for the
-    statements inside them. Nested function/class definitions are separate
-    symbols and therefore terminate the current straight-line block.
+    Existing structural containers such as if/for/while/try/with/match remain
+    their own regions. A synthetic `region` is created only for straight-line
+    statement runs directly in a function body or at module level. Ordinary
+    statements already inside a structural container belong directly to that
+    container rather than being wrapped in another region.
     \"\"\"
     regions = []
     region_index = [0]
@@ -71,14 +72,28 @@ def build_regions(statements, text, id_prefix, fallback_line=1):
             isinstance(statement.value.value, str)
         )
 
-    def walk(statement_list, parent_region_id=None):
+    def nested_statement_lists(node):
+        out = []
+        for field in ("body", "orelse", "finalbody"):
+            value = getattr(node, field, None)
+            if isinstance(value, list) and value:
+                out.append(value)
+        for handler in getattr(node, "handlers", []) or []:
+            if getattr(handler, "body", None):
+                out.append(handler.body)
+        for case in getattr(node, "cases", []) or []:
+            if getattr(case, "body", None):
+                out.append(case.body)
+        return out
+
+    def walk(statement_list, parent_region_id=None, allow_straight_region=True):
         straight = []
 
         def flush_straight():
             nonlocal straight
             meaningful = [item for item in straight if not is_docstring_statement(item)]
             straight = []
-            if not meaningful:
+            if not allow_straight_region or not meaningful:
                 return
             start_line = getattr(meaningful[0], "lineno", fallback_line)
             end_line = getattr(meaningful[-1], "end_lineno", getattr(meaningful[-1], "lineno", start_line))
@@ -95,26 +110,19 @@ def build_regions(statements, text, id_prefix, fallback_line=1):
                 end_line = getattr(child, "end_lineno", start_line)
                 region_id = next_region(type(child).__name__.lower(), start_line, end_line, parent_region_id)
 
-                nested_lists = []
-                for field in ("body", "orelse", "finalbody"):
-                    value = getattr(child, field, None)
-                    if isinstance(value, list) and value:
-                        nested_lists.append(value)
-                for handler in getattr(child, "handlers", []) or []:
-                    if getattr(handler, "body", None):
-                        nested_lists.append(handler.body)
-                for case in getattr(child, "cases", []) or []:
-                    if getattr(case, "body", None):
-                        nested_lists.append(case.body)
-                for nested in nested_lists:
-                    walk(nested, region_id)
+                # Nested structural containers remain navigable children, but
+                # ordinary statements inside this container are not wrapped in
+                # a second synthetic region.
+                for nested in nested_statement_lists(child):
+                    walk(nested, region_id, False)
                 continue
 
-            straight.append(child)
+            if allow_straight_region:
+                straight.append(child)
 
         flush_straight()
 
-    walk(statements)
+    walk(statements, None, True)
     return regions
 
 modules = {}
@@ -752,44 +760,60 @@ def build_code_facts(mod, info):
             elif selected_parent is None and not container:
                 row["parentFactId"] = fact_id
 
-    def group_statement_list(statements, container_node=None):
+    def nested_statement_lists(statement):
+        out = []
+        for field in ("body", "orelse", "finalbody"):
+            nested = getattr(statement, field, None)
+            if isinstance(nested, list) and nested:
+                out.append(nested)
+        for handler in getattr(statement, "handlers", []) or []:
+            if getattr(handler, "body", None):
+                out.append(handler.body)
+        for case in getattr(statement, "cases", []) or []:
+            if getattr(case, "body", None):
+                out.append(case.body)
+        return out
+
+    def group_statement_list(statements, container_node=None, allow_region=True):
         straight = []
 
         def flush():
             nonlocal straight
-            add_straight_region(straight, container_node)
+            if allow_region:
+                add_straight_region(straight, container_node)
             straight = []
 
         for statement in statements:
-            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 flush()
-                # Definitions are already first-class constructs. Their bodies
-                # get their own straight-line regions.
-                group_statement_list(getattr(statement, "body", []) or [], statement)
+                # Function bodies are deliberately segmented by synthetic
+                # regions for their straight-line stretches.
+                group_statement_list(getattr(statement, "body", []) or [], statement, True)
+                continue
+
+            if isinstance(statement, ast.ClassDef):
+                flush()
+                # A class is already a structural container. Do not add
+                # synthetic regions for class-body statements, but still find
+                # method/nested-function bodies below it.
+                group_statement_list(getattr(statement, "body", []) or [], statement, False)
                 continue
 
             if isinstance(statement, structured_statements):
                 flush()
-
-                for field in ("body", "orelse", "finalbody"):
-                    nested = getattr(statement, field, None)
-                    if isinstance(nested, list) and nested:
-                        group_statement_list(nested, statement)
-
-                for handler in getattr(statement, "handlers", []) or []:
-                    if getattr(handler, "body", None):
-                        group_statement_list(handler.body, handler)
-
-                for case in getattr(statement, "cases", []) or []:
-                    if getattr(case, "body", None):
-                        group_statement_list(case.body, case)
+                # The structured construct itself is the container. Recurse
+                # only to discover nested function/class definitions and nested
+                # structural constructs; do not synthesize regions in its body.
+                for nested in nested_statement_lists(statement):
+                    group_statement_list(nested, statement, False)
                 continue
 
-            straight.append(statement)
+            if allow_region:
+                straight.append(statement)
 
         flush()
 
-    group_statement_list(tree.body, None)
+    group_statement_list(tree.body, None, True)
     selected.extend(synthetic_regions)
 
     # Rebuild children after region insertion/re-parenting so CSV parent and
@@ -922,7 +946,7 @@ for mod, info in modules.items():
         })
 
 print(json.dumps({
-    "version": 9,
+    "version": 10,
     "symbols": symbols,
     "externalSymbols": external_symbols,
     "codeFacts": code_facts,
