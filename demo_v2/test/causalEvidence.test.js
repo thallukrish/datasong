@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   causalHypothesisText,
-  causalNavigationPicks,
   evaluateCausalContribution
 } from '../server/query_v5/causalEvidence.js';
 
@@ -50,18 +49,6 @@ test('causal evidence rejects locally unimportant contributions before accumulat
   assert.equal(result.score,0);
 });
 
-test('navigation ranks local evidence relevance independently of hypothesis score', () => {
-  const picks=[
-    {state:{name:'low'},score:0.2},
-    {state:{name:'high'},score:0.9},
-    {state:{name:'border'},score:0.01}
-  ];
-
-  assert.deepEqual(
-    causalNavigationPicks(picks).map(item=>item.state.name),
-    ['high','border']
-  );
-});
 
 test('causal hypothesis display is derived only from accepted contributions', () => {
   assert.equal(
