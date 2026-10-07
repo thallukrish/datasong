@@ -651,13 +651,26 @@ def build_code_facts(mod, info):
 
     by_node = {row["_node"]: row for row in selected}
 
-    # First establish the ordinary AST containment relation for all concrete
-    # constructs. Synthetic region rows below only re-parent the top-level
-    # constructs that fall inside a straight-line statement group.
+    container_nodes = (
+        ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef,
+        ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try,
+        ast.ExceptHandler, ast.With, ast.AsyncWith
+    )
+    if hasattr(ast, "Match"):
+        container_nodes = container_nodes + (ast.Match,)
+    if hasattr(ast, "match_case"):
+        container_nodes = container_nodes + (ast.match_case,)
+
+    def is_container_node(node):
+        return isinstance(node, container_nodes)
+
+    # Only true structural containers own children. Leaf constructs such as
+    # assignment, call, return, expression, etc. are siblings under the nearest
+    # function/control-flow container (or under a synthetic region added below).
     for row in selected:
         node = row["_node"]
         cur = parents.get(node)
-        while cur is not None and cur not in selected_set:
+        while cur is not None and (cur not in selected_set or not is_container_node(cur)):
             cur = parents.get(cur)
         if cur is not None:
             row["parentFactId"] = by_node[cur]["factId"]
@@ -741,23 +754,16 @@ def build_code_facts(mod, info):
         for statement in meaningful:
             inside.update(selected_descendants(statement))
 
-        # Only roots of the grouped statements move under the region. Their
-        # existing descendants (for example call under assignment) keep their
-        # exact construct-to-construct containment.
+        # Every leaf/root construct in the straight-line stretch that currently
+        # belongs directly to the function/module container moves under the
+        # synthetic region. Leaf constructs never become parents of one another.
         for node in inside:
             row = by_node.get(node)
             if row is None:
                 continue
-            parent_id = row.get("parentFactId", "")
-            parent_node = parents.get(node)
-            selected_parent = None
-            while parent_node is not None and parent_node not in selected_set:
-                parent_node = parents.get(parent_node)
-            if parent_node is not None:
-                selected_parent = parent_node
-            if selected_parent not in inside and parent_id == container:
+            if row.get("parentFactId", "") == container:
                 row["parentFactId"] = fact_id
-            elif selected_parent is None and not container:
+            elif not container and not row.get("parentFactId", ""):
                 row["parentFactId"] = fact_id
 
     def nested_statement_lists(statement):
@@ -946,7 +952,7 @@ for mod, info in modules.items():
         })
 
 print(json.dumps({
-    "version": 10,
+    "version": 11,
     "symbols": symbols,
     "externalSymbols": external_symbols,
     "codeFacts": code_facts,
