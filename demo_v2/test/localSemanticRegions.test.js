@@ -95,3 +95,124 @@ test('semantic windows expose regions for short functions and keep calls in the 
   assert.ok(!edges.some(edge => edge[0] === 'run' && edge[1] === 'helper' && edge[2] === 'calls'));
   assert.ok(!edges.some(edge => edge[0] === 'if-region' && edge[1] === 'helper' && edge[2] === 'calls'));
 });
+
+
+test('semantic windows can start from a module-level region and follow contained regions and calls', () => {
+  const helper = {
+    id: 'helper',
+    name: 'helper',
+    sourcePath: 'main.py',
+    startLine: 20,
+    endLine: 21,
+    body: 'def helper():\n    return 1',
+    references: [],
+    regions: []
+  };
+
+  const rootRegion = {
+    id: 'module:main.py:region:1',
+    kind: 'region',
+    startLine: 1,
+    endLine: 2,
+    parentRegionId: null,
+    body: 'CONFIG = 1\nvalue = helper()',
+    references: [
+      { relation: 'calls', targetSymbolId: 'helper', line: 2 }
+    ]
+  };
+  const ifRegion = {
+    id: 'module:main.py:region:2',
+    kind: 'if',
+    startLine: 4,
+    endLine: 5,
+    parentRegionId: null,
+    body: 'if CONFIG:\n    helper()',
+    references: [
+      { relation: 'calls', targetSymbolId: 'helper', line: 5 }
+    ]
+  };
+  const nestedRegion = {
+    id: 'module:main.py:region:3',
+    kind: 'region',
+    startLine: 5,
+    endLine: 5,
+    parentRegionId: ifRegion.id,
+    body: 'helper()',
+    references: [
+      { relation: 'calls', targetSymbolId: 'helper', line: 5 }
+    ]
+  };
+
+  const explorer = {
+    topology: {
+      symbolById: new Map([[helper.id, helper]]),
+      moduleRegions: [{
+        moduleName: 'main',
+        sourcePath: 'main.py',
+        regions: [rootRegion, ifRegion, nestedRegion]
+      }]
+    }
+  };
+
+  const rootState = {
+    id: rootRegion.id,
+    regionId: rootRegion.id,
+    type: 'code_region',
+    name: 'main.py [region @ 1]',
+    symbolId: '',
+    sourcePath: 'main.py',
+    startLine: 1,
+    endLine: 2,
+    body: rootRegion.body,
+    parent: null,
+    parentSymbolId: null,
+    kind: 'region',
+    moduleLevel: true,
+    references: rootRegion.references
+  };
+
+  const rootWindow = collectLocalSemanticWindow({
+    state: rootState,
+    explorer,
+    depth: 3,
+    includeRootRegions: true,
+    includeCallFrontier: true
+  });
+  assert.ok(rootWindow.links.some(link =>
+    link.from === rootRegion.id && link.to === 'helper' && link.relationship === 'calls'
+  ));
+
+  const ifState = {
+    id: ifRegion.id,
+    regionId: ifRegion.id,
+    type: 'code_region',
+    name: 'main.py [if @ 4]',
+    symbolId: '',
+    sourcePath: 'main.py',
+    startLine: 4,
+    endLine: 5,
+    body: ifRegion.body,
+    parent: null,
+    parentSymbolId: null,
+    kind: 'if',
+    moduleLevel: true,
+    references: ifRegion.references
+  };
+
+  const ifWindow = collectLocalSemanticWindow({
+    state: ifState,
+    explorer,
+    depth: 3,
+    includeRootRegions: true,
+    includeCallFrontier: true
+  });
+  assert.ok(ifWindow.links.some(link =>
+    link.from === ifRegion.id && link.to === nestedRegion.id && link.relationship === 'contains'
+  ));
+  assert.ok(ifWindow.links.some(link =>
+    link.from === nestedRegion.id && link.to === 'helper' && link.relationship === 'calls'
+  ));
+  assert.ok(!ifWindow.links.some(link =>
+    link.from === ifRegion.id && link.to === 'helper' && link.relationship === 'calls'
+  ));
+});
