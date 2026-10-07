@@ -301,7 +301,14 @@ function fallbackCodeEntries(topology, limit=40) {
 
 function semanticNodeView(state,explorer){
   const semantic=codeSemanticForState(state,explorer)||{};
-  return [state?.type||'',state?.name||'',text(semantic.purpose||'',320),text(semantic.effect||'',280)];
+  const structuralType=state?.navigationRelationship==='calls'
+    ? 'call'
+    : state?.type==='code_region'
+      ? String(state?.kind||'region')
+      : state?.type==='code_symbol'
+        ? 'function'
+        : state?.type||'';
+  return [structuralType,state?.name||'',text(semantic.purpose||'',320),text(semantic.effect||'',280)];
 }
 
 function semanticWindowView(rootState,window,explorer){
@@ -343,7 +350,7 @@ function semanticNavigationChildren(state,window,flowChildren=null){
     .map(link=>({relationship:String(link.relationship||''),state:byId.get(link.to)}))
     .filter(item=>item.state&&item.state?.kind!=='regex-match')
     .filter(item=>item.relationship!=='calls'||item.state.type!=='code_symbol'||!allowedCalls||allowedCalls.has(item.state.symbolId))
-    .map(item=>item.state);
+    .map(item=>({...item.state,navigationRelationship:item.relationship}));
   return dedupeStates(children)
     .sort((a,b)=>{
       const ar=a.type==='code_region'?0:1,br=b.type==='code_region'?0:1;
