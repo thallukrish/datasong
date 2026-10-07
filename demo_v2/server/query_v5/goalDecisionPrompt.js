@@ -89,20 +89,28 @@ CAUSAL NAVIGATION
 
 Navigation is driven by the expected CHANGE in the OVERALL hypothesis, not by local relevance.
 
-For each immediate candidate in c, use l only to estimate what evidence is likely to be found if that candidate is visited.
+For each immediate candidate in c, use its semantic description and l to predict the value of VISITING that candidate next.
 
 Return p rows as:
 [candidateIndex,expectedHypothesisScore,[]]
 
 expectedHypothesisScore means:
-"Expected overall alignment of the accumulated accepted hypothesis after useful evidence from this candidate is visited and, if warranted, added."
+"If this candidate is visited next, what overall alignment score do I expect the accepted hypothesis to reach after evaluating whatever useful evidence that visit is likely to reveal?"
 
-Compare each expectedHypothesisScore with the current overall score:
-- greater than current score = strengthening branch
-- approximately equal = flat branch
-- less than current score = weakening branch
+This is a SEARCH PREDICTION, not established evidence.
+You are not required to already prove the candidate's mechanism before giving it a positive score.
+A candidate should receive a high expectedHypothesisScore when its semantics or lookahead make it a promising place to obtain evidence that would strengthen the current causal explanation.
 
-Do not use er as the navigation score.
+Compare each expectedHypothesisScore with the current overall score ps:
+- greater than ps = expected strengthening
+- approximately equal to ps = expected flattening
+- less than ps = expected weakening
+
+When hl is empty and ps=0, a promising candidate may still receive a strong positive expectedHypothesisScore if visiting it is likely to reveal the first useful causal evidence.
+Do not set candidates to zero merely because no contribution has yet been accepted.
+
+Use er only for the CURRENT visited node.
+Do not use er as the candidate navigation score.
 Do not add any unvisited lookahead evidence to hl.
 Do not claim a lookahead mechanism as established evidence.
 
