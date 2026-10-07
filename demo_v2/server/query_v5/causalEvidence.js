@@ -72,7 +72,9 @@ export function evaluateCausalContribution({
     accepted:true,
     rejected:false,
     reason:'',
-    score:after,
+    // Accepted causal evidence never lowers the committed hypothesis score.
+    // A small numerical decrease within epsilon is treated as flat.
+    score:Math.max(before,after),
     relevance,
     contributions:arr(priorContributions)
   };
