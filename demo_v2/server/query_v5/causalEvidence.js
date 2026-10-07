@@ -1,5 +1,3 @@
-export const CAUSAL_EVIDENCE_RELEVANCE_MIN = 0.5;
-
 function arr(value){
   return Array.isArray(value)?value:[];
 }
@@ -37,7 +35,7 @@ export function evaluateCausalContribution({
     };
   }
 
-  if(relevance<CAUSAL_EVIDENCE_RELEVANCE_MIN){
+  if(!(relevance>0)){
     return {
       accepted:false,
       rejected:true,
@@ -80,6 +78,10 @@ export function evaluateCausalContribution({
   };
 }
 
+export function isCausalEvidenceRelevant(score){
+  return Number(score||0)>0;
+}
+
 export function causalNavigationPicks(picks=[]){
-  return arr(picks).filter(pick=>Number(pick?.score||0)>=CAUSAL_EVIDENCE_RELEVANCE_MIN);
+  return arr(picks).filter(pick=>isCausalEvidenceRelevant(pick?.score));
 }
