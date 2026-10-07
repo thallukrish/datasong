@@ -40,17 +40,26 @@ export function materializeCodeStructure(explorer,states=[]){
       }
       continue;
     }
-    if(!symbol)continue;
+    if(!symbol&&state.type!=='code_region')continue;
     const node=upsert(explorer,{
       id:state.id,type:state.type==='code_region'?'function-region':'function',name:state.name,
-      data:{details:{structural:{sourcePath:state.sourcePath||symbol.sourcePath||'',startLine:Number(state.startLine||symbol.startLine||0),endLine:Number(state.endLine||symbol.endLine||0),symbolId:state.symbolId,regionId:state.regionId||'',kind:state.kind||symbol.kind||'',signature:symbol.signature||''},semantic:{}}},
+      data:{details:{structural:{
+        sourcePath:state.sourcePath||symbol?.sourcePath||'',
+        startLine:Number(state.startLine||symbol?.startLine||0),
+        endLine:Number(state.endLine||symbol?.endLine||0),
+        symbolId:state.symbolId||'',
+        regionId:state.regionId||'',
+        kind:state.kind||symbol?.kind||'',
+        signature:symbol?.signature||'',
+        moduleLevel:!!state.moduleLevel
+      },semantic:{}}},
       links:[]
     });
     if(state.type==='code_region'){
-      const parentId=state.parent||state.symbolId;
-      mergeLinks(node,[{nodeId:parentId,relationship:'contained-by'}]);
-      let parent=graphNode(explorer,parentId);
-      if(!parent&&parentId===state.symbolId){const ps=symbolById?.get(state.symbolId);if(ps)parent=upsert(explorer,{id:ps.id,type:'function',name:ps.name,data:{details:{structural:{sourcePath:ps.sourcePath||'',startLine:Number(ps.startLine||0),endLine:Number(ps.endLine||0),symbolId:ps.id,kind:ps.kind||'',signature:ps.signature||''},semantic:{}}},links:[]});}
+      const parentId=state.parent||state.symbolId||'';
+      if(parentId)mergeLinks(node,[{nodeId:parentId,relationship:'contained-by'}]);
+      let parent=parentId?graphNode(explorer,parentId):null;
+      if(!parent&&symbol&&parentId===state.symbolId){const ps=symbolById?.get(state.symbolId);if(ps)parent=upsert(explorer,{id:ps.id,type:'function',name:ps.name,data:{details:{structural:{sourcePath:ps.sourcePath||'',startLine:Number(ps.startLine||0),endLine:Number(ps.endLine||0),symbolId:ps.id,kind:ps.kind||'',signature:ps.signature||''},semantic:{}}},links:[]});}
       if(parent)mergeLinks(parent,[{nodeId:state.id,relationship:'contains'}]);
     }else if(state.parentSymbolId&&state.parentSymbolId!==state.symbolId){
       let parent=graphNode(explorer,state.parentSymbolId);
