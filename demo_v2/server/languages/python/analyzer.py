@@ -37,14 +37,14 @@ def source_span(text, start_line, end_line):
     return "\n".join(lines[start:end])
 
 def build_regions(statements, text, id_prefix, fallback_line=1):
-    \"\"\"Build semantic navigation containers without duplicating AST containers.
+    """Build semantic navigation containers without duplicating AST containers.
 
     Existing structural containers such as if/for/while/try/with/match remain
     their own regions. A synthetic `region` is created only for straight-line
     statement runs directly in a function body or at module level. Ordinary
     statements already inside a structural container belong directly to that
     container rather than being wrapped in another region.
-    \"\"\"
+    """
     regions = []
     region_index = [0]
     region_types = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith)
