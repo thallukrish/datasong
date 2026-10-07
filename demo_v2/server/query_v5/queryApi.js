@@ -10,7 +10,7 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
     try{
       if(!queryClient)return res.status(503).json({error:'The reasoning service is not configured'});
       const question=String(req.body?.question||'').trim();if(!question)return res.status(400).json({error:'question is required'});
-      const progress={running:true,question,mode:'',status:'searching',goals:[],activeGoalId:'',hypothesis:'',hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],evidenceRanges:[],entryBranches:[],counterfactualValidation:null,facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
+      const progress={running:true,question,mode:'',status:'searching',goals:[],activeGoalId:'',hypothesis:'',hypothesisList:[],evidenceRelevance:0,hypothesisScore:0,previousScore:0,delta:0,trend:'',bestScore:0,constraintChecklist:[],evidenceRanges:[],entryBranches:[],counterfactualValidation:null,facts:[],explained:false,action:'START',path:[],candidates:[],learnNodes:[],tokens:{prompt:0,completion:0,total:0},events:[]};explorer.state.queryV5Progress=progress;explorer.emit?.();
       const onProgress=(event={})=>{
         const p=explorer.state.queryV5Progress||progress;
         if(typeof event.mode==='string')p.mode=event.mode;
@@ -18,6 +18,8 @@ export function registerQueryV5Api({app,explorer,queryClient,queryModel,dataRoot
         if(Array.isArray(event.goals))p.goals=event.goals;
         if(typeof event.goalId==='string')p.activeGoalId=event.goalId;
         if(typeof event.hypothesis==='string')p.hypothesis=event.hypothesis;
+        if(Array.isArray(event.hypothesisList))p.hypothesisList=event.hypothesisList;
+        if(Number.isFinite(Number(event.evidenceRelevance)))p.evidenceRelevance=Number(event.evidenceRelevance);
         if(Number.isFinite(Number(event.hypothesisScore)))p.hypothesisScore=Number(event.hypothesisScore);
         if(Number.isFinite(Number(event.previousScore)))p.previousScore=Number(event.previousScore);
         if(Number.isFinite(Number(event.delta)))p.delta=Number(event.delta);
