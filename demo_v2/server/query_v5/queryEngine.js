@@ -1570,9 +1570,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           top.entryRootId=top.current.state.id;
           top.entryRootName=top.current.state.name;
         }
-        thread.hypothesis=top.baseHypothesis||'';
-        thread.hypothesisScore=Number(top.baseScore||0);
-        thread.hypothesisContributions=arr(top.baseHypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+        if(thread.goal.kind!=='causal'){
+          thread.hypothesis=top.baseHypothesis||'';
+          thread.hypothesisScore=Number(top.baseScore||0);
+          thread.hypothesisContributions=arr(top.baseHypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+        }
+        // Causal evidence is cumulative once accepted and source-grounded.
+        // Backtracking changes only where we navigate next, not the evidence list.
         top.hypothesis=thread.hypothesis;
         top.hypothesisScore=thread.hypothesisScore;
         top.hypothesisContributions=arr(thread.hypothesisContributions);
@@ -1582,9 +1586,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       }
       thread.stack.pop();
       const parent=thread.stack.at(-1);
-      thread.hypothesis=parent?.hypothesis||'';
-      thread.hypothesisScore=Number(parent?.hypothesisScore||0);
-      thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+      if(thread.goal.kind!=='causal'){
+        thread.hypothesis=parent?.hypothesis||'';
+        thread.hypothesisScore=Number(parent?.hypothesisScore||0);
+        thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+      }
     }
     return seedGoal(thread);
   };
@@ -1915,7 +1921,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     emit({
       action:'HYPOTHESIS_PROGRESS',goalId:goal.id,
       hypothesis:decision.hypothesis||thread.hypothesis,
-      hypothesisList:arr(thread.hypothesisContributions).map(item=>item.claim),
+      hypothesisList:arr(thread.hypothesisContributions).map(item=>({
+        claim:item.claim||'',
+        sourcePath:item.sourcePath||'',
+        startLine:Number(item.startLine||0),
+        endLine:Number(item.endLine||item.startLine||0),
+        sourceGrounded:item.sourceGrounded===true,
+        evidenceRelevance:Number(item.evidenceRelevance||0)
+      })),
       evidenceRelevance:Number(decision.evidenceRelevance||0),
       hypothesisScore:decision.hypothesisScore,
       previousScore,delta:progress.delta,trend:progress.trend,
