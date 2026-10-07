@@ -16,7 +16,7 @@ const MAX_NEIGHBORS = 18;
 const MAX_SEARCH_RESULTS = 12;
 const MAX_ENTRY_SYMBOLS = 24;
 const MAX_README_CHARS = 5000;
-const CONSTRUCT_INDEX_SCHEMA_VERSION = 2;
+const CONSTRUCT_INDEX_SCHEMA_VERSION = 1;
 const PYTHON_ANALYZER_VERSION = 12;
 
 function normalizeRepoUrl(repoUrl) {
@@ -512,28 +512,8 @@ export class CodeTopology {
   }
 
   buildPalIndexes(rows=[]) {
-    const sourceRows = Array.isArray(rows) ? rows : [];
-    const baseHeaders = ['row','file','line_range','type','name','parent','children','callers','callees'];
-
-    // Add one virtual name column per structural type. For example, a
-    // function row {type:'function', name:'separability_matrix'} also exposes
-    // function:'separability_matrix'. This lets prefix expansion consult only
-    // the unique values for the requested construct type instead of the global
-    // name column.
-    const typeColumns = [...new Set(sourceRows
-      .map((row) => String(row?.type || '').trim().toLowerCase())
-      .filter((type) => type && !baseHeaders.includes(type)))];
-
-    const indexedRows = sourceRows.map((row) => {
-      const type = String(row?.type || '').trim().toLowerCase();
-      const name = String(row?.name || '').trim();
-      return type && name && typeColumns.includes(type)
-        ? { ...row, [type]: name }
-        : row;
-    });
-
-    return createIndexesFromRows(indexedRows, {
-      headers:[...baseHeaders,...typeColumns],
+    return createIndexesFromRows(rows, {
+      headers:['row','file','line_range','type','name','parent','children','callers','callees'],
       excludeColumns:['row'],
       multiValueColumns:['children','callers','callees']
     });
