@@ -81,7 +81,3 @@ export function evaluateCausalContribution({
 export function isCausalEvidenceRelevant(score){
   return Number(score||0)>0;
 }
-
-export function causalNavigationPicks(picks=[]){
-  return arr(picks).filter(pick=>isCausalEvidenceRelevant(pick?.score));
-}
