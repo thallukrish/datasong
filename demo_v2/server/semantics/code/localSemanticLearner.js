@@ -38,7 +38,35 @@ function stateForRegion(symbol,region){
     body:String(region?.body||''),
     parent:region?.parentRegionId||symbol.id,
     parentSymbolId:symbol.id,
-    kind
+    kind,
+    references:arr(region?.references)
+  };
+}
+
+function moduleRegionOwner(explorer,sourcePath=''){
+  return arr(explorer.topology?.moduleRegions)
+    .find(item=>String(item?.sourcePath||'')===String(sourcePath||''))||null;
+}
+
+function stateForModuleRegion(owner,region){
+  const kind=String(region?.kind||'region');
+  const startLine=Number(region?.startLine||0);
+  const sourcePath=String(owner?.sourcePath||'');
+  return {
+    id:region.id,
+    regionId:region.id,
+    type:'code_region',
+    name:`${sourcePath} [${kind} @ ${startLine}]`,
+    symbolId:'',
+    sourcePath,
+    startLine,
+    endLine:Number(region?.endLine||startLine),
+    body:String(region?.body||''),
+    parent:region?.parentRegionId||null,
+    parentSymbolId:null,
+    kind,
+    moduleLevel:true,
+    references:arr(region?.references)
   };
 }
 
@@ -52,10 +80,17 @@ function structuralRegionStates(state,explorer){
 function structuralRegionChildren(state,explorer){
   if(!state||state.type!=='code_region')return[];
   const symbol=explorer.topology?.symbolById?.get(state.symbolId);
-  if(!symbol)return[];
-  return arr(symbol.regions)
+  if(symbol){
+    return arr(symbol.regions)
+      .filter(region=>String(region?.parentRegionId||'')===String(state.regionId||state.id||''))
+      .map(region=>stateForRegion(symbol,region))
+      .filter(region=>region.id);
+  }
+  const owner=moduleRegionOwner(explorer,state.sourcePath);
+  if(!owner)return[];
+  return arr(owner.regions)
     .filter(region=>String(region?.parentRegionId||'')===String(state.regionId||state.id||''))
-    .map(region=>stateForRegion(symbol,region))
+    .map(region=>stateForModuleRegion(owner,region))
     .filter(region=>region.id);
 }
 
@@ -83,9 +118,11 @@ function externalStateForRef(symbol,ref){
 
 function descendantRegionRanges(state,explorer){
   if(state?.type!=='code_region')return[];
-  const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
+  const symbol=explorer.topology?.symbolById?.get(state?.symbolId);
+  const owner=symbol||moduleRegionOwner(explorer,state?.sourcePath);
+  if(!owner)return[];
   const byParent=new Map();
-  for(const region of arr(symbol.regions)){
+  for(const region of arr(owner.regions)){
     const parent=String(region?.parentRegionId||'');
     if(!byParent.has(parent))byParent.set(parent,[]);
     byParent.get(parent).push(region);
@@ -104,8 +141,13 @@ function descendantRegionRanges(state,explorer){
 
 function directCallStates(state,explorer){
   if(state?.type==='code_external')return[];
-  const symbol=explorer.topology?.symbolById?.get(state?.symbolId);if(!symbol)return[];
-  const topRegions=arr(symbol.regions).filter(region=>!region?.parentRegionId);
+  const symbol=explorer.topology?.symbolById?.get(state?.symbolId);
+  const moduleOwner=!symbol&&state?.type==='code_region'
+    ? moduleRegionOwner(explorer,state?.sourcePath)
+    : null;
+  if(!symbol&&!moduleOwner)return[];
+
+  const topRegions=arr((symbol||moduleOwner).regions).filter(region=>!region?.parentRegionId);
   const nestedRanges=descendantRegionRanges(state,explorer);
   const lineOf=(ref)=>Number(ref?.line||ref?.startLine||0);
   const belongsHere=(ref)=>{
@@ -119,13 +161,19 @@ function directCallStates(state,explorer){
       return start<=line&&line<=end;
     });
   };
+  const refs=symbol?arr(symbol.references):arr(state.references);
   const out=[];
-  for(const ref of arr(symbol.references).filter(ref=>ref?.relation==='calls'&&belongsHere(ref))){
+  for(const ref of refs.filter(ref=>ref?.relation==='calls'&&belongsHere(ref))){
     if(ref?.targetSymbolId){
       const target=explorer.topology?.symbolById?.get(ref.targetSymbolId);
-      if(target)out.push(stateForSymbol(target,symbol.id));
+      if(target)out.push(stateForSymbol(target,symbol?.id||null));
     }else if(ref?.external&&ref?.resolution==='external_import'){
-      out.push(externalStateForRef(symbol,ref));
+      const externalOwner=symbol||{
+        id:state.id,
+        sourcePath:state.sourcePath,
+        name:state.name
+      };
+      out.push(externalStateForRef(externalOwner,ref));
     }
   }
   return out;
@@ -199,9 +247,13 @@ export async function ensureLocalCodeSemantics({states,path=[],links=[],explorer
       if(!learned)externalCalls.push({externalId:state.id,name:state.name,sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:text(state.callText||state.body,1200),keywordArgs:arr(state.keywordArgs),reExported:!!state.reExported,boundaryKind:state.boundaryKind||'external-call'});
       continue;
     }
-    const symbol=explorer.topology?.symbolById?.get(state.symbolId);if(!symbol)continue;
-    if(state.type==='code_region'&&!learned)regions.push({regionId:state.regionId,symbolId:state.symbolId,kind:state.kind||'',sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,body:text(state.body,3200)});
-    else if(state.type!=='code_region'&&!learned)symbols.push({symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',sourcePath:symbol.sourcePath||'',startLine:symbol.startLine,endLine:symbol.endLine,body:text(symbol.body,3200)});
+    const symbol=explorer.topology?.symbolById?.get(state.symbolId);
+    if(state.type==='code_region'){
+      if(!learned)regions.push({regionId:state.regionId,symbolId:state.symbolId||'',kind:state.kind||'',sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,body:text(state.body,3200)});
+      continue;
+    }
+    if(!symbol)continue;
+    if(!learned)symbols.push({symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',sourcePath:symbol.sourcePath||'',startLine:symbol.startLine,endLine:symbol.endLine,body:text(symbol.body,3200)});
   }
   if(!symbols.length&&!regions.length&&!externalCalls.length)return{learned:false,reused:requested.length};
   onProgress({action:'LEARN_START',path:arr(path).map(x=>x.name),nodes:[...symbols.map(x=>({id:x.symbolId,name:x.name||x.symbolId})),...regions.map(x=>({id:x.regionId,name:x.regionId})),...externalCalls.map(x=>({id:x.externalId,name:x.qualifiedName||x.name||x.externalId}))]});
