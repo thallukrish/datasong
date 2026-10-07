@@ -112,21 +112,27 @@ For every acceptance criterion, return a groundedness score 0..1. A high score m
 Also return ok=1 only when every hard criterion is grounded at least 0.9 by the selected evidence set. Return only:
 {"ck":[[0,0.0]],"ok":0}.`;
 
-const CAUSAL_MECHANISM_GROUND_SYSTEM = `Verify whether exact source evidence grounds the proposed causal mechanism itself.
+const LOCAL_CAUSAL_EVIDENCE_GROUND_SYSTEM = `Verify one local causal evidence contribution against exact source.
 
-q is the original request.
-goal is the active causal goal and its frozen failingCase.
-hl is the already accepted causal contribution list.
-hc is the CURRENT proposed causal contribution from the visited node.
-ev is selected exact source evidence as [evidenceIndex,path,startLine,endLine,code,claimedConstraintIndexes,why].
+hc is the CURRENT local contribution proposed from the visited semantic node.
+ev is exact source evidence selected from that same node as [evidenceIndex,path,startLine,endLine,code,claimedConstraintIndexes,why].
 
-This is deliberately narrower than behavioral/testcase validation. Judge only whether the supplied source establishes the mechanism claimed by hc: the operation, branch, data flow, mutation, dispatch, state transition, or other code behavior that could cause the reported symptom.
+This is a literal source-grounding check only.
 
-Do not require this local source to independently reproduce the complete failing testcase, exact final output, non-regression behavior, or desired fixed behavior. Those are validated later by a counterfactual intervention against the frozen failingCase.
+Ask exactly:
+"Do the supplied source lines directly establish the local fact stated in hc?"
 
-Return score 0..1 for how strongly the exact source grounds hc as the causal mechanism, and ok=1 only when score >= 0.9. A nearby or merely plausible code location is not enough.
+Do NOT judge whether hc by itself explains the reported bug, failing testcase, final symptom, root cause, or desired fix.
+Do NOT require hc to be an end-to-end causal mechanism.
+Do NOT use the original issue, the accumulated hypothesis, or missing downstream evidence as reasons to reject hc.
+
+A contribution such as "function A delegates to function B", "this branch runs before the CompoundModel branch", or "this operator dispatch calls _cstack" is grounded when the exact source establishes that local fact, even if later evidence is still needed to explain the bug.
+
+Return ok=1 when the source directly establishes hc.
+Return ok=0 only when the source does not establish hc, contradicts it, or hc adds an unsupported inference beyond these lines.
+
 Return only:
-{"score":0.0,"ok":0,"why":""}.`;
+{"ok":0,"why":""}.`;
 
 const COUNTERFACTUAL_VALIDATE_SYSTEM = `Validate a proposed causal diagnosis by deriving the smallest hypothetical code change implied by that diagnosis and testing whether that intervention would fix the exact reported failing condition.
 
@@ -682,7 +688,7 @@ async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evi
   return {scores,ok};
 }
 
-async function verifyCausalMechanismGrounding({question,goal,hypothesisContributions=[],contribution='',evidenceStates,client,model,usage,log,step}){
+async function verifyLocalCausalEvidenceGrounding({goal,contribution='',evidenceStates,client,model,usage,log,step}){
   const evidence=arr(evidenceStates).map((state,index)=>[
     index,
     state.sourcePath||'',
@@ -694,17 +700,14 @@ async function verifyCausalMechanismGrounding({question,goal,hypothesisContribut
   ]);
   if(!evidence.length)return {score:0,ok:false,why:''};
   const payload={
-    q:question,
-    goal:{id:goal?.id||'',kind:goal?.kind||'',text:goal?.text||'',failingCase:goal?.failingCase||''},
-    hl:arr(hypothesisContributions).map(item=>item?.claim||'').filter(Boolean),
     hc:String(contribution||''),
     ev:evidence
   };
-  const call=await modelJson(client,model,CAUSAL_MECHANISM_GROUND_SYSTEM,payload);addUsage(usage,call.usage);
-  const score=Math.max(0,Math.min(1,Number(call.parsed?.score||0)));
-  const ok=Number(call.parsed?.ok||0)===1&&score>=GOAL_CLOSE_SCORE;
+  const call=await modelJson(client,model,LOCAL_CAUSAL_EVIDENCE_GROUND_SYSTEM,payload);addUsage(usage,call.usage);
+  const ok=Number(call.parsed?.ok||0)===1;
+  const score=ok?1:0;
   const why=text(call.parsed?.why||'',600);
-  log('query_v5_causal_mechanism_grounding',{step,goalId:goal?.id||'',payload,result:{score,ok,why},usage:call.usage});
+  log('query_v5_local_causal_evidence_grounding',{step,goalId:goal?.id||'',payload,result:{score,ok,why},usage:call.usage});
   return {score,ok,why};
 }
 
@@ -902,14 +905,14 @@ async function decide({
   if(!entryStage&&sourceBody){
     if(activeGoal?.kind==='causal'){
       causalMechanismGrounding=evidenceStates.length
-        ? await verifyCausalMechanismGrounding({
-            question,goal:activeGoal,hypothesisContributions,
+        ? await verifyLocalCausalEvidenceGrounding({
+            goal:activeGoal,
             contribution:text(call.parsed?.hc||'',700),
             evidenceStates,client,model,usage,log,step
           })
         : {score:0,ok:false,why:''};
       // Keep the immutable symptom/behavior constraints as diagnostics here.
-      // Local source is responsible only for grounding the causal mechanism.
+      // Local source is responsible only for grounding the current local contribution.
       // The failing case and desired behavior are tested by the later
       // counterfactual intervention.
     }else if(evidenceStates.length){

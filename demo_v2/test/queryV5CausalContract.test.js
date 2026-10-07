@@ -51,3 +51,12 @@ test('top-level causal entries reset branch-local hypothesis state',()=>{
   assert.match(engine,/thread\.flatSteps>=MAX_FLAT_STEPS/);
   assert.match(GOAL_DECIDE_SYSTEM,/An entry may remain below another entry's best score while its own hs is still increasing/);
 });
+
+test('local causal source grounding does not require root-cause proof',()=>{
+  assert.match(engine,/LOCAL_CAUSAL_EVIDENCE_GROUND_SYSTEM/);
+  assert.match(engine,/Do NOT judge whether hc by itself explains the reported bug/);
+  assert.match(engine,/Do NOT require hc to be an end-to-end causal mechanism/);
+  assert.match(engine,/const payload=\{\s*hc:String\(contribution\|\|''\),\s*ev:evidence\s*\}/);
+  assert.match(engine,/const score=ok\?1:0/);
+  assert.doesNotMatch(engine,/CAUSAL_MECHANISM_GROUND_SYSTEM/);
+});
