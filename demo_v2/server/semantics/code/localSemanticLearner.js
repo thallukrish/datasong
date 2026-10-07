@@ -5,7 +5,7 @@ const MAX_LOOKAHEAD_NODES = 48;
 
 const LEARN_SYSTEM = `Learn query-independent semantics for the supplied local execution window. flowContext contains only already-learned predecessor semantics. newNodes contains raw repository code plus deterministic call relationships, and may also contain terminal externalCalls for imported APIs whose implementation is outside the repository.
 
-Describe what each supplied function, function-region, or external call does and its execution effect. For externalCalls, use only the supplied import identity and call-site syntax. Explain the local meaning of invoking that imported API here; do not invent or claim knowledge of the dependency implementation beyond what the import name and call syntax support. External calls are terminal boundaries, not repository code to traverse.
+Describe what each supplied function, function-body region, module-level region, or external call does and its execution effect. For externalCalls, use only the supplied import identity and call-site syntax. Explain the local meaning of invoking that imported API here; do not invent or claim knowledge of the dependency implementation beyond what the import name and call syntax support. External calls are terminal boundaries, not repository code to traverse.
 
 Do not answer a user query, infer query relevance, rank branches, or rewrite predecessor semantics. Return one semantic result for every supplied new node as {"symbols":[{"symbolId":"","purpose":"","effect":""}],"regions":[{"regionId":"","purpose":"","effect":""}],"externalCalls":[{"externalId":"","purpose":"","effect":""}]} using only exact supplied IDs.`;
 
