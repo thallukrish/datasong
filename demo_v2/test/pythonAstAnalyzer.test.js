@@ -75,7 +75,7 @@ def foobar(a, b):
 `);
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
-  assert.equal(result.version, 8);
+  assert.equal(result.version, 9);
   assert.equal(result.constructs, undefined);
 
   const facts = result.codeFacts || [];
