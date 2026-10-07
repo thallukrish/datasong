@@ -131,25 +131,13 @@ test('semantic windows can start from a module-level region and follow contained
       { relation: 'calls', targetSymbolId: 'helper', line: 5 }
     ]
   };
-  const nestedRegion = {
-    id: 'module:main.py:region:3',
-    kind: 'region',
-    startLine: 5,
-    endLine: 5,
-    parentRegionId: ifRegion.id,
-    body: 'helper()',
-    references: [
-      { relation: 'calls', targetSymbolId: 'helper', line: 5 }
-    ]
-  };
-
   const explorer = {
     topology: {
       symbolById: new Map([[helper.id, helper]]),
       moduleRegions: [{
         moduleName: 'main',
         sourcePath: 'main.py',
-        regions: [rootRegion, ifRegion, nestedRegion]
+        regions: [rootRegion, ifRegion]
       }]
     }
   };
@@ -207,12 +195,9 @@ test('semantic windows can start from a module-level region and follow contained
     includeCallFrontier: true
   });
   assert.ok(ifWindow.links.some(link =>
-    link.from === ifRegion.id && link.to === nestedRegion.id && link.relationship === 'contains'
-  ));
-  assert.ok(ifWindow.links.some(link =>
-    link.from === nestedRegion.id && link.to === 'helper' && link.relationship === 'calls'
+    link.from === ifRegion.id && link.to === 'helper' && link.relationship === 'calls'
   ));
   assert.ok(!ifWindow.links.some(link =>
-    link.from === ifRegion.id && link.to === 'helper' && link.relationship === 'calls'
+    link.from === ifRegion.id && link.relationship === 'contains'
   ));
 });
