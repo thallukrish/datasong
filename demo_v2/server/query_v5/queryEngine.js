@@ -951,14 +951,14 @@ async function decide({
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const assessment=sourceBody&&['confirm','revise','reject'].includes(String(call.parsed?.assessment||'').toLowerCase())
     ?String(call.parsed.assessment).toLowerCase():'';
-  const proposedContribution=entryStage?'':text(call.parsed?.hc||'',700);
+  const currentContribution=entryStage?'':text(call.parsed?.hc||'',700);
   const evidenceRelevance=!entryStage&&activeGoal?.kind==='causal'
     ? Math.max(0,Math.min(1,Number(call.parsed?.er||0)))
     : 0;
   const causalDisplayHypothesis=activeGoal?.kind==='causal'
     ? causalHypothesisText([
         ...arr(hypothesisContributions),
-        ...(proposedContribution?[{claim:proposedContribution}]:[])
+        ...(currentContribution?[{claim:currentContribution}]:[])
       ])
     : '';
 
@@ -966,7 +966,7 @@ async function decide({
     explained:groundedHardConstraintsMet&&!unresolvedOther,
     assessment,
     evidenceRelevance,
-    contribution:proposedContribution,
+    contribution:currentContribution,
     causalHypothesisComplete:!entryStage&&activeGoal?.kind==='causal'&&Number(call.parsed?.cx||0)===1,
     hypothesis:entryStage?'':activeGoal?.kind==='causal'?causalDisplayHypothesis:text(call.parsed?.h||hypothesis||'',900),
     picks,
