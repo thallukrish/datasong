@@ -1,6 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 import { selectCodeEntries } from './codeEntrySelector.js';
+import { CAUSAL_EVIDENCE_RELEVANCE_MIN, causalHypothesisText, causalNavigationPicks, evaluateCausalContribution } from './causalEvidence.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
@@ -48,9 +49,9 @@ q is the original request.
 g is the goal ledger as [goalId,kind,status,text,dependsOn,hardConstraints,optionalConstraints,failingCase].
 u is the active goal ID.
 f is previously established evidence as [factId,status,sourceGoalId,sourceGoalKind,text].
-h is the rolling evidence-backed hypothesis summary.
+h is a derived display summary. For causal goals the authoritative hypothesis is hl, not h.
 hl is the ordered list of already accepted causal contributions as [claim,path,startLine,endLine,sourceGrounded].
-ps is the score of that accepted hypothesis before visiting n.
+ps is the overall issue-alignment score of that accepted causal evidence list before visiting n.
 n is the semantic node currently being visited, or null during entry comparison.
 c is the set of semantic navigation candidates as [candidateIndex,type,name,purpose,effect].
 src is exact source for n only when you explicitly requested source inspection on the previous decision.
@@ -63,38 +64,34 @@ ENTRY STAGE: when n is null, compare the structurally shortlisted entry points u
 - Score EVERY supplied candidate in p as [candidateIndex,entryNavigationScore]. entryNavigationScore is 0..1 and means "how strongly does the learned meaning of this code make it a useful starting point for investigating the full active goal?"
 - Rank the candidates strongest to weakest. Use the full issue and active goal, including symptom/change/result terms, to distinguish structurally similar entries.
 - Give positive scores to every genuinely plausible starting entry. A score of 0 means the entry is not worth entering.
-- Do not form or update h yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return h="", hc="", cx=0, gs=[], ck=[], hs=0.
+- Do not form or update causal evidence yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return er=0, h="", hc="", cx=0, gs=[], ck=[], hs=0.
 - Once LeMap enters the highest-ranked entry, that entry becomes the first visited semantic evidence. Lower-ranked positive entries remain alternatives for backtracking/reseeding. The normal SEMANTIC WALK then forms or revises the hypothesis from visited evidence.
 
-SEMANTIC WALK: when n is present and src is absent, treat h as the branch-local accumulated explanation for the active goal. Integrate only evidence from the current visited semantic node. Do not treat unvisited lookahead nodes as evidence.
-- For causal goals, hl is the accepted causal hypothesis. Decide whether the CURRENT visited node adds one distinct causal contribution. Return that contribution in hc as a concise claim, or hc="" when this node adds nothing.
-- For a causal goal, evaluate the tentative ordered list hl + hc against the original reported issue and frozen failingCase. hs is the alignment of that entire tentative list to the issue, not the relevance of the current node alone. Compare it with ps.
-- A locally relevant-looking region can still be the wrong causal path. If adding hc makes the accumulated explanation fit the reported issue worse, hs must decrease. LeMap will reject that contribution and backtrack.
-- cx=1 only when the accumulated causal list forms a coherent end-to-end explanation from the distinguishing reported condition through the relevant code behavior to the observed symptom. A single locally grounded mechanism is not automatically complete. Otherwise cx=0.
-- For non-causal goals return hc="" and cx=0.
+SEMANTIC WALK: when n is present and src is absent, evaluate the current visited evidence in two separate stages. Integrate only evidence from the current visited semantic node. Do not treat unvisited lookahead nodes as evidence.
+- LEVEL 1, CURRENT EVIDENCE: return er from 0..1 for how important the CURRENT visited evidence is to investigating or explaining the active issue. This is local evidence relevance only. A node can be highly relevant because it exposes a dispatch, delegation, branch, mutation, data flow, or other connection even when it does not by itself explain the complete issue.
+- For causal goals, if the current evidence supports one distinct causal contribution, return it in hc as a concise claim. Otherwise return hc="". Do not invent a contribution merely because er is high.
+- LEVEL 2, ACCUMULATED EVIDENCE: hl is the authoritative accepted causal hypothesis. If hc is non-empty, evaluate the tentative ordered list hl + hc against the original reported issue and frozen failingCase. Return hs as the overall issue-alignment of that whole tentative list. If hc is empty, hs must equal ps because the accepted causal hypothesis has not changed.
+- A current evidence item may be locally important (high er) yet still make the accumulated explanation worse. In that case hs must decrease. LeMap will reject that contribution while still using local relevance to navigate.
+- cx=1 only when the accumulated causal list including hc forms a coherent end-to-end explanation from the distinguishing reported condition through relevant code behavior to the observed symptom. Otherwise cx=0.
+- For causal goals h is display-only. Do not use h as evidence and do not let h influence er or hs. The authoritative causal state is hl plus the tentative hc.
+- For non-causal goals return hc="", cx=0 and use the existing h/constraint evaluation normally.
 - The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace them from candidate evidence.
-- HYPOTHESIS INVARIANT: as soon as the current visited evidence or any immediate candidate produces a positive semantic signal above 0, h must be non-empty. If no prior hypothesis exists, form the best provisional hypothesis supported by the current visited evidence and the direction indicated by the positive candidate signal. A provisional hypothesis may be incomplete, but it must state what currently appears to explain or answer the goal.
-- Once h exists, every subsequent visited evidence item must keep, strengthen, refine, weaken, or replace it. Never return h="" while continuing a branch with positive scores.
-- Candidate scores are not a substitute for a hypothesis. If p contains any positive expectedHypothesisScore, h must describe the current best explanation that those candidates are expected to strengthen.
-- Revise h when the visited semantic evidence warrants it. Do not defend h merely because it already exists.
-- Score the resulting hypothesis against those fixed constraints. Return ck as [[constraintIndex,score],...] using concatenated hardConstraints then optionalConstraints, with each score 0..1. The constraint text itself must not be returned.
-- hs is the overall hypothesis-match score 0..1. It summarizes how well the accumulated evidence-backed hypothesis satisfies the active goal. Hard constraints dominate this score.
-- gs reports goal sufficiency as [[goalId,score]]. It should agree with the hypothesis/constraint evidence. Use 1.0 when the hypothesis is sufficient to answer the goal; do not reserve 1.0 for exhaustive repository certainty.
-- l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only. Use it to estimate whether a branch is likely to strengthen the hypothesis, stay flat, or weaken it, especially for currently weak hard constraints.
-- p ranks at most 3 immediate semantic continuations. Return rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]. The score is the expected hypothesis match after useful exploration down that branch, not generic relevance. Compare it to the current hs: a candidate below hs is a weakening branch and should normally not be selected; a candidate near hs is flat evidence; a candidate above hs is strengthening evidence. constraintIndexes are unresolved constraints that the branch appears capable of improving.
-- a contains only direct observations established by the visited semantic node. For causal goals, do not put causal interpretations, explanations, inferred mechanisms, or restatements of h into a; those remain branch-local in h. Every item in a must be a plain string, never an array or object.
+- Score fixed constraints in ck as diagnostics. For causal goals hs is NOT derived from ck; it is the alignment of the causal evidence list to the original issue.
+- gs reports goal sufficiency as [[goalId,score]].
+- l contains bounded semantic lookahead for each immediate candidate. Lookahead is navigation evidence only.
+- p ranks at most 3 immediate semantic continuations. For causal goals return [candidateIndex,expectedEvidenceRelevance,[]], where expectedEvidenceRelevance estimates LEVEL 1 relevance of evidence likely to be found by entering that candidate. Do not compare candidate relevance to hs. For non-causal goals retain [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
+- a contains only direct observations established by the visited semantic node. For causal goals, causal interpretations belong in hc, not a.
 - ev=[] while src is absent.
-- i=1 requests exact source for the CURRENT semantic node when its semantics materially affect the hypothesis but exact code is needed to establish or reject an unresolved hard constraint. Otherwise i=0.
+- i=1 requests exact source for the CURRENT semantic node when its semantics are important and exact code is needed to establish or reject hc or another material claim. Otherwise i=0.
 - Do not request source merely to browse.
 
-SOURCE DIAGNOSIS: when src is present, stop treating h as something to confirm. h is only the previous candidate explanation.
-- Re-derive the best explanation from the supplied source plus already established facts.
-- For a causal goal, use this stage to establish or reject the CURRENT node's contribution hc in exact source. Re-evaluate the tentative ordered list hl + hc against the issue and return hs for the whole list. Do not demand that one local source range prove the complete failing testcase or desired corrected behavior.
+SOURCE DIAGNOSIS: when src is present, evaluate the exact source for the current node.
+- For causal goals, re-evaluate er from the exact source, establish or reject the CURRENT node's contribution hc, and re-evaluate the tentative ordered list hl + hc against the issue. Return hs for the whole list. If source rejects hc, return hc="" and hs=ps. Do not demand that one local source range prove the complete failing testcase or desired corrected behavior.
+- For non-causal goals, re-derive the best explanation from supplied source plus already established facts.
 - For causal goals, cx=1 only when the accumulated list is now a coherent end-to-end causal explanation. Exact grounding of one contribution by itself does not make cx=1.
 - For a change goal, identify what the existing source does at the requested change site and state the source-backed modification needed to satisfy the requested change. Do not turn it into a causal bug diagnosis unless the request itself is causal.
-- Return assessment as one of "confirm", "revise", or "reject" describing what the supplied source does to the previous h.
-- For causal goals, explicitly test whether the proposed mechanism explains the distinguishing condition in the issue: what operation is involved, what differs in the failing case, why that difference changes behavior, and how that produces the reported symptom.
-- If the source supports a different mechanism better than h, replace h. Do not preserve an earlier explanation merely because it is plausible or already accumulated.
+- Return assessment as one of "confirm", "revise", or "reject" describing what the supplied source establishes.
+- For causal goals, test only the current hc against source and then score hl + hc against the distinguishing condition in the issue. Do not replace already accepted hl with a speculative prose explanation.
 - A causal hypothesis must not receive a high hard-constraint score merely because the source contains code related to the symptom. It must account for the distinguishing behavior requested by the goal.
 - src.lines contains LeMap-assigned source evidence candidates as [evidenceIndex,sourceText]. LeMap owns source coordinates; do not invent or return line numbers.
 - First determine the mechanism, then select ev as [[evidenceIndex,[constraintIndexes],"why"],...] containing only the smallest combined set of source candidates that establishes that mechanism.
@@ -110,7 +107,7 @@ Never invent implementation details not present in learned semantics, supported 
 For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
 For SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 Return only:
-{"assessment":"","hc":"","cx":0,"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+{"assessment":"","er":0.0,"hc":"","cx":0,"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
 const HYPOTHESIS_REPAIR_SYSTEM = `Repair an invalid semantic-walk decision. LeMap detected positive semantic signal but the model returned an empty hypothesis.
@@ -825,7 +822,7 @@ async function decide({
 
   let call=await modelJson(client,model,GOAL_DECIDE_SYSTEM,payload);addUsage(usage,call.usage);
 
-  if(!entryStage&&!sourceBody){
+  if(!entryStage&&!sourceBody&&activeGoal?.kind!=='causal'){
     const parsedP=arr(call.parsed?.p);
     const positiveCandidate=parsedP.some(row=>Number(row?.[1]||0)>0);
     const positiveSemanticSignal=
@@ -1018,12 +1015,24 @@ async function decide({
   const unresolvedOther=arr(goals).some(goal=>goal.id!==activeGoalId&&goal.status!=='resolved');
   const assessment=sourceBody&&['confirm','revise','reject'].includes(String(call.parsed?.assessment||'').toLowerCase())
     ?String(call.parsed.assessment).toLowerCase():'';
+  const proposedContribution=entryStage?'':text(call.parsed?.hc||'',700);
+  const evidenceRelevance=!entryStage&&activeGoal?.kind==='causal'
+    ? Math.max(0,Math.min(1,Number(call.parsed?.er||0)))
+    : 0;
+  const causalDisplayHypothesis=activeGoal?.kind==='causal'
+    ? causalHypothesisText([
+        ...arr(hypothesisContributions),
+        ...(proposedContribution?[{claim:proposedContribution}]:[])
+      ])
+    : '';
+
   const result={
     explained:groundedHardConstraintsMet&&!unresolvedOther,
     assessment,
-    contribution:entryStage?'':text(call.parsed?.hc||'',700),
+    evidenceRelevance,
+    contribution:proposedContribution,
     causalHypothesisComplete:!entryStage&&activeGoal?.kind==='causal'&&Number(call.parsed?.cx||0)===1,
-    hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
+    hypothesis:entryStage?'':activeGoal?.kind==='causal'?causalDisplayHypothesis:text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:entryStage?[]:arr(call.parsed?.a),
     disputes:entryStage?[]:arr(call.parsed?.d),
@@ -1047,23 +1056,8 @@ async function decide({
     supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
   };
 
-  if(!entryStage&&!sourceBody){
-    const hasPositiveContinuation=picks.some(pick=>Number(pick.score||0)>0);
-    if(hasPositiveContinuation&&!String(result.hypothesis||'').trim()){
-      result.picks=[];
-      result.hypothesisScore=0;
-      result.hardConstraintsMet=false;
-      result.goalResolutions=[];
-      result.explained=false;
-      log('query_v5_hypothesis_invariant_enforced',{
-        step,activeGoalId,currentState:currentState?.name||'',
-        action:'discarded positive continuations because no hypothesis was formed'
-      });
-    }
-  }
-
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
-    explained:result.explained,assessment:result.assessment,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,
+    explained:result.explained,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
     evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
@@ -1073,7 +1067,7 @@ async function decide({
 
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
-    action:'DECIDE',step,mode,assessment:result.assessment,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,explained:result.explained,
+    action:'DECIDE',step,mode,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,explained:result.explained,
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
