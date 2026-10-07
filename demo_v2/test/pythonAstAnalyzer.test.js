@@ -75,7 +75,7 @@ def foobar(a, b):
 `);
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
-  assert.equal(result.version, 7);
+  assert.equal(result.version, 8);
   assert.equal(result.constructs, undefined);
 
   const facts = result.codeFacts || [];
@@ -116,7 +116,7 @@ def build(x):
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['main.py'] });
   const build = (result.symbols || []).find((symbol) => symbol.name === 'build');
-  const blocks = (build?.regions || []).filter((region) => region.kind === 'block');
+  const blocks = (build?.regions || []).filter((region) => region.kind === 'region');
   const conditional = (build?.regions || []).find((region) => region.kind === 'if');
 
   assert.ok(build);
@@ -128,10 +128,59 @@ def build(x):
   const file = (result.moduleRegions || []).find((item) => item.sourcePath === 'main.py');
   assert.ok(file);
   assert.ok((file.regions || []).some((region) =>
-    region.kind === 'block' &&
+    region.kind === 'region' &&
     /CONFIG = \{\}/.test(region.body) &&
     /LIMIT = 10/.test(region.body)
   ));
+});
+
+test('Python structural CSV materializes straight-line region rows with containment', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-region-csv-'));
+  const repoDir = path.join(root, 'repo');
+  const cacheRoot = path.join(root, 'cache');
+  await fs.mkdir(repoDir, { recursive: true });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(repoDir, 'main.py'), `
+CONFIG = 1
+LIMIT = 2
+
+def build(x):
+    value = x + 1
+    doubled = value * 2
+    if doubled:
+        result = helper(doubled)
+    final = doubled
+    return final
+`);
+
+  const topology = new CodeTopology({ cacheRoot });
+  topology.repoDir = repoDir;
+  topology.repoUrl = 'https://example.invalid/regions.git';
+  topology.files = ['main.py'];
+  topology.commit = 'cccccccccccccccccccccccccccccccccccccccc';
+
+  await topology.buildConstructIndex();
+
+  const rows = topology.codeStructureRows;
+  const moduleRegion = rows.find((row) => row.type === 'region' && row.line_range === '2-3');
+  const functionRegion = rows.find((row) => row.type === 'region' && row.line_range === '6-7');
+  const ifRow = rows.find((row) => row.type === 'if');
+  const nestedRegion = rows.find((row) => row.type === 'region' && row.line_range === '9');
+  const trailingRegion = rows.find((row) => row.type === 'region' && row.line_range === '10-11');
+  const buildRow = rows.find((row) => row.type === 'function' && row.name === 'build');
+  const valueRow = rows.find((row) => row.type === 'assignment' && row.name === 'value');
+  const helperCall = rows.find((row) => row.type === 'call' && row.name === 'helper');
+
+  assert.ok(moduleRegion);
+  assert.equal(moduleRegion.parent, '');
+  assert.ok(functionRegion);
+  assert.equal(functionRegion.parent, buildRow.row);
+  assert.equal(valueRow.parent, functionRegion.row);
+  assert.equal(ifRow.parent, buildRow.row);
+  assert.equal(nestedRegion.parent, ifRow.row);
+  assert.equal(trailingRegion.parent, buildRow.row);
+  assert.equal(helperCall.parent, rows.find((row) => row.type === 'assignment' && row.name === 'result').row);
 });
 
 test('CodeTopology persists structural CSV with JSON-array relation cells', async (t) => {
