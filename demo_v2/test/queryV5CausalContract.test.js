@@ -60,3 +60,10 @@ test('local causal source grounding does not require root-cause proof',()=>{
   assert.match(engine,/const score=ok\?1:0/);
   assert.doesNotMatch(engine,/CAUSAL_MECHANISM_GROUND_SYSTEM/);
 });
+
+test('causal flat budget starts only after accepted evidence and never blocks strengthening',()=>{
+  assert.match(engine,/hasAcceptedCausalEvidence=goal\.kind==='causal'&&arr\(thread\.hypothesisContributions\)\.length>0/);
+  assert.match(engine,/hasAcceptedCausalEvidence&&progress\.trend==='flat'\?thread\.flatSteps\+1:0/);
+  assert.match(engine,/if\(goal\.kind==='causal'\)return strengthens\|\|\(hasAcceptedHypothesis&&staysFlat&&canSpendFlatStep\)/);
+  assert.doesNotMatch(engine,/!causalFlatExhausted&&\(strengthens/);
+});

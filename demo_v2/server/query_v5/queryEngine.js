@@ -1921,7 +1921,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const previousScore=Number(thread.hypothesisScore||0);
     const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
     thread.hypothesisScore=decision.hypothesisScore;
-    thread.flatSteps=progress.trend==='flat'?thread.flatSteps+1:0;
+    const hasAcceptedCausalEvidence=goal.kind==='causal'&&arr(thread.hypothesisContributions).length>0;
+    thread.flatSteps=goal.kind==='causal'
+      ? (hasAcceptedCausalEvidence&&progress.trend==='flat'?thread.flatSteps+1:0)
+      : (progress.trend==='flat'?thread.flatSteps+1:0);
     frame.flatSteps=thread.flatSteps;
     if(!decision.causalRejected&&decision.hypothesisScore>thread.bestScore){
       thread.bestScore=decision.hypothesisScore;
@@ -2048,12 +2051,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
       const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
       const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
-      const causalFlatExhausted=goal.kind==='causal'&&thread.flatSteps>=MAX_FLAT_STEPS;
+      const hasAcceptedHypothesis=arr(thread.hypothesisContributions).length>0;
 
-      // Causal navigation is branch-local. Keep following an entry while its
-      // accumulated score is growing. Flat progress gets only two hops; once
-      // that budget is exhausted, leave the path. Weakening is never followed.
-      if(goal.kind==='causal')return !causalFlatExhausted&&(strengthens||(staysFlat&&canSpendFlatStep));
+      // A strengthening prediction always wins, even after earlier flat hops.
+      // Before the first accepted causal contribution, hs=0 is only a search
+      // baseline, so navigation-only nodes do not consume the flat budget and
+      // zero-improvement candidates are not followed merely because they are flat.
+      if(goal.kind==='causal')return strengthens||(hasAcceptedHypothesis&&staysFlat&&canSpendFlatStep);
       return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
     });
     if(warm.length){
@@ -2090,13 +2094,15 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // Flat exploration is tolerated briefly only while a branch still appears
     // capable of resolving an unmet hard constraint. Otherwise backtrack and
     // compare alternate branch potential with the best hypothesis seen so far.
-    if(thread.flatSteps>=MAX_FLAT_STEPS){
+    if(goal.kind!=='causal'||arr(thread.hypothesisContributions).length>0){
+      if(thread.flatSteps>=MAX_FLAT_STEPS){
       emit({
         action:'HYPOTHESIS_FLAT',goalId:goal.id,state:state.name,
         hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,
         bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
         path:path.map(x=>x.name)
       });
+      }
     }
 
     await resumeThread(thread);
