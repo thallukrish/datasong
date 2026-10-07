@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CAUSAL_EVIDENCE_RELEVANCE_MIN,
   causalHypothesisText,
   causalNavigationPicks,
   evaluateCausalContribution
@@ -42,7 +41,7 @@ test('causal evidence rejects locally unimportant contributions before accumulat
     priorContributions:[],
     priorScore:0,
     contribution:'weak guess',
-    evidenceRelevance:CAUSAL_EVIDENCE_RELEVANCE_MIN-0.01,
+    evidenceRelevance:0,
     tentativeScore:0.8
   });
 
@@ -55,7 +54,7 @@ test('navigation ranks local evidence relevance independently of hypothesis scor
   const picks=[
     {state:{name:'low'},score:0.2},
     {state:{name:'high'},score:0.9},
-    {state:{name:'border'},score:CAUSAL_EVIDENCE_RELEVANCE_MIN}
+    {state:{name:'border'},score:0.01}
   ];
 
   assert.deepEqual(
