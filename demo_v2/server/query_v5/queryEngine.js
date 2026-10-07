@@ -938,9 +938,11 @@ async function decide({
   // During semantic traversal, hs is the branch-local explanatory strength.
   // Constraint scores remain diagnostics until exact source is inspected.
   // Once source is present, grounded hard-constraint scores become authoritative.
-  const hypothesisScore=sourceBody
-    ? (semanticConstraintScore||modelHypothesisScore||activeGoalScore)
-    : (modelHypothesisScore||semanticConstraintScore||activeGoalScore);
+  const hypothesisScore=!entryStage&&activeGoal?.kind==='causal'
+    ? modelHypothesisScore
+    : sourceBody
+      ? (semanticConstraintScore||modelHypothesisScore||activeGoalScore)
+      : (modelHypothesisScore||semanticConstraintScore||activeGoalScore);
   const hardConstraintsMet=!entryStage&&Boolean(sourceBody)&&hardScores.length>0&&hardScores.every(score=>score>=GOAL_CLOSE_SCORE);
   // Goal closure is anchored in the accumulated hypothesis satisfying every
   // hard acceptance constraint. gs remains a model diagnostic, not the sole
@@ -1000,7 +1002,7 @@ async function decide({
     : [];
   const groundedHardScores=groundedConstraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
   const groundedHypothesisScore=sourceBody&&activeGoal?.kind==='causal'
-    ? (modelHypothesisScore||activeGoalScore||hypothesisScore)
+    ? modelHypothesisScore
     : sourceBody&&groundedHardScores.length
       ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
       : hypothesisScore;
