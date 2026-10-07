@@ -140,7 +140,7 @@ function queryProgressMarkup(p){
   const candidates=(p.candidates||[]).map(x=>({...x,n:Number(x.navigation||0)})).sort((a,b)=>b.n-a.n).slice(0,5);
   const branches=candidates.map((x,i)=>{
     const targets=!isCausal&&(x.targets||[]).length?' · targets '+x.targets.map(n=>'C'+(Number(n)+1)).join(', '):'';
-    const metric=isCausal?'expected evidence relevance ':'expected match ';
+    const metric=isCausal?'expected overall evidence match ':'expected match ';
     return '<div class="qbranch '+(i===0?'best':'')+'">├─ '+esc(x.name)+' · '+metric+Math.round(x.n*100)+'%'+esc(targets)+'</div>';
   }).join('');
   const causalEvidence=isCausal&&causalUi?causalUi.evidenceListMarkup(p,esc):'';
