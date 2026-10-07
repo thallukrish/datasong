@@ -5,7 +5,7 @@
 <section id="profilesScreen" class="screen"><div class="twocol"><aside class="left"><div class="label">enterprises</div><div id="enterpriseList"></div><button id="addEnterprise" class="secondary new">+ Add enterprise</button></aside><main class="main"><div id="profileEmpty" class="empty">Select an enterprise.</div><div id="profileDetail" class="profile hidden"><div class="label">enterprise profile</div><h1 id="profileName"></h1><p id="profileDesc"></p><div class="groups">artifacts</div><div class="artifacts"><button class="artifact" id="repoArtifact"><strong>Git repository</strong><span>Code and executable workflows</span></button><button class="artifact disabled" disabled><strong>Databases</strong><span>Not yet implemented</span></button><button class="artifact disabled" disabled><strong>Documents</strong><span>Not yet implemented</span></button><button class="artifact disabled" disabled><strong>Email</strong><span>Not yet implemented</span></button><button class="artifact disabled" disabled><strong>Slack</strong><span>Not yet implemented</span></button><button class="artifact disabled" disabled><strong>Teams</strong><span>Not yet implemented</span></button></div><div id="profileForm" class="form hidden"><div class="field"><label>Company name</label><input id="company"></div><div class="field"><label>Semantic profile</label><select id="semanticProfile"><option value="enterprise">Enterprise semantics</option><option value="code">Generic code semantics / SWE-Explore</option></select></div><div class="field"><label>Description</label><textarea id="business"></textarea></div><div class="field"><label>Git repository URL</label><input id="repo"></div><div class="field"><label>Repository branch or commit <span class="small">(optional)</span></label><input id="repoCommit" placeholder="branch name or commit SHA"></div><div id="repoPrepareStatus" class="small"></div><button id="saveProfile" class="primary">Save</button> <button id="cancelProfile" class="secondary">Cancel</button></div></div></main></div></section>
 <section id="learnScreen" class="screen hidden"><div class="learn"><aside class="rail"><div class="label">selected enterprise</div><div id="learnEnterprise" class="enterprise-name"></div><div id="learnRepo" class="small"></div><div class="coverage"><div class="coverage-top"><span>overall learning</span><b id="coveragePct">0%</b></div><div class="bar"><div id="coverageFill" class="fill"></div></div><div id="coverageText" class="small"></div></div><div id="activity" class="activity"></div><div class="search"><div class="searchbox"><input id="learnSearch" autocomplete="off" placeholder="Find workflow or flow path"><button id="find" class="secondary">Find</button></div><div id="searchResults"></div></div><div id="threads"></div></aside><main class="wiki"><div class="label">learning view</div><h1 id="wikiTitle">Enterprise map</h1><p id="wikiIntro" class="small"></p><div class="section"><h2>Trigger</h2><div id="trigger"></div></div><div class="section"><h2>Steps</h2><div id="steps"></div></div><div class="section"><h2>Entities & persistent objects</h2><div id="workflowEntities" class="chips"></div></div><div class="section"><h2>Relationships</h2><div id="workflowRelations"></div></div></main></div></section>
 <section id="mapScreen" class="screen hidden"><div class="map"><aside class="left"><div class="label">enterprise map</div><div id="mapIndex"></div></aside><main id="mapDetail" class="main"><div class="empty">Select a workflow or entity.</div></main></div></section>
-<section id="queryScreen" class="screen hidden"><div class="querywrap"><h1>Ask lemap.</h1><p class="small">lemap uses learned workflow detail and can also point to relevant flow paths that have not been explored yet.</p><div class="querybox"><textarea id="question" rows="3" placeholder="Ask a business question…"></textarea><button id="ask" class="primary">Ask</button></div><div id="queryResult" class="query-result hidden"></div></div></section></div><script src="/learnStatus.js"></script><script>
+<section id="queryScreen" class="screen hidden"><div class="querywrap"><h1>Ask lemap.</h1><p class="small">lemap uses learned workflow detail and can also point to relevant flow paths that have not been explored yet.</p><div class="querybox"><textarea id="question" rows="3" placeholder="Ask a business question…"></textarea><button id="ask" class="primary">Ask</button></div><div id="queryResult" class="query-result hidden"></div></div></section></div><script src="/learnStatus.js"></script><script src="/queryCausalProgress.js"></script><script>
 const $=id=>document.getElementById(id),esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[c])),uniq=a=>[...new Set((a||[]).filter(Boolean).map(String))];
 const DEMO={id:'popcommerce',name:'PopCommerce',description:'An ecommerce company selling products online. Customers browse products, maintain carts, place orders and make payments. The business manages fulfilment, inventory, shipping, returns and accounting.',repoUrl:'https://github.com/moqui/PopCommerce'};
 let profiles=[],selectedId='',editingNew=false,state={},selectedArc='',screen='profiles',selectedMap=null,searchTimer=null,lastSearch='';
@@ -125,6 +125,7 @@ function renderMapDetail(){if(!selectedMap)return;const ws=businessArcs(),em=ent
 function queryProgressMarkup(p){
   if(!p||!p.question)return'';
   const goals=p.goals||[],active=goals.find(g=>g[0]===p.activeGoalId)||goals.find(g=>g[2]!=='resolved')||goals[0];
+  const causalUi=window.LeMapCausalProgress,isCausal=causalUi?.isCausalGoal(active)||false;
   const goalTitle=active?esc(active[3]||active[0]||''):'';const queryStatus=p.status||'searching';
   const score=Math.max(0,Math.min(1,Number(p.hypothesisScore||0)));
   const best=Math.max(score,Number(p.bestScore||0));
@@ -138,9 +139,11 @@ function queryProgressMarkup(p){
   }).join('');
   const candidates=(p.candidates||[]).map(x=>({...x,n:Number(x.navigation||0)})).sort((a,b)=>b.n-a.n).slice(0,5);
   const branches=candidates.map((x,i)=>{
-    const targets=(x.targets||[]).length?' · targets '+x.targets.map(n=>'C'+(Number(n)+1)).join(', '):'';
-    return '<div class="qbranch '+(i===0?'best':'')+'">├─ '+esc(x.name)+' · expected match '+Math.round(x.n*100)+'%'+esc(targets)+'</div>';
+    const targets=!isCausal&&(x.targets||[]).length?' · targets '+x.targets.map(n=>'C'+(Number(n)+1)).join(', '):'';
+    const metric=isCausal?'expected evidence relevance ':'expected match ';
+    return '<div class="qbranch '+(i===0?'best':'')+'">├─ '+esc(x.name)+' · '+metric+Math.round(x.n*100)+'%'+esc(targets)+'</div>';
   }).join('');
+  const causalEvidence=isCausal&&causalUi?causalUi.evidenceListMarkup(p,esc):'';
   const evidence=(p.evidenceRanges||[]).map(r=>'<div class="qstep done">✓ '+esc((r.sourcePath||'source')+':'+(r.startLine||'')+(r.endLine&&r.endLine!==r.startLine?'-'+r.endLine:''))+(r.why?' · '+esc(r.why):'')+'</div>').join('');
   const entryBranches=(p.entryBranches||[]).slice().sort((a,b)=>Number(b.bestScore||0)-Number(a.bestScore||0)).map((b,i)=>'<div class="qbranch '+(i===0?'best':'')+'">├─ '+esc(b.name||'entry')+' · current '+Math.round(Number(b.currentScore||0)*100)+'% · best '+Math.round(Number(b.bestScore||0)*100)+'%</div>').join('');
   const cf=p.counterfactualValidation;
@@ -151,17 +154,19 @@ function queryProgressMarkup(p){
     (goalTitle?'<div class="label">active goal</div><div class="qhypothesis">'+goalTitle+'</div>':'')+
     '<div class="qgrid">'+
       '<div class="qmetric"><span class="label">status</span><b>'+esc(queryStatus==='best_so_far_exhausted'?'best so far · unresolved':queryStatus)+'</b></div>'+
-      '<div class="qmetric"><span class="label">hypothesis match</span><b>'+Math.round(score*100)+'%</b></div>'+
+      (isCausal?'<div class="qmetric"><span class="label">current evidence relevance</span><b>'+causalUi.localRelevanceMetric(p)+'</b></div>':'')+
+      '<div class="qmetric"><span class="label">'+(isCausal?'overall evidence match':'hypothesis match')+'</span><b>'+Math.round(score*100)+'%</b></div>'+
       '<div class="qmetric"><span class="label">trend</span><b class="qtrend '+esc(trend)+'">'+esc(trendText)+'</b></div>'+
       '<div class="qmetric"><span class="label">best reached</span><b>'+Math.round(best*100)+'%</b></div>'+
       '<div class="qmetric qtokens"><span class="label">tokens</span><b>'+total.toLocaleString()+'</b><span class="small">'+prompt.toLocaleString()+' in · '+completion.toLocaleString()+' out</span></div>'+
     '</div>'+
-    '<div class="label">'+(p.explained?'explanation':'current hypothesis')+'</div>'+
+    '<div class="label">'+(p.explained?'explanation':isCausal?'current causal chain':'current hypothesis')+'</div>'+
     (p.hypothesis?'<div class="qhypothesis">'+esc(p.hypothesis)+'</div>':'<div class="small">Waiting for semantic evidence…</div>')+
-    (constraints?'<div class="qconstraints"><div class="label">hypothesis vs acceptance criteria</div>'+constraints+'</div>':'')+
+    causalEvidence+
+    (constraints?'<div class="qconstraints"><div class="label">'+(isCausal?'acceptance criteria diagnostics':'hypothesis vs acceptance criteria')+'</div>'+constraints+'</div>':'')+
     (path?'<div class="qpath"><div class="label">current path</div>'+path+'</div>':'')+
     (branches?'<div class="qbranches"><div class="label">semantic lookahead</div>'+branches+'</div>':'')+
-    (entryBranches?'<div class="qbranches"><div class="label">entry branch scores</div>'+entryBranches+'</div>':'')+
+    (!isCausal&&entryBranches?'<div class="qbranches"><div class="label">entry branch scores</div>'+entryBranches+'</div>':'')+
     (evidence?'<div class="qpath"><div class="label">supporting source evidence</div>'+evidence+'</div>':'')+
     counterfactual+
     (facts?'<div class="qpath"><div class="label">established evidence</div>'+facts+'</div>':'')+
