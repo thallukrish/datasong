@@ -160,10 +160,12 @@ function queryProgressMarkup(p){
       '<div class="qmetric"><span class="label">best reached</span><b>'+Math.round(best*100)+'%</b></div>'+
       '<div class="qmetric qtokens"><span class="label">tokens</span><b>'+total.toLocaleString()+'</b><span class="small">'+prompt.toLocaleString()+' in · '+completion.toLocaleString()+' out</span></div>'+
     '</div>'+
-    '<div class="label">'+(p.explained?'explanation':isCausal?'current causal chain':'current hypothesis')+'</div>'+
-    (p.hypothesis?'<div class="qhypothesis">'+esc(p.hypothesis)+'</div>':'<div class="small">Waiting for semantic evidence…</div>')+
-    causalEvidence+
-    (constraints?'<div class="qconstraints"><div class="label">'+(isCausal?'acceptance criteria diagnostics':'hypothesis vs acceptance criteria')+'</div>'+constraints+'</div>':'')+
+    (isCausal
+      ? causalEvidence
+      : '<div class="label">'+(p.explained?'explanation':'current hypothesis')+'</div>'+
+        (p.hypothesis?'<div class="qhypothesis">'+esc(p.hypothesis)+'</div>':'<div class="small">Waiting for semantic evidence…</div>')+
+        (constraints?'<div class="qconstraints"><div class="label">hypothesis vs acceptance criteria</div>'+constraints+'</div>':'')
+    )+
     (path?'<div class="qpath"><div class="label">current path</div>'+path+'</div>':'')+
     (branches?'<div class="qbranches"><div class="label">semantic lookahead</div>'+branches+'</div>':'')+
     (!isCausal&&entryBranches?'<div class="qbranches"><div class="label">entry branch scores</div>'+entryBranches+'</div>':'')+
