@@ -48,7 +48,9 @@ q is the original request.
 g is the goal ledger as [goalId,kind,status,text,dependsOn,hardConstraints,optionalConstraints,failingCase].
 u is the active goal ID.
 f is previously established evidence as [factId,status,sourceGoalId,sourceGoalKind,text].
-h is the rolling evidence-backed hypothesis.
+h is the rolling evidence-backed hypothesis summary.
+hl is the ordered list of already accepted causal contributions as [claim,path,startLine,endLine,sourceGrounded].
+ps is the score of that accepted hypothesis before visiting n.
 n is the semantic node currently being visited, or null during entry comparison.
 c is the set of semantic navigation candidates as [candidateIndex,type,name,purpose,effect].
 src is exact source for n only when you explicitly requested source inspection on the previous decision.
@@ -61,10 +63,15 @@ ENTRY STAGE: when n is null, compare the structurally shortlisted entry points u
 - Score EVERY supplied candidate in p as [candidateIndex,entryNavigationScore]. entryNavigationScore is 0..1 and means "how strongly does the learned meaning of this code make it a useful starting point for investigating the full active goal?"
 - Rank the candidates strongest to weakest. Use the full issue and active goal, including symptom/change/result terms, to distinguish structurally similar entries.
 - Give positive scores to every genuinely plausible starting entry. A score of 0 means the entry is not worth entering.
-- Do not form or update h yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return h="", gs=[], ck=[], hs=0.
+- Do not form or update h yet, because no entry has been visited. Do not score goal constraints, add facts, request source, or conclude the issue. Return h="", hc="", cx=0, gs=[], ck=[], hs=0.
 - Once LeMap enters the highest-ranked entry, that entry becomes the first visited semantic evidence. Lower-ranked positive entries remain alternatives for backtracking/reseeding. The normal SEMANTIC WALK then forms or revises the hypothesis from visited evidence.
 
 SEMANTIC WALK: when n is present and src is absent, treat h as the branch-local accumulated explanation for the active goal. Integrate only evidence from the current visited semantic node. Do not treat unvisited lookahead nodes as evidence.
+- For causal goals, hl is the accepted causal hypothesis. Decide whether the CURRENT visited node adds one distinct causal contribution. Return that contribution in hc as a concise claim, or hc="" when this node adds nothing.
+- For a causal goal, evaluate the tentative ordered list hl + hc against the original reported issue and frozen failingCase. hs is the alignment of that entire tentative list to the issue, not the relevance of the current node alone. Compare it with ps.
+- A locally relevant-looking region can still be the wrong causal path. If adding hc makes the accumulated explanation fit the reported issue worse, hs must decrease. LeMap will reject that contribution and backtrack.
+- cx=1 only when the accumulated causal list forms a coherent end-to-end explanation from the distinguishing reported condition through the relevant code behavior to the observed symptom. A single locally grounded mechanism is not automatically complete. Otherwise cx=0.
+- For non-causal goals return hc="" and cx=0.
 - The active goal already contains immutable hardConstraints and optionalConstraints created before traversal. Never add, remove, rewrite, reinterpret, or replace them from candidate evidence.
 - HYPOTHESIS INVARIANT: as soon as the current visited evidence or any immediate candidate produces a positive semantic signal above 0, h must be non-empty. If no prior hypothesis exists, form the best provisional hypothesis supported by the current visited evidence and the direction indicated by the positive candidate signal. A provisional hypothesis may be incomplete, but it must state what currently appears to explain or answer the goal.
 - Once h exists, every subsequent visited evidence item must keep, strengthen, refine, weaken, or replace it. Never return h="" while continuing a branch with positive scores.
@@ -82,7 +89,8 @@ SEMANTIC WALK: when n is present and src is absent, treat h as the branch-local 
 
 SOURCE DIAGNOSIS: when src is present, stop treating h as something to confirm. h is only the previous candidate explanation.
 - Re-derive the best explanation from the supplied source plus already established facts.
-- For a causal goal, use this stage to establish the local mechanism in source. Do not demand that one local source range prove the complete failing testcase or desired corrected behavior; LeMap performs that behavioral validation only after the mechanism is source-grounded.
+- For a causal goal, use this stage to establish or reject the CURRENT node's contribution hc in exact source. Re-evaluate the tentative ordered list hl + hc against the issue and return hs for the whole list. Do not demand that one local source range prove the complete failing testcase or desired corrected behavior.
+- For causal goals, cx=1 only when the accumulated list is now a coherent end-to-end causal explanation. Exact grounding of one contribution by itself does not make cx=1.
 - For a change goal, identify what the existing source does at the requested change site and state the source-backed modification needed to satisfy the requested change. Do not turn it into a causal bug diagnosis unless the request itself is causal.
 - Return assessment as one of "confirm", "revise", or "reject" describing what the supplied source does to the previous h.
 - For causal goals, explicitly test whether the proposed mechanism explains the distinguishing condition in the issue: what operation is involved, what differs in the failing case, why that difference changes behavior, and how that produces the reported symptom.
@@ -102,7 +110,7 @@ Never invent implementation details not present in learned semantics, supported 
 For ENTRY STAGE return p rows as [candidateIndex,entryNavigationScore].
 For SEMANTIC WALK return p rows as [candidateIndex,expectedHypothesisScore,[constraintIndexes]].
 Return only:
-{"assessment":"","h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
+{"assessment":"","hc":"","cx":0,"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}.
 `;
 
 const HYPOTHESIS_REPAIR_SYSTEM = `Repair an invalid semantic-walk decision. LeMap detected positive semantic signal but the model returned an empty hypothesis.
@@ -770,7 +778,8 @@ async function verifyCausalMechanismGrounding({question,goal,hypothesis,evidence
 }
 
 async function decide({
-  question,mode,goals=[],activeGoalId='',branchId='',hypothesis='',ledger,path=[],currentState=null,currentWindow=null,
+  question,mode,goals=[],activeGoalId='',branchId='',hypothesis='',hypothesisContributions=[],previousHypothesisScore=0,
+  ledger,path=[],currentState=null,currentWindow=null,
   candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
   const entryStage=!currentState;
@@ -792,6 +801,14 @@ async function decide({
     g:goalView(goals),
     u:String(activeGoalId||''),
     h:hypothesis||'',
+    hl:arr(hypothesisContributions).map(item=>[
+      item?.claim||'',
+      item?.sourcePath||'',
+      Number(item?.startLine||0),
+      Number(item?.endLine||item?.startLine||0),
+      !!item?.sourceGrounded
+    ]),
+    ps:Number(previousHypothesisScore||0),
     f:ledgerView(ledger,{goals,activeGoalId,branchId}),
     n:currentState?semanticNodeView(currentState,explorer):null,
     src:sourceBody?{
@@ -834,6 +851,8 @@ async function decide({
           failingCase:activeGoal?.failingCase||''
         },
         previousH:hypothesis||'',
+        hypothesisList:payload.hl,
+        previousScore:payload.ps,
         n:payload.n,
         c:payload.c,
         l:payload.l,
@@ -978,7 +997,7 @@ async function decide({
     : [];
   const groundedHardScores=groundedConstraintChecklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
   const groundedHypothesisScore=sourceBody&&activeGoal?.kind==='causal'
-    ? Number(causalMechanismGrounding?.score||0)
+    ? (modelHypothesisScore||activeGoalScore||hypothesisScore)
     : sourceBody&&groundedHardScores.length
       ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
       : hypothesisScore;
@@ -997,6 +1016,8 @@ async function decide({
   const result={
     explained:groundedHardConstraintsMet&&!unresolvedOther,
     assessment,
+    contribution:entryStage?'':text(call.parsed?.hc||'',700),
+    causalHypothesisComplete:!entryStage&&activeGoal?.kind==='causal'&&Number(call.parsed?.cx||0)===1,
     hypothesis:entryStage?'':text(call.parsed?.h||hypothesis||'',900),
     picks,
     additions:entryStage?[]:arr(call.parsed?.a),
@@ -1037,7 +1058,7 @@ async function decide({
   }
 
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
-    explained:result.explained,assessment:result.assessment,hypothesis:result.hypothesis,
+    explained:result.explained,assessment:result.assessment,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
     evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
@@ -1047,7 +1068,7 @@ async function decide({
 
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
-    action:'DECIDE',step,mode,assessment:result.assessment,hypothesis:result.hypothesis,explained:result.explained,
+    action:'DECIDE',step,mode,assessment:result.assessment,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,explained:result.explained,
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
@@ -1422,7 +1443,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     batchNumber:0,
     hypothesis:'',
     hypothesisScore:0,
+    hypothesisContributions:[],
     bestHypothesis:'',
+    bestHypothesisContributions:[],
     bestScore:0,
     bestConstraintChecklist:[],
     bestSupportStates:[],
@@ -1553,8 +1576,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         alternatives:ranked.slice(1),
         hypothesis:'',
         hypothesisScore:0,
+        hypothesisContributions:[],
         baseHypothesis:'',
         baseScore:0,
+        baseHypothesisContributions:[],
         frontierIds:[],
         entryRootId:ranked[0].state.id,
         entryRootName:ranked[0].state.name
@@ -1612,8 +1637,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         }
         thread.hypothesis=top.baseHypothesis||'';
         thread.hypothesisScore=Number(top.baseScore||0);
+        thread.hypothesisContributions=arr(top.baseHypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
         top.hypothesis=thread.hypothesis;
         top.hypothesisScore=thread.hypothesisScore;
+        top.hypothesisContributions=arr(thread.hypothesisContributions);
         const event={step,action:'BACKTRACK',goalId:thread.goal.id,to:top.current.state.name,hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,bestScore:thread.bestScore};
         events.push(event);emit({...event,path:[...top.path,top.current.state].map(x=>x.name)});
         return true;
@@ -1622,6 +1649,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const parent=thread.stack.at(-1);
       thread.hypothesis=parent?.hypothesis||'';
       thread.hypothesisScore=Number(parent?.hypothesisScore||0);
+      thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
     }
     return seedGoal(thread);
   };
@@ -1679,6 +1707,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
 
     let decision=await decide({
       question,mode,goals,activeGoalId:goal.id,branchId:entryRootId,hypothesis:thread.hypothesis||frame.hypothesis,
+      hypothesisContributions:thread.hypothesisContributions,previousHypothesisScore:thread.hypothesisScore,
       ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
@@ -1699,7 +1728,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       !decision.inspectSource&&
       !arr(decision.picks).length;
     const forcedEntrySource=emptyEntryDecision&&Boolean(String(state.body||state.callText||'').trim());
-    const shouldInspectSource=(decision.inspectSource&&sourceAllowed)||forcedEntrySource;
+    const causalSemanticWeakening=goal.kind==='causal'&&Boolean(decision.contribution)&&
+      thread.hypothesisContributions.length>0&&
+      Number(decision.hypothesisScore||0)<Number(thread.hypothesisScore||0)-HYPOTHESIS_DELTA_EPSILON;
+    const causalContributionNeedsSource=goal.kind==='causal'&&Boolean(decision.contribution)&&
+      !causalSemanticWeakening&&Boolean(String(state.body||state.callText||'').trim());
+    const shouldInspectSource=(decision.inspectSource&&sourceAllowed)||forcedEntrySource||causalContributionNeedsSource;
     let inspectedSource=false;
     if(shouldInspectSource&&step<MAX_STEPS){
       inspectedSource=true;
@@ -1707,6 +1741,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         emit({
           action:'ENTRY_SOURCE_FALLBACK',goalId:goal.id,state:state.name,
           reason:'Selected entry produced no hypothesis, source request, or semantic continuation. Inspecting exact entry source before abandoning the branch.',
+          path:path.map(x=>x.name)
+        });
+      }else if(causalContributionNeedsSource&&!decision.inspectSource){
+        emit({
+          action:'CAUSAL_CONTRIBUTION_SOURCE',goalId:goal.id,state:state.name,
+          contribution:decision.contribution,
+          reason:'A causal contribution that improves or starts the accumulated hypothesis must be checked against exact source before it is accepted.',
           path:path.map(x=>x.name)
         });
       }
@@ -1717,10 +1758,76 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       });
       decision=await decide({
         question,mode,goals,activeGoalId:goal.id,branchId:entryRootId,hypothesis:decision.hypothesis||thread.hypothesis||frame.hypothesis,
+        hypothesisContributions:thread.hypothesisContributions,previousHypothesisScore:thread.hypothesisScore,
         ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
       });
+    }
+
+    // Causal hypotheses are an ordered list of accepted contributions.
+    // The current node is tentatively appended by the model and the WHOLE list
+    // is rescored against the reported issue. A weakening or source-ungrounded
+    // contribution is removed and its branch is not pursued.
+    let causalContributionRejected=false;
+    let causalContributionRejectReason='';
+    if(goal.kind==='causal'){
+      const priorContributions=arr(thread.hypothesisContributions);
+      const priorScore=Number(thread.hypothesisScore||0);
+      const claim=String(decision.contribution||'').trim();
+      const weakening=Boolean(claim)&&priorContributions.length>0&&
+        Number(decision.hypothesisScore||0)<priorScore-HYPOTHESIS_DELTA_EPSILON;
+      const sourceUngrounded=Boolean(claim)&&inspectedSource&&decision.evidenceGrounded!==true;
+
+      if(claim&&(weakening||sourceUngrounded)){
+        causalContributionRejected=true;
+        causalContributionRejectReason=weakening
+          ? 'Adding this contribution reduced alignment of the accumulated causal hypothesis to the reported issue.'
+          : 'Exact source did not ground this proposed causal contribution.';
+        decision.contribution='';
+        decision.causalHypothesisComplete=false;
+        decision.hypothesis=thread.hypothesis||'';
+        decision.hypothesisScore=priorScore;
+        decision.picks=[];
+        decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
+        decision.causalContributionRejected=true;
+        emit({
+          action:'CAUSAL_CONTRIBUTION_REJECTED',goalId:goal.id,state:state.name,
+          previousScore:priorScore,tentativeScore:Number(call?.parsed?.hs||0),
+          reason:causalContributionRejectReason,
+          hypothesis:thread.hypothesis||'',
+          hypothesisList:priorContributions.map(item=>item.claim),
+          path:path.map(x=>x.name)
+        });
+      }else if(claim){
+        const accepted={
+          claim,
+          stateId:state.id,
+          sourcePath:state.sourcePath||'',
+          startLine:Number(state.startLine||0),
+          endLine:Number(state.endLine||state.startLine||0),
+          sourceGrounded:inspectedSource?decision.evidenceGrounded===true:false,
+          supportStates:dedupeStates(decision.supportStates||[])
+        };
+        thread.hypothesisContributions=[...priorContributions,accepted];
+        frame.hypothesisContributions=arr(thread.hypothesisContributions);
+        decision.supportStates=dedupeStates(thread.hypothesisContributions.flatMap(item=>arr(item?.supportStates)));
+        emit({
+          action:'CAUSAL_CONTRIBUTION_ACCEPTED',goalId:goal.id,state:state.name,
+          contribution:accepted.claim,previousScore:priorScore,
+          hypothesisScore:Number(decision.hypothesisScore||0),
+          sourceGrounded:accepted.sourceGrounded,
+          hypothesisList:thread.hypothesisContributions.map(item=>item.claim),
+          complete:!!decision.causalHypothesisComplete,
+          path:path.map(x=>x.name)
+        });
+      }else if(priorContributions.length){
+        // A visited node that adds nothing does not rewrite the accepted causal
+        // hypothesis or inherit its evidence.
+        decision.hypothesis=thread.hypothesis||decision.hypothesis||'';
+        decision.hypothesisScore=priorScore;
+        decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
+      }
     }
 
     // Every entry-level branch keeps an independent score. Compare the
@@ -1774,21 +1881,20 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const targetsWeak=arr(pick.targets).some(index=>unresolvedBeforeCounterfactual.has(index));
       return improves||targetsWeak;
     });
-    const sourceGroundedCandidate=Boolean(
-      inspectedSource&&decision.evidenceRanges?.length&&decision.evidenceGrounded===true
-    );
-    // Causal flow has two distinct gates:
-    // 1. exact source establishes the proposed mechanism
-    // 2. counterfactual validation tests that mechanism against the frozen
-    //    symptom/failing case and desired behavior.
-    // Once gate 1 passes, validate behavior immediately instead of continuing
-    // to roam the graph merely because local source cannot prove global output.
-    const shouldCounterfactuallyValidate=goal.kind==='causal'&&sourceGroundedCandidate;
+    const acceptedCausalContributions=arr(thread.hypothesisContributions);
+    const causalChainSourceGrounded=acceptedCausalContributions.length>0&&
+      acceptedCausalContributions.every(item=>item?.sourceGrounded===true);
+    // Counterfactual validation belongs at the end of causal collection, not
+    // after one locally grounded region. Run it only when the accumulated list
+    // is judged end-to-end complete and every accepted contribution is backed
+    // by exact source.
+    const shouldCounterfactuallyValidate=goal.kind==='causal'&&
+      !causalContributionRejected&&decision.causalHypothesisComplete&&causalChainSourceGrounded;
 
     if(shouldCounterfactuallyValidate){
       const cfKey=[
         decision.hypothesis||'',
-        ...arr(decision.evidenceRanges).map(range=>`${range.sourcePath}:${range.startLine}-${range.endLine}`)
+        ...acceptedCausalContributions.map(item=>`${item.claim}@${item.sourcePath}:${item.startLine}-${item.endLine}`)
       ].join('|');
       let counterfactual=thread.counterfactualByHypothesis.get(cfKey);
       if(!counterfactual){
@@ -1852,17 +1958,20 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     if(!decision.causalRejected&&decision.hypothesisScore>thread.bestScore){
       thread.bestScore=decision.hypothesisScore;
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
+      thread.bestHypothesisContributions=arr(thread.hypothesisContributions);
       thread.bestConstraintChecklist=decision.constraintChecklist;
       thread.bestSupportStates=dedupeStates(decision.supportStates||[]);
     }
     if(!decision.causalRejected&&decision.hardConstraintsMet){
       thread.bestHypothesis=decision.hypothesis||thread.bestHypothesis||thread.hypothesis;
+      thread.bestHypothesisContributions=arr(thread.hypothesisContributions);
       thread.bestConstraintChecklist=decision.constraintChecklist;
       thread.bestSupportStates=dedupeStates(decision.supportStates||thread.bestSupportStates||[]);
     }
     emit({
       action:'HYPOTHESIS_PROGRESS',goalId:goal.id,
       hypothesis:decision.hypothesis||thread.hypothesis,
+      hypothesisList:arr(thread.hypothesisContributions).map(item=>item.claim),
       hypothesisScore:decision.hypothesisScore,
       previousScore,delta:progress.delta,trend:progress.trend,
       bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
@@ -1881,6 +1990,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // function chunks and sibling regions are never evaluated in isolation.
     frame.hypothesis=thread.hypothesis||frame.hypothesis;
     frame.hypothesisScore=thread.hypothesisScore;
+    frame.hypothesisContributions=arr(thread.hypothesisContributions);
     rollingHypothesis=thread.hypothesis||rollingHypothesis;
     applyLedgerDecision({
       ledger,goal,branchId:entryRootId,additions:decision.additions,disputes:decision.disputes,
@@ -1919,14 +2029,16 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
       .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
       .map(item=>item.index));
-    if(entryBranchDominated||decision.causalRejected){
+    if(entryBranchDominated||decision.causalRejected||causalContributionRejected){
       emit({
         action:'ENTRY_BRANCH_PRUNED',goalId:goal.id,
         entry:entryRootName,entryScore:Number(decision.hypothesisScore||0),
         incumbentEntry:bestOtherEntry?.name||'',incumbentScore:Number(bestOtherEntry?.bestScore||0),
-        reason:decision.causalRejected
-          ?'Counterfactual intervention failed to validate this causal diagnosis.'
-          :'Entry branch fell below an already established entry-level score.',
+        reason:causalContributionRejected
+          ? causalContributionRejectReason
+          : decision.causalRejected
+            ? 'Counterfactual intervention failed to validate this causal diagnosis.'
+            : 'Entry branch fell below an already established entry-level score.',
         entryBranches:[...thread.entryScores.values()].map(item=>({
           id:item.id,name:item.name,currentScore:Number(item.currentScore||0),bestScore:Number(item.bestScore||0)
         })),
@@ -1956,7 +2068,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.stack.push({
         path,current:warm[0],alternatives:warm.slice(1),
         hypothesis:thread.hypothesis||decision.hypothesis,hypothesisScore:thread.hypothesisScore,
+        hypothesisContributions:arr(thread.hypothesisContributions),
         baseHypothesis:thread.hypothesis||decision.hypothesis,baseScore:thread.hypothesisScore,
+        baseHypothesisContributions:arr(thread.hypothesisContributions),
         navigationKind,frontierIds:[],
         entryRootId,entryRootName
       });
