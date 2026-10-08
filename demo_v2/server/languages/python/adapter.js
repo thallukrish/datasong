@@ -1,3 +1,4 @@
+import { buildPythonDataStructureGraph } from './dataStructureGraph.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -32,7 +33,20 @@ export async function analyzePythonRepository({ repoDir, files }) {
   for (const command of commands) {
     try {
       const commandArgs = command === 'py' ? ['-3', ...args] : args;
-      return await run(command, commandArgs, input);
+      const structural = await run(command, commandArgs, input);
+      const dataScript = new URL('./dataflow_analyzer.py', import.meta.url);
+      const dataArgs = command === 'py'
+        ? ['-3', fileURLToPath(dataScript), repoDir]
+        : [fileURLToPath(dataScript), repoDir];
+      const data = await run(command, dataArgs, input);
+      return {
+        ...structural,
+        dataObservations: Array.isArray(data?.observations) ? data.observations : [],
+        dataGraphNodes: buildPythonDataStructureGraph({
+          symbols: structural?.symbols || [],
+          observations: data?.observations || []
+        })
+      };
     } catch (error) {
       lastError = error;
       if (!/ENOENT|not found|cannot find/i.test(String(error?.message || ''))) throw error;
