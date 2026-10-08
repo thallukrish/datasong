@@ -164,8 +164,9 @@ export function buildPythonDataStructureGraph({ symbols = [], observations = [] 
     const entityLinks = [];
     for (const observation of cluster.observations) {
       const relationship = relationshipFor(observation);
-      if (!entityLinks.some((link) => link.id === observation.functionId && link.relationship === relationship)) {
-        entityLinks.push({ id: observation.functionId, relationship: `used by function: ${relationship}` });
+      const reverseRelationship = `used by function: ${relationship}`;
+      if (!entityLinks.some((link) => link.id === observation.functionId && link.relationship === reverseRelationship)) {
+        entityLinks.push({ id: observation.functionId, relationship: reverseRelationship });
       }
       const fn = functionNodes.get(observation.functionId);
       if (fn && !fn.links.some((link) => link.id === id && link.relationship === relationship)) {
