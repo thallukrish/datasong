@@ -10,7 +10,9 @@ Active causal goal only:
 [goalText,failingCase]
 
 hl
-Accepted semantic causal contributions for THIS entry branch, as claim strings in order.
+CURRENT causal explanatory set for THIS entry branch, as claim strings in order.
+The array index is the evidence index used by k below.
+hl is not a permanent history. Earlier evidence may be dropped when newer visited evidence makes it unnecessary.
 
 ps
 Current overall score, 0..1, of hl against q and failingCase.
@@ -37,12 +39,16 @@ TASK
 - hc must not include an inferred root cause, downstream behavior, or facts from lookahead.
 - If er=0, hc="".
 
-2. Score the accumulated causal explanation.
-- hl is authoritative.
-- If hc="", hs MUST equal ps.
-- If hc is non-empty, score hl + hc against the ORIGINAL issue q and failingCase.
-- hs may rise, stay flat, or fall.
-- cx=1 only when hl + hc is already a coherent end-to-end explanation of the reported failure. Otherwise cx=0.
+2. Revise and score the causal explanation.
+- Return k as the indexes of the OLD hl items that still materially contribute to the best causal explanation after considering n.
+- k must contain only valid hl indexes, without duplicates. Keep their original order.
+- You may drop old hl items that were useful earlier but no longer contribute to the causal explanation.
+- You may not invent replacements for dropped items. The revised set is ONLY retained old hl items plus the optional current hc.
+- Choose the smallest retained set that preserves the strongest explanation.
+- hs scores exactly: retained hl[k] + hc, against the ORIGINAL issue q and failingCase.
+- If hc="" you may still revise hl by dropping unnecessary old items, so hs need not equal ps.
+- Do not return a revised set with materially lower explanatory strength merely to make it shorter.
+- cx=1 only when retained hl[k] + hc is a coherent end-to-end explanation of the reported failure. Otherwise cx=0.
 
 3. Predict navigation.
 For every candidate in c return:
@@ -54,7 +60,7 @@ A promising unvisited candidate can score above ps even when hl is empty.
 Never add lookahead content to hl and never state lookahead as established evidence.
 
 Return only:
-{"er":0,"hc":"","hs":0.0,"cx":0,"p":[]}
+{"k":[],"er":0,"hc":"","hs":0.0,"cx":0,"p":[]}
 `;
 
 export const GOAL_DECIDE_SYSTEM = `Evaluate one visited semantic code node against one active NON-CAUSAL software-engineering goal.

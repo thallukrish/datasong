@@ -15,8 +15,9 @@ test('causal semantic prompt has one binary local decision and one accumulated s
   assert.match(CAUSAL_DECIDE_SYSTEM,/er=1 only when n itself establishes a useful causal fact/);
   assert.match(CAUSAL_DECIDE_SYSTEM,/minimal NEW fact/);
   assert.match(CAUSAL_DECIDE_SYSTEM,/already represented in hl, return er=0 and hc=""/);
-  assert.match(CAUSAL_DECIDE_SYSTEM,/If hc="", hs MUST equal ps/);
-  assert.match(CAUSAL_DECIDE_SYSTEM,/score hl \+ hc against the ORIGINAL issue/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/Return k as the indexes of the OLD hl items/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/hs scores exactly: retained hl\[k\] \+ hc/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/If hc="" you may still revise hl/);
   assert.match(CAUSAL_DECIDE_SYSTEM,/search prediction only/);
 });
 
@@ -68,11 +69,12 @@ test('top-level causal entries reset branch-local hypothesis state',()=>{
   assert.match(engine,/entryVisited:new Map\(\)/);
 });
 
-test('flat budget persists across sibling backtracking and never blocks strengthening',()=>{
-  assert.match(engine,/hasAcceptedCausalEvidence&&progress\.trend==='flat'\?thread\.flatSteps\+1:0/);
+test('causal flat budget is path-local and restores at sibling backtracking',()=>{
+  assert.match(engine,/const pathFlatSteps=Number\(frame\.flatSteps\|\|0\)/);
+  assert.match(engine,/thread\.flatSteps=Number\(top\.baseFlatSteps\|\|0\)/);
+  assert.match(engine,/thread\.flatSteps=Number\(parent\?\.flatSteps\|\|0\)/);
+  assert.match(engine,/flatSteps:thread\.flatSteps,\s*baseFlatSteps:thread\.flatSteps/);
   assert.match(engine,/if\(goal\.kind==='causal'\)return strengthens\|\|\(hasAcceptedHypothesis&&staysFlat&&canSpendFlatStep\)/);
-  assert.doesNotMatch(engine,/thread\.flatSteps=Number\(top\.baseFlatSteps/);
-  assert.doesNotMatch(engine,/thread\.flatSteps=Number\(parent\?\.flatSteps/);
 });
 
 test('non-causal prompt remains separate from causal prompt',()=>{
@@ -91,4 +93,12 @@ test('causal source localization requires coverage for every hl contribution',()
   assert.match(engine,/contributionIndexes/);
   assert.match(engine,/function causalSourceCoverageComplete/);
   assert.match(engine,/for\(let index=0;index<contributionCount;index\+=1\)/);
+});
+
+test('causal hl is a moving explanatory set selected by retained indexes',()=>{
+  assert.match(engine,/retainedContributionIndexes/);
+  assert.match(engine,/retainCausalContributions\(priorContributions,requestedIndexes\)/);
+  assert.match(engine,/action:'CAUSAL_HYPOTHESIS_REVISED'/);
+  assert.match(engine,/decision\.hypothesis=causalHypothesisText\(revised\)/);
+  assert.match(engine,/decision\.hypothesisScore=Math\.max\(priorScore,tentativeScore\)/);
 });

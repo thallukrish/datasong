@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   causalHypothesisText,
-  evaluateCausalContribution
+  evaluateCausalContribution,
+  retainCausalContributions
 } from '../server/query_v5/causalEvidence.js';
 
 test('causal evidence uses separate local relevance and global hypothesis score', () => {
@@ -78,4 +79,16 @@ test('exact normalized duplicate causal contribution is ignored without pruning'
   assert.equal(result.rejected,false);
   assert.equal(result.duplicate,true);
   assert.equal(result.score,0.62);
+});
+
+test('causal evidence can retain a smaller ordered explanatory subset',()=>{
+  const prior=[{claim:'A'},{claim:'B'},{claim:'C'}];
+  assert.deepEqual(
+    retainCausalContributions(prior,[1,2]).map(item=>item.claim),
+    ['B','C']
+  );
+  assert.deepEqual(
+    retainCausalContributions(prior,[2,2,99,0]).map(item=>item.claim),
+    ['A','C']
+  );
 });

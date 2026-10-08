@@ -2,6 +2,14 @@ function arr(value){
   return Array.isArray(value)?value:[];
 }
 
+export function retainCausalContributions(contributions=[],indexes=[]){
+  const source=arr(contributions);
+  const keep=new Set(
+    arr(indexes).map(Number).filter(index=>Number.isInteger(index)&&index>=0&&index<source.length)
+  );
+  return source.filter((_,index)=>keep.has(index));
+}
+
 export function causalHypothesisText(contributions=[]){
   return arr(contributions)
     .map(item=>String(item?.claim||'').trim())

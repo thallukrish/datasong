@@ -2,7 +2,7 @@ import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 import { selectCodeEntries } from './codeEntrySelector.js';
 import { CAUSAL_DECIDE_SYSTEM, GOAL_DECIDE_SYSTEM } from './goalDecisionPrompt.js';
-import { causalHypothesisText, evaluateCausalContribution } from './causalEvidence.js';
+import { causalHypothesisText, evaluateCausalContribution, retainCausalContributions } from './causalEvidence.js';
 
 const MAX_STEPS = 64;
 const ENTRY_BATCH_SIZE = 20;
@@ -928,7 +928,7 @@ async function decide({
     ? String(call.parsed?.hc||'').trim()
     : '';
   const groundedHypothesisScore=activeGoal?.kind==='causal'
-    ? (proposedCausalContribution?modelHypothesisScore:Number(previousHypothesisScore||0))
+    ? modelHypothesisScore
     : sourceBody&&groundedHardScores.length
       ? groundedHardScores.reduce((sum,value)=>sum+value,0)/groundedHardScores.length
       : hypothesisScore;
@@ -948,9 +948,20 @@ async function decide({
   const evidenceRelevance=!entryStage&&activeGoal?.kind==='causal'
     ? (Number(call.parsed?.er||0)===1?1:0)
     : 0;
+  const requestedKeepIndexes=activeGoal?.kind==='causal'
+    ? arr(call.parsed?.k).map(Number).filter(Number.isInteger)
+    : [];
+  const retainedContributionIndexes=activeGoal?.kind==='causal'
+    ? (Array.isArray(call.parsed?.k)
+        ? [...new Set(requestedKeepIndexes.filter(index=>index>=0&&index<arr(hypothesisContributions).length))]
+        : arr(hypothesisContributions).map((_,index)=>index))
+    : [];
+  const retainedContributions=activeGoal?.kind==='causal'
+    ? retainCausalContributions(hypothesisContributions,retainedContributionIndexes)
+    : [];
   const causalDisplayHypothesis=activeGoal?.kind==='causal'
     ? causalHypothesisText([
-        ...arr(hypothesisContributions),
+        ...retainedContributions,
         ...(currentContribution?[{claim:currentContribution}]:[])
       ])
     : '';
@@ -960,6 +971,7 @@ async function decide({
     assessment,
     evidenceRelevance,
     contribution:currentContribution,
+    retainedContributionIndexes,
     causalHypothesisComplete:!entryStage&&activeGoal?.kind==='causal'&&Number(call.parsed?.cx||0)===1,
     hypothesis:entryStage?'':activeGoal?.kind==='causal'?causalDisplayHypothesis:text(call.parsed?.h||hypothesis||'',900),
     picks,
@@ -984,7 +996,7 @@ async function decide({
   };
 
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
-    explained:result.explained,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,
+    explained:result.explained,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,retainedContributionIndexes:result.retainedContributionIndexes,causalHypothesisComplete:result.causalHypothesisComplete,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
     evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
@@ -994,7 +1006,7 @@ async function decide({
 
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
-    action:'DECIDE',step,mode,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,causalHypothesisComplete:result.causalHypothesisComplete,explained:result.explained,
+    action:'DECIDE',step,mode,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,retainedContributionIndexes:result.retainedContributionIndexes,causalHypothesisComplete:result.causalHypothesisComplete,explained:result.explained,
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
@@ -1565,6 +1577,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         baseHypothesis:'',
         baseScore:0,
         baseHypothesisContributions:[],
+        flatSteps:0,
+        baseFlatSteps:0,
         frontierIds:[],
         entryRootId:ranked[0].state.id,
         entryRootName:ranked[0].state.name
@@ -1627,6 +1641,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           thread.hypothesisScore=0;
           thread.hypothesisContributions=[];
           thread.flatSteps=0;
+          top.flatSteps=0;
+          top.baseFlatSteps=0;
         }else{
           // A sibling semantic branch restarts from the causal state at its
           // parent. Evidence collected only on the abandoned sibling is not
@@ -1634,6 +1650,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           thread.hypothesis=top.baseHypothesis||'';
           thread.hypothesisScore=Number(top.baseScore||0);
           thread.hypothesisContributions=arr(top.baseHypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+          thread.flatSteps=Number(top.baseFlatSteps||0);
+          top.flatSteps=thread.flatSteps;
         }
         top.hypothesis=thread.hypothesis;
         top.hypothesisScore=thread.hypothesisScore;
@@ -1647,6 +1665,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.hypothesis=parent?.hypothesis||'';
       thread.hypothesisScore=Number(parent?.hypothesisScore||0);
       thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
+      thread.flatSteps=Number(parent?.flatSteps||0);
     }
     return seedGoal(thread);
   };
@@ -1754,9 +1773,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       });
     }
 
-    // Causal evaluation is binary locally and scored only at the accumulated level:
-    // er says whether the CURRENT node contributes one local fact; hs scores hl + hc
-    // against the original issue.
+    // Causal state is a living explanatory set, not an append-only history.
+    // The model may retain a subset of old hl and add at most the current hc.
+    // Revisions are accepted only when they preserve or strengthen explanatory score.
     let causalContributionRejected=false;
     let causalContributionRejectReason='';
     if(goal.kind==='causal'){
@@ -1764,71 +1783,104 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const priorScore=Number(thread.hypothesisScore||0);
       const claim=String(decision.contribution||'').trim();
       const tentativeScore=Number(decision.hypothesisScore||0);
-      const evaluation=evaluateCausalContribution({
-        priorContributions,
-        priorScore,
-        contribution:claim,
-        evidenceRelevance:decision.evidenceRelevance,
-        tentativeScore,
-        epsilon:HYPOTHESIS_DELTA_EPSILON
-      });
+      const requestedIndexes=arr(decision.retainedContributionIndexes);
+      const retainedPrior=retainCausalContributions(priorContributions,requestedIndexes);
+      const revisionWeakens=priorContributions.length>0&&
+        tentativeScore<priorScore-HYPOTHESIS_DELTA_EPSILON;
 
-      if(evaluation.duplicate){
-        decision.contribution='';
-        decision.hypothesis=causalHypothesisText(priorContributions);
-        decision.hypothesisScore=priorScore;
-        decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
-      }else if(evaluation.rejected){
-        causalContributionRejected=true;
-        causalContributionRejectReason=evaluation.reason;
+      if(revisionWeakens){
+        causalContributionRejected=Boolean(claim);
+        causalContributionRejectReason=claim
+          ? 'The proposed causal revision reduced alignment of the explanatory set to the reported issue.'
+          : '';
         decision.contribution='';
         decision.causalHypothesisComplete=false;
         decision.hypothesis=causalHypothesisText(priorContributions);
         decision.hypothesisScore=priorScore;
+        decision.retainedContributionIndexes=priorContributions.map((_,index)=>index);
         decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
-        decision.causalContributionRejected=true;
-        emit({
-          action:'CAUSAL_CONTRIBUTION_REJECTED',goalId:goal.id,state:state.name,
-          evidenceRelevance:Number(decision.evidenceRelevance||0),
-          previousScore:priorScore,tentativeScore,
-          reason:causalContributionRejectReason,
-          hypothesis:decision.hypothesis,
-          hypothesisList:priorContributions.map(item=>item.claim),
-          path:path.map(x=>x.name)
-        });
-      }else if(claim&&evaluation.accepted){
-        const accepted={
-          claim,
-          stateId:state.id,
-          sourcePath:state.sourcePath||'',
-          startLine:Number(state.startLine||0),
-          endLine:Number(state.endLine||state.startLine||0),
-          sourceGrounded:false,
-          evidenceRelevance:Number(decision.evidenceRelevance||0),
-          supportStates:dedupeStates(decision.supportStates||[])
-        };
-        thread.hypothesisContributions=[...priorContributions,accepted];
-        frame.hypothesisContributions=arr(thread.hypothesisContributions);
-        decision.hypothesis=causalHypothesisText(thread.hypothesisContributions);
-        decision.hypothesisScore=Number(evaluation.score||tentativeScore||priorScore);
-        decision.supportStates=dedupeStates(thread.hypothesisContributions.flatMap(item=>arr(item?.supportStates)));
-        emit({
-          action:'CAUSAL_CONTRIBUTION_ACCEPTED',goalId:goal.id,state:state.name,
-          contribution:accepted.claim,
-          evidenceRelevance:accepted.evidenceRelevance,
-          previousScore:priorScore,
-          hypothesisScore:Number(decision.hypothesisScore||0),
-          sourceGrounded:accepted.sourceGrounded,
-          hypothesisList:thread.hypothesisContributions.map(item=>item.claim),
-          complete:!!decision.causalHypothesisComplete,
-          path:path.map(x=>x.name)
-        });
+        if(causalContributionRejected){
+          decision.causalContributionRejected=true;
+          emit({
+            action:'CAUSAL_CONTRIBUTION_REJECTED',goalId:goal.id,state:state.name,
+            evidenceRelevance:Number(decision.evidenceRelevance||0),
+            previousScore:priorScore,tentativeScore,
+            reason:causalContributionRejectReason,
+            hypothesis:decision.hypothesis,
+            hypothesisList:priorContributions.map(item=>item.claim),
+            path:path.map(x=>x.name)
+          });
+        }
       }else{
-        // A navigation-only node may be highly relevant without adding causal
-        // evidence. Keep the accepted hypothesis list and its score unchanged.
-        decision.hypothesis=causalHypothesisText(priorContributions);
-        decision.hypothesisScore=priorScore;
-        decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
+        let revised=retainedPrior;
+        if(claim){
+          const evaluation=evaluateCausalContribution({
+            priorContributions:retainedPrior,
+            priorScore,
+            contribution:claim,
+            evidenceRelevance:decision.evidenceRelevance,
+            tentativeScore,
+            epsilon:HYPOTHESIS_DELTA_EPSILON
+          });
+          if(evaluation.duplicate){
+            decision.contribution='';
+          }else if(evaluation.rejected){
+            causalContributionRejected=true;
+            causalContributionRejectReason=evaluation.reason;
+            decision.contribution='';
+            decision.causalHypothesisComplete=false;
+            decision.hypothesis=causalHypothesisText(priorContributions);
+            decision.hypothesisScore=priorScore;
+            decision.retainedContributionIndexes=priorContributions.map((_,index)=>index);
+            decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
+            decision.causalContributionRejected=true;
+            emit({
+              action:'CAUSAL_CONTRIBUTION_REJECTED',goalId:goal.id,state:state.name,
+              evidenceRelevance:Number(decision.evidenceRelevance||0),
+              previousScore:priorScore,tentativeScore,
+              reason:causalContributionRejectReason,
+              hypothesis:decision.hypothesis,
+              hypothesisList:priorContributions.map(item=>item.claim),
+              path:path.map(x=>x.name)
+            });
+          }else if(evaluation.accepted){
+            revised=[...retainedPrior,{
+              claim,
+              stateId:state.id,
+              sourcePath:state.sourcePath||'',
+              startLine:Number(state.startLine||0),
+              endLine:Number(state.endLine||state.startLine||0),
+              sourceGrounded:false,
+              evidenceRelevance:Number(decision.evidenceRelevance||0),
+              supportStates:dedupeStates(decision.supportStates||[])
+            }];
+          }
+        }
+
+        if(!causalContributionRejected){
+          const beforeClaims=priorContributions.map(item=>item.claim);
+          const afterClaims=revised.map(item=>item.claim);
+          const changed=beforeClaims.length!==afterClaims.length||
+            beforeClaims.some((claimText,index)=>claimText!==afterClaims[index]);
+          thread.hypothesisContributions=revised;
+          frame.hypothesisContributions=arr(revised);
+          decision.hypothesis=causalHypothesisText(revised);
+          decision.hypothesisScore=Math.max(priorScore,tentativeScore);
+          decision.supportStates=dedupeStates(revised.flatMap(item=>arr(item?.supportStates)));
+          if(changed){
+            emit({
+              action:'CAUSAL_HYPOTHESIS_REVISED',goalId:goal.id,state:state.name,
+              previousScore:priorScore,
+              hypothesisScore:Number(decision.hypothesisScore||0),
+              previousHypothesisList:beforeClaims,
+              hypothesisList:afterClaims,
+              retainedContributionIndexes:requestedIndexes,
+              contribution:decision.contribution||'',
+              complete:!!decision.causalHypothesisComplete,
+              path:path.map(x=>x.name)
+            });
+          }
+        }
       }
     }
 
@@ -1946,9 +1998,13 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
     thread.hypothesisScore=decision.hypothesisScore;
     const hasAcceptedCausalEvidence=goal.kind==='causal'&&arr(thread.hypothesisContributions).length>0;
-    thread.flatSteps=goal.kind==='causal'
-      ? (hasAcceptedCausalEvidence&&progress.trend==='flat'?thread.flatSteps+1:0)
-      : (progress.trend==='flat'?thread.flatSteps+1:0);
+    if(goal.kind==='causal'){
+      const pathFlatSteps=Number(frame.flatSteps||0);
+      thread.flatSteps=hasAcceptedCausalEvidence&&progress.trend==='flat'?pathFlatSteps+1:0;
+      frame.flatSteps=thread.flatSteps;
+    }else{
+      thread.flatSteps=progress.trend==='flat'?thread.flatSteps+1:0;
+    }
     if(!decision.causalRejected&&decision.hypothesisScore>thread.bestScore){
       thread.bestScore=decision.hypothesisScore;
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
@@ -2071,7 +2127,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const strengthens=expectedScore>currentScore+HYPOTHESIS_DELTA_EPSILON;
       const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
       const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
-      const canSpendFlatStep=progress.trend!=='weakening'&&thread.flatSteps<MAX_FLAT_STEPS;
+      const canSpendFlatStep=progress.trend!=='weakening'&&Number(frame.flatSteps||0)<MAX_FLAT_STEPS;
       const hasAcceptedHypothesis=arr(thread.hypothesisContributions).length>0;
 
       // A strengthening prediction always wins, even after earlier flat hops.
@@ -2088,6 +2144,8 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         hypothesisContributions:arr(thread.hypothesisContributions),
         baseHypothesis:thread.hypothesis||decision.hypothesis,baseScore:thread.hypothesisScore,
         baseHypothesisContributions:arr(thread.hypothesisContributions),
+        flatSteps:thread.flatSteps,
+        baseFlatSteps:thread.flatSteps,
         navigationKind,frontierIds:[],
         entryRootId,entryRootName
       });
