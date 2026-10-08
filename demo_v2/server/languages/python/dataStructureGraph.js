@@ -16,12 +16,12 @@ function originNames(observation) {
 function strongIdentity(observation) {
   const annotation = norm(observation?.annotation);
   if (annotation) return `annotation:${annotation}`;
-  const constructors = originNames(observation)
-    .filter((name) => arr(observation?.origins).some((origin) => origin?.name === name && ['constructed', 'container', 'mapping', 'sequence', 'set'].includes(origin?.kind)))
-    .map(norm);
-  if (constructors.length) return `origin:${constructors.join('|')}`;
   const keys = uniq(observation?.keys).map(norm);
   if (keys.length >= 2) return `keys:${keys.join('|')}`;
+  const constructors = originNames(observation)
+    .filter((name) => arr(observation?.origins).some((origin) => origin?.name === name && origin?.kind === 'constructed'))
+    .map(norm);
+  if (constructors.length) return `origin:${constructors.join('|')}`;
   const members = uniq([...(observation?.members || []), ...(observation?.methods || [])]).map(norm);
   if (members.length >= 2) return `shape:${norm(observation?.kind)}:${members.join('|')}`;
   return '';
