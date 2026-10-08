@@ -71,10 +71,11 @@ test('top-level causal entries reset branch-local hypothesis state',()=>{
 
 test('causal flat budget is path-local and restores at sibling backtracking',()=>{
   assert.match(engine,/const pathFlatSteps=Number\(frame\.flatSteps\|\|0\)/);
+  assert.match(engine,/thread\.flatSteps=progress\.trend==='flat'\?pathFlatSteps\+1:0/);
   assert.match(engine,/thread\.flatSteps=Number\(top\.baseFlatSteps\|\|0\)/);
   assert.match(engine,/thread\.flatSteps=Number\(parent\?\.flatSteps\|\|0\)/);
   assert.match(engine,/flatSteps:thread\.flatSteps,\s*baseFlatSteps:thread\.flatSteps/);
-  assert.match(engine,/if\(goal\.kind==='causal'\)return strengthens\|\|\(hasAcceptedHypothesis&&staysFlat&&canSpendFlatStep\)/);
+  assert.match(engine,/const flatSearchable=staysFlat&&canSpendFlatStep&&\(hasAcceptedHypothesis\|\|pick\.hasLookahead\)/);
 });
 
 test('non-causal prompt remains separate from causal prompt',()=>{
@@ -101,4 +102,10 @@ test('causal hl is a moving explanatory set selected by retained indexes',()=>{
   assert.match(engine,/action:'CAUSAL_HYPOTHESIS_REVISED'/);
   assert.match(engine,/decision\.hypothesis=causalHypothesisText\(revised\)/);
   assert.match(engine,/decision\.hypothesisScore=Math\.max\(priorScore,tentativeScore\)/);
+});
+
+test('pre-hypothesis causal wrappers can spend bounded flat hops only with lookahead',()=>{
+  assert.match(engine,/const causalLookaheadIndexes=new Set/);
+  assert.match(engine,/hasLookahead:causalLookaheadIndexes\.has\(index\)/);
+  assert.match(engine,/hasAcceptedHypothesis\|\|pick\.hasLookahead/);
 });

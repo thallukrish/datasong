@@ -832,13 +832,17 @@ async function decide({
   }
 
   const byIndex=new Map(candidates.map((state,index)=>[String(index),state]));
+  const causalLookaheadIndexes=new Set(
+    causal?arr(lookahead).map(row=>String(row?.[0])):[]
+  );
   const picks=[];
   for(const row of arr(call.parsed?.p)){
-    const state=byIndex.get(String(row?.[0]));if(!state)continue;
+    const index=String(row?.[0]);
+    const state=byIndex.get(index);if(!state)continue;
     const score=Math.max(0,Math.min(1,Number(row?.[1]||0)));
     if(!(score>0))continue;
     const targets=entryStage?[]:arr(row?.[2]).map(Number).filter(Number.isInteger);
-    picks.push({state,score,targets});
+    picks.push({state,score,targets,hasLookahead:causalLookaheadIndexes.has(index)});
   }
   picks.sort((a,b)=>b.score-a.score);
 
@@ -2000,7 +2004,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const hasAcceptedCausalEvidence=goal.kind==='causal'&&arr(thread.hypothesisContributions).length>0;
     if(goal.kind==='causal'){
       const pathFlatSteps=Number(frame.flatSteps||0);
-      thread.flatSteps=hasAcceptedCausalEvidence&&progress.trend==='flat'?pathFlatSteps+1:0;
+      thread.flatSteps=progress.trend==='flat'?pathFlatSteps+1:0;
       frame.flatSteps=thread.flatSteps;
     }else{
       thread.flatSteps=progress.trend==='flat'?thread.flatSteps+1:0;
@@ -2130,11 +2134,14 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       const canSpendFlatStep=progress.trend!=='weakening'&&Number(frame.flatSteps||0)<MAX_FLAT_STEPS;
       const hasAcceptedHypothesis=arr(thread.hypothesisContributions).length>0;
 
-      // A strengthening prediction always wins, even after earlier flat hops.
-      // Before the first accepted causal contribution, hs=0 is only a search
-      // baseline, so navigation-only nodes do not consume the flat budget and
-      // zero-improvement candidates are not followed merely because they are flat.
-      if(goal.kind==='causal')return strengthens||(hasAcceptedHypothesis&&staysFlat&&canSpendFlatStep);
+      // A strengthening prediction always wins. Flat causal wrappers may also
+      // be traversed for at most the path-local flat budget. Before the first
+      // accepted hc, require bounded lookahead so we do not wander into arbitrary
+      // zero-score leaves just to keep searching.
+      if(goal.kind==='causal'){
+        const flatSearchable=staysFlat&&canSpendFlatStep&&(hasAcceptedHypothesis||pick.hasLookahead);
+        return strengthens||flatSearchable;
+      }
       return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
     });
     if(warm.length){
@@ -2164,7 +2171,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       emit({
         action:'BRANCH_PRUNED',goalId:goal.id,state:state.name,
         bestScore:thread.bestScore,hypothesisScore:thread.hypothesisScore,
-        candidates:decision.picks.map(pick=>({name:pick.state.name,expected:pick.score,targets:pick.targets})),
+        candidates:decision.picks.map(pick=>({name:pick.state.name,expected:pick.score,targets:pick.targets,hasLookahead:!!pick.hasLookahead})),
         path:path.map(x=>x.name)
       });
     }
