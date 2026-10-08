@@ -5,7 +5,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CAUSAL_DECIDE_SYSTEM,
-  CAUSAL_SOURCE_SYSTEM,
   GOAL_DECIDE_SYSTEM
 } from '../server/query_v5/goalDecisionPrompt.js';
 
@@ -14,38 +13,39 @@ const engine=fs.readFileSync(path.join(here,'../server/query_v5/queryEngine.js')
 
 test('causal semantic prompt has one binary local decision and one accumulated score',()=>{
   assert.match(CAUSAL_DECIDE_SYSTEM,/er=1 only when n itself establishes a useful causal fact/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/minimal NEW fact/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/already represented in hl, return er=0 and hc=""/);
   assert.match(CAUSAL_DECIDE_SYSTEM,/If hc="", hs MUST equal ps/);
   assert.match(CAUSAL_DECIDE_SYSTEM,/score hl \+ hc against the ORIGINAL issue/);
   assert.match(CAUSAL_DECIDE_SYSTEM,/search prediction only/);
-  assert.doesNotMatch(CAUSAL_DECIDE_SYSTEM,/hardConstraints|optionalConstraints|goal sufficiency|acceptance criteria/);
 });
 
-test('causal source prompt verifies only the local fact',()=>{
-  assert.match(CAUSAL_SOURCE_SYSTEM,/check only whether src directly establishes that local fact/);
-  assert.match(CAUSAL_SOURCE_SYSTEM,/Source grounding is local/);
-  assert.match(CAUSAL_SOURCE_SYSTEM,/Set ok=1 only when hc is non-empty/);
-  assert.doesNotMatch(CAUSAL_SOURCE_SYSTEM,/"er"/);
-  assert.doesNotMatch(CAUSAL_SOURCE_SYSTEM,/root-cause mechanism|hardConstraints|optionalConstraints/);
-});
-
-test('causal payload excludes generic goal ledger and duplicate facts',()=>{
-  assert.match(engine,/const payload=causal\s*\? sourceBody/);
-  assert.match(engine,/hl:arr\(hypothesisContributions\)\.map\(item=>item\?\.claim\|\|''\)\.filter\(Boolean\)/);
-  assert.match(engine,/g:\[activeGoal\?\.text\|\|'',activeGoal\?\.failingCase\|\|''\]/);
+test('causal traversal has no per-node source prompt or source payload',()=>{
+  assert.doesNotMatch(engine,/CAUSAL_SOURCE_SYSTEM/);
   const causalPayloadStart=engine.indexOf('const payload=causal');
   const causalPayloadEnd=engine.indexOf('const decisionPrompt=',causalPayloadStart);
   const causalPayload=engine.slice(causalPayloadStart,causalPayloadEnd);
-  assert.doesNotMatch(causalPayload,/ledgerView\(/);
-  assert.doesNotMatch(causalPayload,/hardConstraints|optionalConstraints/);
+  assert.match(causalPayload,/n:currentState\?causalSemanticNodeView/);
+  assert.match(causalPayload,/c:candidates\.map/);
+  assert.doesNotMatch(causalPayload,/pc:String\(proposedContribution/);
+  assert.doesNotMatch(causalPayload,/src:\{/);
 });
 
-test('causal source verification does not resend semantic candidate trees',()=>{
-  const start=engine.indexOf('? sourceBody');
-  const end=engine.indexOf(': {\n          q:question,',start);
-  const sourcePayload=engine.slice(start,end);
-  assert.doesNotMatch(sourcePayload,/\bc:/);
-  assert.doesNotMatch(sourcePayload,/\bl:/);
-  assert.match(engine,/if\(goal\.kind==='causal'\)decision\.picks=semanticNavigationPicks/);
+test('causal contributions are accepted from semantics without source gating',()=>{
+  assert.match(engine,/evaluateCausalContribution\(\{[\s\S]*tentativeScore,[\s\S]*epsilon:HYPOTHESIS_DELTA_EPSILON/);
+  assert.doesNotMatch(engine,/causalContributionNeedsSource/);
+  assert.doesNotMatch(engine,/sourceDroppedContribution/);
+  assert.doesNotMatch(engine,/CAUSAL_CONTRIBUTION_SOURCE/);
+});
+
+test('completed causal list is localized to source exactly once before counterfactual',()=>{
+  assert.match(engine,/sourceLocalizationByHypothesis:new Map\(\)/);
+  assert.match(engine,/hypothesisContributions:acceptedCausalContributions/);
+  assert.match(engine,/CAUSAL_SOURCE_LOCALIZE_SYSTEM/);
+  assert.match(engine,/\{q:question,hl,sources\}/);
+  assert.match(engine,/localizedRangeStates\(rawCausalEvidence,ranges\)/);
+  assert.match(engine,/action:'CAUSAL_SOURCE_LOCALIZED'/);
+  assert.match(engine,/evidenceStates:localized/);
 });
 
 test('causal lookahead does not duplicate candidate root semantics',()=>{
@@ -55,14 +55,6 @@ test('causal lookahead does not duplicate candidate root semantics',()=>{
   assert.match(body,/const descendants=arr\(children\.get\(state\.id\)\)/);
   assert.match(body,/return \[index,descendants\]/);
   assert.doesNotMatch(body,/\[index,walk\(state,1\)\]/);
-});
-
-test('call edges do not relabel destination functions',()=>{
-  const start=engine.indexOf('function semanticNodeView');
-  const end=engine.indexOf('function semanticWindowView',start);
-  const body=engine.slice(start,end);
-  assert.match(body,/state\?\.type==='code_symbol'\s*\? 'function'/);
-  assert.doesNotMatch(body,/navigationRelationship==='calls'/);
 });
 
 test('top-level causal entries reset branch-local hypothesis state',()=>{
@@ -81,10 +73,4 @@ test('flat budget persists across sibling backtracking and never blocks strength
 test('non-causal prompt remains separate from causal prompt',()=>{
   assert.match(GOAL_DECIDE_SYSTEM,/NON-CAUSAL/);
   assert.doesNotMatch(GOAL_DECIDE_SYSTEM,/hl is authoritative|CURRENT EVIDENCE CONTRIBUTION/);
-});
-
-test('source grounding becomes the binary local evidence signal',()=>{
-  assert.match(engine,/sourceBody\s*\? \(Number\(call\.parsed\?\.ok\|\|0\)===1&&currentContribution\?1:0\)/);
-  assert.match(engine,/Number\(call\.parsed\?\.er\|\|0\)===1\?1:0/);
-  assert.doesNotMatch(engine,/currentWindow=null/);
 });

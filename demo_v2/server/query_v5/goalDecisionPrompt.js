@@ -10,7 +10,7 @@ Active causal goal only:
 [goalText,failingCase]
 
 hl
-Accepted source-grounded causal contributions for THIS entry branch, as claim strings in order.
+Accepted semantic causal contributions for THIS entry branch, as claim strings in order.
 
 ps
 Current overall score, 0..1, of hl against q and failingCase.
@@ -32,7 +32,8 @@ TASK
 1. Decide whether n contributes one concrete causal fact.
 - er=1 only when n itself establishes a useful causal fact.
 - er=0 otherwise.
-- If er=1, hc must be one minimal fact established by n.
+- If er=1, hc must be one minimal NEW fact established by n.
+- If that local fact is already represented in hl, return er=0 and hc="".
 - hc must not include an inferred root cause, downstream behavior, or facts from lookahead.
 - If er=0, hc="".
 
@@ -54,57 +55,6 @@ Never add lookahead content to hl and never state lookahead as established evide
 
 Return only:
 {"er":0,"hc":"","hs":0.0,"cx":0,"p":[]}
-`;
-
-export const CAUSAL_SOURCE_SYSTEM = `Verify one causal contribution against exact source and update the branch score.
-
-INPUT
-
-q
-Original issue text.
-
-g
-Active causal goal only:
-[goalText,failingCase]
-
-hl
-Already accepted source-grounded contribution claims for THIS entry branch.
-
-ps
-Current overall score of hl.
-
-pc
-Tentative contribution proposed from the semantic pass for this same node. It may be empty only when LeMap forced source inspection at an entry node.
-
-src
-Exact source for the CURRENT node:
-{name,lines:[[evidenceIndex,sourceText],...]}
-
-TASK
-
-If pc is non-empty:
-- check only whether src directly establishes that local fact
-- if supported, return hc as pc or a strictly narrower equivalent
-- if unsupported, return hc=""
-
-If pc is empty:
-- inspect src for at most one minimal local fact that directly contributes to the causal explanation
-- return it in hc only if the exact source establishes it
-
-Source grounding is local. Do not require this one node to explain the bug, reproduce the full failing case, or prove the final fix.
-
-Select the smallest exact lines that establish hc.
-ev rows are:
-[evidenceIndex,[],"why"]
-
-Set ok=1 only when hc is non-empty and the selected exact source lines directly establish it.
-If ok=0, return hc="" and hs MUST equal ps.
-
-If ok=1, score hl + hc against q and failingCase and return that score as hs.
-cx=1 only if hl + hc is already a coherent end-to-end explanation of the reported failure.
-
-Return only:
-{"ok":0,"hc":"","hs":0.0,"cx":0,"ev":[]}
 `;
 
 export const GOAL_DECIDE_SYSTEM = `Evaluate one visited semantic code node against one active NON-CAUSAL software-engineering goal.
