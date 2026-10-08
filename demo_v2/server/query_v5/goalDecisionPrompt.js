@@ -1,172 +1,165 @@
-export const GOAL_DECIDE_SYSTEM = `Evaluate one visited semantic code node against one active software-engineering goal.
+export const CAUSAL_DECIDE_SYSTEM = `Evaluate one visited semantic code node for a causal software-engineering issue.
 
-INPUTS
+INPUT
 
 q
-Original user request.
+Original issue text.
 
 g
-Goal ledger as:
+Active causal goal only:
+[goalText,failingCase]
+
+hl
+Accepted source-grounded causal contributions for THIS entry branch, as claim strings in order.
+
+ps
+Current overall score, 0..1, of hl against q and failingCase.
+
+n
+CURRENT visited semantic node:
+[type,name,purpose,effect]
+
+c
+Immediate unvisited candidates:
+[candidateIndex,type,name,purpose,effect]
+
+l
+Bounded descendant semantics for candidates, used only to predict where useful evidence may be found.
+Lookahead is not visited evidence.
+
+TASK
+
+1. Decide whether n contributes one concrete causal fact.
+- er=1 only when n itself establishes a useful causal fact.
+- er=0 otherwise.
+- If er=1, hc must be one minimal fact established by n.
+- hc must not include an inferred root cause, downstream behavior, or facts from lookahead.
+- If er=0, hc="".
+
+2. Score the accumulated causal explanation.
+- hl is authoritative.
+- If hc="", hs MUST equal ps.
+- If hc is non-empty, score hl + hc against the ORIGINAL issue q and failingCase.
+- hs may rise, stay flat, or fall.
+- cx=1 only when hl + hc is already a coherent end-to-end explanation of the reported failure. Otherwise cx=0.
+
+3. Predict navigation.
+For every candidate in c return:
+[candidateIndex,expectedHypothesisScore,[]]
+
+expectedHypothesisScore is the score you expect the accepted hypothesis to reach AFTER that candidate is actually visited and any useful local contribution from it is evaluated.
+It is a search prediction only.
+A promising unvisited candidate can score above ps even when hl is empty.
+Never add lookahead content to hl and never state lookahead as established evidence.
+
+Return only:
+{"er":0,"hc":"","hs":0.0,"cx":0,"p":[]}
+`;
+
+export const CAUSAL_SOURCE_SYSTEM = `Verify one causal contribution against exact source and update the branch score.
+
+INPUT
+
+q
+Original issue text.
+
+g
+Active causal goal only:
+[goalText,failingCase]
+
+hl
+Already accepted source-grounded contribution claims for THIS entry branch.
+
+ps
+Current overall score of hl.
+
+pc
+Tentative contribution proposed from the semantic pass for this same node. It may be empty only when LeMap forced source inspection at an entry node.
+
+src
+Exact source for the CURRENT node:
+{name,lines:[[evidenceIndex,sourceText],...]}
+
+TASK
+
+If pc is non-empty:
+- check only whether src directly establishes that local fact
+- if supported, return hc as pc or a strictly narrower equivalent
+- if unsupported, return hc=""
+
+If pc is empty:
+- inspect src for at most one minimal local fact that directly contributes to the causal explanation
+- return it in hc only if the exact source establishes it
+
+Source grounding is local. Do not require this one node to explain the bug, reproduce the full failing case, or prove the final fix.
+
+Select the smallest exact lines that establish hc.
+ev rows are:
+[evidenceIndex,[],"why"]
+
+Set ok=1 only when hc is non-empty and the selected exact source lines directly establish it.
+If ok=0, return hc="" and hs MUST equal ps.
+
+If ok=1, score hl + hc against q and failingCase and return that score as hs.
+cx=1 only if hl + hc is already a coherent end-to-end explanation of the reported failure.
+
+Return only:
+{"ok":0,"hc":"","hs":0.0,"cx":0,"ev":[]}
+`;
+
+export const GOAL_DECIDE_SYSTEM = `Evaluate one visited semantic code node against one active NON-CAUSAL software-engineering goal.
+
+INPUT
+
+q
+Original request.
+
+g
+Goal ledger:
 [goalId,kind,status,text,dependsOn,hardConstraints,optionalConstraints,failingCase]
 
 u
 Active goal ID.
 
 f
-Previously established evidence as:
+Previously established evidence:
 [factId,status,sourceGoalId,sourceGoalKind,text]
 
-hl
-For causal goals only. Ordered list of ACCEPTED causal evidence contributions:
-[claim,path,startLine,endLine,sourceGrounded]
-
-ps
-For causal goals only. Overall alignment score, 0..1, of hl against the original issue before the current node is evaluated.
+h
+Current evidence-backed explanation for the active goal.
 
 n
-The CURRENT visited semantic node:
+CURRENT visited semantic node:
 [type,name,purpose,effect]
-
-The type is the actual destination construct being evaluated, such as function, region, if, for, while, try, with, match, or module region. A calls edge used to reach a function does not make that destination a call.
+n is null only for entry comparison.
 
 c
-Immediate semantic navigation candidates:
+Immediate candidates:
 [candidateIndex,type,name,purpose,effect]
 
 l
-Bounded semantic lookahead under each candidate. It is NAVIGATION CONTEXT ONLY. It is not visited evidence and must never be added to hl.
-
-pc
-For SOURCE VERIFICATION only. The exact tentative causal contribution proposed for this same node during the preceding semantic evaluation. When pc is non-empty, verify that contribution against src. Do not silently replace it with a different mechanism.
+Bounded semantic lookahead for navigation only.
 
 src
-Exact source for the CURRENT node, supplied only during source verification:
+Exact source for the CURRENT node when source inspection is active:
 {name,sourcePath,lines:[[evidenceIndex,sourceText],...]}
 
 m
-Structural code matches used only during entry comparison.
+Structural matches used only when n is null.
 
-h
-Display text used for non-causal goals. For causal goals h is not evidence, is not authoritative, and must not influence causal scoring.
+TASK
 
-CORE CAUSAL MODEL
+When n is null, rank supplied entries in p and do not form a hypothesis.
 
-For causal goals there are exactly two evaluations.
-
-LEVEL 1 — CURRENT EVIDENCE CONTRIBUTION
-
-Evaluate only n.
-
-For causal goals er is binary:
-- er=1 means the CURRENT visited node establishes one concrete fact that contributes to the causal explanation.
-- er=0 means it does not establish such a contribution.
-
-If er=1, return exactly one minimal contribution in hc.
-hc must state only what this node actually establishes. It is one evidence contribution, not a root-cause theory and not a prediction about unvisited code.
-
-If the node is useful only as a route toward other evidence, return er=0 and hc="".
-Do not assign fractional causal relevance scores.
-
-LEVEL 2 — OVERALL HYPOTHESIS ALIGNMENT
-
-hl is the authoritative causal hypothesis.
-
-If hc is non-empty, evaluate the tentative list:
-hl + hc
-
-Return hs from 0..1 answering:
-"How well does this whole ordered evidence list explain the ORIGINAL reported issue and frozen failingCase?"
-
-If hc is empty, hs MUST equal ps because the accepted hypothesis did not change.
-
-A locally valid contribution may still make the accumulated explanation worse.
-In that case er remains 1 but hs may decrease, so LeMap can reject that contribution.
-
-cx=1 only when hl + hc forms a coherent end-to-end causal explanation of the distinguishing reported condition through the relevant code behavior to the observed symptom.
-Otherwise cx=0.
-
-CAUSAL NAVIGATION
-
-Navigation is driven by the expected CHANGE in the OVERALL hypothesis, not by local relevance.
-
-For each immediate candidate in c, use its semantic description and l to predict the value of VISITING that candidate next.
-
-Return p rows as:
-[candidateIndex,expectedHypothesisScore,[]]
-
-expectedHypothesisScore means:
-"If this candidate is visited next, what overall alignment score do I expect the accepted hypothesis to reach after evaluating whatever useful evidence that visit is likely to reveal?"
-
-This is a SEARCH PREDICTION, not established evidence.
-You are not required to already prove the candidate's mechanism before giving it a positive score.
-A candidate should receive a high expectedHypothesisScore when its semantics or lookahead make it a promising place to obtain evidence that would strengthen the current causal explanation.
-
-Compare each expectedHypothesisScore with the current overall score ps:
-- greater than ps = expected strengthening
-- approximately equal to ps = expected flattening
-- less than ps = expected weakening
-
-When hl is empty and ps=0, a promising candidate may still receive a strong positive expectedHypothesisScore if visiting it is likely to reveal the first useful causal evidence.
-Do not set candidates to zero merely because no contribution has yet been accepted.
-
-Each top-level entry function is an independent causal branch. When LeMap starts another entry, hl and ps are reset for that entry. Compare navigation against that entry's own current ps. An entry may remain below another entry's best score while its own hs is still increasing. Flat or weakening progress should cause LeMap to leave that path after its small flat-step budget.
-
-er is only the binary contribution decision for the CURRENT visited node.
-Do not use er as the candidate navigation score.
-Do not add any unvisited lookahead evidence to hl.
-Do not claim a lookahead mechanism as established evidence.
-
-ENTRY STAGE
-
-When n is null:
-- compare only the structurally shortlisted entries
-- c contains candidate entry functions or boundaries
-- score every supplied candidate in p as [candidateIndex,entryNavigationScore]
-- entryNavigationScore is how useful that entry is as a starting point for the full active goal
-- do not create hc or causal evidence
-- return er=0, hc="", cx=0, hs=0, gs=[], ck=[], i=0
-
-SOURCE VERIFICATION
-
-When src is present:
-- evaluate the exact source for the SAME current node n
-- pc is the tentative contribution proposed before source inspection
-- for a causal goal, verify pc against src
-- do not invent a replacement mechanism
-- if src supports pc, return hc as pc or a narrower wording that preserves the same mechanism
-- if src does not support pc, return hc=""
-- select ev as the smallest exact source lines that establish or reject pc
-- ev rows are [evidenceIndex,[],"why"]
-- causal source verification is LOCAL mechanism grounding, not global testcase validation
-- do not require this one source range to prove every hard constraint or the final corrected behavior
-- after verifying hc, score the tentative overall list hl + hc in hs
-- if hc="", hs MUST equal ps
-- return er=1 only if the exact source grounds pc as a local contribution; otherwise return er=0
-- i=0 because this source is already being inspected
-
-NON-CAUSAL GOALS
-
-For locate, describe, change, or verify goals:
-- use n, c, l, src, f, hardConstraints, and optionalConstraints normally
-- hc="" and cx=0
-- h may be used as the rolling explanation
-- ck contains criterion scores as [[constraintIndex,score],...]
-- gs contains goal sufficiency as [[goalId,score],...]
-- p rows are [candidateIndex,expectedHypothesisScore,[constraintIndexes]]
-
-GENERAL RULES
-
-- Use only visited semantic evidence, accepted facts, structural entry evidence, and supplied exact source.
-- Never turn lookahead into established evidence.
-- Never rewrite immutable hardConstraints, optionalConstraints, or failingCase.
-- Never use h as causal evidence.
-- Never drop or replace accepted hl entries during evaluation of a new node.
-- For causal goals, local evidence is binary: it either contributes one source-groundable fact or it does not.
-- hc must be the smallest causal fact established by the current node, not a speculative end-to-end diagnosis.
-- A valid local contribution may still reduce the overall hypothesis score and therefore be rejected from hl.
-- Exact source verification checks the current contribution, not the entire causal story.
-- Counterfactual validation of the complete causal story happens later and is outside this prompt.
+Otherwise:
+- update h only from visited evidence
+- score fixed acceptance criteria in ck as [[constraintIndex,score],...]
+- score goal sufficiency in gs as [[goalId,score],...]
+- use p to rank immediate candidates as [candidateIndex,expectedHypothesisScore,[constraintIndexes]]
+- use i=1 only when exact source is needed
+- when src is present, select the smallest exact supporting lines in ev as [evidenceIndex,[constraintIndexes],"why"]
+- never turn lookahead into established evidence
 
 Return only:
-{"assessment":"","er":0.0,"hc":"","cx":0,"h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[[0,0.0]]}
+{"assessment":"","h":"","gs":[],"ck":[],"hs":0.0,"ev":[],"a":[],"d":[],"r":[],"i":0,"p":[]}
 `;

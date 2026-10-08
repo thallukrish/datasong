@@ -1,7 +1,7 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
 import { selectCodeEntries } from './codeEntrySelector.js';
-import { GOAL_DECIDE_SYSTEM } from './goalDecisionPrompt.js';
+import { CAUSAL_DECIDE_SYSTEM, CAUSAL_SOURCE_SYSTEM, GOAL_DECIDE_SYSTEM } from './goalDecisionPrompt.js';
 import { causalHypothesisText, evaluateCausalContribution, isCausalEvidenceRelevant } from './causalEvidence.js';
 
 const MAX_STEPS = 64;
@@ -111,28 +111,6 @@ For every acceptance criterion, return a groundedness score 0..1. A high score m
 
 Also return ok=1 only when every hard criterion is grounded at least 0.9 by the selected evidence set. Return only:
 {"ck":[[0,0.0]],"ok":0}.`;
-
-const LOCAL_CAUSAL_EVIDENCE_GROUND_SYSTEM = `Verify one local causal evidence contribution against exact source.
-
-hc is the CURRENT local contribution proposed from the visited semantic node.
-ev is exact source evidence selected from that same node as [evidenceIndex,path,startLine,endLine,code,claimedConstraintIndexes,why].
-
-This is a literal source-grounding check only.
-
-Ask exactly:
-"Do the supplied source lines directly establish the local fact stated in hc?"
-
-Do NOT judge whether hc by itself explains the reported bug, failing testcase, final symptom, root cause, or desired fix.
-Do NOT require hc to be an end-to-end causal mechanism.
-Do NOT use the original issue, the accumulated hypothesis, or missing downstream evidence as reasons to reject hc.
-
-A contribution such as "function A delegates to function B", "this branch runs before the CompoundModel branch", or "this operator dispatch calls _cstack" is grounded when the exact source establishes that local fact, even if later evidence is still needed to explain the bug.
-
-Return ok=1 when the source directly establishes hc.
-Return ok=0 only when the source does not establish hc, contradicts it, or hc adds an unsupported inference beyond these lines.
-
-Return only:
-{"ok":0,"why":""}.`;
 
 const COUNTERFACTUAL_VALIDATE_SYSTEM = `Validate a proposed causal diagnosis by deriving the smallest hypothetical code change implied by that diagnosis and testing whether that intervention would fix the exact reported failing condition.
 
@@ -319,6 +297,16 @@ function semanticNodeView(state,explorer){
   return [structuralType,state?.name||'',text(semantic.purpose||'',320),text(semantic.effect||'',280)];
 }
 
+function causalSemanticNodeView(state,explorer){
+  const semantic=codeSemanticForState(state,explorer)||{};
+  const structuralType=state?.type==='code_region'
+    ? String(state?.kind||'region')
+    : state?.type==='code_symbol'
+      ? 'function'
+      : state?.type||'';
+  return [structuralType,state?.name||'',text(semantic.purpose||'',180),text(semantic.effect||'',180)];
+}
+
 function semanticWindowView(rootState,window,explorer){
   const stateById=new Map(arr(window?.states).map(state=>[state.id,state]));
   const childrenById=new Map();
@@ -383,6 +371,30 @@ function semanticLookaheadView(candidates=[],window,explorer,maxDepth=3){
     return [...semanticNodeView(state,explorer),kids];
   };
   return arr(candidates).map((state,index)=>[index,walk(state,1)]).filter(row=>row[1]);
+}
+
+function causalSemanticLookaheadView(candidates=[],window,explorer,maxDepth=3){
+  const byId=new Map(arr(window?.states).map(state=>[state.id,state]));
+  const children=new Map();
+  for(const link of arr(window?.links)){
+    if(!['contains','calls'].includes(String(link?.relationship||'')))continue;
+    if(!children.has(link.from))children.set(link.from,[]);
+    children.get(link.from).push(link.to);
+  }
+  const walk=(state,depth,seen=new Set())=>{
+    if(!state?.id||depth>maxDepth||seen.has(state.id))return null;
+    const nextSeen=new Set(seen);nextSeen.add(state.id);
+    const kids=depth===maxDepth?[]:arr(children.get(state.id))
+      .map(id=>byId.get(id)).filter(Boolean)
+      .map(child=>walk(child,depth+1,nextSeen)).filter(Boolean);
+    return [...causalSemanticNodeView(state,explorer),kids];
+  };
+  return arr(candidates).map((state,index)=>{
+    const descendants=arr(children.get(state.id))
+      .map(id=>byId.get(id)).filter(Boolean)
+      .map(child=>walk(child,2,new Set([state.id]))).filter(Boolean);
+    return [index,descendants];
+  }).filter(row=>row[1].length);
 }
 
 function hypothesisProgress(previous,current){
@@ -688,32 +700,9 @@ async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evi
   return {scores,ok};
 }
 
-async function verifyLocalCausalEvidenceGrounding({goal,contribution='',evidenceStates,client,model,usage,log,step}){
-  const evidence=arr(evidenceStates).map((state,index)=>[
-    index,
-    state.sourcePath||'',
-    Number(state.startLine||0),
-    Number(state.endLine||state.startLine||0),
-    text(state.body||'',1600),
-    arr(state.evidenceSupports),
-    state.evidenceWhy||''
-  ]);
-  if(!evidence.length)return {score:0,ok:false,why:''};
-  const payload={
-    hc:String(contribution||''),
-    ev:evidence
-  };
-  const call=await modelJson(client,model,LOCAL_CAUSAL_EVIDENCE_GROUND_SYSTEM,payload);addUsage(usage,call.usage);
-  const ok=Number(call.parsed?.ok||0)===1;
-  const score=ok?1:0;
-  const why=text(call.parsed?.why||'',600);
-  log('query_v5_local_causal_evidence_grounding',{step,goalId:goal?.id||'',payload,result:{score,ok,why},usage:call.usage});
-  return {score,ok,why};
-}
-
 async function decide({
   question,mode,goals=[],activeGoalId='',branchId='',hypothesis='',hypothesisContributions=[],previousHypothesisScore=0,proposedContribution='',
-  ledger,path=[],currentState=null,currentWindow=null,
+  ledger,path=[],currentState=null,
   candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
   const entryStage=!currentState;
@@ -730,33 +719,50 @@ async function decide({
 
   const activeGoal=arr(goals).find(goal=>goal.id===activeGoalId);
 
-  const payload={
-    q:question,
-    g:goalView(goals),
-    u:String(activeGoalId||''),
-    h:hypothesis||'',
-    hl:arr(hypothesisContributions).map(item=>[
-      item?.claim||'',
-      item?.sourcePath||'',
-      Number(item?.startLine||0),
-      Number(item?.endLine||item?.startLine||0),
-      !!item?.sourceGrounded
-    ]),
-    ps:Number(previousHypothesisScore||0),
-    pc:String(proposedContribution||''),
-    f:ledgerView(ledger,{goals,activeGoalId,branchId}),
-    n:currentState?semanticNodeView(currentState,explorer):null,
-    src:sourceBody?{
-      name:currentState?.name||'',
-      sourcePath:currentState?.sourcePath||'',
-      lines:sourceCandidates.map(item=>[item.index,text(item.code,360)])
-    }:null,
-    m:entryMatches,
-    c:candidates.map((state,index)=>[index,...semanticNodeView(state,explorer)]),
-    l:entryStage?[]:lookahead
-  };
+  const causal=activeGoal?.kind==='causal';
+  const payload=causal
+    ? sourceBody
+      ? {
+          q:question,
+          g:[activeGoal?.text||'',activeGoal?.failingCase||''],
+          hl:arr(hypothesisContributions).map(item=>item?.claim||'').filter(Boolean),
+          ps:Number(previousHypothesisScore||0),
+          pc:String(proposedContribution||''),
+          src:{
+            name:currentState?.name||'',
+            lines:sourceCandidates.map(item=>[item.index,text(item.code,360)])
+          }
+        }
+      : {
+          q:question,
+          g:[activeGoal?.text||'',activeGoal?.failingCase||''],
+          hl:arr(hypothesisContributions).map(item=>item?.claim||'').filter(Boolean),
+          ps:Number(previousHypothesisScore||0),
+          n:currentState?causalSemanticNodeView(currentState,explorer):null,
+          c:candidates.map((state,index)=>[index,...causalSemanticNodeView(state,explorer)]),
+          l:entryStage?[]:lookahead
+        }
+    : {
+        q:question,
+        g:goalView(goals),
+        u:String(activeGoalId||''),
+        h:hypothesis||'',
+        f:ledgerView(ledger,{goals,activeGoalId,branchId}),
+        n:currentState?semanticNodeView(currentState,explorer):null,
+        src:sourceBody?{
+          name:currentState?.name||'',
+          sourcePath:currentState?.sourcePath||'',
+          lines:sourceCandidates.map(item=>[item.index,text(item.code,360)])
+        }:null,
+        m:entryMatches,
+        c:candidates.map((state,index)=>[index,...semanticNodeView(state,explorer)]),
+        l:entryStage?[]:lookahead
+      };
 
-  let call=await modelJson(client,model,GOAL_DECIDE_SYSTEM,payload);addUsage(usage,call.usage);
+  const decisionPrompt=causal
+    ? (sourceBody?CAUSAL_SOURCE_SYSTEM:CAUSAL_DECIDE_SYSTEM)
+    : GOAL_DECIDE_SYSTEM;
+  let call=await modelJson(client,model,decisionPrompt,payload);addUsage(usage,call.usage);
 
   if(!entryStage&&!sourceBody&&activeGoal?.kind!=='causal'){
     const parsedP=arr(call.parsed?.p);
@@ -786,8 +792,6 @@ async function decide({
           failingCase:activeGoal?.failingCase||''
         },
         previousH:hypothesis||'',
-        hypothesisList:payload.hl,
-        previousScore:payload.ps,
         n:payload.n,
         c:payload.c,
         l:payload.l,
@@ -901,20 +905,14 @@ async function decide({
     }
   }
   let grounding=null;
-  let causalMechanismGrounding=null;
+  let causalSourceGrounded=null;
   if(!entryStage&&sourceBody){
     if(activeGoal?.kind==='causal'){
-      causalMechanismGrounding=evidenceStates.length
-        ? await verifyLocalCausalEvidenceGrounding({
-            goal:activeGoal,
-            contribution:text(call.parsed?.hc||'',700),
-            evidenceStates,client,model,usage,log,step
-          })
-        : {score:0,ok:false,why:''};
-      // Keep the immutable symptom/behavior constraints as diagnostics here.
-      // Local source is responsible only for grounding the current local contribution.
-      // The failing case and desired behavior are tested by the later
-      // counterfactual intervention.
+      causalSourceGrounded=Boolean(
+        String(call.parsed?.hc||'').trim()&&
+        evidenceStates.length&&
+        Number(call.parsed?.ok||0)===1
+      );
     }else if(evidenceStates.length){
       grounding=await verifyEvidenceGrounding({
         question,goal:activeGoal,hypothesis:text(call.parsed?.h||hypothesis||'',900),
@@ -956,7 +954,9 @@ async function decide({
     ?String(call.parsed.assessment).toLowerCase():'';
   const currentContribution=entryStage?'':text(call.parsed?.hc||'',700);
   const evidenceRelevance=!entryStage&&activeGoal?.kind==='causal'
-    ? Math.max(0,Math.min(1,Number(call.parsed?.er||0)))
+    ? sourceBody
+      ? (Number(call.parsed?.ok||0)===1&&currentContribution?1:0)
+      : (Number(call.parsed?.er||0)===1?1:0)
     : 0;
   const causalDisplayHypothesis=activeGoal?.kind==='causal'
     ? causalHypothesisText([
@@ -985,11 +985,11 @@ async function decide({
     inspectSource,
     evidenceRanges,
     evidenceGrounded:activeGoal?.kind==='causal'
-      ? (causalMechanismGrounding?causalMechanismGrounding.ok:null)
+      ? causalSourceGrounded
       : (grounding?grounding.ok:null),
-    causalMechanismGrounded:activeGoal?.kind==='causal'?Boolean(causalMechanismGrounding?.ok):null,
-    causalMechanismScore:activeGoal?.kind==='causal'?Number(causalMechanismGrounding?.score||0):null,
-    causalMechanismWhy:activeGoal?.kind==='causal'?String(causalMechanismGrounding?.why||''):null,
+    causalMechanismGrounded:activeGoal?.kind==='causal'?causalSourceGrounded:null,
+    causalMechanismScore:activeGoal?.kind==='causal'?(causalSourceGrounded?1:0):null,
+    causalMechanismWhy:activeGoal?.kind==='causal'?'':null,
     evidenceReselected,
     evidenceCoverage:sourceBody?evidenceCoverageRatio(currentState,evidenceStates):0,
     supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
@@ -1519,8 +1519,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         baseHypothesis:'',
         baseScore:0,
         baseHypothesisContributions:[],
-        flatSteps:0,
-        baseFlatSteps:0,
         frontierIds:[],
         entryRootId:ranked[0].state.id,
         entryRootName:ranked[0].state.name
@@ -1588,12 +1586,10 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           thread.hypothesis=top.baseHypothesis||'';
           thread.hypothesisScore=Number(top.baseScore||0);
           thread.hypothesisContributions=arr(top.baseHypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
-          thread.flatSteps=Number(top.baseFlatSteps||0);
         }
         top.hypothesis=thread.hypothesis;
         top.hypothesisScore=thread.hypothesisScore;
         top.hypothesisContributions=arr(thread.hypothesisContributions);
-        top.flatSteps=thread.flatSteps;
         const event={step,action:'BACKTRACK',goalId:thread.goal.id,to:top.current.state.name,hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,bestScore:thread.bestScore};
         events.push(event);emit({...event,path:[...top.path,top.current.state].map(x=>x.name)});
         return true;
@@ -1603,7 +1599,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.hypothesis=parent?.hypothesis||'';
       thread.hypothesisScore=Number(parent?.hypothesisScore||0);
       thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
-      thread.flatSteps=Number(parent?.flatSteps||0);
     }
     return seedGoal(thread);
   };
@@ -1657,7 +1652,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       ? (regionCandidates.length===next.length?'region':regionCandidates.length?'mixed':'call')
       : 'none';
 
-    const lookahead=semanticLookaheadView(next,learned.window,explorer,WINDOW_DEPTH);
+    const lookahead=goal.kind==='causal'
+      ? causalSemanticLookaheadView(next,learned.window,explorer,WINDOW_DEPTH)
+      : semanticLookaheadView(next,learned.window,explorer,WINDOW_DEPTH);
 
     // Preserve the complete semantic frontier on the parent frame. Query may
     // return only the top few navigation picks; the unreturned candidates must
@@ -1667,7 +1664,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     let decision=await decide({
       question,mode,goals,activeGoalId:goal.id,branchId:entryRootId,hypothesis:thread.hypothesis||frame.hypothesis,
       hypothesisContributions:thread.hypothesisContributions,previousHypothesisScore:thread.hypothesisScore,
-      ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
+      ledger,path:frame.path,currentState:state,candidates:next,lookahead,
       explorer,client,model,usage,log,step:++step,onProgress:emit
     });
 
@@ -1719,20 +1716,21 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         path:path.map(x=>x.name)
       });
       const semanticProposedContribution=String(decision.contribution||'').trim();
+      const semanticNavigationPicks=arr(decision.picks);
       decision=await decide({
         question,mode,goals,activeGoalId:goal.id,branchId:entryRootId,hypothesis:decision.hypothesis||thread.hypothesis||frame.hypothesis,
         hypothesisContributions:thread.hypothesisContributions,previousHypothesisScore:thread.hypothesisScore,
         proposedContribution:semanticProposedContribution,
-        ledger,path:frame.path,currentState:state,currentWindow:learned.window,candidates:next,lookahead,
+        ledger,path:frame.path,currentState:state,candidates:next,lookahead,
         sourceBody:String(state.body||state.callText||''),
         explorer,client,model,usage,log,step:++step,onProgress:emit
       });
+      if(goal.kind==='causal')decision.picks=semanticNavigationPicks;
     }
 
-    // Causal navigation has two independent evaluations:
-    // 1. evidenceRelevance says whether the CURRENT node matters to the issue.
-    // 2. hypothesisScore says whether the accepted evidence list plus hc fits
-    //    the ORIGINAL issue better as a whole.
+    // Causal evaluation is binary locally and scored only at the accumulated level:
+    // er says whether the CURRENT node contributes one local fact; hs scores hl + hc
+    // against the original issue.
     let causalContributionRejected=false;
     let causalContributionRejectReason='';
     if(goal.kind==='causal'){
@@ -1925,7 +1923,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     thread.flatSteps=goal.kind==='causal'
       ? (hasAcceptedCausalEvidence&&progress.trend==='flat'?thread.flatSteps+1:0)
       : (progress.trend==='flat'?thread.flatSteps+1:0);
-    frame.flatSteps=thread.flatSteps;
     if(!decision.causalRejected&&decision.hypothesisScore>thread.bestScore){
       thread.bestScore=decision.hypothesisScore;
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
@@ -2067,7 +2064,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         hypothesisContributions:arr(thread.hypothesisContributions),
         baseHypothesis:thread.hypothesis||decision.hypothesis,baseScore:thread.hypothesisScore,
         baseHypothesisContributions:arr(thread.hypothesisContributions),
-        flatSteps:thread.flatSteps,baseFlatSteps:thread.flatSteps,
         navigationKind,frontierIds:[],
         entryRootId,entryRootName
       });
