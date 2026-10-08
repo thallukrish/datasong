@@ -58,13 +58,14 @@ function clusterObservations(observations) {
       continue;
     }
     let cluster = null;
-    if (!key) {
-      cluster = clusters.find((candidate) =>
-        candidate.strongKey === '' &&
-        candidate.kind === observation.kind &&
-        similarity(candidate.prototype, observation) >= 0.6
-      ) || null;
-    }
+    const alias = norm(observation?.variable);
+    cluster = clusters.find((candidate) => {
+      if (candidate.kind !== observation.kind) return false;
+      const score = similarity(candidate.prototype, observation);
+      const aliasMatch = alias && [...candidate.aliases].some((value) => norm(value) === alias);
+      if (key && candidate.strongKey && key !== candidate.strongKey) return score >= 0.75;
+      return score >= 0.6 || (aliasMatch && score > 0);
+    }) || null;
     if (!cluster) {
       cluster = {
         strongKey: key,
@@ -123,14 +124,9 @@ export function buildPythonDataStructureGraph({ symbols = [], observations = [] 
   const clusters = clusterObservations(observations);
   const nodes = [];
   const functionNodes = new Map();
-  const relevantFunctions = new Set();
-
-  for (const cluster of clusters) {
-    for (const functionId of cluster.functionIds) relevantFunctions.add(functionId);
-  }
+  const relevantFunctions = new Set(arr(symbols).map((symbol) => symbol?.id).filter(Boolean));
 
   for (const symbol of arr(symbols)) {
-    if (!relevantFunctions.has(symbol.id)) continue;
     const links = [];
     for (const ref of arr(symbol.references)) {
       if (ref?.relation === 'calls' && ref?.targetSymbolId && relevantFunctions.has(ref.targetSymbolId)) {
