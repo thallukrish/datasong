@@ -148,6 +148,8 @@ class ObservationVisitor(ast.NodeVisitor):
                 rec = self.touch(name, node, "write")
                 if rec and (origin.get("kind") or origin.get("name")):
                     rec["origins"].append(origin)
+                    for key in origin.get("keys", []):
+                        rec["keys"].add(key)
             base = root_name(target)
             if base and isinstance(target, (ast.Attribute, ast.Subscript)):
                 self.touch(base, target, "mutate")
@@ -162,6 +164,8 @@ class ObservationVisitor(ast.NodeVisitor):
                 origin = value_origin(node.value)
                 if origin.get("kind") or origin.get("name"):
                     rec["origins"].append(origin)
+                    for key in origin.get("keys", []):
+                        rec["keys"].add(key)
         base = root_name(node.target)
         if base and isinstance(node.target, (ast.Attribute, ast.Subscript)):
             self.touch(base, node.target, "mutate")
