@@ -12,7 +12,6 @@ const ENTRY_CONFIRM_CANDIDATE_LIMIT = 8;
 const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
 const HYPOTHESIS_DELTA_EPSILON = 0.03;
-const MAX_FLAT_STEPS = 2;
 const CAUSAL_ACCEPT_SCORE = 0.8;
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
@@ -832,17 +831,17 @@ async function decide({
   }
 
   const byIndex=new Map(candidates.map((state,index)=>[String(index),state]));
-  const causalLookaheadIndexes=new Set(
-    causal?arr(lookahead).map(row=>String(row?.[0])):[]
-  );
   const picks=[];
   for(const row of arr(call.parsed?.p)){
     const index=String(row?.[0]);
     const state=byIndex.get(index);if(!state)continue;
     const score=Math.max(0,Math.min(1,Number(row?.[1]||0)));
-    if(!(score>0))continue;
+    // In causal mode a zero prediction is still a valid non-weakening move
+    // while hs is zero. Do not discard it before the navigation rule compares
+    // expectedScore with the current hs.
+    if(!causal&&!(score>0))continue;
     const targets=entryStage?[]:arr(row?.[2]).map(Number).filter(Number.isInteger);
-    picks.push({state,score,targets,hasLookahead:causalLookaheadIndexes.has(index)});
+    picks.push({state,score,targets});
   }
   picks.sort((a,b)=>b.score-a.score);
 
@@ -1453,8 +1452,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     bestSupportStates:[],
     counterfactualValidation:null,
     sourceLocalizationByHypothesis:new Map(),
-    entryScores:new Map(),
-    flatSteps:0
+    entryScores:new Map()
   }]));
 
   const dependenciesResolved=(goal)=>arr(goal.dependsOn).every(id=>goals.find(item=>item.id===id)?.status==='resolved');
@@ -1581,8 +1579,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         baseHypothesis:'',
         baseScore:0,
         baseHypothesisContributions:[],
-        flatSteps:0,
-        baseFlatSteps:0,
         frontierIds:[],
         entryRootId:ranked[0].state.id,
         entryRootName:ranked[0].state.name
@@ -1644,9 +1640,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           thread.hypothesis='';
           thread.hypothesisScore=0;
           thread.hypothesisContributions=[];
-          thread.flatSteps=0;
-          top.flatSteps=0;
-          top.baseFlatSteps=0;
         }else{
           // A sibling semantic branch restarts from the causal state at its
           // parent. Evidence collected only on the abandoned sibling is not
@@ -1654,8 +1647,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
           thread.hypothesis=top.baseHypothesis||'';
           thread.hypothesisScore=Number(top.baseScore||0);
           thread.hypothesisContributions=arr(top.baseHypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
-          thread.flatSteps=Number(top.baseFlatSteps||0);
-          top.flatSteps=thread.flatSteps;
         }
         top.hypothesis=thread.hypothesis;
         top.hypothesisScore=thread.hypothesisScore;
@@ -1669,7 +1660,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       thread.hypothesis=parent?.hypothesis||'';
       thread.hypothesisScore=Number(parent?.hypothesisScore||0);
       thread.hypothesisContributions=arr(parent?.hypothesisContributions).map(item=>({...item,supportStates:arr(item?.supportStates)}));
-      thread.flatSteps=Number(parent?.flatSteps||0);
     }
     return seedGoal(thread);
   };
@@ -2001,14 +1991,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const previousScore=Number(thread.hypothesisScore||0);
     const progress=hypothesisProgress(previousScore,decision.hypothesisScore);
     thread.hypothesisScore=decision.hypothesisScore;
-    const hasAcceptedCausalEvidence=goal.kind==='causal'&&arr(thread.hypothesisContributions).length>0;
-    if(goal.kind==='causal'){
-      const pathFlatSteps=Number(frame.flatSteps||0);
-      thread.flatSteps=progress.trend==='flat'?pathFlatSteps+1:0;
-      frame.flatSteps=thread.flatSteps;
-    }else{
-      thread.flatSteps=progress.trend==='flat'?thread.flatSteps+1:0;
-    }
     if(!decision.causalRejected&&decision.hypothesisScore>thread.bestScore){
       thread.bestScore=decision.hypothesisScore;
       thread.bestHypothesis=decision.hypothesis||thread.hypothesis;
@@ -2128,21 +2110,17 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     const warm=decision.picks.filter(pick=>{
       const currentScore=Number(decision.hypothesisScore||0);
       const expectedScore=Number(pick.score||0);
+      const weakens=expectedScore<currentScore-HYPOTHESIS_DELTA_EPSILON;
+
+      // Causal navigation has one rule: follow any candidate that does not
+      // materially weaken the current explanatory score. Backtrack only on
+      // weakening. Flat intermediate wrappers therefore need no special case.
+      if(goal.kind==='causal')return !weakens;
+
       const strengthens=expectedScore>currentScore+HYPOTHESIS_DELTA_EPSILON;
       const staysFlat=Math.abs(expectedScore-currentScore)<=HYPOTHESIS_DELTA_EPSILON;
       const targetsUnresolved=arr(pick.targets).some(index=>unresolvedHard.has(index));
-      const canSpendFlatStep=progress.trend!=='weakening'&&Number(frame.flatSteps||0)<MAX_FLAT_STEPS;
-      const hasAcceptedHypothesis=arr(thread.hypothesisContributions).length>0;
-
-      // A strengthening prediction always wins. Flat causal wrappers may also
-      // be traversed for at most the path-local flat budget. Before the first
-      // accepted hc, require bounded lookahead so we do not wander into arbitrary
-      // zero-score leaves just to keep searching.
-      if(goal.kind==='causal'){
-        const flatSearchable=staysFlat&&canSpendFlatStep&&(hasAcceptedHypothesis||pick.hasLookahead);
-        return strengthens||flatSearchable;
-      }
-      return strengthens||(staysFlat&&targetsUnresolved&&canSpendFlatStep);
+      return strengthens||(staysFlat&&targetsUnresolved);
     });
     if(warm.length){
       thread.stack.push({
@@ -2151,8 +2129,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         hypothesisContributions:arr(thread.hypothesisContributions),
         baseHypothesis:thread.hypothesis||decision.hypothesis,baseScore:thread.hypothesisScore,
         baseHypothesisContributions:arr(thread.hypothesisContributions),
-        flatSteps:thread.flatSteps,
-        baseFlatSteps:thread.flatSteps,
         navigationKind,frontierIds:[],
         entryRootId,entryRootName
       });
@@ -2171,23 +2147,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       emit({
         action:'BRANCH_PRUNED',goalId:goal.id,state:state.name,
         bestScore:thread.bestScore,hypothesisScore:thread.hypothesisScore,
-        candidates:decision.picks.map(pick=>({name:pick.state.name,expected:pick.score,targets:pick.targets,hasLookahead:!!pick.hasLookahead})),
+        candidates:decision.picks.map(pick=>({name:pick.state.name,expected:pick.score,targets:pick.targets})),
         path:path.map(x=>x.name)
       });
-    }
-
-    // Flat exploration is tolerated briefly only while a branch still appears
-    // capable of resolving an unmet hard constraint. Otherwise backtrack and
-    // compare alternate branch potential with the best hypothesis seen so far.
-    if(goal.kind!=='causal'||arr(thread.hypothesisContributions).length>0){
-      if(thread.flatSteps>=MAX_FLAT_STEPS){
-      emit({
-        action:'HYPOTHESIS_FLAT',goalId:goal.id,state:state.name,
-        hypothesis:thread.hypothesis,hypothesisScore:thread.hypothesisScore,
-        bestScore:thread.bestScore,constraintChecklist:decision.constraintChecklist,
-        path:path.map(x=>x.name)
-      });
-      }
     }
 
     await resumeThread(thread);

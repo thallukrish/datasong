@@ -65,17 +65,8 @@ test('causal lookahead does not duplicate candidate root semantics',()=>{
 
 test('top-level causal entries reset branch-local hypothesis state',()=>{
   assert.match(engine,/Each top-level entry is an independent causal hypothesis branch/);
-  assert.match(engine,/thread\.hypothesis='';\s*thread\.hypothesisScore=0;\s*thread\.hypothesisContributions=\[\];\s*thread\.flatSteps=0/);
+  assert.match(engine,/thread\.hypothesis='';\s*thread\.hypothesisScore=0;\s*thread\.hypothesisContributions=\[\]/);
   assert.match(engine,/entryVisited:new Map\(\)/);
-});
-
-test('causal flat budget is path-local and restores at sibling backtracking',()=>{
-  assert.match(engine,/const pathFlatSteps=Number\(frame\.flatSteps\|\|0\)/);
-  assert.match(engine,/thread\.flatSteps=progress\.trend==='flat'\?pathFlatSteps\+1:0/);
-  assert.match(engine,/thread\.flatSteps=Number\(top\.baseFlatSteps\|\|0\)/);
-  assert.match(engine,/thread\.flatSteps=Number\(parent\?\.flatSteps\|\|0\)/);
-  assert.match(engine,/flatSteps:thread\.flatSteps,\s*baseFlatSteps:thread\.flatSteps/);
-  assert.match(engine,/const flatSearchable=staysFlat&&canSpendFlatStep&&\(hasAcceptedHypothesis\|\|pick\.hasLookahead\)/);
 });
 
 test('non-causal prompt remains separate from causal prompt',()=>{
@@ -104,8 +95,14 @@ test('causal hl is a moving explanatory set selected by retained indexes',()=>{
   assert.match(engine,/decision\.hypothesisScore=Math\.max\(priorScore,tentativeScore\)/);
 });
 
-test('pre-hypothesis causal wrappers can spend bounded flat hops only with lookahead',()=>{
-  assert.match(engine,/const causalLookaheadIndexes=new Set/);
-  assert.match(engine,/hasLookahead:causalLookaheadIndexes\.has\(index\)/);
-  assert.match(engine,/hasAcceptedHypothesis\|\|pick\.hasLookahead/);
+
+test('causal navigation follows non-weakening candidates and has no flat-hop budget',()=>{
+  assert.match(engine,/const weakens=expectedScore<currentScore-HYPOTHESIS_DELTA_EPSILON/);
+  assert.match(engine,/if\(goal\.kind==='causal'\)return !weakens/);
+  assert.match(engine,/if\(!causal&&!\(score>0\)\)continue/);
+  assert.doesNotMatch(engine,/MAX_FLAT_STEPS/);
+  assert.doesNotMatch(engine,/flatSteps/);
+  assert.doesNotMatch(engine,/baseFlatSteps/);
+  assert.doesNotMatch(engine,/HYPOTHESIS_FLAT/);
+  assert.doesNotMatch(engine,/hasLookahead/);
 });
