@@ -38,14 +38,19 @@ test('causal contributions are accepted from semantics without source gating',()
   assert.doesNotMatch(engine,/CAUSAL_CONTRIBUTION_SOURCE/);
 });
 
-test('completed causal list is localized to source exactly once before counterfactual',()=>{
+test('high-confidence complete causal list is localized once and resolves without mandatory counterfactual',()=>{
   assert.match(engine,/sourceLocalizationByHypothesis:new Map\(\)/);
   assert.match(engine,/hypothesisContributions:acceptedCausalContributions/);
   assert.match(engine,/CAUSAL_SOURCE_LOCALIZE_SYSTEM/);
   assert.match(engine,/\{q:question,hl,sources\}/);
+  assert.match(engine,/CAUSAL_ACCEPT_SCORE = 0\.8/);
+  assert.match(engine,/Number\(decision\.hypothesisScore\|\|0\)>=CAUSAL_ACCEPT_SCORE/);
+  assert.match(engine,/causalSourceCoverageComplete\(ranges,acceptedCausalContributions\.length\)/);
   assert.match(engine,/localizedRangeStates\(rawCausalEvidence,ranges\)/);
   assert.match(engine,/action:'CAUSAL_SOURCE_LOCALIZED'/);
-  assert.match(engine,/evidenceStates:localized/);
+  assert.match(engine,/action:'CAUSAL_HYPOTHESIS_ACCEPTED'/);
+  assert.doesNotMatch(engine,/decision\.hypothesisScore=hard\.length/);
+  assert.doesNotMatch(engine,/Counterfactual intervention failed to validate this causal diagnosis/);
 });
 
 test('causal lookahead does not duplicate candidate root semantics',()=>{
@@ -73,4 +78,17 @@ test('flat budget persists across sibling backtracking and never blocks strength
 test('non-causal prompt remains separate from causal prompt',()=>{
   assert.match(GOAL_DECIDE_SYSTEM,/NON-CAUSAL/);
   assert.doesNotMatch(GOAL_DECIDE_SYSTEM,/hl is authoritative|CURRENT EVIDENCE CONTRIBUTION/);
+});
+
+test('causal visited state is keyed by node plus accepted hypothesis state',()=>{
+  assert.match(engine,/function semanticVisitKey\(/);
+  assert.match(engine,/semanticVisitKey\(state,goal\.kind,thread\.hypothesisContributions\)/);
+  assert.match(engine,/semanticVisitKey\(child,goal\.kind,thread\.hypothesisContributions\)/);
+  assert.match(engine,/semanticVisitKey\(id,thread\.goal\.kind,thread\.hypothesisContributions\)/);
+});
+
+test('causal source localization requires coverage for every hl contribution',()=>{
+  assert.match(engine,/contributionIndexes/);
+  assert.match(engine,/function causalSourceCoverageComplete/);
+  assert.match(engine,/for\(let index=0;index<contributionCount;index\+=1\)/);
 });

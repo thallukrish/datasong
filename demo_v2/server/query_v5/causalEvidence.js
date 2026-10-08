@@ -9,14 +9,20 @@ export function causalHypothesisText(contributions=[]){
     .join(' -> ');
 }
 
+function normalizeClaim(value){
+  return String(value||'')
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
 export function evaluateCausalContribution({
   priorContributions=[],
   priorScore=0,
   contribution='',
   evidenceRelevance=0,
   tentativeScore=0,
-  inspectedSource=false,
-  sourceGrounded=null,
   epsilon=0.03
 }={}){
   const claim=String(contribution||'').trim();
@@ -29,6 +35,22 @@ export function evaluateCausalContribution({
       accepted:false,
       rejected:false,
       reason:'',
+      score:before,
+      relevance,
+      contributions:arr(priorContributions)
+    };
+  }
+
+  const normalized=normalizeClaim(claim);
+  const duplicate=normalized&&arr(priorContributions).some(item=>
+    normalizeClaim(item?.claim||'')===normalized
+  );
+  if(duplicate){
+    return {
+      accepted:false,
+      rejected:false,
+      duplicate:true,
+      reason:'The contribution is already represented in the accepted causal hypothesis.',
       score:before,
       relevance,
       contributions:arr(priorContributions)
@@ -57,17 +79,6 @@ export function evaluateCausalContribution({
     };
   }
 
-  if(inspectedSource&&sourceGrounded!==true){
-    return {
-      accepted:false,
-      rejected:true,
-      reason:'Exact source did not ground this proposed causal contribution.',
-      score:before,
-      relevance,
-      contributions:arr(priorContributions)
-    };
-  }
-
   return {
     accepted:true,
     rejected:false,
@@ -78,8 +89,4 @@ export function evaluateCausalContribution({
     relevance,
     contributions:arr(priorContributions)
   };
-}
-
-export function isCausalEvidenceRelevant(score){
-  return Number(score||0)>0;
 }

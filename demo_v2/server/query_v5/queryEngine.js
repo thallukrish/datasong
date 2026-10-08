@@ -13,6 +13,7 @@ const WINDOW_DEPTH = 3;
 const GOAL_CLOSE_SCORE = 0.9;
 const HYPOTHESIS_DELTA_EPSILON = 0.03;
 const MAX_FLAT_STEPS = 2;
+const CAUSAL_ACCEPT_SCORE = 0.8;
 const GOAL_DECOMPOSE_SYSTEM = `Read the user's software-engineering request as one stable issue that may contain several interdependent obligations. Decompose only the material obligations needed to satisfy the request. A goal kind must be one of "locate", "describe", "causal", "change", or "verify".
 
 Treat these as the primary issue intents:
@@ -88,9 +89,11 @@ hl is the accepted causal contribution list, in order.
 sources are the raw source regions associated with the visited semantic nodes that produced hl.
 
 Select only the smallest exact source ranges that directly support hl.
+Every returned range must list the zero-based hl contribution indexes it supports.
+Every hl contribution must be supported by at least one returned range.
 Do not rewrite, rescore, expand, reject, or repair hl. Do not search outside sources.
 Return only:
-{"ranges":[{"ref":0,"startLine":0,"endLine":0,"why":""}]}
+{"ranges":[{"ref":0,"startLine":0,"endLine":0,"contributionIndexes":[0],"why":""}]}
 `;
 
 const EVIDENCE_RESELECT_SYSTEM = `Select the smallest exact source ranges needed to support an already proposed hypothesis against fixed acceptance criteria.
@@ -711,7 +714,7 @@ async function verifyEvidenceGrounding({question,goal,hypothesis,constraints,evi
 }
 
 async function decide({
-  question,mode,goals=[],activeGoalId='',branchId='',hypothesis='',hypothesisContributions=[],previousHypothesisScore=0,proposedContribution='',
+  question,mode,goals=[],activeGoalId='',branchId='',hypothesis='',hypothesisContributions=[],previousHypothesisScore=0,
   ledger,path=[],currentState=null,
   candidates=[],candidateWindows=[],lookahead=[],sourceBody='',explorer,client,model,usage,log,step,onProgress=()=>{}
 }) {
@@ -1089,11 +1092,15 @@ async function localizeCausalHypothesis({question,hypothesisContributions,eviden
   const ranges=[];
   for(const item of arr(call.parsed?.ranges)){
     const source=sources[Number(item?.ref)];if(!source)continue;
+    const contributionIndexes=arr(item?.contributionIndexes)
+      .map(Number)
+      .filter(index=>Number.isInteger(index)&&index>=0&&index<hl.length);
     ranges.push({
       name:source.name,
       sourcePath:source.sourcePath,
       startLine:Number(item?.startLine||source.startLine||0),
       endLine:Number(item?.endLine||source.endLine||0),
+      contributionIndexes:[...new Set(contributionIndexes)],
       why:text(item?.why||'',260)
     });
   }
@@ -1124,10 +1131,37 @@ function localizedRangeStates(evidenceStates=[],ranges=[]){
       startLine:start,
       endLine:end,
       body:lines.slice(offset,offset+count).join('\n'),
+      evidenceSupports:arr(range.contributionIndexes),
       evidenceWhy:range.why||''
     });
   }
   return dedupeStates(out);
+}
+
+function causalSourceCoverageComplete(ranges=[],contributionCount=0){
+  if(!(contributionCount>0))return false;
+  const covered=new Set(
+    arr(ranges).flatMap(range=>arr(range?.contributionIndexes))
+      .map(Number)
+      .filter(index=>Number.isInteger(index)&&index>=0&&index<contributionCount)
+  );
+  for(let index=0;index<contributionCount;index+=1){
+    if(!covered.has(index))return false;
+  }
+  return true;
+}
+
+function causalVisitSignature(contributions=[]){
+  return arr(contributions)
+    .map(item=>String(item?.claim||'').trim().toLowerCase())
+    .filter(Boolean)
+    .join('\u241f');
+}
+
+function semanticVisitKey(stateOrId,goalKind,contributions=[]){
+  const id=typeof stateOrId==='string'?stateOrId:String(stateOrId?.id||'');
+  if(String(goalKind||'')!=='causal')return id;
+  return `${id}|hl:${causalVisitSignature(contributions)}`;
 }
 
 async function triageEntryCandidates({question,candidates=[],client,model,usage,log}){
@@ -1403,8 +1437,6 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     bestSupportStates:[],
     counterfactualValidation:null,
     sourceLocalizationByHypothesis:new Map(),
-    counterfactualByHypothesis:new Map(),
-    rejectedCausalHypotheses:new Set(),
     entryScores:new Map(),
     flatSteps:0
   }]));
@@ -1571,7 +1603,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       // decision will rescore only those remaining candidates.
       const activeVisited=thread.entryVisited.get(top.entryRootId)||new Set();
       const pendingFrontier=arr(top.frontierIds)
-        .filter(id=>id&&!activeVisited.has(id));
+        .filter(id=>id&&!activeVisited.has(
+          semanticVisitKey(id,thread.goal.kind,thread.hypothesisContributions)
+        ));
       if(pendingFrontier.length){
         const event={
           step,action:'SEMANTIC_FRONTIER_REVISIT',goalId:thread.goal.id,
@@ -1639,7 +1673,7 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       entryVisited=new Set();
       thread.entryVisited.set(entryRootId,entryVisited);
     }
-    entryVisited.add(state.id);
+    entryVisited.add(semanticVisitKey(state,goal.kind,thread.hypothesisContributions));
     thread.visited.add(state.id);
 
     const learned=await ensureLocalSemanticWindow({
@@ -1660,7 +1694,9 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
     // driven by whether adding evidence along a candidate is expected to
     // strengthen, flatten, or weaken the OVERALL accumulated hypothesis.
     const next=semanticNavigationChildren(state,learned.window,flowChildren)
-      .filter(child=>!entryVisited.has(child.id));
+      .filter(child=>!entryVisited.has(
+        semanticVisitKey(child,goal.kind,thread.hypothesisContributions)
+      ));
     const regionCandidates=next.filter(child=>child.type==='code_region');
     const navigationKind=next.length
       ? (regionCandidates.length===next.length?'region':regionCandidates.length?'mixed':'call')
@@ -1737,7 +1773,12 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         epsilon:HYPOTHESIS_DELTA_EPSILON
       });
 
-      if(evaluation.rejected){
+      if(evaluation.duplicate){
+        decision.contribution='';
+        decision.hypothesis=causalHypothesisText(priorContributions);
+        decision.hypothesisScore=priorScore;
+        decision.supportStates=dedupeStates(priorContributions.flatMap(item=>arr(item?.supportStates)));
+      }else if(evaluation.rejected){
         causalContributionRejected=true;
         causalContributionRejectReason=evaluation.reason;
         decision.contribution='';
@@ -1828,101 +1869,75 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       path:path.map(x=>x.name)
     });
 
-    // Causal traversal trusts the learned semantics. Once the accepted list is
-    // complete, perform exactly one source-localization pass for the whole hl,
-    // then use those exact lines for final counterfactual validation.
+    // Causal traversal trusts learned semantics. A complete causal chain with
+    // hs >= CAUSAL_ACCEPT_SCORE is sufficient to stop exploration. At that
+    // point LeMap performs one source-localization pass for the whole hl.
+    // Counterfactual validation is optional and is not a resolution gate.
     const acceptedCausalContributions=arr(thread.hypothesisContributions);
-    const shouldCounterfactuallyValidate=goal.kind==='causal'&&
-      !causalContributionRejected&&decision.causalHypothesisComplete&&acceptedCausalContributions.length>0;
+    const causalReadyForSource=goal.kind==='causal'&&
+      !causalContributionRejected&&
+      decision.causalHypothesisComplete&&
+      Number(decision.hypothesisScore||0)>=CAUSAL_ACCEPT_SCORE&&
+      acceptedCausalContributions.length>0;
 
-    if(shouldCounterfactuallyValidate){
-      const cfKey=[
+    if(causalReadyForSource){
+      const sourceKey=[
         decision.hypothesis||'',
         ...acceptedCausalContributions.map(item=>item.claim)
       ].join('|');
       const rawCausalEvidence=dedupeStates(
         acceptedCausalContributions.flatMap(item=>arr(item?.supportStates))
       );
-      let localized=thread.sourceLocalizationByHypothesis.get(cfKey);
-      if(!localized){
+      let localizedRecord=thread.sourceLocalizationByHypothesis.get(sourceKey);
+      if(!localizedRecord){
         const ranges=await localizeCausalHypothesis({
           question,
           hypothesisContributions:acceptedCausalContributions,
           evidenceStates:rawCausalEvidence,
           client,model,usage,log
         });
-        localized=localizedRangeStates(rawCausalEvidence,ranges);
-        thread.sourceLocalizationByHypothesis.set(cfKey,localized);
+        localizedRecord={
+          ranges,
+          states:localizedRangeStates(rawCausalEvidence,ranges),
+          complete:causalSourceCoverageComplete(ranges,acceptedCausalContributions.length)
+        };
+        thread.sourceLocalizationByHypothesis.set(sourceKey,localizedRecord);
         emit({
           action:'CAUSAL_SOURCE_LOCALIZED',goalId:goal.id,
           hypothesisList:acceptedCausalContributions.map(item=>item.claim),
           evidenceRanges:ranges,
+          coverageComplete:localizedRecord.complete,
           path:path.map(x=>x.name)
         });
       }
-      let counterfactual=thread.counterfactualByHypothesis.get(cfKey);
-      if(!counterfactual&&localized.length){
-        counterfactual=await validateCausalCounterfactual({
-          question,goal,hypothesis:decision.hypothesis,
-          evidenceStates:localized,
-          client,model,usage,log,step
-        });
-        thread.counterfactualByHypothesis.set(cfKey,counterfactual);
-      }
-      if(!counterfactual){
-        counterfactual={
-          pass:false,
-          failingCase:goal.failingCase||'',
-          patch:'',
-          beforePrediction:'',
-          afterPrediction:'',
-          prediction:'',
-          constraintScores:[],
-          failure:'No exact source lines were localized for the completed causal hypothesis.'
-        };
-      }
-      decision.counterfactualValidation=counterfactual;
-      thread.counterfactualValidation=counterfactual;
-      emit({
-        action:counterfactual.pass?'COUNTERFACTUAL_PASS':'COUNTERFACTUAL_FAIL',
-        goalId:goal.id,hypothesis:decision.hypothesis,
-        failingCase:counterfactual.failingCase,
-        patch:counterfactual.patch,beforePrediction:counterfactual.beforePrediction,
-        afterPrediction:counterfactual.afterPrediction,prediction:counterfactual.prediction,
-        failure:counterfactual.failure,path:path.map(x=>x.name)
-      });
 
-      if(counterfactual.pass){
-        // A successful intervention is additional causal evidence. It may
-        // strengthen only the fixed criteria that the independent validator
-        // says the intervention itself establishes.
-        const checklist=arr(decision.constraintChecklist).map(row=>[row[0],Number(row[1]||0),row[2]]);
-        for(const row of arr(counterfactual.constraintScores)){
-          const index=Number(row?.[0]),score=Number(row?.[1]||0);
-          if(!Number.isInteger(index)||index<0||index>=checklist.length)continue;
-          checklist[index][1]=Math.max(Number(checklist[index][1]||0),score);
-        }
-        decision.constraintChecklist=checklist;
-        const hard=checklist.filter(row=>row[2]==='hard').map(row=>Number(row[1]||0));
-        decision.hypothesisScore=hard.length?hard.reduce((sum,value)=>sum+value,0)/hard.length:decision.hypothesisScore;
-        decision.hardConstraintsMet=hard.length>0&&hard.every(score=>score>=GOAL_CLOSE_SCORE);
-        decision.goalResolutions=decision.hardConstraintsMet?[goal.id]:[];
-        decision.explained=decision.hardConstraintsMet&&!goals.some(item=>item.id!==goal.id&&item.status!=='resolved');
+      if(localizedRecord.complete&&localizedRecord.states.length){
+        thread.hypothesisContributions=acceptedCausalContributions.map((item,index)=>({
+          ...item,
+          sourceGrounded:localizedRecord.ranges.some(range=>
+            arr(range?.contributionIndexes).map(Number).includes(index)
+          )
+        }));
+        frame.hypothesisContributions=arr(thread.hypothesisContributions);
+        decision.supportStates=localizedRecord.states;
+        decision.evidenceRanges=localizedRecord.ranges;
+        decision.goalResolutions=[goal.id];
+        decision.hardConstraintsMet=true;
+        decision.explained=!goals.some(item=>item.id!==goal.id&&item.status!=='resolved');
+        emit({
+          action:'CAUSAL_HYPOTHESIS_ACCEPTED',goalId:goal.id,
+          hypothesis:decision.hypothesis,
+          hypothesisScore:Number(decision.hypothesisScore||0),
+          hypothesisList:thread.hypothesisContributions.map(item=>item.claim),
+          path:path.map(x=>x.name)
+        });
       }else{
-        decision.causalRejected=true;
-        thread.rejectedCausalHypotheses.add(String(decision.hypothesis||''));
-        disputeCausalBranchFacts(ledger,goal.id,entryRootId);
-        decision.hardConstraintsMet=false;
-        decision.explained=false;
-        decision.goalResolutions=[];
-        // If this exact explanation had been the incumbent, it is no longer
-        // eligible to remain best-so-far after failing its own intervention.
-        if(String(thread.bestHypothesis||'')===String(decision.hypothesis||'')){
-          thread.bestHypothesis='';
-          thread.bestScore=0;
-          thread.bestConstraintChecklist=[];
-          thread.bestSupportStates=[];
-        }
+        emit({
+          action:'CAUSAL_SOURCE_INCOMPLETE',goalId:goal.id,
+          hypothesis:decision.hypothesis,
+          hypothesisScore:Number(decision.hypothesisScore||0),
+          path:path.map(x=>x.name)
+        });
       }
     }
 
@@ -2016,13 +2031,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
       .map((row,index)=>({index,score:Number(row[1]||0),kind:row[2]}))
       .filter(item=>item.kind==='hard'&&item.score<GOAL_CLOSE_SCORE)
       .map(item=>item.index));
-    if(causalContributionRejected||decision.causalRejected){
+    if(causalContributionRejected){
       frame.frontierIds=[];
       emit({
         action:'BRANCH_PRUNED',goalId:goal.id,state:state.name,
-        reason:causalContributionRejected
-          ? causalContributionRejectReason
-          : 'Counterfactual intervention failed to validate this causal diagnosis.',
+        reason:causalContributionRejectReason,
         evidenceRelevance:Number(decision.evidenceRelevance||0),
         hypothesisScore:Number(thread.hypothesisScore||0),
         hypothesisList:arr(thread.hypothesisContributions).map(item=>item.claim),
