@@ -63,7 +63,12 @@ def value_origin(node):
     if isinstance(node, ast.Call):
         name = call_name(node)
         leaf = name.split(".")[-1] if name else ""
-        kind = "container" if leaf in {"dict", "list", "set", "tuple"} else "constructed"
+        if leaf in {"dict", "list", "set", "tuple"}:
+            kind = "container"
+        elif leaf[:1].isupper():
+            kind = "constructed"
+        else:
+            kind = "call-result"
         return {"kind": kind, "name": name}
     if isinstance(node, ast.Name):
         return {"kind": "alias", "name": node.id}
@@ -74,13 +79,14 @@ def value_origin(node):
     return {"kind": "", "name": ""}
 
 class ObservationVisitor(ast.NodeVisitor):
-    def __init__(self, source_path, qualified, function_id, node):
+    def __init__(self, source_path, qualified, function_id, node, ignored_names=None):
         self.source_path = source_path
         self.qualified = qualified
         self.function_id = function_id
         self.function_node = node
         self.records = {}
         self.parents = []
+        self.ignored_names = set(ignored_names or []) | {"self", "cls"}
 
         args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
         if node.args.vararg:
@@ -94,7 +100,7 @@ class ObservationVisitor(ast.NodeVisitor):
                 rec["annotation"] = safe_unparse(arg.annotation)
 
     def rec(self, name):
-        if not name:
+        if not name or name in self.ignored_names:
             return None
         if name not in self.records:
             self.records[name] = {
@@ -180,6 +186,7 @@ class ObservationVisitor(ast.NodeVisitor):
         if base:
             rec = self.touch(base, node, "read" if isinstance(node.ctx, ast.Load) else "mutate")
             if rec:
+                rec["operations"].add("index")
                 key = constant_key(node.slice)
                 if key:
                     rec["keys"].add(key)
@@ -223,6 +230,7 @@ class ObservationVisitor(ast.NodeVisitor):
             origin_kinds = {item.get("kind") for item in rec["origins"] if item.get("kind")}
             complex_evidence = (
                 bool(rec["members"]) or bool(rec["methods"]) or bool(rec["keys"]) or
+                "index" in rec["operations"] or
                 bool(origin_kinds & {"mapping", "sequence", "set", "container", "constructed"}) or
                 (annotation and annotation not in PRIMITIVE_ANNOTATIONS)
             )
@@ -244,6 +252,7 @@ class ObservationVisitor(ast.NodeVisitor):
         return out
 
 modules = {}
+module_imports = {}
 for item in requested:
     path = (root / item).resolve()
     if not path.is_file() or path.suffix != ".py":
@@ -254,6 +263,16 @@ for item in requested:
     except (UnicodeDecodeError, SyntaxError):
         continue
     modules[item] = tree
+    imported = set()
+    for top in tree.body:
+        if isinstance(top, ast.Import):
+            for alias in top.names:
+                imported.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(top, ast.ImportFrom):
+            for alias in top.names:
+                if alias.name != "*":
+                    imported.add(alias.asname or alias.name)
+    module_imports[item] = imported
 
 observations = []
 for source_path, tree in modules.items():
@@ -261,7 +280,7 @@ for source_path, tree in modules.items():
         if isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef)):
             q = top.name
             function_id = sid(source_path, q, top.lineno)
-            visitor = ObservationVisitor(source_path, q, function_id, top)
+            visitor = ObservationVisitor(source_path, q, function_id, top, module_imports.get(source_path))
             visitor.visit(top)
             observations.extend(visitor.result())
         elif isinstance(top, ast.ClassDef):
@@ -269,7 +288,7 @@ for source_path, tree in modules.items():
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     q = f"{top.name}.{child.name}"
                     function_id = sid(source_path, q, child.lineno)
-                    visitor = ObservationVisitor(source_path, q, function_id, child)
+                    visitor = ObservationVisitor(source_path, q, function_id, child, module_imports.get(source_path))
                     visitor.visit(child)
                     observations.extend(visitor.result())
 
