@@ -95,6 +95,8 @@ class ObservationVisitor(ast.NodeVisitor):
             args.append(node.args.kwarg)
         for arg in args:
             rec = self.rec(arg.arg)
+            if not rec:
+                continue
             rec["parameter"] = True
             if arg.annotation is not None:
                 rec["annotation"] = safe_unparse(arg.annotation)
