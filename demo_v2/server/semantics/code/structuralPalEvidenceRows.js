@@ -38,13 +38,18 @@ function addParallelLink(row, targetRow, relationship) {
 }
 
 function normalizeExistingRows(rows) {
-  return arr(rows).map((row) => ({
-    ...row,
-    links: row?.links || emptyPalArray(),
-    relationships: row?.relationships || emptyPalArray(),
-    flowRows: row?.flowRows || emptyPalArray(),
-    details: row?.details || ''
-  }));
+  return arr(rows).map((row) => {
+    const normalized = {
+      ...row,
+      links: row?.links || emptyPalArray(),
+      relationships: row?.relationships || emptyPalArray(),
+      flowRows: row?.flowRows || emptyPalArray(),
+      details: row?.details || ''
+    };
+    for (const child of decodeArray(row?.children)) addParallelLink(normalized, child, 'contains');
+    for (const callee of decodeArray(row?.callees)) addParallelLink(normalized, callee, 'calls');
+    return normalized;
+  });
 }
 
 function existingNodeRows(rows) {
