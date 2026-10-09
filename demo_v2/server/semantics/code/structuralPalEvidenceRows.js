@@ -44,6 +44,7 @@ function normalizeExistingRows(rows) {
       links: row?.links || emptyPalArray(),
       relationships: row?.relationships || emptyPalArray(),
       flowRows: row?.flowRows || emptyPalArray(),
+      features: row?.features || emptyPalArray(),
       details: row?.details || ''
     };
     for (const child of decodeArray(row?.children)) addParallelLink(normalized, child, 'contains');
@@ -120,6 +121,14 @@ export function materializeStructuralEvidenceRows({
       links: emptyPalArray(),
       relationships: emptyPalArray(),
       flowRows: emptyPalArray(),
+      features: encodePalArray([
+        ...(node.details?.aliases || []),
+        ...(node.details?.annotations || []),
+        ...(node.details?.origins || []),
+        ...(node.details?.members || []),
+        ...(node.details?.methods || []),
+        ...(node.details?.keys || [])
+      ]),
       details: JSON.stringify({
         kind: node.details?.kind || '',
         aliases: node.details?.aliases || [],
@@ -170,6 +179,7 @@ export function materializeStructuralEvidenceRows({
       links: encodePalArray(workflowLinks),
       relationships: encodePalArray(workflowLinks.map(() => 'contains')),
       flowRows: encodePalArray(workflowLinks),
+      features: emptyPalArray(),
       details: JSON.stringify({
         callPathId: node.details?.callPathId || '',
         functionCount: Number(node.details?.functionCount || functionRows.length),
