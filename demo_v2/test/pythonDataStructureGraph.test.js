@@ -79,3 +79,42 @@ def compute(value: int):
   assert.ok(!entities.some((node) => node.details?.aliases?.includes('math')));
   assert.ok(!entities.some((node) => node.details?.aliases?.includes('count')));
 });
+
+
+test('Python entity relations attach to the innermost AST region with exact lines', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-region-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'region.py'), `
+def update(record):
+    if record["enabled"]:
+        record["value"] = record["value"] + 1
+    return record
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['region.py'] });
+  const updateSymbol = (result.symbols || []).find((symbol) => symbol.name === 'update');
+  const ifRegion = (updateSymbol?.regions || []).find((region) => region.kind === 'if');
+  const entity = (result.dataGraphNodes || []).find((node) =>
+    node.type === 'entity' && node.details?.keys?.includes("'value'")
+  );
+  const relation = (result.entityLinks || []).find((link) =>
+    link.targetId === entity?.id &&
+    link.relationship === 'update' &&
+    link.variable === 'record'
+  );
+
+  assert.ok(updateSymbol);
+  assert.ok(ifRegion);
+  assert.ok(entity);
+  assert.ok(relation);
+  assert.equal(relation.sourceId, ifRegion.id);
+  assert.equal(relation.sourceType, 'function-region');
+  assert.equal(relation.regionId, ifRegion.id);
+  assert.equal(relation.functionId, updateSymbol.id);
+  assert.ok(relation.startLine >= ifRegion.startLine);
+  assert.ok(relation.endLine <= ifRegion.endLine);
+
+  const regionNode = (result.dataGraphNodes || []).find((node) => node.id === ifRegion.id);
+  assert.ok(regionNode?.links.some((link) => link.id === entity.id && link.relationship === 'update'));
+});
