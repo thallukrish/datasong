@@ -3,7 +3,7 @@ import { CallPathIndexerV3 } from './callPathIndexerV3.js';
 import { createMoquiAdapters } from './adapters/moqui/index.js';
 import { analyzePythonRepository } from './languages/python/adapter.js';
 import { buildWorkflowGraph, mergeStructuralEvidenceNodes } from './semantics/code/structuralEvidenceGraph.js';
-import { persistStructuralEvidenceCsv } from './semantics/code/structuralCsvPersistence.js';
+import { materializeStructuralEvidenceRows } from './semantics/code/structuralPalEvidenceRows.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -32,7 +32,6 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.workflowGraphNodes = [];
     this.workflowLinks = [];
     this.structuralEvidenceNodes = [];
-    this.structuralEvidenceCsv = null;
   }
 
   async prepareIndexOnly(repoUrl) {
@@ -48,7 +47,6 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.workflowGraphNodes = [];
     this.workflowLinks = [];
     this.structuralEvidenceNodes = [];
-    this.structuralEvidenceCsv = null;
     this.symbols = [];
     this.symbolById.clear();
     this.nameIndex.clear();
@@ -83,7 +81,6 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.workflowGraphNodes = [];
     this.workflowLinks = [];
     this.structuralEvidenceNodes = [];
-    this.structuralEvidenceCsv = null;
 
     const t=Date.now();
     const pythonAst = await this.augmentPythonAstGraph();
@@ -143,16 +140,25 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
       this.pythonDataGraphNodes,
       this.workflowGraphNodes
     );
-    this.structuralEvidenceCsv = await persistStructuralEvidenceCsv({
-      cacheRoot: this.cacheRoot,
-      repoUrl: this.repoUrl,
-      commit: this.commit,
+    this.codeStructureRows = materializeStructuralEvidenceRows({
+      baseRows: this.codeStructureRows,
       entityNodes: this.pythonDataGraphNodes,
       entityLinks: this.pythonEntityLinks,
-      workflowNodes: this.workflowGraphNodes,
-      workflowLinks: this.workflowLinks
+      workflowNodes: this.workflowGraphNodes
     });
-    console.log(`[repo-prepare] structural entity/workflow evidence ${Date.now()-t}ms entities=${this.pythonDataGraphNodes.filter((node)=>node?.type==='entity').length} workflows=${this.workflowGraphNodes.length}`);
+    const csvPath = await this.persistCodeStructureCsv({ language:'python', rows:this.codeStructureRows });
+    const palPaths = await this.persistPalIndexes({ language:'python', rows:this.codeStructureRows });
+    if (this.constructIndexMeta) {
+      this.constructIndexMeta = {
+        ...this.constructIndexMeta,
+        csvPath,
+        uniqueIndexPath:palPaths.uniqueIndexPath,
+        valuesIndexPath:palPaths.valuesIndexPath,
+        csvRowCount:this.codeStructureRows.length,
+        recordCount:this.codeStructureRows.length
+      };
+    }
+    console.log(`[repo-prepare] structural entity/workflow evidence ${Date.now()-t}ms entities=${this.pythonDataGraphNodes.filter((node)=>node?.type==='entity').length} workflows=${this.workflowGraphNodes.length} rows=${this.codeStructureRows.length}`);
 
     console.log(`[repo-prepare] DONE ${Date.now()-startedAt}ms`);
     return {
@@ -164,7 +170,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
         entityLinkCount: this.pythonEntityLinks.length,
         workflowNodeCount: this.workflowGraphNodes.length,
         workflowLinkCount: this.workflowLinks.length,
-        csv: this.structuralEvidenceCsv
+        csvPath: this.codeStructureCsvPath('python')
       },
       moquiEntitySchema: this.moquiEntitySchema,
       moquiXmlExecution: this.moquiXmlExecution,
