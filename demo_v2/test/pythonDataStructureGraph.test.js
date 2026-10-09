@@ -54,8 +54,25 @@ def run():
   const save = nodes.find((node) => node.type === 'function' && node.details?.name === 'save');
   const run = nodes.find((node) => node.type === 'function' && node.details?.name === 'run');
 
-  assert.ok(normalize?.links.some((link) => link.id === sharedRecord.id && /update|read/.test(link.relationship)));
-  assert.ok(save?.links.some((link) => link.id === sharedRecord.id && /read/.test(link.relationship)));
+  const normalizeEntityLink = (result.entityLinks || []).find((link) =>
+    link.functionId === normalize?.id &&
+    link.targetId === sharedRecord.id &&
+    /update|read/.test(link.relationship)
+  );
+  const saveEntityLink = (result.entityLinks || []).find((link) =>
+    link.functionId === save?.id &&
+    link.targetId === sharedRecord.id &&
+    link.relationship === 'read'
+  );
+
+  assert.ok(normalizeEntityLink);
+  assert.ok(saveEntityLink);
+  assert.ok(nodes.find((node) => node.id === normalizeEntityLink.sourceId)?.links.some(
+    (link) => link.id === sharedRecord.id && link.relationship === normalizeEntityLink.relationship
+  ));
+  assert.ok(nodes.find((node) => node.id === saveEntityLink.sourceId)?.links.some(
+    (link) => link.id === sharedRecord.id && link.relationship === 'read'
+  ));
   assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === normalize.id));
   assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === save.id));
 });
