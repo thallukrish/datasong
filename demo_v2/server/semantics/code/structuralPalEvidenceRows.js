@@ -70,10 +70,25 @@ function existingNodeRows(rows) {
   return { functionRows, spanRows };
 }
 
-function sourceRowForLink(link, indexes) {
-  if (link?.sourceType === 'function') {
-    return indexes.functionRows.get(`${link.sourcePath}:${Number(link.startLine || 0)}`) || 0;
+function rowForGraphNode(node, indexes) {
+  if (!node) return 0;
+  if (node.type === 'function') {
+    return indexes.functionRows.get(
+      `${node.details?.sourcePath}:${Number(node.details?.startLine || 0)}`
+    ) || 0;
   }
+
+  const exact = indexes.spanRows.get(
+    rowKey(node.details?.sourcePath, node.details?.startLine, node.details?.endLine)
+  ) || [];
+  if (exact.length) return exact[0];
+
+  return 0;
+}
+
+function sourceRowForLink(link, indexes, graphNodeById) {
+  const direct = rowForGraphNode(graphNodeById.get(link?.sourceId), indexes);
+  if (direct) return direct;
 
   const exact = indexes.spanRows.get(rowKey(link?.sourcePath, link?.startLine, link?.endLine)) || [];
   if (exact.length) return exact[0];
@@ -81,10 +96,12 @@ function sourceRowForLink(link, indexes) {
   let best = 0;
   let bestSpan = Number.MAX_SAFE_INTEGER;
   for (const [key, rowNumbers] of indexes.spanRows.entries()) {
-    const [file, startText, endText] = key.split(':');
+    const last = key.lastIndexOf(':');
+    const secondLast = key.lastIndexOf(':', last - 1);
+    const file = key.slice(0, secondLast);
+    const start = Number(key.slice(secondLast + 1, last) || 0);
+    const end = Number(key.slice(last + 1) || 0);
     if (file !== String(link?.sourcePath || '')) continue;
-    const start = Number(startText || 0);
-    const end = Number(endText || 0);
     const line = Number(link?.startLine || 0);
     if (start <= line && line <= end && (end - start) < bestSpan) {
       best = rowNumbers[0] || 0;
@@ -103,6 +120,7 @@ export function materializeStructuralEvidenceRows({
   const rows = normalizeExistingRows(baseRows);
   const indexes = existingNodeRows(rows);
   const rowByNodeId = new Map();
+  const graphNodeById = new Map(arr(entityNodes).map((node) => [node?.id, node]));
   const nextRow = () => rows.length + 1;
 
   for (const node of arr(entityNodes).filter((item) => item?.type === 'entity')) {
@@ -145,14 +163,13 @@ export function materializeStructuralEvidenceRows({
   }
 
   for (const link of arr(entityLinks)) {
-    const sourceRow = sourceRowForLink(link, indexes);
+    const sourceRow = sourceRowForLink(link, indexes, graphNodeById);
     const targetRow = rowByNodeId.get(link?.targetId) || 0;
     if (!sourceRow || !targetRow) continue;
     addParallelLink(rows[sourceRow - 1], targetRow, String(link.relationship || ''));
   }
 
   for (const node of arr(workflowNodes).filter((item) => item?.type === 'workflow')) {
-    const graphNodeById = new Map(arr(entityNodes).map((candidate) => [candidate?.id, candidate]));
     const functionRows = arr(node.links)
       .filter((link) => link?.relationship === 'contains')
       .map((link) => {
