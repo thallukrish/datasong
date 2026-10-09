@@ -39,7 +39,7 @@ def run():
     node.links.every((link) => typeof link.id === 'string' && typeof link.relationship === 'string')
   ));
 
-  const entityNodes = nodes.filter((node) => node.type === 'data-structure');
+  const entityNodes = nodes.filter((node) => node.type === 'entity');
   const sharedRecord = entityNodes.find((node) =>
     node.details?.kind === 'mapping' &&
     node.details?.keys?.includes("'name'") &&
@@ -54,8 +54,8 @@ def run():
   const save = nodes.find((node) => node.type === 'function' && node.details?.name === 'save');
   const run = nodes.find((node) => node.type === 'function' && node.details?.name === 'run');
 
-  assert.ok(normalize?.links.some((link) => link.id === sharedRecord.id && /modifies|reads/.test(link.relationship)));
-  assert.ok(save?.links.some((link) => link.id === sharedRecord.id && /reads/.test(link.relationship)));
+  assert.ok(normalize?.links.some((link) => link.id === sharedRecord.id && /update|read/.test(link.relationship)));
+  assert.ok(save?.links.some((link) => link.id === sharedRecord.id && /read/.test(link.relationship)));
   assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === normalize.id));
   assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === save.id));
 });
@@ -74,7 +74,7 @@ def compute(value: int):
 `);
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['sample.py'] });
-  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'data-structure');
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
 
   assert.ok(!entities.some((node) => node.details?.aliases?.includes('math')));
   assert.ok(!entities.some((node) => node.details?.aliases?.includes('count')));
