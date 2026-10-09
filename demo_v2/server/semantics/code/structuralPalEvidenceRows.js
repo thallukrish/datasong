@@ -143,25 +143,17 @@ export function materializeStructuralEvidenceRows({
   }
 
   for (const node of arr(workflowNodes).filter((item) => item?.type === 'workflow')) {
+    const graphNodeById = new Map(arr(entityNodes).map((candidate) => [candidate?.id, candidate]));
     const functionRows = arr(node.links)
       .filter((link) => link?.relationship === 'contains')
       .map((link) => {
-        const details = arr(entityNodes).find((candidate) => candidate?.id === link.id)?.details;
-        if (details) return indexes.functionRows.get(`${details.sourcePath}:${Number(details.startLine || 0)}`) || 0;
-        return 0;
+        const functionNode = graphNodeById.get(link.id);
+        if (functionNode?.type !== 'function') return 0;
+        return indexes.functionRows.get(
+          `${functionNode.details?.sourcePath}:${Number(functionNode.details?.startLine || 0)}`
+        ) || 0;
       })
       .filter(Boolean);
-
-    // Function nodes are part of the data graph, so resolve workflow ids through them.
-    if (!functionRows.length) {
-      for (const link of arr(node.links).filter((item) => item?.relationship === 'contains')) {
-        const functionNode = arr(entityNodes).find((candidate) => candidate?.id === link.id && candidate?.type === 'function');
-        const row = functionNode
-          ? indexes.functionRows.get(`${functionNode.details?.sourcePath}:${Number(functionNode.details?.startLine || 0)}`) || 0
-          : 0;
-        if (row) functionRows.push(row);
-      }
-    }
 
     const row = nextRow();
     const workflowLinks = functionRows.map(String);
