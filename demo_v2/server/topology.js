@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import simpleGit from 'simple-git';
 import { createIndexesFromRows } from 'pal-executor-lib/indexing';
 import { analyzePythonRepository } from './languages/python/adapter.js';
+import { STRUCTURAL_PAL_COLUMNS, STRUCTURAL_PAL_MULTI_VALUE_COLUMNS } from './semantics/code/structuralPalSchema.js';
 
 const CODE_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.java', '.kt', '.kts', '.py', '.rb', '.go', '.rs', '.cs',
@@ -16,7 +17,7 @@ const MAX_NEIGHBORS = 18;
 const MAX_SEARCH_RESULTS = 12;
 const MAX_ENTRY_SYMBOLS = 24;
 const MAX_README_CHARS = 5000;
-const CONSTRUCT_INDEX_SCHEMA_VERSION = 1;
+const CONSTRUCT_INDEX_SCHEMA_VERSION = 2;
 const PYTHON_ANALYZER_VERSION = 12;
 
 function normalizeRepoUrl(repoUrl) {
@@ -513,9 +514,9 @@ export class CodeTopology {
 
   buildPalIndexes(rows=[]) {
     return createIndexesFromRows(rows, {
-      headers:['row','file','line_range','type','name','parent','children','callers','callees'],
+      headers:STRUCTURAL_PAL_COLUMNS,
       excludeColumns:['row'],
-      multiValueColumns:['children','callers','callees']
+      multiValueColumns:STRUCTURAL_PAL_MULTI_VALUE_COLUMNS
     });
   }
 
@@ -631,7 +632,7 @@ export class CodeTopology {
   }
 
   serializeCodeStructureCsv(rows=[]) {
-    const columns = ['row', 'file', 'line_range', 'type', 'name', 'parent', 'children', 'callers', 'callees'];
+    const columns = STRUCTURAL_PAL_COLUMNS;
     const cell = (value) => {
       const text = String(value ?? '');
       return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
