@@ -39,13 +39,15 @@ export async function analyzePythonRepository({ repoDir, files }) {
         ? ['-3', fileURLToPath(dataScript), repoDir]
         : [fileURLToPath(dataScript), repoDir];
       const data = await run(command, dataArgs, input);
+      const dataGraph = buildPythonDataStructureGraph({
+        symbols: structural?.symbols || [],
+        observations: data?.observations || []
+      });
       return {
         ...structural,
         dataObservations: Array.isArray(data?.observations) ? data.observations : [],
-        dataGraphNodes: buildPythonDataStructureGraph({
-          symbols: structural?.symbols || [],
-          observations: data?.observations || []
-        })
+        dataGraphNodes: Array.isArray(dataGraph?.nodes) ? dataGraph.nodes : [],
+        entityLinks: Array.isArray(dataGraph?.entityLinks) ? dataGraph.entityLinks : []
       };
     } catch (error) {
       lastError = error;
