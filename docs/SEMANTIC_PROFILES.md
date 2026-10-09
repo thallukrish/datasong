@@ -228,6 +228,152 @@ Dynamic Python is intentionally outside the first implementation. Reflection, ru
 The learning run log records `pythonAst` statistics at `run_start`, including symbol count, resolved call count and unresolved call count. These statistics make it possible to distinguish a language-analysis failure from a later call-path, semantic-interpretation or retrieval failure.
 
 
+## Unified structural PAL graph
+
+The code profile persists functions, regions, entities and workflows in one structural PAL CSV for a repository revision.
+
+The CSV is the canonical flat row namespace for structural graph evidence. Node kind is expressed by the existing `type` column rather than by separate files.
+
+Typical row types include:
+
+```text
+function
+function-region / AST construct
+entity
+workflow
+```
+
+The structural CSV columns are:
+
+```text
+row
+file
+line_range
+type
+name
+parent
+children
+callers
+callees
+links
+relationships
+flowRows
+features
+details
+```
+
+Existing `children`, `callers` and `callees` remain for compatibility.
+
+`links` and `relationships` are parallel multi-valued PAL columns. Position is significant:
+
+```text
+links          = [12, 30, 41]
+relationships  = [calls, read, update]
+```
+
+means:
+
+```text
+this row -> calls  -> row 12
+this row -> read   -> row 30
+this row -> update -> row 41
+```
+
+The number of values in `links` and `relationships` must always match.
+
+Existing function graph edges are also projected into the generic pair:
+
+```text
+callees  -> links with relationship=calls
+children -> links with relationship=contains
+```
+
+This allows PAL to traverse one generic graph while older code can continue using the original columns.
+
+### Entity rows
+
+Entity discovery is deterministic and AST-based. Complex values such as constructed objects, mappings, sequences, sets, array-like values and structurally stable objects are observed inside functions and clustered across functions using type/origin/shape evidence.
+
+An entity row uses:
+
+```text
+type = entity
+```
+
+Its searchable structural characteristics are placed in the multi-valued `features` column. Features may include:
+
+```text
+aliases
+annotations/types
+constructor or origin names
+members
+methods
+mapping keys
+```
+
+Detailed cluster metadata such as kind, function count, flow-edge count and core score is retained in `details`.
+
+Entity transformations are represented as ordinary graph relations from the function or region row to the entity row:
+
+```text
+function/region row -> create -> entity row
+function/region row -> read   -> entity row
+function/region row -> update -> entity row
+function/region row -> delete -> entity row
+```
+
+When an operation occurs inside an AST region, the edge originates from the smallest/innermost structural row containing that source line. The row's existing `file` and `line_range` provide provenance. No separate edge CSV is required.
+
+### Workflow rows
+
+A workflow is a deterministic view over an existing grouped call path. It does not invent another execution topology.
+
+A workflow row uses:
+
+```text
+type = workflow
+```
+
+Its generic membership links are:
+
+```text
+links         = [function row numbers...]
+relationships = [contains, contains, ...]
+```
+
+The ordered execution sequence is stored separately in the multi-valued `flowRows` column:
+
+```text
+flowRows = [10, 11, 23, 31]
+```
+
+This order is authoritative for the representative workflow path:
+
+```text
+10 -> 11 -> 23 -> 31
+```
+
+`links` expresses graph membership; `flowRows` preserves execution order.
+
+The workflow row's `details` may retain compact structural metadata such as call-path id, function count, entity count and branch/alternate counts.
+
+### Architectural boundary
+
+The unified PAL graph extends structural evidence without replacing existing navigation logic.
+
+```text
+existing AST/function indexing
+        +
+entity clustering
+        +
+existing CallPathIndexerV3 paths
+        ↓
+one structural PAL CSV
+```
+
+The call graph remains the execution authority. Entity relations strengthen evidence about what data is transformed. Workflow rows preserve reusable vertical slices. Query/HL scoring may use all three as independent structural evidence for stronger causal confidence.
+
+
 ## Query-driven semantic map construction
 
 Generic code learning is now intended to grow from query demand rather than require exhaustive semantic interpretation of every indexed vertical call path.
