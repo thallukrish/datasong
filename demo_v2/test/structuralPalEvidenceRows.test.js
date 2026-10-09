@@ -12,6 +12,7 @@ test('unified PAL rows keep links and relationships parallel and workflow flowRo
   const entityNodes = [
     { id:'A', type:'function', details:{ sourcePath:'a.py', startLine:1, endLine:5 }, links:[] },
     { id:'B', type:'function', details:{ sourcePath:'b.py', startLine:10, endLine:15 }, links:[] },
+    { id:'B:region:1', type:'function-region', details:{ sourcePath:'b.py', startLine:11, endLine:13 }, links:[] },
     { id:'entity:X', type:'entity', details:{ name:'X', kind:'mapping', functionCount:2, flowEdgeCount:1, coreScore:3 }, links:[] }
   ];
 
@@ -19,7 +20,7 @@ test('unified PAL rows keep links and relationships parallel and workflow flowRo
     {
       sourceId:'A', sourceType:'function', relationship:'create',
       targetId:'entity:X', functionId:'A', regionId:'',
-      sourcePath:'a.py', startLine:1, endLine:5
+      sourcePath:'a.py', startLine:4, endLine:4
     },
     {
       sourceId:'B:region:1', sourceType:'function-region', relationship:'update',
