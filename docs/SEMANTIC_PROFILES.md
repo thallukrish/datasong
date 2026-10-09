@@ -228,6 +228,377 @@ Dynamic Python is intentionally outside the first implementation. Reflection, ru
 The learning run log records `pythonAst` statistics at `run_start`, including symbol count, resolved call count and unresolved call count. These statistics make it possible to distinguish a language-analysis failure from a later call-path, semantic-interpretation or retrieval failure.
 
 
+## Deterministic entity and workflow indexes for code
+
+The code profile extends deterministic indexing beyond symbols and calls with two additional, query-independent graph views:
+
+```text
+function graph
+  A -> calls -> B
+
+entity graph
+  A -> create -> X
+  B -> read   -> X
+  C -> update -> X
+
+workflow graph
+  W -> contains -> A
+  W -> contains -> B
+  W -> contains -> C
+```
+
+These views do not replace the existing Python AST symbol/call index and do not change query navigation policy. They add reusable structural evidence that can strengthen semantic hierarchy construction, candidate scoring and causal confidence.
+
+### Entity discovery
+
+While the Python AST adapter indexes each function body, it also records observations about non-trivial values and data structures, including:
+
+- constructed objects
+- annotated complex parameters
+- mappings/dictionaries and observed keys
+- lists, sets and sequence-like structures
+- array-like values inferred from indexing or members such as `shape`, `dtype`, `ndim` or `size`
+- object members and method usage
+- assignments and mutations
+- values passed to calls
+- returned values
+- constructor/import/origin evidence
+
+Primitive temporaries and imported module aliases are not promoted merely because they appear in a function.
+
+Observations are reconciled across functions into deterministic entity candidates. Stronger identity evidence includes a common annotation/type, constructor/origin, stable mapping keys and stable member/method shape. Variable names are only supporting evidence.
+
+The objective is not to prove runtime object identity. It is to identify recurring structural entities that are useful for repository understanding.
+
+An entity seen in many distinct functions and call-flow edges is treated as increasingly core to the codebase. An entity seen only in one or a few functions remains local/helper evidence unless later observations connect it more broadly.
+
+### Entity relations
+
+Entity relations are deliberately direct. There is no separate action field.
+
+Typical relations are:
+
+```text
+create
+read
+update
+delete
+```
+
+Additional relations should be introduced only when they add concrete causal value.
+
+Examples:
+
+```text
+function A -> create -> entity X
+function B -> read   -> entity X
+function C -> update -> entity X
+```
+
+The same entity may have multiple observations in one function or region. Each observation retains source provenance.
+
+### Region and source-line anchoring
+
+Entity transformations must remain localizable to source.
+
+Every entity observation records:
+
+```text
+functionId
+regionId
+startLine
+endLine
+entityId
+relationship
+```
+
+If the observation lies inside one or more AST regions, it is attached to the smallest/innermost containing region using the region's existing `startLine` and `endLine`.
+
+If no region contains the observation, `regionId` is empty and the function is the containing structural unit.
+
+The exact line range is retained even when a region id is available. The region provides control-flow context; the line range provides exact evidence retrieval.
+
+This permits Query/HL to distinguish:
+
+```text
+function F updates entity X somewhere
+```
+
+from the stronger statement:
+
+```text
+region R inside function F updates entity X at lines 120-122
+```
+
+### Workflow discovery
+
+A workflow is a reusable vertical slice over the existing deterministic call graph. Workflow discovery does not invent a second execution topology.
+
+A workflow groups a coherent ordered set of existing function nodes:
+
+```text
+workflow W
+  -> contains -> function A
+  -> contains -> function B
+  -> contains -> function C
+```
+
+The function-to-function `calls` edges remain authoritative for execution order.
+
+Entity evidence enriches the same slice:
+
+```text
+A -> create -> X
+B -> read   -> X
+C -> update -> X
+```
+
+so the workflow can be interpreted as an execution path that acts on specific entities without encoding those transformations into the call graph itself.
+
+The initial workflow builder should therefore consume:
+
+```text
+existing resolved call paths
++
+entity observations on the functions/regions in those paths
+```
+
+and materialize workflow nodes that reference the participating functions.
+
+### Canonical in-memory graph shape
+
+Functions, regions, entities and workflows use one flat node array.
+
+Each node has:
+
+```text
+id
+type
+details
+links[]
+```
+
+Each link contains only:
+
+```text
+id
+relationship
+```
+
+For example:
+
+```json
+{
+  "id": "symbol:pkg/a.py#A@10",
+  "type": "function",
+  "details": {
+    "name": "A",
+    "sourcePath": "pkg/a.py",
+    "startLine": 10,
+    "endLine": 25
+  },
+  "links": [
+    { "id": "symbol:pkg/b.py#B@30", "relationship": "calls" },
+    { "id": "entity:abc123", "relationship": "create" }
+  ]
+}
+```
+
+and:
+
+```json
+{
+  "id": "workflow:w1",
+  "type": "workflow",
+  "details": {
+    "name": "w1"
+  },
+  "links": [
+    { "id": "symbol:pkg/a.py#A@10", "relationship": "contains" },
+    { "id": "symbol:pkg/b.py#B@30", "relationship": "contains" }
+  ]
+}
+```
+
+Source provenance for an entity transformation belongs in the entity observation details/CSV row, not as semantic payload on the graph link.
+
+### Structural CSV persistence
+
+The existing function structural CSV remains authoritative for symbols, regions and call topology and continues to be stored under the repository/commit-specific structural cache, for example:
+
+```text
+demo_v2/data/repo-cache/code-structural-csv/<repo-key>/<commit>/
+```
+
+Entity and workflow indexes should be persisted alongside the existing function graph so all three views share the same repository revision and symbol ids.
+
+The recommended CSVs are:
+
+```text
+entity-nodes.csv
+entity-links.csv
+workflow-nodes.csv
+workflow-links.csv
+```
+
+They are PAL-style flattened views of the canonical node graph.
+
+#### entity-nodes.csv
+
+Columns:
+
+```text
+id
+type
+name
+kind
+aliases
+annotations
+origins
+members
+methods
+keys
+functionCount
+flowEdgeCount
+coreScore
+```
+
+Notes:
+
+- `id` is the canonical entity node id.
+- `type` is normally `entity`.
+- `kind` is a structural kind such as object, mapping, sequence, set or array-like.
+- list-valued columns use the repository's standard CSV list encoding.
+- `functionCount` is the number of distinct functions that observe the entity.
+- `flowEdgeCount` is the number of resolved call edges between functions that observe the entity.
+- `coreScore` is a structural ranking signal, initially based on breadth across functions/flows.
+
+#### entity-links.csv
+
+Each row is one source-backed function/region-to-entity relation.
+
+Columns:
+
+```text
+sourceId
+sourceType
+relationship
+targetId
+targetType
+functionId
+regionId
+sourcePath
+startLine
+endLine
+variable
+origin
+```
+
+Typical rows are:
+
+```text
+function A, create, entity X
+function B, read,   entity X
+function C, update, entity X
+```
+
+Rules:
+
+- `sourceId` is the function id when the observation is function-level, otherwise the innermost region id.
+- `sourceType` is `function` or `function-region`.
+- `relationship` directly records `create`, `read`, `update` or `delete`; there is no separate action column.
+- `targetId` is the canonical entity id.
+- `functionId` is always retained, even when `sourceId` is a region id.
+- `regionId` is empty when no AST region contains the observation.
+- `sourcePath`, `startLine` and `endLine` provide exact provenance.
+- `variable` records the local alias at that observation.
+- `origin` records known constructor/type/call provenance when available.
+
+#### workflow-nodes.csv
+
+Columns:
+
+```text
+id
+type
+name
+entryFunctionId
+exitFunctionId
+functionCount
+entityCount
+```
+
+The first version should keep workflow node details structural and compact. Semantic labels can be added later by the learned semantic layer.
+
+#### workflow-links.csv
+
+Each row relates a workflow node to a participating function.
+
+Columns:
+
+```text
+sourceId
+sourceType
+relationship
+targetId
+targetType
+ordinal
+sourcePath
+startLine
+endLine
+```
+
+Typical rows are:
+
+```text
+workflow W -> contains -> function A
+workflow W -> contains -> function B
+```
+
+Rules:
+
+- `sourceId` is the workflow id.
+- `sourceType` is `workflow`.
+- `relationship` is `contains`.
+- `targetId` is the existing function symbol id.
+- `targetType` is `function`.
+- `ordinal` records the function's position in the representative call path.
+- source location is copied from the referenced function for direct evidence lookup.
+
+Workflow execution order is still determined by the existing function `calls` graph. The workflow CSV records membership and representative order; it does not create an independent execution semantics.
+
+### Use as query evidence
+
+The three deterministic views remain independent but join on stable node ids:
+
+```text
+function graph
+  where execution can travel
+
+entity graph
+  what structures are created/read/updated/deleted at each function or region
+
+workflow graph
+  which functions form a coherent vertical slice
+```
+
+HL construction and query scoring may use entity/workflow evidence as additional support for causality.
+
+For example, a candidate region is stronger when:
+
+```text
+the query refers to entity X
++
+the region reads/updates X
++
+the containing function lies on the strongest call path
++
+the function belongs to the same workflow slice
+```
+
+This evidence strengthens confidence. It does not replace the existing deterministic call topology or query-driven navigation policy.
+
+
 ## Query-driven semantic map construction
 
 Generic code learning is now intended to grow from query demand rather than require exhaustive semantic interpretation of every indexed vertical call path.
