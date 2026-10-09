@@ -11,6 +11,7 @@ export const STRUCTURAL_PAL_COLUMNS = [
   'links',
   'relationships',
   'flowRows',
+  'features',
   'details'
 ];
 
@@ -20,7 +21,8 @@ export const STRUCTURAL_PAL_MULTI_VALUE_COLUMNS = [
   'callees',
   'links',
   'relationships',
-  'flowRows'
+  'flowRows',
+  'features'
 ];
 
 export function emptyPalArray() {
