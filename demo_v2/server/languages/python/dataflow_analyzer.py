@@ -86,6 +86,7 @@ class ObservationVisitor(ast.NodeVisitor):
         self.function_node = node
         self.records = {}
         self.parents = []
+        self.events = []
         self.ignored_names = set(ignored_names or []) | {"self", "cls"}
 
         args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
@@ -124,6 +125,19 @@ class ObservationVisitor(ast.NodeVisitor):
             }
         return self.records[name]
 
+    def add_event(self, name, node, operation, detail=""):
+        if not name or name in self.ignored_names:
+            return
+        line = int(getattr(node, "lineno", 0) or 0)
+        end_line = int(getattr(node, "end_lineno", line) or line)
+        self.events.append({
+            "variable": name,
+            "operation": operation,
+            "detail": detail,
+            "line": line,
+            "endLine": end_line
+        })
+
     def touch(self, name, node, operation=None):
         rec = self.rec(name)
         if not rec:
@@ -134,6 +148,7 @@ class ObservationVisitor(ast.NodeVisitor):
             rec["lastLine"] = max(rec["lastLine"], int(getattr(node, "end_lineno", line) or line))
         if operation:
             rec["operations"].add(operation)
+            self.add_event(name, node, operation)
         return rec
 
     def visit(self, node):
@@ -152,6 +167,8 @@ class ObservationVisitor(ast.NodeVisitor):
                     rec["origins"].append(origin)
                     for key in origin.get("keys", []):
                         rec["keys"].add(key)
+                    if origin.get("kind") in {"mapping", "sequence", "set", "container", "constructed"}:
+                        self.add_event(name, node, "create", origin.get("name", ""))
             base = root_name(target)
             if base and isinstance(target, (ast.Attribute, ast.Subscript)):
                 self.touch(base, target, "mutate")
@@ -168,6 +185,8 @@ class ObservationVisitor(ast.NodeVisitor):
                     rec["origins"].append(origin)
                     for key in origin.get("keys", []):
                         rec["keys"].add(key)
+                    if origin.get("kind") in {"mapping", "sequence", "set", "container", "constructed"}:
+                        self.add_event(name, node, "create", origin.get("name", ""))
         base = root_name(node.target)
         if base and isinstance(node.target, (ast.Attribute, ast.Subscript)):
             self.touch(base, node.target, "mutate")
@@ -252,6 +271,10 @@ class ObservationVisitor(ast.NodeVisitor):
             elif any(member in {"shape", "dtype", "ndim", "size"} for member in rec["members"]):
                 kind = "array-like"
             rec["kind"] = kind
+            rec["events"] = [
+                event for event in self.events
+                if event.get("variable") == rec["variable"]
+            ]
             for key in ("members", "methods", "keys", "operations", "passedTo"):
                 rec[key] = sorted(rec[key])
             out.append(rec)
