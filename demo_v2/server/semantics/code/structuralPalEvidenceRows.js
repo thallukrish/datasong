@@ -38,12 +38,14 @@ function addParallelLink(row, targetRow, relationship) {
 }
 
 function normalizeExistingRows(rows) {
-  return arr(rows).map((row) => {
+  return arr(rows)
+    .filter((row) => !['entity', 'workflow'].includes(String(row?.type || '')))
+    .map((row) => {
     const normalized = {
       ...row,
-      links: row?.links || emptyPalArray(),
-      relationships: row?.relationships || emptyPalArray(),
-      flowRows: row?.flowRows || emptyPalArray(),
+      links: emptyPalArray(),
+      relationships: emptyPalArray(),
+      flowRows: emptyPalArray(),
       features: row?.features || emptyPalArray(),
       details: row?.details || ''
     };
