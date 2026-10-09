@@ -2,6 +2,8 @@ import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopology
 import { CallPathIndexerV3 } from './callPathIndexerV3.js';
 import { createMoquiAdapters } from './adapters/moqui/index.js';
 import { analyzePythonRepository } from './languages/python/adapter.js';
+import { buildWorkflowGraph, mergeStructuralEvidenceNodes } from './semantics/code/structuralEvidenceGraph.js';
+import { persistStructuralEvidenceCsv } from './semantics/code/structuralCsvPersistence.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -25,6 +27,12 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemaByName = new Map();
     this.externalSymbols = [];
     this.moduleRegions = [];
+    this.pythonDataGraphNodes = [];
+    this.pythonEntityLinks = [];
+    this.workflowGraphNodes = [];
+    this.workflowLinks = [];
+    this.structuralEvidenceNodes = [];
+    this.structuralEvidenceCsv = null;
   }
 
   async prepareIndexOnly(repoUrl) {
@@ -35,6 +43,12 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemaByName = new Map();
     this.externalSymbols = [];
     this.moduleRegions = [];
+    this.pythonDataGraphNodes = [];
+    this.pythonEntityLinks = [];
+    this.workflowGraphNodes = [];
+    this.workflowLinks = [];
+    this.structuralEvidenceNodes = [];
+    this.structuralEvidenceCsv = null;
     this.symbols = [];
     this.symbolById.clear();
     this.nameIndex.clear();
@@ -64,6 +78,12 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.callers.clear();
     this.externalSymbols = [];
     this.moduleRegions = [];
+    this.pythonDataGraphNodes = [];
+    this.pythonEntityLinks = [];
+    this.workflowGraphNodes = [];
+    this.workflowLinks = [];
+    this.structuralEvidenceNodes = [];
+    this.structuralEvidenceCsv = null;
 
     const t=Date.now();
     const pythonAst = await this.augmentPythonAstGraph();
@@ -110,10 +130,42 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     t=Date.now();
     this.callPathIndex = this.callPathIndexer.build();
     console.log(`[repo-prepare] call-path index ${Date.now()-t}ms ranked=${this.callPathIndex.rankedPathCount} grouped=${this.callPathIndex.groupedPathCount}`);
+
+    t=Date.now();
+    const workflowGraph = buildWorkflowGraph({
+      groupedPaths: this.callPathIndexer.top(Number.MAX_SAFE_INTEGER),
+      symbols: this.symbols,
+      entityLinks: this.pythonEntityLinks
+    });
+    this.workflowGraphNodes = workflowGraph.nodes;
+    this.workflowLinks = workflowGraph.workflowLinks;
+    this.structuralEvidenceNodes = mergeStructuralEvidenceNodes(
+      this.pythonDataGraphNodes,
+      this.workflowGraphNodes
+    );
+    this.structuralEvidenceCsv = await persistStructuralEvidenceCsv({
+      cacheRoot: this.cacheRoot,
+      repoUrl: this.repoUrl,
+      commit: this.commit,
+      entityNodes: this.pythonDataGraphNodes,
+      entityLinks: this.pythonEntityLinks,
+      workflowNodes: this.workflowGraphNodes,
+      workflowLinks: this.workflowLinks
+    });
+    console.log(`[repo-prepare] structural entity/workflow evidence ${Date.now()-t}ms entities=${this.pythonDataGraphNodes.filter((node)=>node?.type==='entity').length} workflows=${this.workflowGraphNodes.length}`);
+
     console.log(`[repo-prepare] DONE ${Date.now()-startedAt}ms`);
     return {
       ...prep,
       pythonAst,
+      structuralEvidence: {
+        nodeCount: this.structuralEvidenceNodes.length,
+        entityNodeCount: this.pythonDataGraphNodes.filter((node) => node?.type === 'entity').length,
+        entityLinkCount: this.pythonEntityLinks.length,
+        workflowNodeCount: this.workflowGraphNodes.length,
+        workflowLinkCount: this.workflowLinks.length,
+        csv: this.structuralEvidenceCsv
+      },
       moquiEntitySchema: this.moquiEntitySchema,
       moquiXmlExecution: this.moquiXmlExecution,
       callPathIndex: {
@@ -134,6 +186,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     const pythonSymbols = Array.isArray(result?.symbols) ? result.symbols : [];
     this.externalSymbols = Array.isArray(result?.externalSymbols) ? result.externalSymbols : [];
     this.moduleRegions = Array.isArray(result?.moduleRegions) ? result.moduleRegions : [];
+    this.pythonDataGraphNodes = Array.isArray(result?.dataGraphNodes) ? result.dataGraphNodes : [];
+    this.pythonEntityLinks = Array.isArray(result?.entityLinks) ? result.entityLinks : [];
     if (!pythonSymbols.length) return { version: Number(result?.version || 1), symbolCount: 0, externalSymbolCount: this.externalSymbols.length, resolvedCallCount: 0, unresolvedCallCount: 0 };
 
     const pythonPaths = new Set(pythonSymbols.map((symbol) => symbol.sourcePath));
