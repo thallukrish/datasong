@@ -155,6 +155,7 @@ export function materializeStructuralEvidenceRows({
       links: emptyPalArray(),
       relationships: emptyPalArray(),
       details: JSON.stringify({
+        structuralId: node.id,
         kind: node.details?.kind || '',
         aliases: node.details?.aliases || [],
         annotations: node.details?.annotations || [],
@@ -199,6 +200,7 @@ export function materializeStructuralEvidenceRows({
       links: encodePalArray(workflowLinks),
       relationships: encodePalArray(workflowLinks.map(() => 'contains')),
       details: JSON.stringify({
+        structuralId: node.id,
         flowRows: functionRows,
         callPathId: node.details?.callPathId || '',
         entryFunctionId: node.details?.entryFunctionId || '',
