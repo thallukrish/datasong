@@ -1,13 +1,36 @@
 import { addUsage, arr, modelJson, text } from '../../query_v2/modelJson.js';
-import { materializeCodeStructure, applyCodeSemantics, semanticDetails } from './codeGraph.js';
+import {
+  materializeCodeStructure,
+  materializeStructuralLineage,
+  applyCodeSemantics,
+  applyStructuralSemantics,
+  semanticDetails
+} from './codeGraph.js';
+import { structuralLineageForState, compactStructuralLineage } from './structuralLineage.js';
 
 const MAX_LOOKAHEAD_NODES = 48;
 
-const LEARN_SYSTEM = `Learn query-independent semantics for the supplied local execution window. flowContext contains only already-learned predecessor semantics. newNodes contains raw repository code plus deterministic call relationships, and may also contain terminal externalCalls for imported APIs whose implementation is outside the repository.
+const LEARN_SYSTEM = `Learn query-independent semantics for the supplied local execution window.
 
-Describe what each supplied function, function-body region, module-level region, or external call does and its execution effect. For externalCalls, use only the supplied import identity and call-site syntax. Explain the local meaning of invoking that imported API here; do not invent or claim knowledge of the dependency implementation beyond what the import name and call syntax support. External calls are terminal boundaries, not repository code to traverse.
+flowContext contains only already-learned predecessor semantics.
+newNodes contains raw repository code plus deterministic call relationships. A symbol or region may also contain lineage:
+- entities: deterministic [operation,name,structuralDescription] relationships for entities created/read/updated/deleted in that exact structural scope.
+- flows: deterministic [workflowName,position,functionCount] memberships for the enclosing function.
 
-Do not answer a user query, infer query relevance, rank branches, or rewrite predecessor semantics. Return one semantic result for every supplied new node as {"symbols":[{"symbolId":"","purpose":"","effect":""}],"regions":[{"regionId":"","purpose":"","effect":""}],"externalCalls":[{"externalId":"","purpose":"","effect":""}]} using only exact supplied IDs.`;
+graphEntities and workflows are the exact structural entity/workflow nodes referenced by lineage. Their identity and relationships are already determined by static analysis. You may describe their semantic role, but MUST NOT invent, remove, reverse, or reinterpret entity operations or workflow membership.
+
+Describe what each supplied function, function-body region, module-level region, or external call does and its execution effect. Make function/region semantics consistent with supplied entity transformations and workflow position when those facts materially clarify behavior. Do not force lineage into a description when it adds no useful meaning.
+
+For graphEntities, describe what the entity represents in this local code and the meaningful state/data role supported by the supplied structural description and code.
+For workflows, describe the concise execution role of the flow supported by the supplied member function context. Do not infer business meaning not supported by supplied code.
+
+For externalCalls, use only supplied import identity and call-site syntax. External calls are terminal boundaries.
+
+Do not answer a user query, infer query relevance, rank branches, or rewrite predecessor semantics.
+
+Return only:
+{"symbols":[{"symbolId":"","purpose":"","effect":""}],"regions":[{"regionId":"","purpose":"","effect":""}],"externalCalls":[{"externalId":"","purpose":"","effect":""}],"entities":[{"entityId":"","purpose":"","effect":""}],"workflows":[{"workflowId":"","purpose":"","effect":""}]}
+using only exact supplied IDs.`;
 
 export function codeSemanticForState(state,explorer){return semanticDetails(explorer,state)}
 
@@ -239,32 +262,139 @@ export function collectLocalSemanticWindow({
 }
 
 export async function ensureLocalCodeSemantics({states,path=[],links=[],explorer,client,model,usage,log=()=>{},onProgress=()=>{}}){
-  const requested=arr(states).filter(Boolean);materializeCodeStructure(explorer,[...arr(path),...requested]);
-  const flowContext=learnedFlowContext(path,explorer),symbols=[],regions=[],externalCalls=[];
+  const requested=arr(states).filter(Boolean);
+  materializeCodeStructure(explorer,[...arr(path),...requested]);
+
+  const flowContext=learnedFlowContext(path,explorer);
+  const symbols=[],regions=[],externalCalls=[];
+  const graphEntities=new Map(),workflows=new Map();
+
   for(const state of requested){
+    const lineage=structuralLineageForState(state,explorer);
+    materializeStructuralLineage(explorer,state,lineage);
+    const compactLineage=compactStructuralLineage(lineage);
+
+    for(const item of arr(lineage.entities)){
+      if(!item?.id||graphEntities.has(item.id))continue;
+      const semantic=semanticDetails(explorer,{id:item.id});
+      if(semantic?.learned)continue;
+      graphEntities.set(item.id,{
+        entityId:item.id,
+        name:item.name||item.id,
+        structuralDescription:item.description||'',
+        operations:[...new Set(arr(lineage.entities).filter(x=>x?.id===item.id).map(x=>x.operation).filter(Boolean))]
+      });
+    }
+
+    for(const item of arr(lineage.flows)){
+      if(!item?.id||workflows.has(item.id))continue;
+      const semantic=semanticDetails(explorer,{id:item.id});
+      if(semantic?.learned)continue;
+      workflows.set(item.id,{
+        workflowId:item.id,
+        name:item.name||item.id,
+        functionCount:Number(item.functionCount||0),
+        branchVariantCount:Number(item.branchVariantCount||0),
+        alternateEntranceCount:Number(item.alternateEntranceCount||0)
+      });
+    }
+
     const learned=!!semanticDetails(explorer,state)?.learned;
     if(state.type==='code_external'){
-      if(!learned)externalCalls.push({externalId:state.id,name:state.name,sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,importModule:state.importModule||'',importName:state.importName||'',qualifiedName:state.qualifiedName||state.name||'',callText:text(state.callText||state.body,1200),keywordArgs:arr(state.keywordArgs),reExported:!!state.reExported,boundaryKind:state.boundaryKind||'external-call'});
+      if(!learned)externalCalls.push({
+        externalId:state.id,name:state.name,sourcePath:state.sourcePath,
+        startLine:state.startLine,endLine:state.endLine,
+        importModule:state.importModule||'',importName:state.importName||'',
+        qualifiedName:state.qualifiedName||state.name||'',
+        callText:text(state.callText||state.body,1200),
+        keywordArgs:arr(state.keywordArgs),reExported:!!state.reExported,
+        boundaryKind:state.boundaryKind||'external-call'
+      });
       continue;
     }
+
     const symbol=explorer.topology?.symbolById?.get(state.symbolId);
     if(state.type==='code_region'){
-      if(!learned)regions.push({regionId:state.regionId,symbolId:state.symbolId||'',kind:state.kind||'',sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,body:text(state.body,3200)});
+      if(!learned)regions.push({
+        regionId:state.regionId,symbolId:state.symbolId||'',kind:state.kind||'',
+        sourcePath:state.sourcePath,startLine:state.startLine,endLine:state.endLine,
+        body:text(state.body,3200),lineage:compactLineage
+      });
       continue;
     }
+
     if(!symbol)continue;
-    if(!learned)symbols.push({symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',sourcePath:symbol.sourcePath||'',startLine:symbol.startLine,endLine:symbol.endLine,body:text(symbol.body,3200)});
+    if(!learned)symbols.push({
+      symbolId:symbol.id,name:symbol.name,signature:symbol.signature||'',
+      sourcePath:symbol.sourcePath||'',startLine:symbol.startLine,endLine:symbol.endLine,
+      body:text(symbol.body,3200),lineage:compactLineage
+    });
   }
-  if(!symbols.length&&!regions.length&&!externalCalls.length)return{learned:false,reused:requested.length};
-  onProgress({action:'LEARN_START',path:arr(path).map(x=>x.name),nodes:[...symbols.map(x=>({id:x.symbolId,name:x.name||x.symbolId})),...regions.map(x=>({id:x.regionId,name:x.regionId})),...externalCalls.map(x=>({id:x.externalId,name:x.qualifiedName||x.name||x.externalId}))]});
-  const call=await modelJson(client,model,LEARN_SYSTEM,{flowContext,newNodes:{symbols,regions,externalCalls,links:arr(links)}});addUsage(usage,call.usage);
-  applyCodeSemantics(explorer,{symbols:call.parsed?.symbols,regions:call.parsed?.regions,externalCalls:call.parsed?.externalCalls});
+
+  const entityInputs=[...graphEntities.values()];
+  const workflowInputs=[...workflows.values()];
+  if(!symbols.length&&!regions.length&&!externalCalls.length&&!entityInputs.length&&!workflowInputs.length){
+    return{learned:false,reused:requested.length};
+  }
+
+  onProgress({
+    action:'LEARN_START',
+    path:arr(path).map(x=>x.name),
+    nodes:[
+      ...symbols.map(x=>({id:x.symbolId,name:x.name||x.symbolId})),
+      ...regions.map(x=>({id:x.regionId,name:x.regionId})),
+      ...externalCalls.map(x=>({id:x.externalId,name:x.qualifiedName||x.name||x.externalId})),
+      ...entityInputs.map(x=>({id:x.entityId,name:x.name||x.entityId})),
+      ...workflowInputs.map(x=>({id:x.workflowId,name:x.name||x.workflowId}))
+    ]
+  });
+
+  const call=await modelJson(client,model,LEARN_SYSTEM,{
+    flowContext,
+    newNodes:{
+      symbols,
+      regions,
+      externalCalls,
+      graphEntities:entityInputs,
+      workflows:workflowInputs,
+      links:arr(links)
+    }
+  });
+  addUsage(usage,call.usage);
+
+  applyCodeSemantics(explorer,{
+    symbols:call.parsed?.symbols,
+    regions:call.parsed?.regions,
+    externalCalls:call.parsed?.externalCalls
+  });
+  applyStructuralSemantics(explorer,{
+    entities:call.parsed?.entities,
+    workflows:call.parsed?.workflows
+  });
+
   explorer.persistSemanticMap?.();
-  log('code_local_semantics_learned',{contextNodeIds:flowContext.map(x=>x.id),symbols:arr(call.parsed?.symbols).length,regions:arr(call.parsed?.regions).length,externalCalls:arr(call.parsed?.externalCalls).length,usage:call.usage});
-  onProgress({action:'LEARN_DONE',path:arr(path).map(x=>x.name),nodeIds:[...arr(call.parsed?.symbols).map(x=>x.symbolId),...arr(call.parsed?.regions).map(x=>x.regionId),...arr(call.parsed?.externalCalls).map(x=>x.externalId)]});
+  log('code_local_semantics_learned',{
+    contextNodeIds:flowContext.map(x=>x.id),
+    symbols:arr(call.parsed?.symbols).length,
+    regions:arr(call.parsed?.regions).length,
+    externalCalls:arr(call.parsed?.externalCalls).length,
+    entities:arr(call.parsed?.entities).length,
+    workflows:arr(call.parsed?.workflows).length,
+    usage:call.usage
+  });
+  onProgress({
+    action:'LEARN_DONE',
+    path:arr(path).map(x=>x.name),
+    nodeIds:[
+      ...arr(call.parsed?.symbols).map(x=>x.symbolId),
+      ...arr(call.parsed?.regions).map(x=>x.regionId),
+      ...arr(call.parsed?.externalCalls).map(x=>x.externalId),
+      ...arr(call.parsed?.entities).map(x=>x.entityId),
+      ...arr(call.parsed?.workflows).map(x=>x.workflowId)
+    ]
+  });
   return{learned:true,reusedContext:flowContext.length,usage:call.usage};
 }
-
 
 export async function ensureLocalSemanticWindow({
   state,path=[],depth=1,highlightRegions=[],includeRootRegions=true,includeCallFrontier=false,
