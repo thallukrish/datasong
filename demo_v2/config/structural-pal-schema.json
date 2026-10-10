@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "columns": [
+    "row",
+    "file",
+    "line_range",
+    "type",
+    "name",
+    "links",
+    "relationships",
+    "details"
+  ],
+  "excludeColumns": [
+    "row"
+  ],
+  "multiValueColumns": [
+    "links",
+    "relationships"
+  ],
+  "columnTypes": {
+    "row": "integer",
+    "file": "string",
+    "line_range": "string",
+    "type": "string",
+    "name": "string",
+    "links": "string[]",
+    "relationships": "string[]",
+    "details": "json"
+  }
+}
