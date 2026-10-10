@@ -106,6 +106,7 @@ def save(record):
     return record["name"]
 
 def normalize(record):
+    name = record["name"]
     record["value"] = record["value"] + 1
     return save(record)
 
