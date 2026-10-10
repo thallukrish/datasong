@@ -19,11 +19,15 @@ Current overall score, 0..1, of hl against q and failingCase.
 
 n
 CURRENT visited semantic node:
-[type,name,purpose,effect]
+[type,name,purpose,effect,lineage]
+
+lineage is optional compact deterministic structural context:
+{"entities":[[operation,name,description],...],"flows":[[workflowName,position,functionCount,description],...]}
+Entity operations and flow membership come from static structure. Treat them as constraints on interpretation, not as extra inferred evidence. Use them only when they materially clarify the current node.
 
 c
 Immediate unvisited candidates:
-[candidateIndex,type,name,purpose,effect]
+[candidateIndex,type,name,purpose,effect,lineage]
 
 l
 Bounded descendant semantics for candidates, used only to predict where useful evidence may be found.
@@ -86,12 +90,16 @@ Current evidence-backed explanation for the active goal.
 
 n
 CURRENT visited semantic node:
-[type,name,purpose,effect]
+[type,name,purpose,effect,lineage]
 n is null only for entry comparison.
+
+lineage is optional compact deterministic structural context:
+{"entities":[[operation,name,description],...],"flows":[[workflowName,position,functionCount,description],...]}
+Entity operations and flow membership come from static structure. Treat them as constraints on interpretation. Do not invent entity transformations or flow membership beyond lineage.
 
 c
 Immediate candidates:
-[candidateIndex,type,name,purpose,effect]
+[candidateIndex,type,name,purpose,effect,lineage]
 
 l
 Bounded semantic lookahead for navigation only.
