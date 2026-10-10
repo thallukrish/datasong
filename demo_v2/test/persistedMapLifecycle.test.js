@@ -59,7 +59,7 @@ test('starting Learn for the same repository keeps the restored map visible whil
   assert.ok(snapshot.semanticObjects.workflow);
 });
 
-test('loading a persisted map schedules runtime hydration on application startup', async () => {
+test('application startup remains inert until a persisted map is explicitly activated', async () => {
   const dataRoot = tempRoot();
   const maps = path.join(dataRoot, 'semantic-maps');
   fs.mkdirSync(maps, { recursive: true });
@@ -84,7 +84,8 @@ test('loading a persisted map schedules runtime hydration on application startup
 
   const explorer = new HydratingExplorer({ dataRoot, topology: {} });
   assert.ok(explorer.startupHydration instanceof Promise);
-  await explorer.startupHydration;
-  assert.equal(explorer.hydrationCalls, 1);
-  assert.equal(explorer.state.pass1Arcs[0].title, 'Existing workflow');
+  const hydration = await explorer.startupHydration;
+  assert.deepEqual(hydration, { hydrated:false, reason:'startup_inert' });
+  assert.equal(explorer.hydrationCalls, undefined);
+  assert.equal(explorer.state.pass1Arcs.length, 0);
 });
