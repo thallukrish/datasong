@@ -9,6 +9,7 @@ function topologyFor(edges, unresolved = {}) {
     name: id,
     signature: `${id}()`,
     sourcePath: 'synthetic.js',
+    executable: true,
     references: (unresolved[id] || []).map((name) => ({ relation: 'calls', name }))
   }));
   const symbolById = new Map(symbols.map((symbol) => [symbol.id, symbol]));
