@@ -9,6 +9,7 @@ function makeTopology() {
     simpleName: name,
     signature: `${name}()`,
     sourcePath: `${name}.js`,
+    executable: true,
     references: []
   }));
   const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
@@ -37,7 +38,7 @@ function topologyFor(edges, signatures = {}) {
   const symbols = ids.map((id) => ({
     id, name: id, simpleName: id,
     signature: signatures[id] || `${id}()`,
-    sourcePath: 'synthetic.js', references: []
+    sourcePath: 'synthetic.js', executable: true, references: []
   }));
   const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
   return {
