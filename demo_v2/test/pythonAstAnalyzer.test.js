@@ -246,7 +246,10 @@ def parent(a, b):
     (Array.isArray(entry[1]) && entry[1].includes(String(childRow.row)))
   ));
   assert.ok(uniqueIndex.relationships.includes('calls'));
-  assert.ok(valuesIndex.relationships.some((entry) => entry[1] === 'calls'));
+  assert.ok(valuesIndex.relationships.some((entry) =>
+    entry[1] === 'calls' ||
+    (Array.isArray(entry[1]) && entry[1].includes('calls'))
+  ));
 
   const parentLinks = JSON.parse(parentRow.links);
   const parentRelationships = JSON.parse(parentRow.relationships);
