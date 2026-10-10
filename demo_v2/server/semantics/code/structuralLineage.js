@@ -105,11 +105,14 @@ function entityEvidence(scopeRows,byId,maxEntities=8){
       const key=`${relationship}|${entity.row}`;
       if(seen.has(key))continue;
       seen.add(key);
+      const details=parseDetails(entity.details);
       out.push({
+        id:String(details.structuralId||`entity-row:${entity.row}`),
         row:Number(entity.row||0),
         name:String(entity.name||''),
         operation:relationship,
-        description:entitySummary(entity)
+        description:entitySummary(entity),
+        details
       });
       if(out.length>=maxEntities)return out;
     }
@@ -128,6 +131,7 @@ function flowEvidence(functionRow,rows=[],maxFlows=5){
     if(position<0)continue;
     const details=parseDetails(row.details);
     out.push({
+      id:String(details.structuralId||`workflow-row:${row.row}`),
       row:Number(row.row||0),
       name:String(row.name||details.callPathId||''),
       position:position+1,
