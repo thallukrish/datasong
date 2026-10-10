@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import PAL from 'pal-executor-lib';
+import { PAL } from 'pal-executor-lib';
 import { analyzePythonRepository } from '../server/languages/python/adapter.js';
 import { buildWorkflowGraph } from '../server/semantics/code/structuralEvidenceGraph.js';
 import { materializeStructuralEvidenceRows } from '../server/semantics/code/structuralPalEvidenceRows.js';
@@ -15,13 +15,26 @@ import {
 import { CodeTopology } from '../server/topology.js';
 
 function hydrateIndexes(indexes) {
+  const valuesIndex = {};
+
+  for (const [column, pairs] of Object.entries(indexes.valuesIndex || {})) {
+    const columnMap = new Map();
+    for (const [rowKey, value] of pairs || []) {
+      if (!columnMap.has(rowKey)) {
+        columnMap.set(rowKey, value);
+        continue;
+      }
+      const prior = columnMap.get(rowKey);
+      columnMap.set(rowKey, Array.isArray(prior) ? [...prior, value] : [prior, value]);
+    }
+    valuesIndex[column] = columnMap;
+  }
+
   return {
     uniqueIndex: new Map(
       Object.entries(indexes.uniqueIndex || {}).map(([column, values]) => [column, new Set(values)])
     ),
-    valuesIndex: Object.fromEntries(
-      Object.entries(indexes.valuesIndex || {}).map(([column, pairs]) => [column, new Map(pairs)])
-    )
+    valuesIndex
   };
 }
 
