@@ -241,7 +241,10 @@ def parent(a, b):
   assert.ok(parentRow);
   assert.ok(childRow);
   assert.ok(uniqueIndex.links.includes(String(childRow.row)));
-  assert.ok(valuesIndex.links.some((entry) => entry[1] === String(childRow.row)));
+  assert.ok(valuesIndex.links.some((entry) =>
+    entry[1] === String(childRow.row) ||
+    (Array.isArray(entry[1]) && entry[1].includes(String(childRow.row)))
+  ));
   assert.ok(uniqueIndex.relationships.includes('calls'));
   assert.ok(valuesIndex.relationships.some((entry) => entry[1] === 'calls'));
 
