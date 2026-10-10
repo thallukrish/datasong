@@ -1170,6 +1170,27 @@ async function synthesizeResolvedAnswer({question,goals,threads,client,model,usa
       supports:arr(state.evidenceSupports),
       why:state.evidenceWhy||''
     }));
+    const contributions=arr(
+      thread?.hypothesisContributions?.length
+        ? thread.hypothesisContributions
+        : thread?.bestHypothesisContributions
+    );
+    const structuralEvidence=contributions.map(item=>({
+      claim:item?.claim||'',
+      entities:arr(item?.structuralSupport?.entities).map(entity=>({
+        id:entity.id||'',
+        operation:entity.operation||'',
+        name:entity.name||'',
+        description:entity.description||''
+      })),
+      flows:arr(item?.structuralSupport?.flows).map(flow=>({
+        id:flow.id||'',
+        name:flow.name||'',
+        position:Number(flow.position||0),
+        functionCount:Number(flow.functionCount||0)
+      }))
+    })).filter(item=>item.claim&&(item.entities.length||item.flows.length));
+
     return {
       id:goal.id,kind:goal.kind,text:goal.text,failingCase:goal.failingCase||'',
       hardConstraints:arr(goal.hardConstraints),
@@ -1178,7 +1199,8 @@ async function synthesizeResolvedAnswer({question,goals,threads,client,model,usa
       hypothesisScore:Number(thread?.hypothesisScore||thread?.bestScore||0),
       constraintScores:arr(thread?.bestConstraintChecklist).map(row=>({text:row[0],score:Number(row[1]||0),kind:row[2]})),
       counterfactualValidation:thread?.counterfactualValidation||null,
-      evidence
+      evidence,
+      structuralEvidence
     };
   });
   const call=await modelJson(client,model,ANSWER_SYNTHESIS_SYSTEM,{q:question,goals:packages});addUsage(usage,call.usage);
