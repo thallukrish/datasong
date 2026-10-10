@@ -360,6 +360,50 @@ function causalSemanticNodeView(state,explorer){
   ];
 }
 
+function causalStructuralSupportView(item={},explorer){
+  const support=item?.structuralSupport||{};
+  const entities=arr(support.entities).map(entity=>{
+    const semantic=codeSemanticForState({id:entity.id},explorer)||{};
+    return [
+      entity.operation||'',
+      entity.name||'',
+      text(semantic.effect||semantic.purpose||entity.description||'',140)
+    ];
+  });
+  const flows=arr(support.flows).map(flow=>{
+    const semantic=codeSemanticForState({id:flow.id},explorer)||{};
+    return [
+      flow.name||'',
+      Number(flow.position||0),
+      Number(flow.functionCount||0),
+      text(semantic.purpose||semantic.effect||'',120)
+    ];
+  });
+  return {entities,flows};
+}
+
+function causalHypothesisEvidenceView(contributions=[],explorer){
+  return arr(contributions)
+    .filter(item=>String(item?.claim||'').trim())
+    .map(item=>[
+      item.claim,
+      causalStructuralSupportView(item,explorer)
+    ]);
+}
+
+function selectedStructuralSupport(state,explorer,entityIndexes=[],flowIndexes=[]){
+  const lineage=structuralLineageForState(state,explorer,{maxEntities:4,maxFlows:2});
+  const entities=arr(entityIndexes)
+    .map(Number)
+    .filter(index=>Number.isInteger(index)&&index>=0&&index<lineage.entities.length)
+    .map(index=>lineage.entities[index]);
+  const flows=arr(flowIndexes)
+    .map(Number)
+    .filter(index=>Number.isInteger(index)&&index>=0&&index<lineage.flows.length)
+    .map(index=>lineage.flows[index]);
+  return {entities,flows};
+}
+
 function semanticWindowView(rootState,window,explorer){
   const stateById=new Map(arr(window?.states).map(state=>[state.id,state]));
   const childrenById=new Map();
@@ -777,7 +821,7 @@ async function decide({
     ? {
         q:question,
         g:[activeGoal?.text||'',activeGoal?.failingCase||''],
-        hl:arr(hypothesisContributions).map(item=>item?.claim||'').filter(Boolean),
+        hl:causalHypothesisEvidenceView(hypothesisContributions,explorer),
         ps:Number(previousHypothesisScore||0),
         n:currentState?causalSemanticNodeView(currentState,explorer):null,
         c:candidates.map((state,index)=>[index,...causalSemanticNodeView(state,explorer)]),
@@ -1010,6 +1054,15 @@ async function decide({
       ])
     : '';
 
+  const structuralSupport=activeGoal?.kind==='causal'&&currentContribution&&evidenceRelevance===1
+    ? selectedStructuralSupport(
+        currentState,
+        explorer,
+        call.parsed?.es,
+        call.parsed?.ws
+      )
+    : {entities:[],flows:[]};
+
   const result={
     explained:groundedHardConstraintsMet&&!unresolvedOther,
     assessment,
@@ -1036,11 +1089,12 @@ async function decide({
     causalMechanismWhy:null,
     evidenceReselected,
     evidenceCoverage:sourceBody?evidenceCoverageRatio(currentState,evidenceStates):0,
-    supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[])
+    supportStates:evidenceStates.length?evidenceStates:(currentState?[currentState]:[]),
+    structuralSupport
   };
 
   log('query_v5_decision',{step,mode,payload,modelResponse:call.parsed,result:{
-    explained:result.explained,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,retainedContributionIndexes:result.retainedContributionIndexes,causalHypothesisComplete:result.causalHypothesisComplete,
+    explained:result.explained,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,structuralSupport:result.structuralSupport,retainedContributionIndexes:result.retainedContributionIndexes,causalHypothesisComplete:result.causalHypothesisComplete,
     picks:picks.map(x=>({name:x.state.name,score:x.score})),
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,
     evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,
@@ -1050,7 +1104,7 @@ async function decide({
 
   const displayPath=currentState?[...path,currentState]:path;
   onProgress({
-    action:'DECIDE',step,mode,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,retainedContributionIndexes:result.retainedContributionIndexes,causalHypothesisComplete:result.causalHypothesisComplete,explained:result.explained,
+    action:'DECIDE',step,mode,assessment:result.assessment,evidenceRelevance:result.evidenceRelevance,hypothesis:result.hypothesis,contribution:result.contribution,structuralSupport:result.structuralSupport,retainedContributionIndexes:result.retainedContributionIndexes,causalHypothesisComplete:result.causalHypothesisComplete,explained:result.explained,
     goalScores:result.goalScores,hypothesisScore:result.hypothesisScore,hardConstraintsMet:result.hardConstraintsMet,constraintChecklist:result.constraintChecklist,inspectSource:result.inspectSource,evidenceRanges:result.evidenceRanges,evidenceGrounded:result.evidenceGrounded,causalMechanismGrounded:result.causalMechanismGrounded,causalMechanismScore:result.causalMechanismScore,evidenceReselected:result.evidenceReselected,evidenceCoverage:result.evidenceCoverage,goals:goalView(goals),
     path:displayPath.map(x=>x.name),facts:ledgerView(ledger,{all:true}),
     candidates:picks.map(x=>({id:x.state.id,name:x.state.name,navigation:x.score,targets:x.targets,stage:entryStage?'entry':'semantic'}))
@@ -1887,7 +1941,11 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
               endLine:Number(state.endLine||state.startLine||0),
               sourceGrounded:false,
               evidenceRelevance:Number(decision.evidenceRelevance||0),
-              supportStates:dedupeStates(decision.supportStates||[])
+              supportStates:dedupeStates(decision.supportStates||[]),
+              structuralSupport:{
+                entities:arr(decision.structuralSupport?.entities).map(item=>({...item})),
+                flows:arr(decision.structuralSupport?.flows).map(item=>({...item}))
+              }
             }];
           }
         }
@@ -2054,7 +2112,15 @@ export async function runCodeFlowQueryV5({question,repoUrl,repoCommit='',explore
         startLine:Number(item.startLine||0),
         endLine:Number(item.endLine||item.startLine||0),
         sourceGrounded:item.sourceGrounded===true,
-        evidenceRelevance:Number(item.evidenceRelevance||0)
+        evidenceRelevance:Number(item.evidenceRelevance||0),
+        structuralSupport:{
+          entities:arr(item.structuralSupport?.entities).map(entity=>({
+            id:entity.id||'',operation:entity.operation||'',name:entity.name||''
+          })),
+          flows:arr(item.structuralSupport?.flows).map(flow=>({
+            id:flow.id||'',name:flow.name||'',position:Number(flow.position||0),functionCount:Number(flow.functionCount||0)
+          }))
+        }
       })),
       evidenceRelevance:Number(decision.evidenceRelevance||0),
       hypothesisScore:decision.hypothesisScore,
