@@ -25,6 +25,18 @@ function decodeArray(value) {
   }
 }
 
+function normalizeDetails(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return JSON.stringify(value);
+  }
+  try {
+    const parsed = JSON.parse(String(value || '{}'));
+    return JSON.stringify(parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {});
+  } catch {
+    return '{}';
+  }
+}
+
 function addParallelLink(row, targetRow, relationship) {
   if (!row || !targetRow || !relationship) return;
   const links = decodeArray(row.links);
@@ -41,18 +53,26 @@ function normalizeExistingRows(rows) {
   return arr(rows)
     .filter((row) => !['entity', 'workflow'].includes(String(row?.type || '')))
     .map((row) => {
-    const normalized = {
-      ...row,
-      links: emptyPalArray(),
-      relationships: emptyPalArray(),
-      flowRows: emptyPalArray(),
-      features: row?.features || emptyPalArray(),
-      details: row?.details || ''
-    };
-    for (const child of decodeArray(row?.children)) addParallelLink(normalized, child, 'contains');
-    for (const callee of decodeArray(row?.callees)) addParallelLink(normalized, callee, 'calls');
-    return normalized;
-  });
+      const normalized = {
+        row: Number(row?.row || 0),
+        file: String(row?.file || ''),
+        line_range: String(row?.line_range || ''),
+        type: String(row?.type || ''),
+        name: String(row?.name || ''),
+        links: encodePalArray(decodeArray(row?.links)),
+        relationships: encodePalArray(decodeArray(row?.relationships)),
+        details: normalizeDetails(row?.details)
+      };
+
+      // Backward compatibility for pre-v3 in-memory rows while the caller is
+      // being upgraded. These fields are never emitted in the final CSV.
+      if (decodeArray(row?.links).length === 0) {
+        for (const child of decodeArray(row?.children)) addParallelLink(normalized, child, 'contains');
+        for (const callee of decodeArray(row?.callees)) addParallelLink(normalized, callee, 'calls');
+      }
+
+      return normalized;
+    });
 }
 
 function existingNodeRows(rows) {
@@ -83,9 +103,7 @@ function rowForGraphNode(node, indexes) {
   const exact = indexes.spanRows.get(
     rowKey(node.details?.sourcePath, node.details?.startLine, node.details?.endLine)
   ) || [];
-  if (exact.length) return exact[0];
-
-  return 0;
+  return exact[0] || 0;
 }
 
 function sourceRowForLink(link, indexes, graphNodeById) {
@@ -134,21 +152,8 @@ export function materializeStructuralEvidenceRows({
       line_range: '',
       type: 'entity',
       name: String(node.details?.name || node.id),
-      parent: '',
-      children: emptyPalArray(),
-      callers: emptyPalArray(),
-      callees: emptyPalArray(),
       links: emptyPalArray(),
       relationships: emptyPalArray(),
-      flowRows: emptyPalArray(),
-      features: encodePalArray([
-        ...(node.details?.aliases || []),
-        ...(node.details?.annotations || []),
-        ...(node.details?.origins || []),
-        ...(node.details?.members || []),
-        ...(node.details?.methods || []),
-        ...(node.details?.keys || [])
-      ]),
       details: JSON.stringify({
         kind: node.details?.kind || '',
         aliases: node.details?.aliases || [],
@@ -191,16 +196,13 @@ export function materializeStructuralEvidenceRows({
       line_range: '',
       type: 'workflow',
       name: String(node.details?.name || node.id),
-      parent: '',
-      children: emptyPalArray(),
-      callers: emptyPalArray(),
-      callees: emptyPalArray(),
       links: encodePalArray(workflowLinks),
       relationships: encodePalArray(workflowLinks.map(() => 'contains')),
-      flowRows: encodePalArray(workflowLinks),
-      features: emptyPalArray(),
       details: JSON.stringify({
+        flowRows: functionRows,
         callPathId: node.details?.callPathId || '',
+        entryFunctionId: node.details?.entryFunctionId || '',
+        exitFunctionId: node.details?.exitFunctionId || '',
         functionCount: Number(node.details?.functionCount || functionRows.length),
         entityCount: Number(node.details?.entityCount || 0),
         branchVariantCount: Number(node.details?.branchVariantCount || 0),
