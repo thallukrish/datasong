@@ -4,7 +4,13 @@ import crypto from 'node:crypto';
 import simpleGit from 'simple-git';
 import { createIndexesFromRows } from 'pal-executor-lib/indexing';
 import { analyzePythonRepository } from './languages/python/adapter.js';
-import { STRUCTURAL_PAL_COLUMNS, STRUCTURAL_PAL_MULTI_VALUE_COLUMNS } from './semantics/code/structuralPalSchema.js';
+import {
+  STRUCTURAL_PAL_COLUMNS,
+  STRUCTURAL_PAL_EXCLUDE_COLUMNS,
+  STRUCTURAL_PAL_MULTI_VALUE_COLUMNS,
+  STRUCTURAL_PAL_COLUMN_TYPES,
+  STRUCTURAL_PAL_SCHEMA_VERSION
+} from './semantics/code/structuralPalSchema.js';
 
 const CODE_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.java', '.kt', '.kts', '.py', '.rb', '.go', '.rs', '.cs',
@@ -17,7 +23,7 @@ const MAX_NEIGHBORS = 18;
 const MAX_SEARCH_RESULTS = 12;
 const MAX_ENTRY_SYMBOLS = 24;
 const MAX_README_CHARS = 5000;
-const CONSTRUCT_INDEX_SCHEMA_VERSION = 2;
+const CONSTRUCT_INDEX_SCHEMA_VERSION = STRUCTURAL_PAL_SCHEMA_VERSION;
 const PYTHON_ANALYZER_VERSION = 12;
 
 function normalizeRepoUrl(repoUrl) {
@@ -514,9 +520,10 @@ export class CodeTopology {
 
   buildPalIndexes(rows=[]) {
     return createIndexesFromRows(rows, {
-      headers:STRUCTURAL_PAL_COLUMNS,
-      excludeColumns:['row'],
-      multiValueColumns:STRUCTURAL_PAL_MULTI_VALUE_COLUMNS
+      headers: STRUCTURAL_PAL_COLUMNS,
+      excludeColumns: STRUCTURAL_PAL_EXCLUDE_COLUMNS,
+      multiValueColumns: STRUCTURAL_PAL_MULTI_VALUE_COLUMNS,
+      columnTypes: STRUCTURAL_PAL_COLUMN_TYPES
     });
   }
 
@@ -574,60 +581,61 @@ export class CodeTopology {
 
     const rowByFactId = new Map(facts.map((fact, index) => [fact.factId, index + 1]));
     const rows = facts.map((fact, index) => {
-      const start = Number(fact.startLine || 0);
-      const end = Number(fact.endLine || start);
-      const children = (Array.isArray(fact.childFactIds) ? fact.childFactIds : [])
-        .map((id) => rowByFactId.get(id))
-        .filter(Boolean)
-        .sort((a, b) => a - b);
+      const startLine = Number(fact.startLine || 0);
+      const endLine = Number(fact.endLine || startLine);
       return {
         row: index + 1,
         file: String(fact.sourcePath || ''),
-        line_range: start === end ? String(start) : `${start}-${end}`,
+        line_range: startLine === endLine ? String(startLine) : `${startLine}-${endLine}`,
         type: String(fact.type || ''),
         name: String(fact.name || ''),
-        parent: rowByFactId.get(fact.parentFactId) || '',
-        children: JSON.stringify(children.map(String)),
-        callers: '[]',
-        callees: '[]'
+        links: '[]',
+        relationships: '[]',
+        details: '{}'
       };
     });
+
+    const addLink = (sourceRow, targetRow, relationship) => {
+      if (!sourceRow || !targetRow || !relationship) return;
+      const source = rows[Number(sourceRow) - 1];
+      if (!source) return;
+      const links = JSON.parse(source.links || '[]');
+      const relationships = JSON.parse(source.relationships || '[]');
+      const target = String(targetRow);
+      if (links.some((value, index) => value === target && relationships[index] === relationship)) return;
+      links.push(target);
+      relationships.push(String(relationship));
+      source.links = JSON.stringify(links);
+      source.relationships = JSON.stringify(relationships);
+    };
+
+    for (const fact of facts) {
+      const childRow = rowByFactId.get(fact.factId);
+      const parentRow = rowByFactId.get(fact.parentFactId);
+      if (parentRow && childRow) addLink(parentRow, childRow, 'contains');
+    }
 
     const functionRowByLocation = new Map();
     for (const row of rows) {
       if (row.type !== 'function') continue;
-      const start = Number(String(row.line_range).split('-')[0] || 0);
-      functionRowByLocation.set(`${row.file}:${start}`, row.row);
+      const firstLine = Number(String(row.line_range).split('-')[0] || 0);
+      functionRowByLocation.set(`${row.file}:${firstLine}`, row.row);
     }
 
     const symbols = Array.isArray(analysis?.symbols) ? analysis.symbols : [];
     const symbolById = new Map(symbols.filter((symbol) => symbol?.id).map((symbol) => [symbol.id, symbol]));
-    const callers = new Map();
-    const callees = new Map();
-    const addRelation = (map, from, to) => {
-      if (!from || !to) return;
-      if (!map.has(from)) map.set(from, new Set());
-      map.get(from).add(to);
-    };
-
     for (const symbol of symbols) {
       const sourceRow = functionRowByLocation.get(`${symbol.sourcePath}:${Number(symbol.startLine || 0)}`);
       if (!sourceRow) continue;
       for (const ref of Array.isArray(symbol.references) ? symbol.references : []) {
-        if (!ref?.targetSymbolId) continue;
+        if (ref?.relation !== 'calls' || !ref?.targetSymbolId) continue;
         const target = symbolById.get(ref.targetSymbolId);
         if (!target) continue;
         const targetRow = functionRowByLocation.get(`${target.sourcePath}:${Number(target.startLine || 0)}`);
-        if (!targetRow) continue;
-        addRelation(callees, sourceRow, targetRow);
-        addRelation(callers, targetRow, sourceRow);
+        if (targetRow) addLink(sourceRow, targetRow, 'calls');
       }
     }
 
-    for (const row of rows) {
-      row.callers = JSON.stringify([...(callers.get(row.row) || [])].sort((a, b) => a - b).map(String));
-      row.callees = JSON.stringify([...(callees.get(row.row) || [])].sort((a, b) => a - b).map(String));
-    }
     return rows;
   }
 
@@ -682,7 +690,6 @@ export class CodeTopology {
       const out = {};
       headers.forEach((header, index) => { out[header] = values[index] ?? ''; });
       out.row = Number(out.row || 0);
-      out.parent = out.parent === '' ? '' : Number(out.parent || 0);
       return out;
     });
   }
