@@ -21,6 +21,23 @@ test('causal semantic prompt has one binary local decision and one accumulated s
   assert.match(CAUSAL_DECIDE_SYSTEM,/search prediction only/);
 });
 
+
+test('causal hl and hs retain deterministic entity and workflow provenance',()=>{
+  assert.match(CAUSAL_DECIDE_SYSTEM,/Each item is:\n\[claim,structuralSupport\]/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/return their zero-based indexes in es/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/return their zero-based indexes in ws/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/hs scores exactly: retained hl\[k\] \+ hc, including the deterministic structuralSupport/);
+  assert.match(CAUSAL_DECIDE_SYSTEM,/"es":\[\],"ws":\[\]/);
+
+  assert.match(engine,/hl:causalHypothesisEvidenceView\(hypothesisContributions,explorer\)/);
+  assert.match(engine,/call\.parsed\?\.es/);
+  assert.match(engine,/call\.parsed\?\.ws/);
+  assert.match(engine,/structuralSupport:\{/);
+  assert.match(engine,/entities:arr\(decision\.structuralSupport\?\.entities\)/);
+  assert.match(engine,/flows:arr\(decision\.structuralSupport\?\.flows\)/);
+  assert.match(engine,/structuralEvidence=contributions\.map/);
+});
+
 test('causal traversal has no per-node source prompt or source payload',()=>{
   assert.doesNotMatch(engine,/CAUSAL_SOURCE_SYSTEM/);
   const causalPayloadStart=engine.indexOf('const payload=causal');
