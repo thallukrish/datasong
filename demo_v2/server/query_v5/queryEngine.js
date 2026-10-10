@@ -1,5 +1,6 @@
 import { addUsage, arr, modelJson, text } from '../query_v2/modelJson.js';
 import { ensureLocalSemanticWindow, codeSemanticForState } from '../semantics/code/localSemanticLearner.js';
+import { structuralLineageForState } from '../semantics/code/structuralLineage.js';
 import { selectCodeEntries } from './codeEntrySelector.js';
 import { CAUSAL_DECIDE_SYSTEM, GOAL_DECIDE_SYSTEM } from './goalDecisionPrompt.js';
 import { causalHypothesisText, evaluateCausalContribution, retainCausalContributions } from './causalEvidence.js';
@@ -299,6 +300,34 @@ function fallbackCodeEntries(topology, limit=40) {
 }
 
 
+function semanticLineageView(state,explorer,{causal=false}={}){
+  if(!['code_symbol','code_region'].includes(String(state?.type||'')))return null;
+  const lineage=structuralLineageForState(state,explorer,{maxEntities:causal?4:5,maxFlows:causal?2:3});
+
+  const entities=arr(lineage.entities).map(item=>{
+    const semantic=codeSemanticForState({id:item.id},explorer)||{};
+    const description=text(
+      semantic.effect||semantic.purpose||item.description||'',
+      causal?120:180
+    );
+    return [item.operation||'',item.name||'',description];
+  });
+
+  const flows=arr(lineage.flows).map(item=>{
+    const semantic=codeSemanticForState({id:item.id},explorer)||{};
+    const description=text(semantic.purpose||semantic.effect||'',causal?100:150);
+    return [
+      item.name||'',
+      Number(item.position||0),
+      Number(item.functionCount||0),
+      description
+    ];
+  });
+
+  if(!entities.length&&!flows.length)return null;
+  return {entities,flows};
+}
+
 function semanticNodeView(state,explorer){
   const semantic=codeSemanticForState(state,explorer)||{};
   const structuralType=state?.type==='code_region'
@@ -306,7 +335,13 @@ function semanticNodeView(state,explorer){
     : state?.type==='code_symbol'
       ? 'function'
       : state?.type||'';
-  return [structuralType,state?.name||'',text(semantic.purpose||'',320),text(semantic.effect||'',280)];
+  return [
+    structuralType,
+    state?.name||'',
+    text(semantic.purpose||'',320),
+    text(semantic.effect||'',280),
+    semanticLineageView(state,explorer)
+  ];
 }
 
 function causalSemanticNodeView(state,explorer){
@@ -316,7 +351,13 @@ function causalSemanticNodeView(state,explorer){
     : state?.type==='code_symbol'
       ? 'function'
       : state?.type||'';
-  return [structuralType,state?.name||'',text(semantic.purpose||'',180),text(semantic.effect||'',180)];
+  return [
+    structuralType,
+    state?.name||'',
+    text(semantic.purpose||'',180),
+    text(semantic.effect||'',180),
+    semanticLineageView(state,explorer,{causal:true})
+  ];
 }
 
 function semanticWindowView(rootState,window,explorer){
