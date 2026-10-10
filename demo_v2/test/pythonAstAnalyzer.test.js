@@ -175,15 +175,23 @@ def build(x):
   const helperCall = rows.find((row) => row.type === 'call' && row.name === 'helper');
 
   assert.ok(moduleRegion);
-  assert.equal(moduleRegion.parent, '');
   assert.ok(functionRegion);
-  assert.equal(functionRegion.parent, buildRow.row);
-  assert.equal(valueRow.parent, functionRegion.row);
-  assert.equal(ifRow.parent, buildRow.row);
   assert.equal(nestedRegion, undefined);
-  assert.equal(trailingRegion.parent, buildRow.row);
-  assert.equal(rows.find((row) => row.type === 'assignment' && row.name === 'result').parent, ifRow.row);
-  assert.equal(helperCall.parent, ifRow.row);
+
+  const linksFor = (row) => JSON.parse(row?.links || '[]');
+  const relsFor = (row) => JSON.parse(row?.relationships || '[]');
+  const hasEdge = (row, target, relationship) => {
+    const links = linksFor(row);
+    const rels = relsFor(row);
+    return links.some((value, index) => value === String(target?.row) && rels[index] === relationship);
+  };
+
+  assert.ok(hasEdge(buildRow, functionRegion, 'contains'));
+  assert.ok(hasEdge(functionRegion, valueRow, 'contains'));
+  assert.ok(hasEdge(buildRow, ifRow, 'contains'));
+  assert.ok(hasEdge(buildRow, trailingRegion, 'contains'));
+  assert.ok(hasEdge(ifRow, rows.find((row) => row.type === 'assignment' && row.name === 'result'), 'contains'));
+  assert.ok(hasEdge(ifRow, helperCall, 'contains'));
 });
 
 test('CodeTopology persists structural CSV with JSON-array relation cells', async (t) => {
@@ -212,7 +220,7 @@ def parent(a, b):
   assert.ok(topology.constructIndexMeta?.csvPath);
   assert.ok(Number(topology.constructIndexMeta?.csvRowCount || 0) > 0);
   const csv = await fs.readFile(topology.constructIndexMeta.csvPath, 'utf8');
-  assert.match(csv, /^row,file,line_range,type,name,parent,children,callers,callees/m);
+  assert.match(csv, /^row,file,line_range,type,name,links,relationships,details/m);
   assert.match(csv, /,function,parent,/);
   assert.match(csv, /,input_param,a,/);
   assert.match(csv, /"\[""[0-9]+""/);
@@ -232,10 +240,16 @@ def parent(a, b):
   const childRow = topology.codeStructureRows.find((row) => row.type === 'function' && row.name === 'child');
   assert.ok(parentRow);
   assert.ok(childRow);
-  assert.ok(uniqueIndex.callees.includes(String(childRow.row)));
-  assert.ok(valuesIndex.callees.some((entry) => entry[1] === String(childRow.row)));
-  assert.ok(uniqueIndex.callers.includes(String(parentRow.row)));
-  assert.ok(valuesIndex.callers.some((entry) => entry[1] === String(parentRow.row)));
+  assert.ok(uniqueIndex.links.includes(String(childRow.row)));
+  assert.ok(valuesIndex.links.some((entry) => entry[1] === String(childRow.row)));
+  assert.ok(uniqueIndex.relationships.includes('calls'));
+  assert.ok(valuesIndex.relationships.some((entry) => entry[1] === 'calls'));
+
+  const parentLinks = JSON.parse(parentRow.links);
+  const parentRelationships = JSON.parse(parentRow.relationships);
+  assert.ok(parentLinks.some((value, index) =>
+    value === String(childRow.row) && parentRelationships[index] === 'calls'
+  ));
 });
 
 test('CodeTopology reuses same-commit structural CSV cache without a duplicated AST snapshot', async (t) => {
