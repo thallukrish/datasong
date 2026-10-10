@@ -4,7 +4,7 @@ import { CallPathIndexerV3 } from '../server/callPathIndexerV3.js';
 
 function topologyFor(edges) {
   const ids = [...new Set([...Object.keys(edges), ...Object.values(edges).flat()])];
-  const symbols = ids.map((id) => ({ id, name: id, simpleName: id, signature: `${id}()`, sourcePath: 'synthetic.js', references: [] }));
+  const symbols = ids.map((id) => ({ id, name: id, simpleName: id, signature: `${id}()`, sourcePath: 'synthetic.js', executable: true, references: [] }));
   const byId = new Map(symbols.map((symbol) => [symbol.id, symbol]));
   return {
     symbols,
