@@ -70,6 +70,76 @@ export function materializeCodeStructure(explorer,states=[]){
   return graph(explorer);
 }
 
+export function materializeStructuralLineage(explorer,state,lineage={}){
+  const codeNode=graphNode(explorer,state?.id);
+  if(!codeNode)return;
+
+  for(const item of arr(lineage.entities)){
+    const entity=upsert(explorer,{
+      id:item.id,
+      type:'entity',
+      name:item.name||item.id,
+      data:{details:{
+        structural:{
+          row:Number(item.row||0),
+          description:item.description||'',
+          ...(item.details||{})
+        },
+        semantic:{}
+      }},
+      links:[]
+    });
+    if(entity){
+      mergeLinks(codeNode,[{nodeId:entity.id,relationship:item.operation||'read'}]);
+      mergeLinks(entity,[{nodeId:codeNode.id,relationship:'used-by'}]);
+    }
+  }
+
+  for(const item of arr(lineage.flows)){
+    const workflow=upsert(explorer,{
+      id:item.id,
+      type:'workflow',
+      name:item.name||item.id,
+      data:{details:{
+        structural:{
+          row:Number(item.row||0),
+          position:Number(item.position||0),
+          functionCount:Number(item.functionCount||0),
+          branchVariantCount:Number(item.branchVariantCount||0),
+          alternateEntranceCount:Number(item.alternateEntranceCount||0)
+        },
+        semantic:{}
+      }},
+      links:[]
+    });
+    if(workflow){
+      mergeLinks(workflow,[{nodeId:codeNode.id,relationship:'contains'}]);
+      mergeLinks(codeNode,[{nodeId:workflow.id,relationship:'in-flow'}]);
+    }
+  }
+}
+
+export function applyStructuralSemantics(explorer,{entities=[],workflows=[]}={}){
+  for(const item of arr(entities)){
+    const node=graphNode(explorer,item.entityId);
+    if(node)node.data.details.semantic={
+      ...(node.data.details.semantic||{}),
+      purpose:item.purpose||'',
+      effect:item.effect||'',
+      learned:true
+    };
+  }
+  for(const item of arr(workflows)){
+    const node=graphNode(explorer,item.workflowId);
+    if(node)node.data.details.semantic={
+      ...(node.data.details.semantic||{}),
+      purpose:item.purpose||'',
+      effect:item.effect||'',
+      learned:true
+    };
+  }
+}
+
 export function applyCodeSemantics(explorer,{symbols=[],regions=[],externalCalls=[]}={}){
   for(const item of arr(symbols)){const node=graphNode(explorer,item.symbolId);if(node)node.data.details.semantic={...(node.data.details.semantic||{}),purpose:item.purpose||'',effect:item.effect||'',learned:true}}
   for(const item of arr(regions)){const node=graphNode(explorer,item.regionId);if(node)node.data.details.semantic={...(node.data.details.semantic||{}),purpose:item.purpose||'',effect:item.effect||'',learned:true}}
