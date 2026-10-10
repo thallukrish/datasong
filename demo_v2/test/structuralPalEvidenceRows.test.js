@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { materializeStructuralEvidenceRows } from '../server/semantics/code/structuralPalEvidenceRows.js';
 
-test('unified PAL rows keep links and relationships parallel and workflow flowRows ordered', () => {
+test('unified PAL rows use minimal schema with parallel links and workflow flowRows in details', () => {
   const baseRows = [
     { row:1, file:'a.py', line_range:'1-5', type:'function', name:'A', parent:'', children:'[]', callers:'[]', callees:'["2"]' },
     { row:2, file:'b.py', line_range:'10-15', type:'function', name:'B', parent:'', children:'[]', callers:'["1"]', callees:'[]' },
@@ -64,7 +64,19 @@ test('unified PAL rows keep links and relationships parallel and workflow flowRo
   const regionRelationships = JSON.parse(region.relationships);
   assert.ok(regionLinks.some((value, index) => value === String(entity.row) && regionRelationships[index] === 'update'));
 
-  assert.deepEqual(JSON.parse(workflow.flowRows), ['1','2']);
   assert.deepEqual(JSON.parse(workflow.links), ['1','2']);
   assert.deepEqual(JSON.parse(workflow.relationships), ['contains','contains']);
+  assert.deepEqual(JSON.parse(workflow.details).flowRows, [1,2]);
+
+  const expectedColumns = ['row','file','line_range','type','name','links','relationships','details'];
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row), expectedColumns);
+    assert.equal(JSON.parse(row.links).length, JSON.parse(row.relationships).length);
+    assert.equal('parent' in row, false);
+    assert.equal('children' in row, false);
+    assert.equal('callers' in row, false);
+    assert.equal('callees' in row, false);
+    assert.equal('flowRows' in row, false);
+    assert.equal('features' in row, false);
+  }
 });
