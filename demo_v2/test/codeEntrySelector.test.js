@@ -109,7 +109,7 @@ test('PAL FILTER wildcard type searches all construct types', async () => {
   assert.equal(hits.length,2);
 });
 
-test('LeMap suffix wildcard expands from PAL unique values then FILTERs exact values', async () => {
+test('LeMap trailing wildcard performs prefix expansion from PAL unique values', async () => {
   const topology={
     codeStructureRows:[
       {row:1,file:'x.py',line_range:'10-20',type:'function',name:'validate_user',parent:'',children:'[]'},
@@ -129,8 +129,8 @@ test('LeMap suffix wildcard expands from PAL unique values then FILTERs exact va
     externalSymbols:[]
   };
   const hits=await scanCodeStructureRowsWithPal({topology,locators:[{type:'function',name:'validate*'}]});
-  assert.equal(hits.length,2);
-  assert.deepEqual(new Set(hits.map(hit=>hit.symbolId)),new Set(['a','b']));
+  assert.equal(hits.length,1);
+  assert.deepEqual(new Set(hits.map(hit=>hit.symbolId)),new Set(['a']));
 });
 
 test('regex fallback maps source matches to enclosing symbols and ranks production above tests', async () => {
