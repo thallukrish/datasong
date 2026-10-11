@@ -4,6 +4,7 @@ import { createMoquiAdapters } from './adapters/moqui/index.js';
 import { analyzePythonRepository } from './languages/python/adapter.js';
 import { buildWorkflowGraph, mergeStructuralEvidenceNodes } from './semantics/code/structuralEvidenceGraph.js';
 import { materializeStructuralEvidenceRows } from './semantics/code/structuralPalEvidenceRows.js';
+import { buildCompactCallFlows } from './semantics/code/compactCallFlows.js';
 
 const identityKey = (value = '') => String(value || '')
   .normalize('NFKC')
@@ -88,15 +89,16 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
   }
 
   async persistPythonStructuralEvidence({ logPrefix='repo-prepare' } = {}) {
-    const t = Date.now();
-
-    this.callPathIndex = this.callPathIndexer.build();
-    console.log(`[${logPrefix}] call-path index ${Date.now()-t}ms ranked=${this.callPathIndex.rankedPathCount} grouped=${this.callPathIndex.groupedPathCount}`);
+    const flowStarted = Date.now();
+    const compactFlows = buildCompactCallFlows({ symbols:this.symbols });
+    console.log(
+      `[${logPrefix}] compact flow graph ${Date.now()-flowStarted}ms ` +
+      `functions=${compactFlows.functionCount} edges=${compactFlows.edgeCount} flows=${compactFlows.paths.length}`
+    );
 
     const workflowStarted = Date.now();
-    const groupedPaths = this.callPathIndexer.top(Number.MAX_SAFE_INTEGER);
     const workflowGraph = buildWorkflowGraph({
-      groupedPaths,
+      groupedPaths: compactFlows.paths,
       symbols: this.symbols,
       entityLinks: this.pythonEntityLinks
     });
@@ -148,6 +150,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
       entityLinkCount:this.pythonEntityLinks.length,
       workflowNodeCount:this.workflowGraphNodes.length,
       workflowLinkCount:this.workflowLinks.length,
+      compactFlowCount:compactFlows.paths.length,
+      compactFlowEdgeCount:compactFlows.edgeCount,
       csvPath:this.codeStructureCsvPath('python')
     };
   }
