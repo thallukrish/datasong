@@ -51,7 +51,105 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.symbolById.clear();
     this.nameIndex.clear();
     this.callers.clear();
-    return super.prepareIndexOnly(repoUrl);
+
+    const prep = await super.prepareIndexOnly(repoUrl);
+    if (!Array.isArray(this.files) || !this.files.some(file => String(file).toLowerCase().endsWith('.py'))) {
+      return prep;
+    }
+
+    const startedAt = Date.now();
+    const pythonAst = await this.augmentPythonAstGraph();
+    console.log(`[profile-index] python structural graph hydrated ${Date.now()-startedAt}ms symbols=${pythonAst.symbolCount} entities=${this.pythonDataGraphNodes.filter(node=>node?.type==='entity').length}`);
+
+    const structuralEvidence = await this.persistPythonStructuralEvidence({
+      logPrefix:'profile-index'
+    });
+
+    const constructIndex = this.constructIndexMeta ? {
+      status:this.constructIndexMeta.status,
+      language:this.constructIndexMeta.language,
+      recordCount:this.constructIndexMeta.recordCount,
+      csvRowCount:this.constructIndexMeta.csvRowCount,
+      reused:!!this.constructIndexMeta.reused,
+      commit:this.constructIndexMeta.commit,
+      schemaVersion:this.constructIndexMeta.schemaVersion,
+      analyzerVersion:this.constructIndexMeta.analyzerVersion,
+      incremental:!!this.constructIndexMeta.incremental,
+      incrementalFrom:this.constructIndexMeta.incrementalFrom||'',
+      affectedFiles:Array.isArray(this.constructIndexMeta.affectedFiles)?this.constructIndexMeta.affectedFiles:[]
+    } : prep?.constructIndex;
+
+    return {
+      ...prep,
+      pythonAst,
+      structuralEvidence,
+      constructIndex
+    };
+  }
+
+  async persistPythonStructuralEvidence({ logPrefix='repo-prepare' } = {}) {
+    const t = Date.now();
+
+    this.callPathIndex = this.callPathIndexer.build();
+    console.log(`[${logPrefix}] call-path index ${Date.now()-t}ms ranked=${this.callPathIndex.rankedPathCount} grouped=${this.callPathIndex.groupedPathCount}`);
+
+    const workflowStarted = Date.now();
+    const groupedPaths = this.callPathIndexer.top(Number.MAX_SAFE_INTEGER);
+    const workflowGraph = buildWorkflowGraph({
+      groupedPaths,
+      symbols: this.symbols,
+      entityLinks: this.pythonEntityLinks
+    });
+
+    this.workflowGraphNodes = workflowGraph.nodes;
+    this.workflowLinks = workflowGraph.workflowLinks;
+    this.structuralEvidenceNodes = mergeStructuralEvidenceNodes(
+      this.pythonDataGraphNodes,
+      this.workflowGraphNodes
+    );
+
+    this.codeStructureRows = materializeStructuralEvidenceRows({
+      baseRows: this.codeStructureRows,
+      entityNodes: this.pythonDataGraphNodes,
+      entityLinks: this.pythonEntityLinks,
+      workflowNodes: this.workflowGraphNodes
+    });
+
+    const csvPath = await this.persistCodeStructureCsv({
+      language:'python',
+      rows:this.codeStructureRows
+    });
+    const palPaths = await this.persistPalIndexes({
+      language:'python',
+      rows:this.codeStructureRows
+    });
+
+    if (this.constructIndexMeta) {
+      this.constructIndexMeta = {
+        ...this.constructIndexMeta,
+        csvPath,
+        uniqueIndexPath:palPaths.uniqueIndexPath,
+        valuesIndexPath:palPaths.valuesIndexPath,
+        csvRowCount:this.codeStructureRows.length,
+        recordCount:this.codeStructureRows.length
+      };
+    }
+
+    console.log(
+      `[${logPrefix}] structural entity/workflow evidence ${Date.now()-workflowStarted}ms ` +
+      `entities=${this.pythonDataGraphNodes.filter(node=>node?.type==='entity').length} ` +
+      `entityLinks=${this.pythonEntityLinks.length} workflows=${this.workflowGraphNodes.length} ` +
+      `workflowLinks=${this.workflowLinks.length} rows=${this.codeStructureRows.length}`
+    );
+
+    return {
+      nodeCount:this.structuralEvidenceNodes.length,
+      entityNodeCount:this.pythonDataGraphNodes.filter(node=>node?.type==='entity').length,
+      entityLinkCount:this.pythonEntityLinks.length,
+      workflowNodeCount:this.workflowGraphNodes.length,
+      workflowLinkCount:this.workflowLinks.length,
+      csvPath:this.codeStructureCsvPath('python')
+    };
   }
 
   async prepareCodeQuery(repoUrl) {
@@ -125,53 +223,15 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     }
 
     t=Date.now();
-    this.callPathIndex = this.callPathIndexer.build();
-    console.log(`[repo-prepare] call-path index ${Date.now()-t}ms ranked=${this.callPathIndex.rankedPathCount} grouped=${this.callPathIndex.groupedPathCount}`);
-
-    t=Date.now();
-    const workflowGraph = buildWorkflowGraph({
-      groupedPaths: this.callPathIndexer.top(Number.MAX_SAFE_INTEGER),
-      symbols: this.symbols,
-      entityLinks: this.pythonEntityLinks
+    const structuralEvidence = await this.persistPythonStructuralEvidence({
+      logPrefix:'repo-prepare'
     });
-    this.workflowGraphNodes = workflowGraph.nodes;
-    this.workflowLinks = workflowGraph.workflowLinks;
-    this.structuralEvidenceNodes = mergeStructuralEvidenceNodes(
-      this.pythonDataGraphNodes,
-      this.workflowGraphNodes
-    );
-    this.codeStructureRows = materializeStructuralEvidenceRows({
-      baseRows: this.codeStructureRows,
-      entityNodes: this.pythonDataGraphNodes,
-      entityLinks: this.pythonEntityLinks,
-      workflowNodes: this.workflowGraphNodes
-    });
-    const csvPath = await this.persistCodeStructureCsv({ language:'python', rows:this.codeStructureRows });
-    const palPaths = await this.persistPalIndexes({ language:'python', rows:this.codeStructureRows });
-    if (this.constructIndexMeta) {
-      this.constructIndexMeta = {
-        ...this.constructIndexMeta,
-        csvPath,
-        uniqueIndexPath:palPaths.uniqueIndexPath,
-        valuesIndexPath:palPaths.valuesIndexPath,
-        csvRowCount:this.codeStructureRows.length,
-        recordCount:this.codeStructureRows.length
-      };
-    }
-    console.log(`[repo-prepare] structural entity/workflow evidence ${Date.now()-t}ms entities=${this.pythonDataGraphNodes.filter((node)=>node?.type==='entity').length} workflows=${this.workflowGraphNodes.length} rows=${this.codeStructureRows.length}`);
 
     console.log(`[repo-prepare] DONE ${Date.now()-startedAt}ms`);
     return {
       ...prep,
       pythonAst,
-      structuralEvidence: {
-        nodeCount: this.structuralEvidenceNodes.length,
-        entityNodeCount: this.pythonDataGraphNodes.filter((node) => node?.type === 'entity').length,
-        entityLinkCount: this.pythonEntityLinks.length,
-        workflowNodeCount: this.workflowGraphNodes.length,
-        workflowLinkCount: this.workflowLinks.length,
-        csvPath: this.codeStructureCsvPath('python')
-      },
+      structuralEvidence,
       moquiEntitySchema: this.moquiEntitySchema,
       moquiXmlExecution: this.moquiXmlExecution,
       callPathIndex: {
