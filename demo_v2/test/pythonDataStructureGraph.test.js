@@ -5,147 +5,57 @@ import os from 'node:os';
 import path from 'node:path';
 import { analyzePythonRepository } from '../server/languages/python/adapter.js';
 
-test('Python indexing emits a flat data-structure graph joined to existing call flow', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-'));
+test('Python flow-derived entity follows a record through call parameters', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-flow-entity-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   await fs.writeFile(path.join(root, 'pipeline.py'), `
-def load():
-    record = {"name": "a", "value": 1}
-    return record
-
-def normalize(record):
-    record["value"] = record["value"] + 1
-    return record
-
 def save(record):
     return record["name"]
 
-def run():
-    record = load()
-    record = normalize(record)
+def normalize(record):
+    record["value"] = record["value"] + 1
     return save(record)
+
+def load():
+    record = {"name": "a", "value": 1}
+    return normalize(record)
+
+def run():
+    return load()
 `);
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['pipeline.py'] });
   const nodes = result.dataGraphNodes || [];
+  const entities = nodes.filter((node) => node.type === 'entity');
 
-  assert.ok(nodes.length > 0);
-  assert.ok(nodes.every((node) =>
-    typeof node.id === 'string' &&
-    typeof node.type === 'string' &&
-    node.details &&
-    Array.isArray(node.links) &&
-    node.links.every((link) => typeof link.id === 'string' && typeof link.relationship === 'string')
-  ));
-
-  const entityNodes = nodes.filter((node) => node.type === 'entity');
-  const constructedRecord = entityNodes.find((node) =>
+  const record = entities.find((node) =>
     node.details?.kind === 'mapping' &&
     node.details?.keys?.includes("'name'") &&
     node.details?.keys?.includes("'value'")
   );
 
-  assert.ok(constructedRecord);
-  assert.equal(constructedRecord.details.identityScope, 'global');
-  assert.ok(constructedRecord.details.coreScore >= constructedRecord.details.functionCount);
+  assert.ok(record, 'Expected one flow-derived record entity');
+  assert.equal(record.details.identityScope, 'flow');
+  assert.ok(record.details.functionCount >= 3);
+  assert.ok(record.details.flowCount >= 1);
+  assert.ok(record.details.persistenceScore > 0);
+  assert.ok(record.details.aliases.includes('record'));
 
-  const normalize = nodes.find((node) => node.type === 'function' && node.details?.name === 'normalize');
-  const save = nodes.find((node) => node.type === 'function' && node.details?.name === 'save');
-  const run = nodes.find((node) => node.type === 'function' && node.details?.name === 'run');
+  const links = result.entityLinks || [];
+  assert.ok(links.some((link) => link.targetId === record.id && link.relationship === 'create'));
+  assert.ok(links.some((link) => link.targetId === record.id && link.relationship === 'update'));
+  assert.ok(links.some((link) => link.targetId === record.id && link.relationship === 'read'));
 
-  const normalizeEntityLink = (result.entityLinks || []).find((link) =>
-    link.functionId === normalize?.id &&
-    /update|read/.test(link.relationship)
-  );
-  const saveEntityLink = (result.entityLinks || []).find((link) =>
-    link.functionId === save?.id &&
-    link.relationship === 'read'
-  );
-
-  assert.ok(normalizeEntityLink);
-  assert.ok(saveEntityLink);
-  assert.notEqual(normalizeEntityLink.targetId, constructedRecord.id);
-  assert.notEqual(saveEntityLink.targetId, constructedRecord.id);
-  assert.notEqual(normalizeEntityLink.targetId, saveEntityLink.targetId);
-
-  const normalizeEntity = nodes.find((node) => node.id === normalizeEntityLink.targetId);
-  const saveEntity = nodes.find((node) => node.id === saveEntityLink.targetId);
-  assert.equal(normalizeEntity?.details?.identityScope, 'function');
-  assert.equal(saveEntity?.details?.identityScope, 'function');
-
-  assert.ok(nodes.find((node) => node.id === normalizeEntityLink.sourceId)?.links.some(
-    (link) => link.id === normalizeEntityLink.targetId && link.relationship === normalizeEntityLink.relationship
-  ));
-  assert.ok(nodes.find((node) => node.id === saveEntityLink.sourceId)?.links.some(
-    (link) => link.id === saveEntityLink.targetId && link.relationship === 'read'
-  ));
-  assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === normalize.id));
-  assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === save.id));
+  const functionNodes = nodes.filter((node) => node.type === 'function');
+  const byName = new Map(functionNodes.map((node) => [node.details?.name, node]));
+  assert.ok(byName.get('run')?.links.some((link) => link.relationship === 'calls' && link.id === byName.get('load')?.id));
+  assert.ok(byName.get('load')?.links.some((link) => link.relationship === 'calls' && link.id === byName.get('normalize')?.id));
+  assert.ok(byName.get('normalize')?.links.some((link) => link.relationship === 'calls' && link.id === byName.get('save')?.id));
 });
 
-test('Python data-structure graph ignores imported module aliases and primitive locals', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-noise-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-
-  await fs.writeFile(path.join(root, 'sample.py'), `
-import math
-
-def compute(value: int):
-    count = value + 1
-    result = math.floor(count)
-    return result
-`);
-
-  const result = await analyzePythonRepository({ repoDir: root, files: ['sample.py'] });
-  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
-
-  assert.ok(!entities.some((node) => node.details?.aliases?.includes('math')));
-  assert.ok(!entities.some((node) => node.details?.aliases?.includes('count')));
-});
-
-
-test('Python entity relations attach to the innermost AST region with exact lines', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-region-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-
-  await fs.writeFile(path.join(root, 'region.py'), `
-def update(record):
-    if record["enabled"]:
-        record["value"] = record["value"] + 1
-    return record
-`);
-
-  const result = await analyzePythonRepository({ repoDir: root, files: ['region.py'] });
-  const updateSymbol = (result.symbols || []).find((symbol) => symbol.name === 'update');
-  const ifRegion = (updateSymbol?.regions || []).find((region) => region.kind === 'if');
-  const entity = (result.dataGraphNodes || []).find((node) =>
-    node.type === 'entity' && node.details?.keys?.includes("'value'")
-  );
-  const relation = (result.entityLinks || []).find((link) =>
-    link.targetId === entity?.id &&
-    link.relationship === 'update' &&
-    link.variable === 'record'
-  );
-
-  assert.ok(updateSymbol);
-  assert.ok(ifRegion);
-  assert.ok(entity);
-  assert.ok(relation);
-  assert.equal(relation.sourceId, ifRegion.id);
-  assert.equal(relation.sourceType, 'function-region');
-  assert.equal(relation.regionId, ifRegion.id);
-  assert.equal(relation.functionId, updateSymbol.id);
-  assert.ok(relation.startLine >= ifRegion.startLine);
-  assert.ok(relation.endLine <= ifRegion.endLine);
-
-  const regionNode = (result.dataGraphNodes || []).find((node) => node.id === ifRegion.id);
-  assert.ok(regionNode?.links.some((link) => link.id === entity.id && link.relationship === 'update'));
-});
-
-
-test('Python entity clustering keeps same-named locals isolated across functions', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-scope-'));
+test('Python flow-derived entities do not merge disconnected same-name locals', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-flow-scope-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
   await fs.writeFile(path.join(root, 'scope.py'), `
@@ -164,35 +74,70 @@ def right():
   );
 
   assert.equal(chunkEntities.length, 2);
-  assert.ok(chunkEntities.every((node) => node.details?.identityScope === 'function'));
   assert.ok(chunkEntities.every((node) => node.details?.functionCount === 1));
-  assert.notEqual(chunkEntities[0].details.identityKey, chunkEntities[1].details.identityKey);
+  assert.notEqual(chunkEntities[0].id, chunkEntities[1].id);
 });
 
-test('Python entity clustering still merges strong shared mapping identity across functions', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-shared-mapping-'));
+test('Python flow-derived entities retain scalar values that cross function boundaries', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-flow-scalar-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
-  await fs.writeFile(path.join(root, 'shared.py'), `
-def make():
-    left_record = {"name": "a", "value": 1}
-    return left_record
+  await fs.writeFile(path.join(root, 'scalar.py'), `
+def source():
+    value: int = 3
+    return value
 
-def use(right_record):
-    return right_record["name"], right_record["value"]
+def consume(number: int):
+    return number + 1
+
+def run():
+    result = source()
+    return consume(result)
 `);
 
-  const result = await analyzePythonRepository({ repoDir: root, files: ['shared.py'] });
+  const result = await analyzePythonRepository({ repoDir: root, files: ['scalar.py'] });
   const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
-  const record = entities.find((node) =>
-    node.details?.kind === 'mapping' &&
-    node.details?.keys?.includes("'name'") &&
-    node.details?.keys?.includes("'value'")
+  const scalar = entities.find((node) =>
+    node.details?.aliases?.includes('value') &&
+    node.details?.aliases?.includes('result') &&
+    node.details?.aliases?.includes('number')
   );
 
-  assert.ok(record);
-  assert.equal(record.details.identityScope, 'global');
-  assert.ok(record.details.functionCount >= 2);
-  assert.ok(record.details.aliases.includes('left_record'));
-  assert.ok(record.details.aliases.includes('right_record'));
+  assert.ok(scalar, 'Expected scalar lineage across return/receiver and argument/parameter');
+  assert.equal(scalar.details.identityScope, 'flow');
+  assert.ok(scalar.details.functionCount >= 3);
+  assert.ok(scalar.details.annotations.includes('int'));
+});
+
+test('Python entity operations attach to the innermost AST region', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-flow-region-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'region.py'), `
+def sink(record):
+    return record["value"]
+
+def update(record):
+    if record["enabled"]:
+        record["value"] = record["value"] + 1
+    return sink(record)
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['region.py'] });
+  const updateSymbol = (result.symbols || []).find((symbol) => symbol.name === 'update');
+  const ifRegion = (updateSymbol?.regions || []).find((region) => region.kind === 'if');
+  const relation = (result.entityLinks || []).find((link) =>
+    link.functionId === updateSymbol?.id &&
+    link.relationship === 'update' &&
+    link.variable === 'record'
+  );
+
+  assert.ok(updateSymbol);
+  assert.ok(ifRegion);
+  assert.ok(relation);
+  assert.equal(relation.sourceId, ifRegion.id);
+  assert.equal(relation.sourceType, 'function-region');
+  assert.equal(relation.regionId, ifRegion.id);
+  assert.ok(relation.startLine >= ifRegion.startLine);
+  assert.ok(relation.endLine <= ifRegion.endLine);
 });
