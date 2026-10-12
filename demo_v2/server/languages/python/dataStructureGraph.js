@@ -13,36 +13,41 @@ function originNames(observation) {
   return uniq(arr(observation?.origins).map((origin) => origin?.name).filter(Boolean));
 }
 
-function strongIdentity(observation) {
-  const annotation = norm(observation?.annotation);
-  if (annotation) return `annotation:${annotation}`;
+function canonicalTypeIdentity(value) {
+  const raw = norm(value).replace(/\s+/g, '');
+  if (!raw) return '';
+
+  // Keep qualified names when present so unrelated classes with the same leaf
+  // name do not collapse. For simple annotations/constructors, the normalized
+  // name is already a stable type identity.
+  return raw;
+}
+
+function globalIdentity(observation) {
+  const annotation = canonicalTypeIdentity(observation?.annotation);
+  if (annotation) return `type:${annotation}`;
+
+  const constructors = arr(observation?.origins)
+    .filter((origin) => origin?.kind === 'constructed' && origin?.name)
+    .map((origin) => canonicalTypeIdentity(origin.name))
+    .filter(Boolean);
+  if (constructors.length) return `type:${uniq(constructors).join('|')}`;
+
+  // A mapping with multiple stable keys is useful structural evidence across
+  // functions (for example a record passed through a pipeline). One-key
+  // dictionaries are too weak and stay scope-local.
   const keys = uniq(observation?.keys).map(norm);
-  if (keys.length >= 2) return `keys:${keys.join('|')}`;
-  const constructors = originNames(observation)
-    .filter((name) => arr(observation?.origins).some((origin) => origin?.name === name && origin?.kind === 'constructed'))
-    .map(norm);
-  if (constructors.length) return `origin:${constructors.join('|')}`;
-  const members = uniq([...(observation?.members || []), ...(observation?.methods || [])]).map(norm);
-  if (members.length >= 2) return `shape:${norm(observation?.kind)}:${members.join('|')}`;
+  if (String(observation?.kind || '') === 'mapping' && keys.length >= 2) {
+    return `mapping-keys:${keys.join('|')}`;
+  }
+
   return '';
 }
 
-function features(observation) {
-  return new Set(uniq([
-    ...(observation?.members || []),
-    ...(observation?.methods || []),
-    ...(observation?.keys || [])
-  ]).map(norm));
-}
-
-function similarity(left, right) {
-  if (left.kind && right.kind && left.kind !== right.kind) return 0;
-  const a = features(left);
-  const b = features(right);
-  if (!a.size || !b.size) return 0;
-  let intersection = 0;
-  for (const item of a) if (b.has(item)) intersection += 1;
-  return intersection / new Set([...a, ...b]).size;
+function scopeIdentity(observation) {
+  const functionId = String(observation?.functionId || '').trim();
+  const variable = norm(observation?.variable);
+  return `scope:${functionId}:${variable || '<anonymous>'}`;
 }
 
 function mergeCluster(cluster, observation) {
@@ -58,27 +63,20 @@ function mergeCluster(cluster, observation) {
 
 export function clusterPythonDataStructures(observations = []) {
   const clusters = [];
-  const byStrong = new Map();
+  const byIdentity = new Map();
 
   for (const observation of arr(observations)) {
-    const key = strongIdentity(observation);
-    if (key && byStrong.has(key)) {
-      mergeCluster(byStrong.get(key), observation);
-      continue;
-    }
+    // Cross-function merging is allowed only with strong deterministic
+    // identity. Ordinary locals are isolated by lexical function scope.
+    const globalKey = globalIdentity(observation);
+    const identityKey = globalKey || scopeIdentity(observation);
 
-    const alias = norm(observation?.variable);
-    let cluster = clusters.find((candidate) => {
-      if (candidate.kind !== observation.kind) return false;
-      const score = similarity(candidate.prototype, observation);
-      const aliasMatch = alias && [...candidate.aliases].some((value) => norm(value) === alias);
-      if (key && candidate.strongKey && key !== candidate.strongKey) return score >= 0.75;
-      return score >= 0.6 || (aliasMatch && score > 0);
-    }) || null;
-
+    let cluster = byIdentity.get(identityKey) || null;
     if (!cluster) {
       cluster = {
-        strongKey: key,
+        strongKey: globalKey,
+        identityKey,
+        identityScope: globalKey ? 'global' : 'function',
         kind: observation.kind || 'object',
         prototype: observation,
         observations: [],
@@ -91,7 +89,7 @@ export function clusterPythonDataStructures(observations = []) {
         annotations: new Set()
       };
       clusters.push(cluster);
-      if (key) byStrong.set(key, cluster);
+      byIdentity.set(identityKey, cluster);
     }
 
     mergeCluster(cluster, observation);
@@ -102,7 +100,7 @@ export function clusterPythonDataStructures(observations = []) {
 
 function entityId(cluster) {
   const fingerprint = [
-    cluster.strongKey,
+    cluster.identityKey || cluster.strongKey,
     cluster.kind,
     [...cluster.annotations].sort().join(','),
     [...cluster.origins].sort().join(','),
@@ -242,6 +240,8 @@ export function buildPythonDataStructureGraph({ symbols = [], observations = [] 
       details: {
         name: entityName(cluster),
         kind: cluster.kind,
+        identityScope: cluster.identityScope || 'function',
+        identityKey: cluster.identityKey || '',
         functionCount,
         flowEdgeCount: flowEdges.size,
         coreScore: functionCount + flowEdges.size,
