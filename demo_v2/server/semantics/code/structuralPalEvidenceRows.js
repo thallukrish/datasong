@@ -171,6 +171,13 @@ export function materializeStructuralEvidenceRows({
         operationCount: Number(node.details?.operationCount || 0),
         persistenceScore: Number(node.details?.persistenceScore || 0),
         transient: Boolean(node.details?.transient),
+        flowId: node.details?.flowId || '',
+        familyId: node.details?.familyId || '',
+        familyKey: node.details?.familyKey || '',
+        familyInstanceCount: Number(node.details?.familyInstanceCount || 0),
+        familyFlowCount: Number(node.details?.familyFlowCount || 0),
+        familyFunctionCount: Number(node.details?.familyFunctionCount || 0),
+        familyPersistenceScore: Number(node.details?.familyPersistenceScore || 0),
         flowEdgeCount: Number(node.details?.flowEdgeCount || 0),
         coreScore: Number(node.details?.coreScore || 0)
       })
