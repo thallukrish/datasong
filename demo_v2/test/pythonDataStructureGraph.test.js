@@ -141,3 +141,54 @@ def update(record):
   assert.ok(relation.startLine >= ifRegion.startLine);
   assert.ok(relation.endLine <= ifRegion.endLine);
 });
+
+
+test('shared helper parameter does not collapse unrelated flow-slice entities', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-flow-helper-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'helper.py'), `
+def helper(x):
+    return x
+
+def process_dataset(ds):
+    return helper(ds)
+
+def process_config(config):
+    return helper(config)
+
+def run_dataset():
+    dataset = Dataset()
+    return process_dataset(dataset)
+
+def run_config():
+    settings = {"mode": "fast", "retry": 3}
+    return process_config(settings)
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['helper.py'] });
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+
+  const helperFlows = entities.filter((node) =>
+    node.details?.identityScope === 'flow-instance' &&
+    node.details?.aliases?.includes('x')
+  );
+
+  assert.ok(helperFlows.length >= 2, 'Expected separate helper.x instances in separate flow slices');
+
+  const datasetFlow = helperFlows.find((node) =>
+    node.details?.aliases?.includes('ds') ||
+    node.details?.aliases?.includes('dataset')
+  );
+  const configFlow = helperFlows.find((node) =>
+    node.details?.aliases?.includes('config') ||
+    node.details?.aliases?.includes('settings')
+  );
+
+  assert.ok(datasetFlow, 'Expected dataset lineage through helper');
+  assert.ok(configFlow, 'Expected config lineage through helper');
+  assert.notEqual(datasetFlow.id, configFlow.id);
+  assert.notEqual(datasetFlow.details.flowId, configFlow.details.flowId);
+  assert.ok(!datasetFlow.details.keys?.includes("'mode'"));
+  assert.ok(configFlow.details.keys?.includes("'mode'"));
+});
