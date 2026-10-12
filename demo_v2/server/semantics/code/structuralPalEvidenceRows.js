@@ -159,11 +159,18 @@ export function materializeStructuralEvidenceRows({
         kind: node.details?.kind || '',
         aliases: node.details?.aliases || [],
         annotations: node.details?.annotations || [],
+        constructors: node.details?.constructors || [],
         origins: node.details?.origins || [],
         members: node.details?.members || [],
         methods: node.details?.methods || [],
         keys: node.details?.keys || [],
+        identityScope: node.details?.identityScope || '',
+        identityKey: node.details?.identityKey || '',
         functionCount: Number(node.details?.functionCount || 0),
+        flowCount: Number(node.details?.flowCount || 0),
+        operationCount: Number(node.details?.operationCount || 0),
+        persistenceScore: Number(node.details?.persistenceScore || 0),
+        transient: Boolean(node.details?.transient),
         flowEdgeCount: Number(node.details?.flowEdgeCount || 0),
         coreScore: Number(node.details?.coreScore || 0)
       })
