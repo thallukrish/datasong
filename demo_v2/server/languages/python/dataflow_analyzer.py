@@ -87,6 +87,7 @@ class ObservationVisitor(ast.NodeVisitor):
         self.records = {}
         self.parents = []
         self.events = []
+        self.call_transfers = {}
         self.ignored_names = set(ignored_names or []) | {"self", "cls"}
 
         args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
@@ -94,11 +95,12 @@ class ObservationVisitor(ast.NodeVisitor):
             args.append(node.args.vararg)
         if node.args.kwarg:
             args.append(node.args.kwarg)
-        for arg in args:
+        for index, arg in enumerate(args):
             rec = self.rec(arg.arg)
             if not rec:
                 continue
             rec["parameter"] = True
+            rec["parameterIndex"] = index
             if arg.annotation is not None:
                 rec["annotation"] = safe_unparse(arg.annotation)
 
@@ -114,6 +116,7 @@ class ObservationVisitor(ast.NodeVisitor):
                 "firstLine": 0,
                 "lastLine": 0,
                 "parameter": False,
+                "parameterIndex": -1,
                 "annotation": "",
                 "origins": [],
                 "members": set(),
@@ -158,8 +161,52 @@ class ObservationVisitor(ast.NodeVisitor):
         finally:
             self.parents.pop()
 
+    def visit_FunctionDef(self, node):
+        if node is self.function_node:
+            self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node):
+        if node is self.function_node:
+            self.generic_visit(node)
+
+    def record_call_transfer(self, node, result_variables=None):
+        if not isinstance(node, ast.Call):
+            return
+        line = int(getattr(node, "lineno", 0) or 0)
+        if not line:
+            return
+        transfer = self.call_transfers.get(line)
+        if transfer is None:
+            transfer = {
+                "callerFunctionId": self.function_id,
+                "callerFunctionName": self.qualified,
+                "sourcePath": self.source_path,
+                "line": line,
+                "endLine": int(getattr(node, "end_lineno", line) or line),
+                "targetName": call_name(node),
+                "positionalArgs": [],
+                "keywordArgs": [],
+                "resultVariables": []
+            }
+            for arg in node.args:
+                transfer["positionalArgs"].append(root_name(arg))
+            for kw in node.keywords:
+                transfer["keywordArgs"].append({
+                    "name": kw.arg or "",
+                    "variable": root_name(kw.value)
+                })
+            self.call_transfers[line] = transfer
+        for name in result_variables or []:
+            if name and name not in transfer["resultVariables"]:
+                transfer["resultVariables"].append(name)
+
     def visit_Assign(self, node):
         origin = value_origin(node.value)
+        if isinstance(node.value, ast.Call):
+            result_variables = []
+            for target in node.targets:
+                result_variables.extend(target_names(target))
+            self.record_call_transfer(node.value, result_variables)
         for target in node.targets:
             for name in target_names(target):
                 rec = self.touch(name, node, "write")
@@ -175,6 +222,8 @@ class ObservationVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node):
+        if isinstance(node.value, ast.Call):
+            self.record_call_transfer(node.value, target_names(node.target))
         for name in target_names(node.target):
             rec = self.touch(name, node, "write")
             if rec and node.annotation is not None:
@@ -218,6 +267,7 @@ class ObservationVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node):
+        self.record_call_transfer(node)
         if isinstance(node.func, ast.Attribute):
             base = root_name(node.func.value)
             if base:
@@ -253,7 +303,13 @@ class ObservationVisitor(ast.NodeVisitor):
         for rec in self.records.values():
             annotation = rec["annotation"]
             origin_kinds = {item.get("kind") for item in rec["origins"] if item.get("kind")}
+            boundary_evidence = (
+                rec["parameter"] or rec["returned"] or bool(rec["passedTo"]) or
+                "return" in rec["operations"] or "pass" in rec["operations"] or
+                "call-result" in origin_kinds
+            )
             complex_evidence = (
+                boundary_evidence or
                 bool(rec["members"]) or bool(rec["methods"]) or bool(rec["keys"]) or
                 "index" in rec["operations"] or
                 bool(origin_kinds & {"mapping", "sequence", "set", "container", "constructed"}) or
@@ -280,6 +336,9 @@ class ObservationVisitor(ast.NodeVisitor):
             out.append(rec)
         return out
 
+    def transfers(self):
+        return list(self.call_transfers.values())
+
 modules = {}
 module_imports = {}
 for item in requested:
@@ -304,6 +363,7 @@ for item in requested:
     module_imports[item] = imported
 
 observations = []
+transfers = []
 for source_path, tree in modules.items():
     for top in tree.body:
         if isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -312,6 +372,7 @@ for source_path, tree in modules.items():
             visitor = ObservationVisitor(source_path, q, function_id, top, module_imports.get(source_path))
             visitor.visit(top)
             observations.extend(visitor.result())
+            transfers.extend(visitor.transfers())
         elif isinstance(top, ast.ClassDef):
             for child in top.body:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -320,5 +381,10 @@ for source_path, tree in modules.items():
                     visitor = ObservationVisitor(source_path, q, function_id, child, module_imports.get(source_path))
                     visitor.visit(child)
                     observations.extend(visitor.result())
+                    transfers.extend(visitor.transfers())
 
-print(json.dumps({"version": 1, "observations": observations}, ensure_ascii=False))
+print(json.dumps({
+    "version": 2,
+    "observations": observations,
+    "transfers": transfers
+}, ensure_ascii=False))
