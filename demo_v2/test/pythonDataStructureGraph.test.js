@@ -97,16 +97,26 @@ def run():
 
   const result = await analyzePythonRepository({ repoDir: root, files: ['scalar.py'] });
   const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
-  const scalar = entities.find((node) =>
+  const sourceFlow = entities.find((node) =>
+    node.details?.identityScope === 'flow-instance' &&
     node.details?.aliases?.includes('value') &&
+    node.details?.aliases?.includes('result')
+  );
+  const consumeFlow = entities.find((node) =>
+    node.details?.identityScope === 'flow-instance' &&
     node.details?.aliases?.includes('result') &&
     node.details?.aliases?.includes('number')
   );
 
-  assert.ok(scalar, 'Expected scalar lineage across return/receiver and argument/parameter');
-  assert.equal(scalar.details.identityScope, 'flow');
-  assert.ok(scalar.details.functionCount >= 3);
-  assert.ok(scalar.details.annotations.includes('int'));
+  assert.ok(sourceFlow, 'Expected return-to-receiver scalar flow instance');
+  assert.ok(consumeFlow, 'Expected argument-to-parameter scalar flow instance');
+  assert.notEqual(sourceFlow.id, consumeFlow.id);
+  assert.notEqual(sourceFlow.details.flowId, consumeFlow.details.flowId);
+  assert.ok(sourceFlow.details.annotations.includes('int'));
+  assert.ok(consumeFlow.details.annotations.includes('int'));
+  assert.ok(sourceFlow.details.familyId);
+  assert.equal(sourceFlow.details.familyId, consumeFlow.details.familyId);
+  assert.ok(sourceFlow.details.familyFlowCount >= 2);
 });
 
 test('Python entity operations attach to the innermost AST region', async (t) => {
