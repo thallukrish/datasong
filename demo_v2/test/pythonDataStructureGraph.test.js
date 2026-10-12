@@ -135,3 +135,57 @@ def update(record):
   const regionNode = (result.dataGraphNodes || []).find((node) => node.id === ifRegion.id);
   assert.ok(regionNode?.links.some((link) => link.id === entity.id && link.relationship === 'update'));
 });
+
+
+test('Python entity clustering keeps same-named locals isolated across functions', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-scope-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'scope.py'), `
+def left():
+    chunk = source.left()
+    return chunk.shape
+
+def right():
+    chunk = source.right()
+    return chunk.dtype
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['scope.py'] });
+  const chunkEntities = (result.dataGraphNodes || []).filter((node) =>
+    node.type === 'entity' && node.details?.aliases?.includes('chunk')
+  );
+
+  assert.equal(chunkEntities.length, 2);
+  assert.ok(chunkEntities.every((node) => node.details?.identityScope === 'function'));
+  assert.ok(chunkEntities.every((node) => node.details?.functionCount === 1));
+  assert.notEqual(chunkEntities[0].details.identityKey, chunkEntities[1].details.identityKey);
+});
+
+test('Python entity clustering still merges strong shared mapping identity across functions', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lemap-python-data-shared-mapping-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+
+  await fs.writeFile(path.join(root, 'shared.py'), `
+def make():
+    left_record = {"name": "a", "value": 1}
+    return left_record
+
+def use(right_record):
+    return right_record["name"], right_record["value"]
+`);
+
+  const result = await analyzePythonRepository({ repoDir: root, files: ['shared.py'] });
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+  const record = entities.find((node) =>
+    node.details?.kind === 'mapping' &&
+    node.details?.keys?.includes("'name'") &&
+    node.details?.keys?.includes("'value'")
+  );
+
+  assert.ok(record);
+  assert.equal(record.details.identityScope, 'global');
+  assert.ok(record.details.functionCount >= 2);
+  assert.ok(record.details.aliases.includes('left_record'));
+  assert.ok(record.details.aliases.includes('right_record'));
+});
