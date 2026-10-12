@@ -1,4 +1,5 @@
 import { buildPythonDataStructureGraph } from './dataStructureGraph.js';
+import { buildCompactCallFlows } from '../../semantics/code/compactCallFlows.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -46,13 +47,20 @@ export async function analyzePythonRepository({ repoDir, files }) {
         ? ['-3', fileURLToPath(dataScript), repoDir]
         : [fileURLToPath(dataScript), repoDir];
       const data = await run(command, dataArgs, input);
+      const compactFlows = buildCompactCallFlows({
+        symbols: structural?.symbols || []
+      });
       const dataGraph = buildPythonDataStructureGraph({
         symbols: structural?.symbols || [],
-        observations: data?.observations || []
+        observations: data?.observations || [],
+        transfers: data?.transfers || [],
+        flowSlices: compactFlows.paths
       });
       return {
         ...structural,
         dataObservations: Array.isArray(data?.observations) ? data.observations : [],
+        dataTransfers: Array.isArray(data?.transfers) ? data.transfers : [],
+        compactFlows: Array.isArray(compactFlows?.paths) ? compactFlows.paths : [],
         dataGraphNodes: Array.isArray(dataGraph?.nodes) ? dataGraph.nodes : [],
         entityLinks: Array.isArray(dataGraph?.entityLinks) ? dataGraph.entityLinks : []
       };
