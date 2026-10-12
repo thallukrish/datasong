@@ -40,15 +40,15 @@ def run():
   ));
 
   const entityNodes = nodes.filter((node) => node.type === 'entity');
-  const sharedRecord = entityNodes.find((node) =>
+  const constructedRecord = entityNodes.find((node) =>
     node.details?.kind === 'mapping' &&
     node.details?.keys?.includes("'name'") &&
     node.details?.keys?.includes("'value'")
   );
 
-  assert.ok(sharedRecord);
-  assert.ok(sharedRecord.details.functionCount >= 3);
-  assert.ok(sharedRecord.details.coreScore >= sharedRecord.details.functionCount);
+  assert.ok(constructedRecord);
+  assert.equal(constructedRecord.details.identityScope, 'global');
+  assert.ok(constructedRecord.details.coreScore >= constructedRecord.details.functionCount);
 
   const normalize = nodes.find((node) => node.type === 'function' && node.details?.name === 'normalize');
   const save = nodes.find((node) => node.type === 'function' && node.details?.name === 'save');
@@ -56,22 +56,29 @@ def run():
 
   const normalizeEntityLink = (result.entityLinks || []).find((link) =>
     link.functionId === normalize?.id &&
-    link.targetId === sharedRecord.id &&
     /update|read/.test(link.relationship)
   );
   const saveEntityLink = (result.entityLinks || []).find((link) =>
     link.functionId === save?.id &&
-    link.targetId === sharedRecord.id &&
     link.relationship === 'read'
   );
 
   assert.ok(normalizeEntityLink);
   assert.ok(saveEntityLink);
+  assert.notEqual(normalizeEntityLink.targetId, constructedRecord.id);
+  assert.notEqual(saveEntityLink.targetId, constructedRecord.id);
+  assert.notEqual(normalizeEntityLink.targetId, saveEntityLink.targetId);
+
+  const normalizeEntity = nodes.find((node) => node.id === normalizeEntityLink.targetId);
+  const saveEntity = nodes.find((node) => node.id === saveEntityLink.targetId);
+  assert.equal(normalizeEntity?.details?.identityScope, 'function');
+  assert.equal(saveEntity?.details?.identityScope, 'function');
+
   assert.ok(nodes.find((node) => node.id === normalizeEntityLink.sourceId)?.links.some(
-    (link) => link.id === sharedRecord.id && link.relationship === normalizeEntityLink.relationship
+    (link) => link.id === normalizeEntityLink.targetId && link.relationship === normalizeEntityLink.relationship
   ));
   assert.ok(nodes.find((node) => node.id === saveEntityLink.sourceId)?.links.some(
-    (link) => link.id === sharedRecord.id && link.relationship === 'read'
+    (link) => link.id === saveEntityLink.targetId && link.relationship === 'read'
   ));
   assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === normalize.id));
   assert.ok(run?.links.some((link) => link.relationship === 'calls' && link.id === save.id));
