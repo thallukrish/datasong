@@ -54,7 +54,9 @@ export async function analyzePythonRepository({ repoDir, files }) {
         symbols: structural?.symbols || [],
         observations: data?.observations || [],
         transfers: data?.transfers || [],
-        flowSlices: compactFlows.paths
+        flowSlices: compactFlows.paths,
+        codeFacts: structural?.codeFacts || [],
+        externalSymbols: structural?.externalSymbols || []
       });
       return {
         ...structural,
