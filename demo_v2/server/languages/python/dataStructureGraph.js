@@ -4,13 +4,13 @@ const arr=(value)=>Array.isArray(value)?value:[];
 const uniq=(values)=>[...new Set(arr(values).filter(Boolean))].sort();
 const obsKey=(functionId,variable)=>`${String(functionId||'')}::${String(variable||'')}`;
 
-function leaf(value){
-  const parts=String(value||'').split(/[.:/\[\], ]/).filter(Boolean);
-  return parts.at(-1)||'';
-}
-
 function stableId(prefix,basis){
   return `${prefix}:${crypto.createHash('sha1').update(String(basis||'')).digest('hex').slice(0,12)}`;
+}
+
+function leaf(value){
+  const parts=String(value||'').split(/[.:/\[\], |]/).filter(Boolean);
+  return parts.at(-1)||'';
 }
 
 function addLink(node,id,relationship){
@@ -55,11 +55,9 @@ function inferredKind(observations){
   if(kinds.has('array-like'))return 'array-like';
   if(kinds.has('sequence'))return 'sequence';
   if(kinds.has('set'))return 'set';
-
   const primitiveAnnotations=new Set(['int','float','str','bool','bytes','bytearray','complex']);
   const annotations=uniq(observations.map(item=>String(item?.annotation||'')).filter(Boolean));
   if(annotations.length&&annotations.every(value=>primitiveAnnotations.has(value)))return 'primitive';
-
   return [...kinds][0]||'value';
 }
 
@@ -77,25 +75,80 @@ function canonicalTypeEvidence(observations){
   return {annotations,constructors};
 }
 
-function entityFamilyKey(observations,kind){
-  const {annotations,constructors}=canonicalTypeEvidence(observations);
-  if(constructors.length===1)return `constructor:${constructors[0]}`;
-  if(annotations.length===1)return `annotation:${annotations[0]}`;
+function classCatalog(codeFacts=[],externalSymbols=[]){
+  const localByName=new Map();
+  for(const fact of arr(codeFacts)){
+    if(String(fact?.type||'')!=='class'||!fact?.name)continue;
+    const name=String(fact.name);
+    const id=`class:${fact.sourcePath}#${name}@${Number(fact.startLine||0)}`;
+    if(!localByName.has(name))localByName.set(name,[]);
+    localByName.get(name).push({id,name,sourcePath:String(fact.sourcePath||'')});
+  }
 
-  const keys=uniq(observations.flatMap(item=>arr(item?.keys)));
-  if(kind==='mapping'&&keys.length>=2)return `mapping:${keys.join('|')}`;
+  const externalByLocal=new Map();
+  for(const symbol of arr(externalSymbols)){
+    const local=String(symbol?.localName||symbol?.simpleName||'').trim();
+    const qualified=String(symbol?.qualifiedName||symbol?.name||'').trim();
+    if(!local||!qualified)continue;
+    if(!externalByLocal.has(local))externalByLocal.set(local,new Set());
+    externalByLocal.get(local).add(qualified);
+  }
+
+  return {localByName,externalByLocal};
+}
+
+function annotationCandidates(annotation=''){
+  return String(annotation||'')
+    .match(/[A-Za-z_][A-Za-z0-9_.]*/g) || [];
+}
+
+function resolveClassToken(token,catalog,sourcePath=''){
+  const raw=String(token||'').trim();
+  if(!raw)return '';
+  const leafName=raw.split('.').at(-1);
+
+  const locals=catalog.localByName.get(leafName)||[];
+  const sameFile=locals.filter(item=>item.sourcePath===String(sourcePath||''));
+  if(sameFile.length===1)return sameFile[0].id;
+  if(locals.length===1)return locals[0].id;
+
+  const external=catalog.externalByLocal.get(leafName);
+  if(external?.size===1)return `external-class:${[...external][0]}`;
+
+  if(raw.includes('.')&&/^[A-Z]/.test(leafName))return `qualified-class:${raw}`;
+  return '';
+}
+
+function resolvedClassId(observation,catalog){
+  const sourcePath=String(observation?.sourcePath||'');
+
+  for(const origin of arr(observation?.origins)){
+    if(origin?.kind!=='constructed'||!origin?.name)continue;
+    const resolved=resolveClassToken(origin.name,catalog,sourcePath);
+    if(resolved)return resolved;
+  }
+
+  for(const token of annotationCandidates(observation?.annotation)){
+    const resolved=resolveClassToken(token,catalog,sourcePath);
+    if(resolved)return resolved;
+  }
 
   return '';
 }
 
-function entityName(observations,kind){
+function displayName(observations,classId){
+  if(classId){
+    const marker=String(classId).split('#').at(-1)?.split('@')[0]||'';
+    if(marker)return marker;
+    const q=String(classId).split(':').at(-1)||'';
+    if(q)return q.split('.').at(-1)||q;
+  }
   const {annotations,constructors}=canonicalTypeEvidence(observations);
   if(constructors.length===1)return leaf(constructors[0]);
   if(annotations.length===1)return leaf(annotations[0]);
-
   const aliases=uniq(observations.map(item=>String(item?.variable||'')).filter(Boolean))
     .sort((a,b)=>a.length-b.length||a.localeCompare(b));
-  return aliases[0]||kind||'value';
+  return aliases[0]||inferredKind(observations)||'entity';
 }
 
 function innermostRegion(symbol,line){
@@ -121,14 +174,9 @@ function eventRelationship(event){
 
 function canonicalEvents(observation){
   const events=arr(observation?.events);
-  const createLines=new Set(
-    events
-      .filter(event=>event?.operation==='create')
-      .map(event=>Number(event?.line||0))
-  );
+  const createLines=new Set(events.filter(event=>event?.operation==='create').map(event=>Number(event?.line||0)));
   const seen=new Set();
   const out=[];
-
   for(const event of events){
     const relationship=eventRelationship(event);
     if(!relationship)continue;
@@ -214,7 +262,6 @@ function resolveTransferTarget(transfer,symbolById){
 
 function transfersByResolvedEdge(transfers,symbolById){
   const out=new Map();
-
   for(const transfer of arr(transfers)){
     const callerId=String(transfer?.callerFunctionId||'');
     const targetId=resolveTransferTarget(transfer,symbolById);
@@ -223,7 +270,6 @@ function transfersByResolvedEdge(transfers,symbolById){
     if(!out.has(key))out.set(key,[]);
     out.get(key).push({...transfer,targetFunctionId:targetId});
   }
-
   return out;
 }
 
@@ -238,9 +284,8 @@ function returnedObservations(functionId,observationByKey){
     .filter(obs=>String(obs?.functionId||'')===String(functionId)&&obs?.returned===true);
 }
 
-function unionAliasesWithinFunctions(uf,functionIds,observationByKey){
-  const allowed=new Set(functionIds);
-
+function unionAliases(uf,functionIds,observationByKey){
+  const allowed=new Set(functionIds.map(String));
   for(const observation of observationByKey.values()){
     if(!allowed.has(String(observation?.functionId||'')))continue;
     for(const origin of arr(observation?.origins)){
@@ -259,34 +304,26 @@ function unionTransfer(uf,transfer,targetId,observationByKey){
 
   arr(transfer?.positionalArgs).forEach((variable,index)=>{
     if(!variable||!params[index])return;
-    uf.union(
-      obsKey(callerId,variable),
-      obsKey(targetId,params[index].variable)
-    );
+    uf.union(obsKey(callerId,variable),obsKey(targetId,params[index].variable));
   });
 
   for(const kw of arr(transfer?.keywordArgs)){
     if(!kw?.name||!kw?.variable)continue;
     const param=params.find(item=>String(item?.variable||'')===String(kw.name));
     if(!param)continue;
-    uf.union(
-      obsKey(callerId,kw.variable),
-      obsKey(targetId,param.variable)
-    );
+    uf.union(obsKey(callerId,kw.variable),obsKey(targetId,param.variable));
   }
 
   const returned=returnedObservations(targetId,observationByKey);
   for(const resultVariable of arr(transfer?.resultVariables)){
-    const receiver=obsKey(callerId,resultVariable);
     for(const returnedObs of returned){
-      uf.union(receiver,obsKey(targetId,returnedObs.variable));
+      uf.union(obsKey(callerId,resultVariable),obsKey(targetId,returnedObs.variable));
     }
   }
 }
 
 function componentMap(uf,keys,observationByKey){
   const components=new Map();
-
   for(const key of keys){
     const observation=observationByKey.get(key);
     if(!observation)continue;
@@ -295,70 +332,61 @@ function componentMap(uf,keys,observationByKey){
     if(!components.has(root))components.set(root,[]);
     components.get(root).push(observation);
   }
-
   return components;
 }
 
-function hasShapeEvidence(observations){
-  return observations.some(obs=>
-    arr(obs?.members).length||
-    arr(obs?.methods).length||
-    arr(obs?.keys).length||
-    arr(obs?.origins).some(origin=>
-      ['mapping','sequence','set','container','constructed'].includes(origin?.kind)
-    )||
-    (obs?.annotation&&String(obs.annotation)!=='Any'&&String(obs.annotation)!=='typing.Any')
-  );
+function observationMap(){
+  return new Map();
 }
 
-function componentCrossesBoundary(observations,flowEdges){
-  const functionIds=new Set(observations.map(obs=>String(obs?.functionId||'')));
-  if(functionIds.size<2)return false;
-
-  for(const edge of flowEdges){
-    const [from,to]=edge.split('→');
-    if(functionIds.has(from)&&functionIds.has(to))return true;
+function addObservations(target,observations){
+  for(const obs of observations){
+    target.set(obsKey(obs.functionId,obs.variable),obs);
   }
-  return false;
+}
+
+function qualifiesAcrossFunctions(observations){
+  return new Set(observations.map(obs=>String(obs?.functionId||''))).size>1;
 }
 
 function materializeEntity({
-  flow,
-  observationsInComponent,
+  id,
+  observations,
+  identityKind,
+  classId='',
   symbolById,
   nodeById,
   entityLinks
 }){
-  const kind=inferredKind(observationsInComponent);
-  const aliases=uniq(observationsInComponent.map(obs=>obs?.variable));
-  const members=uniq(observationsInComponent.flatMap(obs=>arr(obs?.members)));
-  const methods=uniq(observationsInComponent.flatMap(obs=>arr(obs?.methods)));
-  const keys=uniq(observationsInComponent.flatMap(obs=>arr(obs?.keys)));
-  const origins=uniq(observationsInComponent.flatMap(originNames));
-  const {annotations,constructors}=canonicalTypeEvidence(observationsInComponent);
-  const functionIds=uniq(observationsInComponent.map(obs=>obs?.functionId));
+  const functionIds=uniq(observations.map(obs=>obs?.functionId));
+  if(functionIds.length<2)return null;
 
-  const bindings=observationsInComponent
-    .map(obs=>obsKey(obs?.functionId,obs?.variable))
-    .sort();
-  const id=stableId('entity-instance',`${String(flow?.id||'')}|${bindings.join('|')}`);
-  const familyKey=entityFamilyKey(observationsInComponent,kind);
-  const familyId=familyKey?stableId('entity-family',familyKey):'';
+  const aliases=uniq(observations.map(obs=>obs?.variable));
+  const members=uniq(observations.flatMap(obs=>arr(obs?.members)));
+  const methods=uniq(observations.flatMap(obs=>arr(obs?.methods)));
+  const keys=uniq(observations.flatMap(obs=>arr(obs?.keys)));
+  const origins=uniq(observations.flatMap(originNames));
+  const {annotations,constructors}=canonicalTypeEvidence(observations);
 
   let operationCount=0;
-  for(const observation of observationsInComponent){
+  const seenLinks=new Set();
+
+  for(const observation of observations){
     const symbol=symbolById.get(observation.functionId);
     for(const event of canonicalEvents(observation)){
-      operationCount+=1;
       const region=innermostRegion(symbol,Number(event.line||0));
       const sourceId=region?.id||observation.functionId;
       const sourceType=region?'function-region':'function';
-      addLink(nodeById.get(sourceId),id,event.relationship);
-
+      const relationship=event.relationship;
+      const dedupe=`${sourceId}|${relationship}|${Number(event.line||0)}|${id}`;
+      if(seenLinks.has(dedupe))continue;
+      seenLinks.add(dedupe);
+      operationCount+=1;
+      addLink(nodeById.get(sourceId),id,relationship);
       entityLinks.push({
         sourceId,
         sourceType,
-        relationship:event.relationship,
+        relationship,
         targetId:id,
         targetType:'entity',
         functionId:observation.functionId,
@@ -367,25 +395,22 @@ function materializeEntity({
         startLine:Number(event.line||0),
         endLine:Number(event.endLine||event.line||0),
         variable:observation.variable||'',
-        origin:event.detail||originNames(observation).join('|'),
-        flowId:String(flow?.id||''),
-        familyId
+        origin:event.detail||originNames(observation).join('|')
       });
     }
   }
 
   const functionCount=functionIds.length;
-  const persistenceScore=(functionCount*2)+Math.min(operationCount,20);
+  const coreScore=(functionCount*3)+Math.min(operationCount,30);
 
   return {
     id,
     type:'entity',
     details:{
-      name:entityName(observationsInComponent,kind),
-      kind,
-      identityScope:'flow-instance',
-      identityKey:`flow:${String(flow?.id||'')}:${id}`,
-      flowId:String(flow?.id||''),
+      name:displayName(observations,classId),
+      kind:inferredKind(observations),
+      identityKind,
+      classId,
       aliases,
       annotations,
       constructors,
@@ -394,71 +419,20 @@ function materializeEntity({
       methods,
       keys,
       functionCount,
-      flowCount:1,
       operationCount,
-      persistenceScore,
-      coreScore:persistenceScore,
-      transient:functionCount<=2,
-      familyId,
-      familyKey,
-      familyInstanceCount:familyId?1:0,
-      familyFlowCount:familyId?1:0,
-      familyFunctionCount:familyId?functionCount:0,
-      familyPersistenceScore:familyId?persistenceScore:0
+      coreScore
     },
     links:[]
   };
-}
-
-function annotateFamilies(entityNodes){
-  const byFamily=new Map();
-
-  for(const node of entityNodes){
-    const familyId=String(node?.details?.familyId||'');
-    if(!familyId)continue;
-    if(!byFamily.has(familyId))byFamily.set(familyId,[]);
-    byFamily.get(familyId).push(node);
-  }
-
-  for(const [familyId,members] of byFamily.entries()){
-    const flowIds=new Set();
-    const functionBindings=new Set();
-    let operationCount=0;
-
-    for(const node of members){
-      if(node.details?.flowId)flowIds.add(String(node.details.flowId));
-      operationCount+=Number(node.details?.operationCount||0);
-      for(const alias of arr(node.details?.aliases)){
-        functionBindings.add(`${String(node.details?.flowId||'')}:${alias}`);
-      }
-    }
-
-    const familyFunctionCount=members.reduce(
-      (sum,node)=>sum+Number(node.details?.functionCount||0),
-      0
-    );
-    const familyPersistenceScore=
-      (flowIds.size*4)+
-      (familyFunctionCount*2)+
-      Math.min(operationCount,40);
-
-    for(const node of members){
-      node.details.familyId=familyId;
-      node.details.familyInstanceCount=members.length;
-      node.details.familyFlowCount=flowIds.size;
-      node.details.familyFunctionCount=familyFunctionCount;
-      node.details.familyPersistenceScore=familyPersistenceScore;
-      node.details.coreScore=
-        Number(node.details?.persistenceScore||0)+familyPersistenceScore;
-    }
-  }
 }
 
 export function buildPythonDataStructureGraph({
   symbols=[],
   observations=[],
   transfers=[],
-  flowSlices=[]
+  flowSlices=[],
+  codeFacts=[],
+  externalSymbols=[]
 }={}){
   const {nodes,nodeById}=buildFunctionNodes(symbols);
   const symbolById=new Map(arr(symbols).map(symbol=>[symbol?.id,symbol]));
@@ -466,109 +440,122 @@ export function buildPythonDataStructureGraph({
 
   for(const observation of arr(observations)){
     if(!observation?.functionId||!observation?.variable)continue;
-    observationByKey.set(
-      obsKey(observation.functionId,observation.variable),
-      observation
-    );
+    observationByKey.set(obsKey(observation.functionId,observation.variable),observation);
   }
 
+  const catalog=classCatalog(codeFacts,externalSymbols);
+  const classIdByBinding=new Map(
+    [...observationByKey.entries()].map(([key,obs])=>[key,resolvedClassId(obs,catalog)])
+  );
   const transferEdges=transfersByResolvedEdge(transfers,symbolById);
-  const entityLinks=[];
-  const entityNodes=[];
+
+  // Qualified class-backed entities are accumulated globally by resolved class.
+  // A class qualifies only when at least two functions in one compact flow
+  // observe that class. Continuity across every intermediate call is not
+  // required because the class definition supplies stable identity.
+  const qualifiedClassObservations=new Map();
+
+  // Anonymous entities require continuous argument/parameter, return/receiver
+  // or alias lineage across more than one function in one compact flow.
+  const anonymousCandidates=new Map();
 
   for(const flow of arr(flowSlices)){
     const functionIds=arr(flow?.symbolIds).map(String).filter(Boolean);
     if(functionIds.length<2)continue;
-
     const functionSet=new Set(functionIds);
-    const flowKeys=[...observationByKey.entries()]
-      .filter(([,obs])=>functionSet.has(String(obs?.functionId||'')))
-      .map(([key])=>key);
 
-    if(!flowKeys.length)continue;
+    const flowEntries=[...observationByKey.entries()]
+      .filter(([,obs])=>functionSet.has(String(obs?.functionId||'')));
+    if(!flowEntries.length)continue;
 
+    // Class-backed qualification can be disconnected inside the flow.
+    const classGroups=new Map();
+    for(const [key,obs] of flowEntries){
+      const classId=classIdByBinding.get(key)||'';
+      if(!classId)continue;
+      if(!classGroups.has(classId))classGroups.set(classId,[]);
+      classGroups.get(classId).push(obs);
+    }
+    for(const [classId,group] of classGroups.entries()){
+      if(!qualifiesAcrossFunctions(group))continue;
+      if(!qualifiedClassObservations.has(classId))qualifiedClassObservations.set(classId,observationMap());
+      addObservations(qualifiedClassObservations.get(classId),group);
+    }
+
+    // Continuous lineage for anonymous structures and untyped parameters.
+    const flowKeys=flowEntries.map(([key])=>key);
     const uf=new UnionFind(flowKeys);
-    unionAliasesWithinFunctions(uf,functionIds,observationByKey);
+    unionAliases(uf,functionIds,observationByKey);
 
-    const flowEdges=[];
     for(let i=0;i<functionIds.length-1;i+=1){
       const from=functionIds[i];
       const to=functionIds[i+1];
       const edge=`${from}→${to}`;
-      flowEdges.push(edge);
       for(const transfer of transferEdges.get(edge)||[]){
         unionTransfer(uf,transfer,to,observationByKey);
       }
     }
 
     const components=componentMap(uf,flowKeys,observationByKey);
+    for(const component of components.values()){
+      if(!qualifiesAcrossFunctions(component))continue;
 
-    for(const observationsInComponent of components.values()){
-      const crossesBoundary=componentCrossesBoundary(
-        observationsInComponent,
-        flowEdges
-      );
-      if(!crossesBoundary)continue;
+      const classIds=uniq(component.map(obs=>classIdByBinding.get(obsKey(obs.functionId,obs.variable))||''));
+      if(classIds.length===1){
+        const classId=classIds[0];
+        if(!qualifiedClassObservations.has(classId))qualifiedClassObservations.set(classId,observationMap());
+        addObservations(qualifiedClassObservations.get(classId),component);
+        continue;
+      }
 
-      const entityNode=materializeEntity({
-        flow,
-        observationsInComponent,
-        symbolById,
-        nodeById,
-        entityLinks
-      });
+      // If more than one conflicting resolved class appears in the same
+      // component, do not collapse them into one anonymous entity.
+      if(classIds.length>1)continue;
 
-      entityNodes.push(entityNode);
-      nodeById.set(entityNode.id,entityNode);
+      const bindings=component
+        .map(obs=>obsKey(obs.functionId,obs.variable))
+        .sort();
+      const candidateId=stableId('entity-trace',`${String(flow?.id||'')}|${bindings.join('|')}`);
+      anonymousCandidates.set(candidateId,component);
     }
   }
 
-  // Local shape-only observations are retained as local evidence, but they are
-  // never joined across functions and never participate in family persistence
-  // unless they have strong type/schema evidence.
-  const representedBindings=new Set(
-    entityNodes.flatMap(node=>
-      arr(node.details?.aliases).map(alias=>
-        `${String(node.details?.flowId||'')}:${alias}`
-      )
-    )
-  );
+  const entityLinks=[];
+  const entityNodes=[];
 
-  const flowFunctions=new Set(
-    arr(flowSlices).flatMap(flow=>arr(flow?.symbolIds).map(String))
-  );
-
-  for(const observation of observationByKey.values()){
-    if(!flowFunctions.has(String(observation?.functionId||'')))continue;
-    if(!hasShapeEvidence([observation]))continue;
-
-    const flowIds=arr(flowSlices)
-      .filter(flow=>arr(flow?.symbolIds).map(String).includes(String(observation.functionId)))
-      .map(flow=>String(flow.id||''));
-
-    const alreadyRepresented=entityNodes.some(node=>
-      arr(node.details?.aliases).includes(observation.variable)&&
-      flowIds.includes(String(node.details?.flowId||''))&&
-      Number(node.details?.functionCount||0)>1
-    );
-    if(alreadyRepresented)continue;
-
-    const pseudoFlow={id:`local:${observation.functionId}`,symbolIds:[observation.functionId]};
-    const localNode=materializeEntity({
-      flow:pseudoFlow,
-      observationsInComponent:[observation],
+  for(const [classId,obsMap] of qualifiedClassObservations.entries()){
+    const observationsForEntity=[...obsMap.values()];
+    if(!qualifiesAcrossFunctions(observationsForEntity))continue;
+    const id=stableId('entity-class',classId);
+    const node=materializeEntity({
+      id,
+      observations:observationsForEntity,
+      identityKind:'class',
+      classId,
       symbolById,
       nodeById,
       entityLinks
     });
-    localNode.details.identityScope='local-shape';
-    localNode.details.flowCount=0;
-    localNode.details.transient=true;
-    entityNodes.push(localNode);
-    nodeById.set(localNode.id,localNode);
+    if(node){
+      entityNodes.push(node);
+      nodeById.set(node.id,node);
+    }
   }
 
-  annotateFamilies(entityNodes);
+  for(const [id,component] of anonymousCandidates.entries()){
+    const node=materializeEntity({
+      id,
+      observations:component,
+      identityKind:'continuous',
+      symbolById,
+      nodeById,
+      entityLinks
+    });
+    if(node){
+      entityNodes.push(node);
+      nodeById.set(node.id,node);
+    }
+  }
 
   nodes.push(...entityNodes);
   nodes.sort((a,b)=>{
@@ -576,12 +563,8 @@ export function buildPythonDataStructureGraph({
     const ar=rank[a.type]??9;
     const br=rank[b.type]??9;
     if(ar!==br)return ar-br;
-    if(a.type==='entity'){
-      return Number(b.details?.coreScore||0)-Number(a.details?.coreScore||0);
-    }
-    return String(a.details?.name||a.id).localeCompare(
-      String(b.details?.name||b.id)
-    );
+    if(a.type==='entity')return Number(b.details?.coreScore||0)-Number(a.details?.coreScore||0);
+    return String(a.details?.name||a.id).localeCompare(String(b.details?.name||b.id));
   });
 
   return {nodes,entityLinks};
