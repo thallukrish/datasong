@@ -102,9 +102,38 @@ function annotationCandidates(annotation=''){
     .match(/[A-Za-z_][A-Za-z0-9_.]*/g) || [];
 }
 
+const NON_IDENTITY_TYPE_NAMES=new Set([
+  'Any','Optional','Union','Literal','Annotated','Type','Generic','Protocol',
+  'Mapping','MutableMapping','Sequence','MutableSequence','Iterable','Iterator',
+  'Collection','Container','Set','MutableSet','Tuple','List','Dict','FrozenSet',
+  'Deque','DefaultDict','Counter','ChainMap',
+  'dict','list','tuple','set','frozenset','str','int','float','bool','bytes',
+  'bytearray','complex','object','type','range','memoryview'
+]);
+
+function isNonIdentityType(token){
+  const raw=String(token||'').trim();
+  if(!raw)return true;
+  const normalized=raw.replace(/^builtins\./,'');
+  const leafName=normalized.split('.').at(-1)||'';
+  if(NON_IDENTITY_TYPE_NAMES.has(leafName))return true;
+  if(normalized.startsWith('typing.'))return true;
+  if(normalized.startsWith('typing_extensions.'))return true;
+  if(normalized.startsWith('collections.abc.'))return true;
+  if(normalized.startsWith('builtins.'))return true;
+  return false;
+}
+
+function classScope(classId=''){
+  const id=String(classId||'');
+  if(id.startsWith('class:'))return 'project';
+  if(id.startsWith('external-class:')||id.startsWith('qualified-class:'))return 'external';
+  return '';
+}
+
 function resolveClassToken(token,catalog,sourcePath=''){
   const raw=String(token||'').trim();
-  if(!raw)return '';
+  if(!raw||isNonIdentityType(raw))return '';
   const leafName=raw.split('.').at(-1);
 
   const locals=catalog.localByName.get(leafName)||[];
@@ -113,9 +142,14 @@ function resolveClassToken(token,catalog,sourcePath=''){
   if(locals.length===1)return locals[0].id;
 
   const external=catalog.externalByLocal.get(leafName);
-  if(external?.size===1)return `external-class:${[...external][0]}`;
+  if(external?.size===1){
+    const qualified=[...external][0];
+    if(!isNonIdentityType(qualified))return `external-class:${qualified}`;
+  }
 
-  if(raw.includes('.')&&/^[A-Z]/.test(leafName))return `qualified-class:${raw}`;
+  if(raw.includes('.')&&/^[A-Z]/.test(leafName)&&!isNonIdentityType(raw)){
+    return `qualified-class:${raw}`;
+  }
   return '';
 }
 
@@ -411,6 +445,7 @@ function materializeEntity({
       kind:inferredKind(observations),
       identityKind,
       classId,
+      classScope:classScope(classId),
       aliases,
       annotations,
       constructors,
