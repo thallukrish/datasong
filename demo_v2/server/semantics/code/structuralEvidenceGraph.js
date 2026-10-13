@@ -15,17 +15,8 @@ function addLink(node, id, relationship) {
   }
 }
 
-export function buildWorkflowGraph({ groupedPaths = [], symbols = [], entityLinks = [] } = {}) {
+export function buildWorkflowGraph({ groupedPaths = [], symbols = [] } = {}) {
   const symbolById = new Map(arr(symbols).map((symbol) => [symbol?.id, symbol]));
-  const entitiesByFunction = new Map();
-
-  for (const link of arr(entityLinks)) {
-    const functionId = String(link?.functionId || '');
-    const targetId = String(link?.targetId || '');
-    if (!functionId || !targetId) continue;
-    if (!entitiesByFunction.has(functionId)) entitiesByFunction.set(functionId, new Set());
-    entitiesByFunction.get(functionId).add(targetId);
-  }
 
   const nodes = [];
   const workflowLinks = [];
@@ -35,10 +26,6 @@ export function buildWorkflowGraph({ groupedPaths = [], symbols = [], entityLink
     if (!symbolIds.length) continue;
 
     const id = workflowId(path);
-    const touchedEntities = new Set();
-    for (const symbolId of symbolIds) {
-      for (const entityId of entitiesByFunction.get(symbolId) || []) touchedEntities.add(entityId);
-    }
 
     const node = {
       id,
@@ -49,7 +36,6 @@ export function buildWorkflowGraph({ groupedPaths = [], symbols = [], entityLink
         entryFunctionId: symbolIds[0],
         exitFunctionId: symbolIds.at(-1),
         functionCount: symbolIds.length,
-        entityCount: touchedEntities.size,
         branchVariantCount: Number(path?.branchVariantCount || 0),
         alternateEntranceCount: Number(path?.alternateEntranceCount || 0)
       },
