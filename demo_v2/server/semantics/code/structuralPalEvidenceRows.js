@@ -209,7 +209,6 @@ export function materializeStructuralEvidenceRows({
         entryFunctionId: node.details?.entryFunctionId || '',
         exitFunctionId: node.details?.exitFunctionId || '',
         functionCount: Number(node.details?.functionCount || functionRows.length),
-        entityCount: Number(node.details?.entityCount || 0),
         branchVariantCount: Number(node.details?.branchVariantCount || 0),
         alternateEntranceCount: Number(node.details?.alternateEntranceCount || 0)
       })
