@@ -14,19 +14,13 @@ test('workflow graph reuses existing ordered call-path symbol ids', () => {
     branchVariantCount: 1,
     alternateEntranceCount: 0
   }];
-  const entityLinks = [
-    { functionId: 'A', targetId: 'entity:X' },
-    { functionId: 'B', targetId: 'entity:X' },
-    { functionId: 'C', targetId: 'entity:Y' }
-  ];
-
-  const graph = buildWorkflowGraph({ groupedPaths, symbols, entityLinks });
+  const graph = buildWorkflowGraph({ groupedPaths, symbols });
   assert.equal(graph.nodes.length, 1);
   assert.equal(graph.nodes[0].type, 'workflow');
   assert.equal(graph.nodes[0].details.entryFunctionId, 'A');
   assert.equal(graph.nodes[0].details.exitFunctionId, 'C');
   assert.equal(graph.nodes[0].details.functionCount, 3);
-  assert.equal(graph.nodes[0].details.entityCount, 2);
+  assert.equal('entityCount' in graph.nodes[0].details, false);
   assert.deepEqual(graph.nodes[0].links.map((link) => [link.id, link.relationship]), [
     ['A', 'contains'], ['B', 'contains'], ['C', 'contains']
   ]);
