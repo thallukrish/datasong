@@ -209,3 +209,51 @@ def start():
   assert.ok(external, 'Expected concrete imported class entity');
   assert.ok(external.details.functionCount >= 2);
 });
+
+
+test('imported modules alone never establish class identity', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-module-alias-', `
+import typing
+
+def finish(x: typing.Mapping[str, int]):
+    return x["value"]
+
+def start():
+    item: typing.Mapping[str, int] = {"value": 1}
+    return finish(item)
+`);
+
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+  assert.ok(!entities.some((node) =>
+    String(node.details?.classId || '') === 'external-class:typing'
+  ));
+
+  const traced = entities.find((node) =>
+    node.details?.identityKind === 'continuous' &&
+    node.details?.keys?.includes("'value'")
+  );
+  assert.ok(traced, 'Expected continuously traced mapping entity');
+});
+
+test('module aliases resolve to canonical concrete external classes', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-module-class-', `
+import pandas as pd
+
+def finish(x: pd.Index):
+    return x.name
+
+def start():
+    item = pd.Index([1, 2, 3])
+    return finish(item)
+`);
+
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+  const external = entities.find((node) =>
+    node.details?.identityKind === 'class' &&
+    node.details?.classScope === 'external' &&
+    node.details?.classId === 'external-class:pandas.Index'
+  );
+
+  assert.ok(external, 'Expected pd.Index to canonicalize to pandas.Index');
+  assert.ok(external.details.functionCount >= 2);
+});
