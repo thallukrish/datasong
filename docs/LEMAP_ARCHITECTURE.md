@@ -322,6 +322,24 @@ f5 reads Dataset.variables
 
 If both observations resolve to the same class definition, LeMap materializes one `Dataset` entity and aggregates the observed members and operations.
 
+Class identity is intentionally restricted:
+
+```text
+project-local concrete class
+→ strong class identity
+
+concrete imported external class
+→ valid external class identity
+
+Python builtins and generic typing/container protocols
+→ type or shape evidence only
+→ never establish class identity by themselves
+```
+
+Examples such as `dict`, `list`, `typing.Dict`, `typing.Mapping`, `typing.Sequence`, builtin scalars and `collections.abc` container protocols must therefore qualify through continuous cross-function lineage rather than disconnected class-style aggregation.
+
+Persisted class-backed entities record whether their class identity is `project` or `external`.
+
 ### Anonymous and non-class entities
 
 Mappings, lists, tuples, arrays without a resolved class identity, primitives and other anonymous values do not have a class definition that can establish identity.
