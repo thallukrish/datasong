@@ -288,23 +288,98 @@ External implementation that falls outside the evidence boundary is treated as a
 
 ## 9. Entity and persistent-data layer
 
-The semantic map connects workflows to the persistent entities they read, create, update or otherwise depend on.
+LeMap treats an entity as data that persists across function boundaries inside a flow.
 
-This relationship is stronger business evidence than generic function reuse.
+A local variable or local data structure used in only one function is not an entity. It remains part of that function or region's structural evidence.
+
+The qualification rule is:
+
+```text
+observed in one function only
+→ local function / region detail
+
+observed in more than one function in a flow
+→ entity candidate
+```
+
+There are two ways an entity candidate can qualify.
+
+### Class-backed entities
+
+A class-backed value may qualify when the same resolved class is observed in more than one function in the same flow.
+
+The functions do not have to be adjacent and the same runtime instance does not need to be passed through every intermediate function. The class definition supplies the stable identity.
 
 Example:
 
 ```text
-Place Order
-   └─ writes → OrderHeader
+Flow
+f1 → f2 → f3 → f4 → f5
 
-View Order Detail
-   └─ reads  → OrderHeader
+f1 updates Dataset.attrs
+f5 reads Dataset.variables
 ```
 
-The shared persistent state is meaningful evidence that the workflows belong to the same business domain and that one may consume state produced by the other.
+If both observations resolve to the same class definition, LeMap materializes one `Dataset` entity and aggregates the observed members and operations.
 
-Entity relationships from the schema are deterministic evidence where available:
+### Anonymous and non-class entities
+
+Mappings, lists, tuples, arrays without a resolved class identity, primitives and other anonymous values do not have a class definition that can establish identity.
+
+They qualify only when deterministic data lineage proves continuity across more than one function in a flow.
+
+Valid continuity evidence includes:
+
+```text
+argument → parameter
+return value → caller receiver
+alias → alias
+```
+
+Example:
+
+```text
+f1.record
+   ↓ argument
+f2.x
+   ↓ return / receiver
+f3.item
+```
+
+The observed keys, members, types and operations are accumulated after identity has been established by the continuous trace.
+
+Matching shape by itself is not identity. Two disconnected dictionaries with the same keys remain local structures unless data flow connects them.
+
+### Graph normalization
+
+Flow and entity graphs meet at functions and regions.
+
+```text
+Flow ─contains→ Function/Region ←read/update/create/delete─ Entity
+```
+
+LeMap therefore does not need persisted Entity-to-Flow edges.
+
+Flow nodes link to functions. Entity evidence links to the functions or regions that create, read, update or delete the entity. Which entities participate in a flow can always be derived through the shared function nodes.
+
+The persisted entity row contains only qualified cross-function evidence such as:
+
+```text
+identity kind
+resolved class identity when available
+aliases
+annotations and constructors
+keys / members / methods
+function count
+operation count
+core score
+```
+
+Temporary flow-instance nodes, local-shape nodes and separate entity-family nodes are not persisted.
+
+This keeps storage smaller and makes every entity row semantically significant.
+
+Entity relationships from explicit schemas remain deterministic evidence where available:
 
 ```text
 OrderItem.orderId
@@ -312,7 +387,7 @@ OrderItem.orderId
 OrderHeader.orderId
 ```
 
-The current learning implementation materializes schema entities/relationships and reconciles them with workflow knowledge in the persistent semantic map.
+The model may describe what an entity means, but structural entity qualification and entity-to-function relationships remain deterministic.
 
 ---
 
