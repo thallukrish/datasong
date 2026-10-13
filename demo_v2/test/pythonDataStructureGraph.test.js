@@ -159,3 +159,53 @@ def update(record):
   assert.ok(relation.startLine >= ifRegion.startLine);
   assert.ok(relation.endLine <= ifRegion.endLine);
 });
+
+
+test('typing containers never establish class entity identity', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-typing-container-', `
+from typing import Mapping, Dict
+
+def finish(x: Mapping[str, int]):
+    return x["value"]
+
+def start():
+    item: Dict[str, int] = {"value": 1}
+    return finish(item)
+`);
+
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+  assert.ok(!entities.some((node) =>
+    String(node.details?.classId || '').includes('typing.Mapping') ||
+    String(node.details?.classId || '').includes('typing.Dict')
+  ));
+
+  const traced = entities.find((node) =>
+    node.details?.identityKind === 'continuous' &&
+    node.details?.keys?.includes("'value'")
+  );
+  assert.ok(traced, 'Expected continuously traced mapping entity');
+  assert.equal(traced.details.classId, '');
+});
+
+test('concrete imported classes may establish external class identity', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-external-class-', `
+from externalpkg import ConcreteThing
+
+def finish(x: ConcreteThing):
+    return x.value
+
+def start():
+    item = ConcreteThing()
+    return finish(item)
+`);
+
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+  const external = entities.find((node) =>
+    node.details?.identityKind === 'class' &&
+    node.details?.classScope === 'external' &&
+    String(node.details?.classId || '').includes('externalpkg.ConcreteThing')
+  );
+
+  assert.ok(external, 'Expected concrete imported class entity');
+  assert.ok(external.details.functionCount >= 2);
+});
