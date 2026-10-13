@@ -340,6 +340,20 @@ Examples such as `dict`, `list`, `typing.Dict`, `typing.Mapping`, `typing.Sequen
 
 Persisted class-backed entities record whether their class identity is `project` or `external`.
 
+Imported modules are never class identity by themselves. A qualified alias is resolved through the import before persistence:
+
+```text
+import pandas as pd
+
+pd.Index
+→ pandas.Index
+→ external concrete class
+
+typing
+→ imported module only
+→ not an entity class
+```
+
 ### Anonymous and non-class entities
 
 Mappings, lists, tuples, arrays without a resolved class identity, primitives and other anonymous values do not have a class definition that can establish identity.
