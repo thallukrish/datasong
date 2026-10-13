@@ -134,6 +134,7 @@ const entities=rows
       kind:d.kind||'',
       identityKind:d.identityKind||'',
       classId:d.classId||'',
+      classScope:d.classScope||'',
       functionCount:Number(d.functionCount||0),
       coreScore:Number(d.coreScore||0),
       keys:Array.isArray(d.keys)?d.keys.slice(0,12):[],
