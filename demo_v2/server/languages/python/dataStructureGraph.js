@@ -85,16 +85,27 @@ function classCatalog(codeFacts=[],externalSymbols=[]){
     localByName.get(name).push({id,name,sourcePath:String(fact.sourcePath||'')});
   }
 
-  const externalByLocal=new Map();
+  const externalSymbolBySource=new Map();
+  const moduleAliasBySource=new Map();
+
   for(const symbol of arr(externalSymbols)){
+    const kind=String(symbol?.kind||'');
+    const sourcePath=String(symbol?.sourcePath||'');
     const local=String(symbol?.localName||symbol?.simpleName||'').trim();
     const qualified=String(symbol?.qualifiedName||symbol?.name||'').trim();
-    if(!local||!qualified)continue;
-    if(!externalByLocal.has(local))externalByLocal.set(local,new Set());
-    externalByLocal.get(local).add(qualified);
+    if(!sourcePath||!local||!qualified)continue;
+
+    const key=`${sourcePath}::${local}`;
+    if(kind==='external-module'){
+      moduleAliasBySource.set(key,String(symbol?.importModule||qualified));
+      continue;
+    }
+    if(kind==='external-symbol'){
+      externalSymbolBySource.set(key,qualified);
+    }
   }
 
-  return {localByName,externalByLocal};
+  return {localByName,externalSymbolBySource,moduleAliasBySource};
 }
 
 function annotationCandidates(annotation=''){
@@ -134,20 +145,39 @@ function classScope(classId=''){
 function resolveClassToken(token,catalog,sourcePath=''){
   const raw=String(token||'').trim();
   if(!raw||isNonIdentityType(raw))return '';
-  const leafName=raw.split('.').at(-1);
+
+  const source=String(sourcePath||'');
+  const parts=raw.split('.').filter(Boolean);
+  const leafName=parts.at(-1)||'';
 
   const locals=catalog.localByName.get(leafName)||[];
-  const sameFile=locals.filter(item=>item.sourcePath===String(sourcePath||''));
+  const sameFile=locals.filter(item=>item.sourcePath===source);
   if(sameFile.length===1)return sameFile[0].id;
   if(locals.length===1)return locals[0].id;
 
-  const external=catalog.externalByLocal.get(leafName);
-  if(external?.size===1){
-    const qualified=[...external][0];
-    if(!isNonIdentityType(qualified))return `external-class:${qualified}`;
+  if(parts.length===1){
+    // A bare imported module such as "typing", "pandas" or "np" is never
+    // class identity. Only a concrete symbol imported from a module may be.
+    if(catalog.moduleAliasBySource.has(`${source}::${raw}`))return '';
+
+    const qualified=catalog.externalSymbolBySource.get(`${source}::${raw}`)||'';
+    if(qualified&&!isNonIdentityType(qualified)){
+      return `external-class:${qualified}`;
+    }
+    return '';
   }
 
-  if(raw.includes('.')&&/^[A-Z]/.test(leafName)&&!isNonIdentityType(raw)){
+  const rootAlias=parts[0];
+  const moduleName=catalog.moduleAliasBySource.get(`${source}::${rootAlias}`)||'';
+  if(moduleName){
+    const canonical=[moduleName,...parts.slice(1)].join('.');
+    if(!isNonIdentityType(canonical)){
+      return `external-class:${canonical}`;
+    }
+    return '';
+  }
+
+  if(!isNonIdentityType(raw)){
     return `qualified-class:${raw}`;
   }
   return '';
