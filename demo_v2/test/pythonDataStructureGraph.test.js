@@ -257,3 +257,42 @@ def start():
   assert.ok(external, 'Expected pd.Index to canonicalize to pandas.Index');
   assert.ok(external.details.functionCount >= 2);
 });
+
+
+test('primitive scalar values passed across functions do not materialize as entities', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-scalars-', `
+def sink_int(x: int):
+    return x + 1
+
+def sink_str(x: str):
+    return x.upper()
+
+def start():
+    count: int = 1
+    label: str = "x"
+    sink_int(count)
+    return sink_str(label)
+`);
+
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+  assert.equal(entities.length, 0);
+});
+
+test('date and time scalar values passed across functions do not materialize as entities', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-dates-', `
+import datetime
+
+def sink(value: datetime.date):
+    return value.year
+
+def start():
+    value = datetime.date.today()
+    return sink(value)
+`);
+
+  const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
+  assert.ok(!entities.some((node) =>
+    String(node.details?.classId || '').endsWith('datetime.date') ||
+    node.details?.aliases?.includes('value')
+  ));
+});
