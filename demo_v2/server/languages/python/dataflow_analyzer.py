@@ -50,6 +50,72 @@ def target_names(node):
         return out
     return []
 
+def value_shape(node):
+    if node is None:
+        return ""
+    if isinstance(node, ast.Constant):
+        if node.value is None:
+            return "literal:none"
+        return f"literal:{type(node.value).__name__}"
+    if isinstance(node, ast.Dict):
+        return "mapping"
+    if isinstance(node, ast.List):
+        return "sequence:list"
+    if isinstance(node, ast.Tuple):
+        return "sequence:tuple"
+    if isinstance(node, ast.Set):
+        return "set"
+    if isinstance(node, ast.Call):
+        name = call_name(node)
+        return f"call:{name}" if name else "call"
+    if isinstance(node, ast.Name):
+        return "alias"
+    if isinstance(node, ast.Attribute):
+        return "member"
+    if isinstance(node, ast.Subscript):
+        return "subscript"
+    if isinstance(node, ast.BinOp):
+        return f"binop:{type(node.op).__name__}"
+    if isinstance(node, ast.UnaryOp):
+        return f"unary:{type(node.op).__name__}"
+    if isinstance(node, ast.Compare):
+        return "compare"
+    if isinstance(node, ast.BoolOp):
+        return f"boolop:{type(node.op).__name__}"
+    return type(node).__name__.lower()
+
+def access_shape(node):
+    if isinstance(node, ast.Subscript):
+        key = constant_key(node.slice)
+        return {"access": "key", "name": key or safe_unparse(node.slice)}
+    if isinstance(node, ast.Attribute):
+        return {"access": "member", "name": node.attr}
+    return {"access": "", "name": ""}
+
+def processing_shape(parent):
+    if parent is None:
+        return ""
+    if isinstance(parent, ast.Call):
+        name = call_name(parent)
+        return f"call:{name}" if name else "call"
+    if isinstance(parent, ast.Return):
+        return "return"
+    if isinstance(parent, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+        return "assign"
+    if isinstance(parent, ast.BinOp):
+        return f"binop:{type(parent.op).__name__}"
+    if isinstance(parent, ast.UnaryOp):
+        return f"unary:{type(parent.op).__name__}"
+    if isinstance(parent, ast.Compare):
+        return "compare"
+    if isinstance(parent, ast.BoolOp):
+        return f"boolop:{type(parent.op).__name__}"
+    if isinstance(parent, ast.Subscript):
+        return "subscript"
+    if isinstance(parent, ast.Attribute):
+        return f"member:{parent.attr}"
+    return type(parent).__name__.lower()
+
 def value_origin(node):
     if isinstance(node, ast.Dict):
         keys = [constant_key(k) for k in node.keys]
@@ -128,7 +194,7 @@ class ObservationVisitor(ast.NodeVisitor):
             }
         return self.records[name]
 
-    def add_event(self, name, node, operation, detail=""):
+    def add_event(self, name, node, operation, detail=None):
         if not name or name in self.ignored_names:
             return
         line = int(getattr(node, "lineno", 0) or 0)
@@ -136,12 +202,12 @@ class ObservationVisitor(ast.NodeVisitor):
         self.events.append({
             "variable": name,
             "operation": operation,
-            "detail": detail,
+            "detail": detail if detail is not None else "",
             "line": line,
             "endLine": end_line
         })
 
-    def touch(self, name, node, operation=None):
+    def touch(self, name, node, operation=None, detail=None):
         rec = self.rec(name)
         if not rec:
             return None
@@ -151,7 +217,7 @@ class ObservationVisitor(ast.NodeVisitor):
             rec["lastLine"] = max(rec["lastLine"], int(getattr(node, "end_lineno", line) or line))
         if operation:
             rec["operations"].add(operation)
-            self.add_event(name, node, operation)
+            self.add_event(name, node, operation, detail)
         return rec
 
     def visit(self, node):
@@ -218,7 +284,9 @@ class ObservationVisitor(ast.NodeVisitor):
                         self.add_event(name, node, "create", origin.get("name", ""))
             base = root_name(target)
             if base and isinstance(target, (ast.Attribute, ast.Subscript)):
-                self.touch(base, target, "mutate")
+                detail = access_shape(target)
+                detail["valueKind"] = value_shape(node.value)
+                self.touch(base, target, "mutate", detail)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node):
@@ -238,19 +306,28 @@ class ObservationVisitor(ast.NodeVisitor):
                         self.add_event(name, node, "create", origin.get("name", ""))
         base = root_name(node.target)
         if base and isinstance(node.target, (ast.Attribute, ast.Subscript)):
-            self.touch(base, node.target, "mutate")
+            detail = access_shape(node.target)
+            detail["valueKind"] = value_shape(node.value)
+            self.touch(base, node.target, "mutate", detail)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node):
         base = root_name(node.target)
         if base:
-            self.touch(base, node, "mutate")
+            detail = access_shape(node.target)
+            detail["valueKind"] = f"augassign:{type(node.op).__name__}:{value_shape(node.value)}"
+            self.touch(base, node, "mutate", detail)
         self.generic_visit(node)
 
     def visit_Attribute(self, node):
         base = root_name(node)
         if base:
-            rec = self.touch(base, node, "read" if isinstance(node.ctx, ast.Load) else "mutate")
+            operation = "read" if isinstance(node.ctx, ast.Load) else "mutate"
+            detail = access_shape(node)
+            if operation == "read":
+                parent = self.parents[-2] if len(self.parents) >= 2 else None
+                detail["afterRead"] = processing_shape(parent)
+            rec = self.touch(base, node, operation, detail)
             if rec:
                 rec["members"].add(node.attr)
         self.generic_visit(node)
@@ -258,7 +335,12 @@ class ObservationVisitor(ast.NodeVisitor):
     def visit_Subscript(self, node):
         base = root_name(node)
         if base:
-            rec = self.touch(base, node, "read" if isinstance(node.ctx, ast.Load) else "mutate")
+            operation = "read" if isinstance(node.ctx, ast.Load) else "mutate"
+            detail = access_shape(node)
+            if operation == "read":
+                parent = self.parents[-2] if len(self.parents) >= 2 else None
+                detail["afterRead"] = processing_shape(parent)
+            rec = self.touch(base, node, operation, detail)
             if rec:
                 rec["operations"].add("index")
                 key = constant_key(node.slice)
