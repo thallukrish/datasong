@@ -305,58 +305,6 @@ function canonicalEvents(observation){
   return out;
 }
 
-function buildFunctionNodes(symbols){
-  const nodes=[];
-  const nodeById=new Map();
-
-  for(const symbol of arr(symbols)){
-    const functionNode={
-      id:symbol.id,
-      type:'function',
-      details:{
-        name:symbol.name,
-        sourcePath:symbol.sourcePath,
-        startLine:Number(symbol.startLine||0),
-        endLine:Number(symbol.endLine||0)
-      },
-      links:[]
-    };
-    nodes.push(functionNode);
-    nodeById.set(functionNode.id,functionNode);
-
-    for(const region of arr(symbol.regions)){
-      const regionNode={
-        id:region.id,
-        type:'function-region',
-        details:{
-          name:`${symbol.name} ${region.kind||'region'}`,
-          functionId:symbol.id,
-          kind:region.kind||'',
-          sourcePath:symbol.sourcePath,
-          startLine:Number(region.startLine||0),
-          endLine:Number(region.endLine||0)
-        },
-        links:[]
-      };
-      nodes.push(regionNode);
-      nodeById.set(regionNode.id,regionNode);
-      addLink(functionNode,regionNode.id,'contains');
-      addLink(regionNode,symbol.id,'contained-by');
-    }
-  }
-
-  for(const symbol of arr(symbols)){
-    const fn=nodeById.get(symbol.id);
-    for(const ref of arr(symbol.references)){
-      if(ref?.relation==='calls'&&ref?.targetSymbolId&&nodeById.has(ref.targetSymbolId)){
-        addLink(fn,ref.targetSymbolId,'calls');
-      }
-    }
-  }
-
-  return {nodes,nodeById};
-}
-
 function resolveTransferTarget(transfer,symbolById){
   const caller=symbolById.get(transfer?.callerFunctionId);
   if(!caller)return '';
@@ -470,7 +418,6 @@ function materializeEntity({
   identityKind,
   classId='',
   symbolById,
-  nodeById,
   entityLinks
 }){
   const functionIds=uniq(observations.map(obs=>obs?.functionId));
@@ -498,7 +445,6 @@ function materializeEntity({
       if(seenLinks.has(dedupe))continue;
       seenLinks.add(dedupe);
       operationCount+=1;
-      addLink(nodeById.get(sourceId),id,relationship);
       entityLinks.push({
         sourceId,
         sourceType,
@@ -551,7 +497,6 @@ export function buildPythonDataStructureGraph({
   codeFacts=[],
   externalSymbols=[]
 }={}){
-  const {nodes,nodeById}=buildFunctionNodes(symbols);
   const symbolById=new Map(arr(symbols).map(symbol=>[symbol?.id,symbol]));
   const observationByKey=new Map();
 
@@ -650,12 +595,10 @@ export function buildPythonDataStructureGraph({
       identityKind:'class',
       classId,
       symbolById,
-      nodeById,
       entityLinks
     });
     if(node){
       entityNodes.push(node);
-      nodeById.set(node.id,node);
     }
   }
 
@@ -665,24 +608,17 @@ export function buildPythonDataStructureGraph({
       observations:component,
       identityKind:'continuous',
       symbolById,
-      nodeById,
       entityLinks
     });
     if(node){
       entityNodes.push(node);
-      nodeById.set(node.id,node);
     }
   }
 
-  nodes.push(...entityNodes);
-  nodes.sort((a,b)=>{
-    const rank={entity:0,workflow:1,function:2,'function-region':3};
-    const ar=rank[a.type]??9;
-    const br=rank[b.type]??9;
-    if(ar!==br)return ar-br;
-    if(a.type==='entity')return Number(b.details?.coreScore||0)-Number(a.details?.coreScore||0);
-    return String(a.details?.name||a.id).localeCompare(String(b.details?.name||b.id));
-  });
+  entityNodes.sort((a,b)=>
+    Number(b.details?.coreScore||0)-Number(a.details?.coreScore||0)||
+    String(a.details?.name||a.id).localeCompare(String(b.details?.name||b.id))
+  );
 
-  return {nodes,entityLinks};
+  return {nodes:entityNodes,entityLinks};
 }
