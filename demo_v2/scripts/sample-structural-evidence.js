@@ -147,6 +147,7 @@ const allEntities=rows
       keys:Array.isArray(d.keys)?d.keys:[],
       members:Array.isArray(d.members)?d.members:[],
       methods:Array.isArray(d.methods)?d.methods:[],
+      accessSignatures:Array.isArray(d.accessSignatures)?d.accessSignatures:[],
       operationCount:uses.length,
       uses
     };
@@ -175,6 +176,14 @@ for(const values of functionRowsByFile.values()){
   values.sort((a,b)=>(a.end-a.start)-(b.end-b.start)||b.start-a.start);
 }
 
+const functionRowForLocation=(file,line)=>{
+  const numericLine=Number(line||0);
+  if(!numericLine)return 0;
+  const enclosing=(functionRowsByFile.get(String(file||''))||[])
+    .find(fn=>fn.start<=numericLine&&numericLine<=fn.end);
+  return Number(enclosing?.row||0);
+};
+
 const functionRowForSource=(sourceRow)=>{
   const source=byRow.get(String(sourceRow));
   if(!source)return 0;
@@ -189,9 +198,7 @@ const functionRowForSource=(sourceRow)=>{
   const line=Number(startText||0);
   if(!line)return 0;
 
-  const enclosing=(functionRowsByFile.get(source.file)||[])
-    .find(fn=>fn.start<=line&&line<=fn.end);
-  return Number(enclosing?.row||0);
+  return functionRowForLocation(source.file,line);
 };
 
 const isStructuredContinuousEntity=(entity)=>{
@@ -389,6 +396,105 @@ structuredChains.sort((a,b)=>
   a.entityRow-b.entityRow
 );
 
+const setIntersection=(left,right)=>{
+  const b=new Set(right);
+  return [...new Set(left)].filter(value=>b.has(value)).sort();
+};
+
+const fingerprintForOccurrence=(occurrence)=>{
+  const entity=allEntities.find(item=>item.row===occurrence.entityRow);
+  const flow=topFlows.find(item=>item.row===occurrence.flowRow);
+  if(!entity||!flow)return null;
+
+  const allowedFunctions=new Set(flow.functions.map(fn=>Number(fn.row)));
+  const signatures=entity.accessSignatures.filter(signature=>{
+    const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
+    return functionRow&&allowedFunctions.has(functionRow);
+  });
+
+  const keys=[...new Set(signatures
+    .filter(signature=>signature?.access==='key'&&signature?.name)
+    .map(signature=>String(signature.name)))].sort();
+  const members=[...new Set(signatures
+    .filter(signature=>signature?.access==='member'&&signature?.name)
+    .map(signature=>String(signature.name)))].sort();
+  const writeValueKinds=[...new Set(signatures
+    .filter(signature=>['update','create'].includes(String(signature?.relationship||''))&&signature?.valueKind)
+    .map(signature=>String(signature.valueKind)))].sort();
+  const afterRead=[...new Set(signatures
+    .filter(signature=>signature?.relationship==='read'&&signature?.afterRead)
+    .map(signature=>String(signature.afterRead)))].sort();
+
+  return {
+    flowRow:occurrence.flowRow,
+    flowName:occurrence.flowName,
+    entityRow:occurrence.entityRow,
+    entityName:occurrence.entityName,
+    kind:occurrence.kind,
+    keys,
+    members,
+    writeValueKinds,
+    afterRead
+  };
+};
+
+const occurrenceFingerprints=structuredChains
+  .map(fingerprintForOccurrence)
+  .filter(Boolean);
+
+const fingerprintIntersections=[];
+for(let i=0;i<occurrenceFingerprints.length;i+=1){
+  for(let j=i+1;j<occurrenceFingerprints.length;j+=1){
+    const left=occurrenceFingerprints[i];
+    const right=occurrenceFingerprints[j];
+    if(left.flowRow===right.flowRow)continue;
+    if(left.kind&&right.kind&&left.kind!==right.kind)continue;
+
+    const commonKeys=setIntersection(left.keys,right.keys);
+    const commonMembers=setIntersection(left.members,right.members);
+    const commonWriteValueKinds=setIntersection(left.writeValueKinds,right.writeValueKinds);
+    const commonAfterRead=setIntersection(left.afterRead,right.afterRead);
+
+    const score=
+      commonKeys.length*4+
+      commonMembers.length*4+
+      commonWriteValueKinds.length*3+
+      commonAfterRead.length*2;
+
+    if(score<=0)continue;
+    fingerprintIntersections.push({
+      score,
+      sameEntityRow:left.entityRow===right.entityRow,
+      kind:left.kind||right.kind,
+      left:{
+        flowRow:left.flowRow,
+        flowName:left.flowName,
+        entityRow:left.entityRow,
+        entityName:left.entityName
+      },
+      right:{
+        flowRow:right.flowRow,
+        flowName:right.flowName,
+        entityRow:right.entityRow,
+        entityName:right.entityName
+      },
+      common:{
+        keys:commonKeys,
+        members:commonMembers,
+        writeValueKinds:commonWriteValueKinds,
+        afterRead:commonAfterRead
+      }
+    });
+  }
+}
+
+fingerprintIntersections.sort((a,b)=>
+  b.score-a.score||
+  Number(a.sameEntityRow)-Number(b.sameEntityRow)||
+  a.left.entityRow-b.left.entityRow||
+  a.right.entityRow-b.right.entityRow
+);
+
 const coreStructureReport={
   chainScope,
   candidateCallChainCount:scopedCallChains.length,
@@ -398,7 +504,8 @@ const coreStructureReport={
     functionCount:flow.functionCount,
     functions:flow.functions
   })),
-  rankedStructuredChains:structuredChains.slice(0,20)
+  rankedStructuredChains:structuredChains.slice(0,20),
+  fingerprintIntersections:fingerprintIntersections.slice(0,20)
 };
 
 const workflowMembership=new Map();
