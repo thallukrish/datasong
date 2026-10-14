@@ -2,6 +2,7 @@ import { ProgressiveRepositoryTopologyV7 } from './progressiveRepositoryTopology
 import { CallPathIndexerV3 } from './callPathIndexerV3.js';
 import { createMoquiAdapters } from './adapters/moqui/index.js';
 import { analyzePythonRepository } from './languages/python/adapter.js';
+import { buildPythonDataStructureGraph } from './languages/python/dataStructureGraph.js';
 import { buildWorkflowGraph, mergeStructuralEvidenceNodes } from './semantics/code/structuralEvidenceGraph.js';
 import { materializeStructuralEvidenceRows } from './semantics/code/structuralPalEvidenceRows.js';
 import { buildCompactCallFlows } from './semantics/code/compactCallFlows.js';
@@ -28,7 +29,10 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemaByName = new Map();
     this.externalSymbols = [];
     this.moduleRegions = [];
-    this.pythonDataGraphNodes = [];
+    this.pythonCodeFacts = [];
+    this.pythonDataObservations = [];
+    this.pythonDataTransfers = [];
+    this.pythonEntityNodes = [];
     this.pythonEntityLinks = [];
     this.workflowGraphNodes = [];
     this.workflowLinks = [];
@@ -43,7 +47,10 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.entitySchemaByName = new Map();
     this.externalSymbols = [];
     this.moduleRegions = [];
-    this.pythonDataGraphNodes = [];
+    this.pythonCodeFacts = [];
+    this.pythonDataObservations = [];
+    this.pythonDataTransfers = [];
+    this.pythonEntityNodes = [];
     this.pythonEntityLinks = [];
     this.workflowGraphNodes = [];
     this.workflowLinks = [];
@@ -60,7 +67,7 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
 
     const startedAt = Date.now();
     const pythonAst = await this.augmentPythonAstGraph();
-    console.log(`[profile-index] python structural graph hydrated ${Date.now()-startedAt}ms symbols=${pythonAst.symbolCount} entities=${this.pythonDataGraphNodes.filter(node=>node?.type==='entity').length}`);
+    console.log(`[profile-index] python function graph hydrated ${Date.now()-startedAt}ms symbols=${pythonAst.symbolCount}`);
 
     const structuralEvidence = await this.persistPythonStructuralEvidence({
       logPrefix:'profile-index'
@@ -89,64 +96,100 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
   }
 
   async persistPythonStructuralEvidence({ logPrefix='repo-prepare' } = {}) {
+    const persistStage = async (stage, rows) => {
+      this.codeStructureRows = rows;
+      const csvPath = await this.persistCodeStructureCsv({
+        language:'python',
+        rows:this.codeStructureRows
+      });
+      const palPaths = await this.persistPalIndexes({
+        language:'python',
+        rows:this.codeStructureRows
+      });
+
+      if (this.constructIndexMeta) {
+        this.constructIndexMeta = {
+          ...this.constructIndexMeta,
+          csvPath,
+          uniqueIndexPath:palPaths.uniqueIndexPath,
+          valuesIndexPath:palPaths.valuesIndexPath,
+          csvRowCount:this.codeStructureRows.length,
+          recordCount:this.codeStructureRows.length
+        };
+      }
+
+      console.log(
+        `[${logPrefix}] ${stage} persisted+indexed rows=${this.codeStructureRows.length}`
+      );
+      return {csvPath,palPaths};
+    };
+
+    // Stage 1 is already materialized by the base topology: function/region
+    // rows and deterministic calls edges are in codeStructureRows and PAL.
+    const functionRows = this.codeStructureRows.filter(row=>row?.type==='function').length;
+    console.log(
+      `[${logPrefix}] function graph ready functions=${functionRows} rows=${this.codeStructureRows.length}`
+    );
+
+    // Stage 2 derives compact execution flows only from the authoritative
+    // function call graph, then persists and indexes those workflow rows.
     const flowStarted = Date.now();
     const compactFlows = buildCompactCallFlows({ symbols:this.symbols });
-    console.log(
-      `[${logPrefix}] compact flow graph ${Date.now()-flowStarted}ms ` +
-      `functions=${compactFlows.functionCount} edges=${compactFlows.edgeCount} flows=${compactFlows.paths.length}`
-    );
-
-    const workflowStarted = Date.now();
     const workflowGraph = buildWorkflowGraph({
       groupedPaths: compactFlows.paths,
-      symbols: this.symbols,
-      entityLinks: this.pythonEntityLinks
+      symbols: this.symbols
     });
-
     this.workflowGraphNodes = workflowGraph.nodes;
     this.workflowLinks = workflowGraph.workflowLinks;
-    this.structuralEvidenceNodes = mergeStructuralEvidenceNodes(
-      this.pythonDataGraphNodes,
-      this.workflowGraphNodes
-    );
 
-    this.codeStructureRows = materializeStructuralEvidenceRows({
+    const functionAndFlowRows = materializeStructuralEvidenceRows({
       baseRows: this.codeStructureRows,
-      entityNodes: this.pythonDataGraphNodes,
-      entityLinks: this.pythonEntityLinks,
       workflowNodes: this.workflowGraphNodes
     });
-
-    const csvPath = await this.persistCodeStructureCsv({
-      language:'python',
-      rows:this.codeStructureRows
-    });
-    const palPaths = await this.persistPalIndexes({
-      language:'python',
-      rows:this.codeStructureRows
-    });
-
-    if (this.constructIndexMeta) {
-      this.constructIndexMeta = {
-        ...this.constructIndexMeta,
-        csvPath,
-        uniqueIndexPath:palPaths.uniqueIndexPath,
-        valuesIndexPath:palPaths.valuesIndexPath,
-        csvRowCount:this.codeStructureRows.length,
-        recordCount:this.codeStructureRows.length
-      };
-    }
+    await persistStage('flow graph', functionAndFlowRows);
 
     console.log(
-      `[${logPrefix}] structural entity/workflow evidence ${Date.now()-workflowStarted}ms ` +
-      `entities=${this.pythonDataGraphNodes.filter(node=>node?.type==='entity').length} ` +
-      `entityLinks=${this.pythonEntityLinks.length} workflows=${this.workflowGraphNodes.length} ` +
-      `workflowLinks=${this.workflowLinks.length} rows=${this.codeStructureRows.length}`
+      `[${logPrefix}] flow graph built ${Date.now()-flowStarted}ms ` +
+      `functions=${compactFlows.functionCount} edges=${compactFlows.edgeCount} ` +
+      `flows=${compactFlows.paths.length} workflowLinks=${this.workflowLinks.length}`
+    );
+
+    // Stage 3 derives entity identity from raw dataflow evidence constrained by
+    // the function graph and compact flow slices. Scalars remain dataflow-only.
+    const entityStarted = Date.now();
+    const entityGraph = buildPythonDataStructureGraph({
+      symbols:this.symbols,
+      observations:this.pythonDataObservations,
+      transfers:this.pythonDataTransfers,
+      flowSlices:compactFlows.paths,
+      codeFacts:this.pythonCodeFacts,
+      externalSymbols:this.externalSymbols
+    });
+    this.pythonEntityNodes = Array.isArray(entityGraph?.nodes) ? entityGraph.nodes : [];
+    this.pythonEntityLinks = Array.isArray(entityGraph?.entityLinks) ? entityGraph.entityLinks : [];
+
+    this.structuralEvidenceNodes = mergeStructuralEvidenceNodes(
+      this.workflowGraphNodes,
+      this.pythonEntityNodes
+    );
+
+    const unifiedRows = materializeStructuralEvidenceRows({
+      baseRows:functionAndFlowRows,
+      entityNodes:this.pythonEntityNodes,
+      entityLinks:this.pythonEntityLinks,
+      workflowNodes:this.workflowGraphNodes
+    });
+    await persistStage('entity graph', unifiedRows);
+
+    console.log(
+      `[${logPrefix}] entity graph built ${Date.now()-entityStarted}ms ` +
+      `entities=${this.pythonEntityNodes.length} entityLinks=${this.pythonEntityLinks.length} ` +
+      `rows=${this.codeStructureRows.length}`
     );
 
     return {
       nodeCount:this.structuralEvidenceNodes.length,
-      entityNodeCount:this.pythonDataGraphNodes.filter(node=>node?.type==='entity').length,
+      entityNodeCount:this.pythonEntityNodes.length,
       entityLinkCount:this.pythonEntityLinks.length,
       workflowNodeCount:this.workflowGraphNodes.length,
       workflowLinkCount:this.workflowLinks.length,
@@ -178,7 +221,10 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     this.callers.clear();
     this.externalSymbols = [];
     this.moduleRegions = [];
-    this.pythonDataGraphNodes = [];
+    this.pythonCodeFacts = [];
+    this.pythonDataObservations = [];
+    this.pythonDataTransfers = [];
+    this.pythonEntityNodes = [];
     this.pythonEntityLinks = [];
     this.workflowGraphNodes = [];
     this.workflowLinks = [];
@@ -256,8 +302,9 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
     const pythonSymbols = Array.isArray(result?.symbols) ? result.symbols : [];
     this.externalSymbols = Array.isArray(result?.externalSymbols) ? result.externalSymbols : [];
     this.moduleRegions = Array.isArray(result?.moduleRegions) ? result.moduleRegions : [];
-    this.pythonDataGraphNodes = Array.isArray(result?.dataGraphNodes) ? result.dataGraphNodes : [];
-    this.pythonEntityLinks = Array.isArray(result?.entityLinks) ? result.entityLinks : [];
+    this.pythonCodeFacts = Array.isArray(result?.codeFacts) ? result.codeFacts : [];
+    this.pythonDataObservations = Array.isArray(result?.dataObservations) ? result.dataObservations : [];
+    this.pythonDataTransfers = Array.isArray(result?.dataTransfers) ? result.dataTransfers : [];
     if (!pythonSymbols.length) return { version: Number(result?.version || 1), symbolCount: 0, externalSymbolCount: this.externalSymbols.length, resolvedCallCount: 0, unresolvedCallCount: 0 };
 
     const pythonPaths = new Set(pythonSymbols.map((symbol) => symbol.sourcePath));
