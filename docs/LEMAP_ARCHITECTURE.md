@@ -356,9 +356,13 @@ typing
 
 ### Anonymous and non-class entities
 
-Mappings, lists, tuples, arrays without a resolved class identity, primitives and other anonymous values do not have a class definition that can establish identity.
+Scalar values such as integers, strings, booleans, floats, bytes and date/time scalars are data-flow evidence, not persistent entities. Passing a scalar across function boundaries does not materialize an entity row.
+
+Mappings, lists, tuples, arrays and other structured values without a resolved class identity do not have a class definition that can establish identity.
 
 They qualify only when deterministic data lineage proves continuity across more than one function in a flow.
+
+Cross-function tracing is therefore the identity foundation, not the final importance test. Core-entity discovery can rank non-class structured values by their persistence through the longest execution flows, while project-local class objects are handled separately.
 
 Valid continuity evidence includes:
 
