@@ -4,12 +4,31 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { analyzePythonRepository } from '../server/languages/python/adapter.js';
+import { buildCompactCallFlows } from '../server/semantics/code/compactCallFlows.js';
+import { buildPythonDataStructureGraph } from '../server/languages/python/dataStructureGraph.js';
 
 async function tempRepo(t, name, source) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), name));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'sample.py'), source);
-  return analyzePythonRepository({ repoDir: root, files: ['sample.py'] });
+
+  const raw = await analyzePythonRepository({ repoDir: root, files: ['sample.py'] });
+  const flows = buildCompactCallFlows({ symbols: raw.symbols || [] });
+  const entities = buildPythonDataStructureGraph({
+    symbols: raw.symbols || [],
+    observations: raw.dataObservations || [],
+    transfers: raw.dataTransfers || [],
+    flowSlices: flows.paths || [],
+    codeFacts: raw.codeFacts || [],
+    externalSymbols: raw.externalSymbols || []
+  });
+
+  return {
+    ...raw,
+    compactFlows: flows.paths || [],
+    dataGraphNodes: entities.nodes || [],
+    entityLinks: entities.entityLinks || []
+  };
 }
 
 test('anonymous data qualifies only through continuous cross-function lineage', async (t) => {
