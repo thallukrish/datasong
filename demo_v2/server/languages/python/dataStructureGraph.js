@@ -13,14 +13,6 @@ function leaf(value){
   return parts.at(-1)||'';
 }
 
-function addLink(node,id,relationship){
-  if(!node||!id||!relationship)return;
-  node.links=arr(node.links);
-  if(!node.links.some(link=>link.id===id&&link.relationship===relationship)){
-    node.links.push({id,relationship});
-  }
-}
-
 class UnionFind{
   constructor(keys=[]){
     this.parent=new Map(keys.map(key=>[key,key]));
