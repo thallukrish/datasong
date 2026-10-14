@@ -211,15 +211,15 @@ export function materializeStructuralEvidenceRows({
           .filter(Boolean);
 
     const row = nextRow();
-    const workflowLinks = functionRows.map(String);
+    const workflowRowLinks = functionRows.map(String);
     rows.push({
       row,
       file: '',
       line_range: '',
       type: 'workflow',
       name: String(node.details?.name || node.id),
-      links: encodePalArray(workflowLinks),
-      relationships: encodePalArray(workflowLinks.map(() => 'contains')),
+      links: encodePalArray(workflowRowLinks),
+      relationships: encodePalArray(workflowRowLinks.map(() => 'contains')),
       details: JSON.stringify({
         structuralId: node.id,
         callPathId: node.details?.callPathId || '',
