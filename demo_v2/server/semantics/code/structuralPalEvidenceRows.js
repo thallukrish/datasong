@@ -165,6 +165,7 @@ export function materializeStructuralEvidenceRows({
         members: node.details?.members || [],
         methods: node.details?.methods || [],
         keys: node.details?.keys || [],
+        accessSignatures: node.details?.accessSignatures || [],
         identityKind: node.details?.identityKind || '',
         classId: node.details?.classId || '',
         classScope: node.details?.classScope || '',
