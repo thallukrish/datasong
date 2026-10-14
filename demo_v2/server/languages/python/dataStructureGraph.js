@@ -122,6 +122,57 @@ const NON_IDENTITY_TYPE_NAMES=new Set([
   'bytearray','complex','object','type','range','memoryview'
 ]);
 
+const SCALAR_TYPE_NAMES=new Set([
+  'str','int','float','bool','bytes','bytearray','complex',
+  'date','datetime','time','timedelta',
+  'datetime64','timedelta64','Timestamp','Timedelta'
+]);
+
+const SCALAR_ANNOTATION_WRAPPERS=new Set([
+  'Optional','Union','Annotated','Literal','None','NoneType'
+]);
+
+function scalarAnnotation(annotation=''){
+  const tokens=annotationCandidates(annotation).map(token=>token.split('.').at(-1)).filter(Boolean);
+  if(!tokens.length)return false;
+
+  const containerNames=new Set([
+    'Mapping','MutableMapping','Sequence','MutableSequence','Iterable','Iterator',
+    'Collection','Container','Set','MutableSet','Tuple','List','Dict','FrozenSet',
+    'Deque','DefaultDict','Counter','ChainMap','dict','list','tuple','set','frozenset',
+    'ndarray','Array','DataArray'
+  ]);
+  if(tokens.some(token=>containerNames.has(token)))return false;
+
+  const substantive=tokens.filter(token=>!SCALAR_ANNOTATION_WRAPPERS.has(token));
+  return substantive.length>0&&substantive.every(token=>SCALAR_TYPE_NAMES.has(token));
+}
+
+function scalarClassId(classId=''){
+  const id=String(classId||'');
+  return [
+    'datetime.date','datetime.datetime','datetime.time','datetime.timedelta',
+    'numpy.datetime64','numpy.timedelta64','pandas.Timestamp','pandas.Timedelta'
+  ].some(name=>id.endsWith(name));
+}
+
+function scalarEntityEvidence(observations,classId=''){
+  if(scalarClassId(classId))return true;
+  if(inferredKind(observations)==='primitive')return true;
+
+  const annotations=observations.map(item=>String(item?.annotation||'').trim()).filter(Boolean);
+  if(annotations.length&&annotations.every(scalarAnnotation))return true;
+
+  const constructors=observations.flatMap(item=>
+    arr(item?.origins)
+      .filter(origin=>origin?.kind==='constructed'&&origin?.name)
+      .map(origin=>String(origin.name).trim())
+  );
+  if(constructors.length&&constructors.every(name=>SCALAR_TYPE_NAMES.has(leaf(name))))return true;
+
+  return false;
+}
+
 function isNonIdentityType(token){
   const raw=String(token||'').trim();
   if(!raw)return true;
@@ -424,6 +475,7 @@ function materializeEntity({
 }){
   const functionIds=uniq(observations.map(obs=>obs?.functionId));
   if(functionIds.length<2)return null;
+  if(scalarEntityEvidence(observations,classId))return null;
 
   const aliases=uniq(observations.map(obs=>obs?.variable));
   const members=uniq(observations.flatMap(obs=>arr(obs?.members)));
