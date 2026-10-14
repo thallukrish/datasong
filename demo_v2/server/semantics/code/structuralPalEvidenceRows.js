@@ -135,7 +135,8 @@ export function materializeStructuralEvidenceRows({
   baseRows = [],
   entityNodes = [],
   entityLinks = [],
-  workflowNodes = []
+  workflowNodes = [],
+  workflowLinks = []
 } = {}) {
   const rows = normalizeExistingRows(baseRows);
   const indexes = existingNodeRows(rows);
@@ -182,16 +183,32 @@ export function materializeStructuralEvidenceRows({
   }
 
   for (const node of arr(workflowNodes).filter((item) => item?.type === 'workflow')) {
-    const functionRows = arr(node.links)
-      .filter((link) => link?.relationship === 'contains')
-      .map((link) => {
-        const functionNode = graphNodeById.get(link.id);
-        if (functionNode?.type !== 'function') return 0;
-        return indexes.functionRows.get(
-          `${functionNode.details?.sourcePath}:${Number(functionNode.details?.startLine || 0)}`
-        ) || 0;
-      })
-      .filter(Boolean);
+    const persistedLinks = arr(workflowLinks)
+      .filter((link) =>
+        link?.sourceId === node.id &&
+        link?.relationship === 'contains' &&
+        link?.targetType === 'function'
+      )
+      .sort((a, b) => Number(a?.ordinal || 0) - Number(b?.ordinal || 0));
+
+    const functionRows = persistedLinks.length
+      ? persistedLinks
+          .map((link) =>
+            indexes.functionRows.get(
+              `${String(link?.sourcePath || '')}:${Number(link?.startLine || 0)}`
+            ) || 0
+          )
+          .filter(Boolean)
+      : arr(node.links)
+          .filter((link) => link?.relationship === 'contains')
+          .map((link) => {
+            const functionNode = graphNodeById.get(link.id);
+            if (functionNode?.type !== 'function') return 0;
+            return indexes.functionRows.get(
+              `${functionNode.details?.sourcePath}:${Number(functionNode.details?.startLine || 0)}`
+            ) || 0;
+          })
+          .filter(Boolean);
 
     const row = nextRow();
     const workflowLinks = functionRows.map(String);
