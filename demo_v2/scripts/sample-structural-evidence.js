@@ -424,6 +424,9 @@ const fingerprintForOccurrence=(occurrence)=>{
   const afterRead=[...new Set(signatures
     .filter(signature=>signature?.relationship==='read'&&signature?.afterRead)
     .map(signature=>String(signature.afterRead)))].sort();
+  const signatureFunctionRows=[...new Set(signatures
+    .map(signature=>functionRowForLocation(signature?.sourcePath,signature?.line))
+    .filter(Boolean))].sort((a,b)=>a-b);
 
   return {
     flowRow:occurrence.flowRow,
@@ -434,7 +437,8 @@ const fingerprintForOccurrence=(occurrence)=>{
     keys,
     members,
     writeValueKinds,
-    afterRead
+    afterRead,
+    signatureFunctionRows
   };
 };
 
@@ -448,6 +452,7 @@ for(let i=0;i<occurrenceFingerprints.length;i+=1){
     const left=occurrenceFingerprints[i];
     const right=occurrenceFingerprints[j];
     if(left.flowRow===right.flowRow)continue;
+    if(left.entityRow===right.entityRow)continue;
     if(left.kind&&right.kind&&left.kind!==right.kind)continue;
 
     const commonKeys=setIntersection(left.keys,right.keys);
@@ -462,10 +467,16 @@ for(let i=0;i<occurrenceFingerprints.length;i+=1){
       commonAfterRead.length*2;
 
     if(score<=0)continue;
+    const sharedFunctionRows=setIntersection(
+      left.signatureFunctionRows.map(String),
+      right.signatureFunctionRows.map(String)
+    ).map(Number);
+
     fingerprintIntersections.push({
       score,
-      sameEntityRow:left.entityRow===right.entityRow,
       kind:left.kind||right.kind,
+      independentFunctionEvidence:sharedFunctionRows.length===0,
+      sharedFunctionRows,
       left:{
         flowRow:left.flowRow,
         flowName:left.flowName,
@@ -490,7 +501,7 @@ for(let i=0;i<occurrenceFingerprints.length;i+=1){
 
 fingerprintIntersections.sort((a,b)=>
   b.score-a.score||
-  Number(a.sameEntityRow)-Number(b.sameEntityRow)||
+  Number(b.independentFunctionEvidence)-Number(a.independentFunctionEvidence)||
   a.left.entityRow-b.left.entityRow||
   a.right.entityRow-b.right.entityRow
 );
