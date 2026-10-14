@@ -47,9 +47,15 @@ function details(value){
 
 const csvPath=process.argv[2];
 const sampleCount=Math.max(1,Number(process.argv[3]||5));
+const chainScope=String(process.argv[4]||'all').trim().toLowerCase();
+const validChainScopes=new Set(['all','production','tests']);
 
 if(!csvPath){
-  console.error('Usage: node scripts/sample-structural-evidence.js <python.csv> [count]');
+  console.error('Usage: node scripts/sample-structural-evidence.js <python.csv> [count] [all|production|tests]');
+  process.exit(1);
+}
+if(!validChainScopes.has(chainScope)){
+  console.error(`Invalid chain scope "${chainScope}". Use all, production, or tests.`);
   process.exit(1);
 }
 
@@ -301,15 +307,22 @@ const callChains=starts
   })
   .sort((a,b)=>b.functionCount-a.functionCount||a.name.localeCompare(b.name));
 
-const isProductionFunction=(fn)=>{
+const isTestFunction=(fn)=>{
   const file=String(fn?.file||'').replaceAll('\\','/').toLowerCase();
-  return !file.includes('/tests/')&&!file.startsWith('tests/')&&!file.startsWith('asv_bench/');
+  return file.includes('/tests/')||file.startsWith('tests/')||
+    file.includes('/test/')||file.startsWith('test/')||
+    file.startsWith('asv_bench/')||file.includes('/asv_bench/');
 };
 
-const productionCallChains=callChains
-  .filter(chain=>chain.functions.every(isProductionFunction));
+const chainMatchesScope=(chain)=>{
+  if(chainScope==='all')return true;
+  const testFlags=chain.functions.map(isTestFunction);
+  if(chainScope==='tests')return testFlags.some(Boolean);
+  return testFlags.every(flag=>!flag);
+};
 
-const topFlows=productionCallChains.slice(0,20);
+const scopedCallChains=callChains.filter(chainMatchesScope);
+const topFlows=scopedCallChains.slice(0,20);
 
 const structuredChains=[];
 for(const flow of topFlows){
@@ -377,6 +390,8 @@ structuredChains.sort((a,b)=>
 );
 
 const coreStructureReport={
+  chainScope,
+  candidateCallChainCount:scopedCallChains.length,
   longestFlows:topFlows.map(flow=>({
     row:flow.row,
     name:flow.name,
@@ -466,6 +481,7 @@ const counts=rows.reduce((acc,row)=>{
 
 console.log(JSON.stringify({
   csvPath,
+  chainScope,
   rowCount:rows.length,
   counts,
   entityDistribution,
