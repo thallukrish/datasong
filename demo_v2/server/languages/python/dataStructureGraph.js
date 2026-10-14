@@ -289,7 +289,10 @@ function canonicalEvents(observation){
     if(!relationship)continue;
     const line=Number(event?.line||0);
     if(relationship==='update'&&createLines.has(line))continue;
-    const key=`${relationship}:${line}:${Number(event?.endLine||line)}`;
+    const detailKey=event?.detail&&typeof event.detail==='object'
+      ? JSON.stringify(event.detail)
+      : String(event?.detail||'');
+    const key=`${relationship}:${line}:${Number(event?.endLine||line)}:${detailKey}`;
     if(seen.has(key))continue;
     seen.add(key);
     out.push({...event,relationship});
@@ -422,6 +425,8 @@ function materializeEntity({
   const keys=uniq(observations.flatMap(obs=>arr(obs?.keys)));
   const origins=uniq(observations.flatMap(originNames));
   const {annotations,constructors}=canonicalTypeEvidence(observations);
+  const accessSignatures=[];
+  const seenAccessSignatures=new Set();
 
   let operationCount=0;
   const seenLinks=new Set();
@@ -433,6 +438,24 @@ function materializeEntity({
       const sourceId=region?.id||observation.functionId;
       const sourceType=region?'function-region':'function';
       const relationship=event.relationship;
+      const detail=event?.detail&&typeof event.detail==='object' ? event.detail : {};
+      if(detail.access||detail.name||detail.valueKind||detail.afterRead){
+        const signature={
+          functionId:observation.functionId,
+          sourcePath:observation.sourcePath||symbol?.sourcePath||'',
+          line:Number(event.line||0),
+          relationship,
+          access:String(detail.access||''),
+          name:String(detail.name||''),
+          valueKind:String(detail.valueKind||''),
+          afterRead:String(detail.afterRead||'')
+        };
+        const signatureKey=JSON.stringify(signature);
+        if(!seenAccessSignatures.has(signatureKey)){
+          seenAccessSignatures.add(signatureKey);
+          accessSignatures.push(signature);
+        }
+      }
       const dedupe=`${sourceId}|${relationship}|${Number(event.line||0)}|${id}`;
       if(seenLinks.has(dedupe))continue;
       seenLinks.add(dedupe);
@@ -473,6 +496,7 @@ function materializeEntity({
       members,
       methods,
       keys,
+      accessSignatures,
       functionCount,
       operationCount,
       coreScore
