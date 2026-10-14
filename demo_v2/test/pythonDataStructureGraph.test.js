@@ -315,3 +315,39 @@ def start():
     node.details?.aliases?.includes('value')
   ));
 });
+
+
+test('entity fingerprints retain structured writes and post-read processing', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-fingerprint-', `
+def consume(value):
+    return value + 1
+
+def finish(record):
+    return consume(record["value"])
+
+def start():
+    record = {"value": 1}
+    record["value"] = record["value"] + 2
+    return finish(record)
+`);
+
+  const entity = (result.dataGraphNodes || []).find((node) =>
+    node.details?.identityKind === 'continuous' &&
+    node.details?.keys?.includes("'value'")
+  );
+
+  assert.ok(entity, 'Expected continuously traced mapping entity');
+  const signatures = entity.details?.accessSignatures || [];
+  assert.ok(signatures.some((item) =>
+    item.relationship === 'update' &&
+    item.access === 'key' &&
+    item.name === "'value'" &&
+    String(item.valueKind || '').startsWith('binop:')
+  ));
+  assert.ok(signatures.some((item) =>
+    item.relationship === 'read' &&
+    item.access === 'key' &&
+    item.name === "'value'" &&
+    String(item.afterRead || '').length > 0
+  ));
+});
