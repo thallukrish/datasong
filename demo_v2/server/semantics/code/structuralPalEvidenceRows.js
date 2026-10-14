@@ -205,7 +205,6 @@ export function materializeStructuralEvidenceRows({
       relationships: encodePalArray(workflowLinks.map(() => 'contains')),
       details: JSON.stringify({
         structuralId: node.id,
-        flowRows: functionRows,
         callPathId: node.details?.callPathId || '',
         entryFunctionId: node.details?.entryFunctionId || '',
         exitFunctionId: node.details?.exitFunctionId || '',
