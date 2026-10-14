@@ -159,7 +159,7 @@ const functionRowForSource=(sourceRow)=>{
   const source=byRow.get(String(sourceRow));
   if(!source)return 0;
   if(source.type==='function')return source.row;
-  if(source.type==='function-region'){
+  if(source.type==='function-region'||source.type==='region'){
     const parent=edgesFrom(source).find(edge=>edge.relationship==='contained-by'&&edge.targetType==='function');
     return Number(parent?.targetRow||0);
   }
@@ -173,7 +173,113 @@ const isStructuredContinuousEntity=(entity)=>{
   return entity.keys.length>0||entity.members.length>0||entity.methods.length>0;
 };
 
-const topFlows=allWorkflows.slice(0,20);
+const functionRows=rows.filter(row=>row.type==='function');
+const functionGraph=new Map(functionRows.map(row=>[
+  Number(row.row),
+  edgesFrom(row)
+    .filter(edge=>edge.relationship==='calls'&&edge.targetType==='function')
+    .map(edge=>Number(edge.targetRow))
+    .filter(Boolean)
+]));
+
+// Collapse recursive cycles before ranking. This keeps the ranking finite while
+// preserving every function that participates in a recursive component.
+let tarjanIndex=0;
+const stack=[];
+const onStack=new Set();
+const indexByRow=new Map();
+const lowByRow=new Map();
+const components=[];
+
+function strongConnect(row){
+  indexByRow.set(row,tarjanIndex);
+  lowByRow.set(row,tarjanIndex);
+  tarjanIndex+=1;
+  stack.push(row);
+  onStack.add(row);
+
+  for(const target of functionGraph.get(row)||[]){
+    if(!indexByRow.has(target)){
+      strongConnect(target);
+      lowByRow.set(row,Math.min(lowByRow.get(row),lowByRow.get(target)));
+    }else if(onStack.has(target)){
+      lowByRow.set(row,Math.min(lowByRow.get(row),indexByRow.get(target)));
+    }
+  }
+
+  if(lowByRow.get(row)!==indexByRow.get(row))return;
+  const members=[];
+  while(stack.length){
+    const member=stack.pop();
+    onStack.delete(member);
+    members.push(member);
+    if(member===row)break;
+  }
+  components.push(members.sort((a,b)=>a-b));
+}
+
+for(const row of functionGraph.keys()){
+  if(!indexByRow.has(row))strongConnect(row);
+}
+
+const componentByRow=new Map();
+components.forEach((members,index)=>members.forEach(row=>componentByRow.set(row,index)));
+
+const componentGraph=new Map(components.map((_,index)=>[index,new Set()]));
+const componentIncoming=new Map(components.map((_,index)=>[index,0]));
+for(const [source,targets] of functionGraph.entries()){
+  const sourceComponent=componentByRow.get(source);
+  for(const target of targets){
+    const targetComponent=componentByRow.get(target);
+    if(sourceComponent===targetComponent)continue;
+    const outgoing=componentGraph.get(sourceComponent);
+    if(!outgoing.has(targetComponent)){
+      outgoing.add(targetComponent);
+      componentIncoming.set(targetComponent,(componentIncoming.get(targetComponent)||0)+1);
+    }
+  }
+}
+
+const longestFromMemo=new Map();
+function longestFrom(component){
+  if(longestFromMemo.has(component))return longestFromMemo.get(component);
+  let best=[component];
+  for(const target of componentGraph.get(component)||[]){
+    const candidate=[component,...longestFrom(target)];
+    const candidateLength=candidate.reduce((sum,id)=>sum+components[id].length,0);
+    const bestLength=best.reduce((sum,id)=>sum+components[id].length,0);
+    if(candidateLength>bestLength)best=candidate;
+  }
+  longestFromMemo.set(component,best);
+  return best;
+}
+
+const roots=[...componentGraph.keys()]
+  .filter(component=>(componentIncoming.get(component)||0)===0);
+const starts=roots.length?roots:[...componentGraph.keys()];
+
+const callChains=starts
+  .map(component=>longestFrom(component))
+  .map((componentPath,index)=>{
+    const chainRows=componentPath.flatMap(component=>components[component]);
+    const functions=chainRows.map((row,index)=>({
+      position:index+1,
+      row,
+      name:byRow.get(String(row))?.name||'',
+      file:byRow.get(String(row))?.file||'',
+      line_range:byRow.get(String(row))?.line_range||''
+    }));
+    return {
+      row:index+1,
+      name:`callchain:${functions.map(fn=>fn.name).slice(0,3).join('→')}`,
+      functionCount:functions.length,
+      functions,
+      recursiveComponentCount:componentPath.filter(component=>components[component].length>1).length
+    };
+  })
+  .sort((a,b)=>b.functionCount-a.functionCount||a.name.localeCompare(b.name));
+
+const topFlows=callChains.slice(0,20);
 
 const structuredChains=[];
 for(const flow of topFlows){
