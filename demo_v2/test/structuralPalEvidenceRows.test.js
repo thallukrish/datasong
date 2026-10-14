@@ -10,10 +10,7 @@ test('unified PAL rows use minimal schema with graph membership only in links', 
   ];
 
   const entityNodes = [
-    { id:'A', type:'function', details:{ sourcePath:'a.py', startLine:1, endLine:5 }, links:[] },
-    { id:'B', type:'function', details:{ sourcePath:'b.py', startLine:10, endLine:15 }, links:[] },
-    { id:'B:region:1', type:'function-region', details:{ sourcePath:'b.py', startLine:11, endLine:13 }, links:[] },
-    { id:'entity:X', type:'entity', details:{ name:'X', kind:'mapping', functionCount:2, flowEdgeCount:1, coreScore:3 }, links:[] }
+    { id:'entity:X', type:'entity', details:{ name:'X', kind:'mapping', functionCount:2, coreScore:3 }, links:[] }
   ];
 
   const entityLinks = [
@@ -32,18 +29,30 @@ test('unified PAL rows use minimal schema with graph membership only in links', 
   const workflowNodes = [{
     id:'workflow:W',
     type:'workflow',
-    details:{ name:'W', callPathId:'callpath:0', functionCount:2, entityCount:1 },
+    details:{ name:'W', callPathId:'callpath:0', functionCount:2 },
     links:[
       { id:'A', relationship:'contains' },
       { id:'B', relationship:'contains' }
     ]
   }];
 
+  const workflowLinks = [
+    {
+      sourceId:'workflow:W', relationship:'contains', targetId:'A', targetType:'function',
+      ordinal:0, sourcePath:'a.py', startLine:1, endLine:5
+    },
+    {
+      sourceId:'workflow:W', relationship:'contains', targetId:'B', targetType:'function',
+      ordinal:1, sourcePath:'b.py', startLine:10, endLine:15
+    }
+  ];
+
   const rows = materializeStructuralEvidenceRows({
     baseRows,
     entityNodes,
     entityLinks,
-    workflowNodes
+    workflowNodes,
+    workflowLinks
   });
 
   const a = rows.find((row) => row.row === 1);
