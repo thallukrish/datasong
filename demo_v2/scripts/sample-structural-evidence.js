@@ -155,15 +155,37 @@ const entities=allEntities.slice(0,sampleCount).map(entity=>({
   uses:entity.uses.slice(0,12)
 }));
 
+const functionRowsByFile=new Map();
+for(const row of rows.filter(row=>row.type==='function')){
+  if(!functionRowsByFile.has(row.file))functionRowsByFile.set(row.file,[]);
+  const [startText,endText]=String(row.line_range||'').split('-');
+  functionRowsByFile.get(row.file).push({
+    row:Number(row.row),
+    start:Number(startText||0),
+    end:Number(endText||startText||0)
+  });
+}
+for(const values of functionRowsByFile.values()){
+  values.sort((a,b)=>(a.end-a.start)-(b.end-b.start)||b.start-a.start);
+}
+
 const functionRowForSource=(sourceRow)=>{
   const source=byRow.get(String(sourceRow));
   if(!source)return 0;
   if(source.type==='function')return source.row;
-  if(source.type==='function-region'||source.type==='region'){
-    const parent=edgesFrom(source).find(edge=>edge.relationship==='contained-by'&&edge.targetType==='function');
-    return Number(parent?.targetRow||0);
-  }
-  return 0;
+
+  const parent=edgesFrom(source).find(edge=>
+    edge.relationship==='contained-by'&&edge.targetType==='function'
+  );
+  if(parent?.targetRow)return Number(parent.targetRow);
+
+  const [startText]=String(source.line_range||'').split('-');
+  const line=Number(startText||0);
+  if(!line)return 0;
+
+  const enclosing=(functionRowsByFile.get(source.file)||[])
+    .find(fn=>fn.start<=line&&line<=fn.end);
+  return Number(enclosing?.row||0);
 };
 
 const isStructuredContinuousEntity=(entity)=>{
@@ -279,7 +301,15 @@ const callChains=starts
   })
   .sort((a,b)=>b.functionCount-a.functionCount||a.name.localeCompare(b.name));
 
-const topFlows=callChains.slice(0,20);
+const isProductionFunction=(fn)=>{
+  const file=String(fn?.file||'').replaceAll('\\','/').toLowerCase();
+  return !file.includes('/tests/')&&!file.startsWith('tests/')&&!file.startsWith('asv_bench/');
+};
+
+const productionCallChains=callChains
+  .filter(chain=>chain.functions.every(isProductionFunction));
+
+const topFlows=productionCallChains.slice(0,20);
 
 const structuredChains=[];
 for(const flow of topFlows){
