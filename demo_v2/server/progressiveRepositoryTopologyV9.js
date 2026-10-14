@@ -144,7 +144,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
 
     const functionAndFlowRows = materializeStructuralEvidenceRows({
       baseRows: this.codeStructureRows,
-      workflowNodes: this.workflowGraphNodes
+      workflowNodes: this.workflowGraphNodes,
+      workflowLinks: this.workflowLinks
     });
     await persistStage('flow graph', functionAndFlowRows);
 
@@ -177,7 +178,8 @@ export class ProgressiveRepositoryTopologyV9 extends ProgressiveRepositoryTopolo
       baseRows:functionAndFlowRows,
       entityNodes:this.pythonEntityNodes,
       entityLinks:this.pythonEntityLinks,
-      workflowNodes:this.workflowGraphNodes
+      workflowNodes:this.workflowGraphNodes,
+      workflowLinks:this.workflowLinks
     });
     await persistStage('entity graph', unifiedRows);
 
