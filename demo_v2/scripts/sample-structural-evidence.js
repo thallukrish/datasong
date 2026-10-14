@@ -545,6 +545,132 @@ fingerprintIntersections.sort((a,b)=>
   a.right.entityRow-b.right.entityRow
 );
 
+// Consolidate distinct continuous entity rows into diagnostic shape families.
+// This does not rewrite entity identity. It only shows which candidates across
+// the top call chains have enough shared structural behaviour to plausibly
+// represent one conceptual data structure.
+const topFunctionRows=new Set(
+  topFlows.flatMap(flow=>flow.functions.map(fn=>Number(fn.row)))
+);
+
+const entityFingerprintByRow=new Map();
+for(const entity of allEntities.filter(isStructuredContinuousEntity)){
+  const signatures=entity.accessSignatures.filter(signature=>{
+    const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
+    return functionRow&&topFunctionRows.has(functionRow);
+  });
+  if(!signatures.length)continue;
+
+  const summary=summarizeSignatures(signatures);
+  const functionRows=[...new Set(signatures
+    .map(signature=>functionRowForLocation(signature?.sourcePath,signature?.line))
+    .filter(Boolean))].sort((a,b)=>a-b);
+  const chainRows=topFlows
+    .filter(flow=>flow.functions.some(fn=>functionRows.includes(Number(fn.row))))
+    .map(flow=>flow.row);
+
+  entityFingerprintByRow.set(entity.row,{
+    entityRow:entity.row,
+    entityName:entity.name,
+    kind:entity.kind,
+    ...summary,
+    functionRows,
+    chainRows:[...new Set(chainRows)].sort((a,b)=>a-b)
+  });
+}
+
+const familyParent=new Map([...entityFingerprintByRow.keys()].map(row=>[row,row]));
+const familyFind=(row)=>{
+  const parent=familyParent.get(row);
+  if(parent===row)return row;
+  const root=familyFind(parent);
+  familyParent.set(row,root);
+  return root;
+};
+const familyUnion=(a,b)=>{
+  const ra=familyFind(a), rb=familyFind(b);
+  if(ra===rb)return;
+  familyParent.set(Math.max(ra,rb),Math.min(ra,rb));
+};
+
+const fingerprintRows=[...entityFingerprintByRow.values()];
+for(let i=0;i<fingerprintRows.length;i+=1){
+  for(let j=i+1;j<fingerprintRows.length;j+=1){
+    const left=fingerprintRows[i], right=fingerprintRows[j];
+    if(left.kind&&right.kind&&left.kind!==right.kind)continue;
+
+    const commonKeys=setIntersection(left.keys,right.keys);
+    const commonMembers=setIntersection(left.members,right.members);
+    const commonWriteValueKinds=setIntersection(left.writeValueKinds,right.writeValueKinds);
+    const commonAfterRead=setIntersection(left.afterRead,right.afterRead);
+
+    const score=
+      commonKeys.length*4+
+      commonMembers.length*4+
+      commonWriteValueKinds.length*3+
+      commonAfterRead.length*2;
+
+    // Require more than a weak one-feature resemblance. Score 7 means, for
+    // example, one common key/member plus one common write-value shape.
+    if(score>=7)familyUnion(left.entityRow,right.entityRow);
+  }
+}
+
+const familyMembers=new Map();
+for(const fingerprint of fingerprintRows){
+  const root=familyFind(fingerprint.entityRow);
+  if(!familyMembers.has(root))familyMembers.set(root,[]);
+  familyMembers.get(root).push(fingerprint);
+}
+
+const intersectAll=(items,key)=>{
+  if(!items.length)return[];
+  return items.slice(1).reduce(
+    (common,item)=>setIntersection(common,item[key]||[]),
+    [...new Set(items[0][key]||[])].sort()
+  );
+};
+
+const shapeFamilies=[...familyMembers.values()]
+  .filter(members=>members.length>=2)
+  .map(members=>{
+    const entityRows=members.map(item=>item.entityRow).sort((a,b)=>a-b);
+    const entityNames=[...new Set(members.map(item=>item.entityName).filter(Boolean))].sort();
+    const functionRows=[...new Set(members.flatMap(item=>item.functionRows))].sort((a,b)=>a-b);
+    const chainRows=[...new Set(members.flatMap(item=>item.chainRows))].sort((a,b)=>a-b);
+    const common={
+      keys:intersectAll(members,'keys'),
+      members:intersectAll(members,'members'),
+      writeValueKinds:intersectAll(members,'writeValueKinds'),
+      afterRead:intersectAll(members,'afterRead')
+    };
+    const commonScore=
+      common.keys.length*4+
+      common.members.length*4+
+      common.writeValueKinds.length*3+
+      common.afterRead.length*2;
+
+    return {
+      kind:members[0]?.kind||'',
+      entityCount:entityRows.length,
+      chainCount:chainRows.length,
+      functionCount:functionRows.length,
+      commonScore,
+      entityRows,
+      entityNames,
+      chainRows,
+      functionRows,
+      common
+    };
+  })
+  .sort((a,b)=>
+    b.chainCount-a.chainCount||
+    b.entityCount-a.entityCount||
+    b.functionCount-a.functionCount||
+    b.commonScore-a.commonScore||
+    a.entityRows[0]-b.entityRows[0]
+  );
+
 const coreStructureReport={
   chainScope,
   candidateCallChainCount:scopedCallChains.length,
@@ -555,7 +681,8 @@ const coreStructureReport={
     functions:flow.functions
   })),
   rankedStructuredChains:structuredChains.slice(0,20),
-  fingerprintIntersections:fingerprintIntersections.slice(0,20)
+  fingerprintIntersections:fingerprintIntersections.slice(0,20),
+  shapeFamilies:shapeFamilies.slice(0,20)
 };
 
 const workflowMembership=new Map();
