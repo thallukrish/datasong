@@ -6,6 +6,8 @@ import path from 'node:path';
 
 import { PAL } from 'pal-executor-lib';
 import { analyzePythonRepository } from '../server/languages/python/adapter.js';
+import { buildPythonDataStructureGraph } from '../server/languages/python/dataStructureGraph.js';
+import { buildCompactCallFlows } from '../server/semantics/code/compactCallFlows.js';
 import { buildWorkflowGraph } from '../server/semantics/code/structuralEvidenceGraph.js';
 import { materializeStructuralEvidenceRows } from '../server/semantics/code/structuralPalEvidenceRows.js';
 import {
@@ -123,21 +125,75 @@ def run():
     files: ['pipeline.py']
   });
 
-  const graphNodes = analysis.dataGraphNodes || [];
-  const functionNodes = graphNodes.filter((node) => node.type === 'function');
-  const entityNodesOnly = graphNodes.filter((node) => node.type === 'entity');
-  const entityLinks = analysis.entityLinks || [];
+  // Stage 1: function call graph is materialized independently from AST facts.
+  const topology = new CodeTopology({ cacheRoot: path.join(root, 'cache') });
+  const baseRows = topology.materializeCodeStructureRows(
+    analysis.codeFacts || [],
+    analysis
+  );
+  const functionRows = baseRows.filter((row) => row.type === 'function');
+  const functionRowByName = new Map(functionRows.map((row) => [row.name, row]));
+  const runRow = functionRowByName.get('run');
+  const loadRow = functionRowByName.get('load');
+  const normalizeRow = functionRowByName.get('normalize');
+  const saveRow = functionRowByName.get('save');
 
-  const byName = new Map(functionNodes.map((node) => [node.details?.name, node]));
-  const run = byName.get('run');
-  const load = byName.get('load');
-  const normalize = byName.get('normalize');
-  const save = byName.get('save');
+  assert.ok(runRow && loadRow && normalizeRow && saveRow, 'Expected persisted function graph rows');
 
-  assert.ok(run && load && normalize && save, 'Expected independent function graph nodes');
-  assert.ok(run.links.some((link) => link.relationship === 'calls' && link.id === load.id));
-  assert.ok(load.links.some((link) => link.relationship === 'calls' && link.id === normalize.id));
-  assert.ok(normalize.links.some((link) => link.relationship === 'calls' && link.id === save.id));
+  const callsTarget = (row, targetRow) => {
+    const links = JSON.parse(row.links || '[]');
+    const relationships = JSON.parse(row.relationships || '[]');
+    return links.some((value, index) =>
+      value === String(targetRow.row) && relationships[index] === 'calls'
+    );
+  };
+
+  assert.ok(callsTarget(runRow, loadRow));
+  assert.ok(callsTarget(loadRow, normalizeRow));
+  assert.ok(callsTarget(normalizeRow, saveRow));
+
+  // Stage 2: derive flow graph from the function graph symbols.
+  const compactFlows = buildCompactCallFlows({ symbols: analysis.symbols || [] });
+  const symbolByName = new Map((analysis.symbols || []).map((symbol) => [symbol.name, symbol]));
+  const run = symbolByName.get('run');
+  const load = symbolByName.get('load');
+  const normalize = symbolByName.get('normalize');
+  const save = symbolByName.get('save');
+  assert.ok(run && load && normalize && save);
+
+  const groupedPaths = [{
+    id: 'callpath:fixture',
+    symbolIds: [run.id, load.id, normalize.id, save.id],
+    branchVariantCount: 0,
+    alternateEntranceCount: 0
+  }];
+  const workflowGraph = buildWorkflowGraph({
+    groupedPaths,
+    symbols: analysis.symbols || []
+  });
+  assert.equal(workflowGraph.nodes.length, 1, 'Expected independent workflow graph');
+  assert.deepEqual(
+    workflowGraph.nodes[0].links.map((link) => link.id),
+    groupedPaths[0].symbolIds
+  );
+
+  const flowRows = materializeStructuralEvidenceRows({
+    baseRows,
+    workflowNodes: workflowGraph.nodes,
+    workflowLinks: workflowGraph.workflowLinks
+  });
+
+  // Stage 3: derive entity graph from function + flow + raw dataflow evidence.
+  const entityGraph = buildPythonDataStructureGraph({
+    symbols: analysis.symbols || [],
+    observations: analysis.dataObservations || [],
+    transfers: analysis.dataTransfers || [],
+    flowSlices: compactFlows.paths || [],
+    codeFacts: analysis.codeFacts || [],
+    externalSymbols: analysis.externalSymbols || []
+  });
+  const entityNodesOnly = entityGraph.nodes || [];
+  const entityLinks = entityGraph.entityLinks || [];
 
   const recordEntity = entityNodesOnly.find((node) =>
     node.details?.kind === 'mapping' &&
@@ -155,33 +211,12 @@ def run():
     link.targetId === recordEntity.id && link.relationship === 'read'
   ));
 
-  const groupedPaths = [{
-    id: 'callpath:fixture',
-    symbolIds: [run.id, load.id, normalize.id, save.id],
-    branchVariantCount: 0,
-    alternateEntranceCount: 0
-  }];
-  const workflowGraph = buildWorkflowGraph({
-    groupedPaths,
-    symbols: analysis.symbols || [],
-    entityLinks
-  });
-  assert.equal(workflowGraph.nodes.length, 1, 'Expected independent workflow graph');
-  assert.deepEqual(
-    workflowGraph.nodes[0].links.map((link) => link.id),
-    groupedPaths[0].symbolIds
-  );
-
-  const topology = new CodeTopology({ cacheRoot: path.join(root, 'cache') });
-  const baseRows = topology.materializeCodeStructureRows(
-    analysis.codeFacts || [],
-    analysis
-  );
   const rows = materializeStructuralEvidenceRows({
-    baseRows,
-    entityNodes: graphNodes,
+    baseRows: flowRows,
+    entityNodes: entityNodesOnly,
     entityLinks,
-    workflowNodes: workflowGraph.nodes
+    workflowNodes: workflowGraph.nodes,
+    workflowLinks: workflowGraph.workflowLinks
   });
 
   assert.ok(rows.some((row) => row.type === 'function'));
@@ -241,7 +276,7 @@ def run():
   );
 
   console.log(JSON.stringify({
-    functionNodes: functionNodes.length,
+    functionNodes: functionRows.length,
     entityNodes: entityNodesOnly.length,
     entityLinks: entityLinks.length,
     workflowNodes: workflowGraph.nodes.length,
