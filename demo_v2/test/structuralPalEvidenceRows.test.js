@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { materializeStructuralEvidenceRows } from '../server/semantics/code/structuralPalEvidenceRows.js';
 
-test('unified PAL rows use minimal schema with parallel links and workflow flowRows in details', () => {
+test('unified PAL rows use minimal schema with graph membership only in links', () => {
   const baseRows = [
     { row:1, file:'a.py', line_range:'1-5', type:'function', name:'A', parent:'', children:'[]', callers:'[]', callees:'["2"]' },
     { row:2, file:'b.py', line_range:'10-15', type:'function', name:'B', parent:'', children:'[]', callers:'["1"]', callees:'[]' },
@@ -66,7 +66,7 @@ test('unified PAL rows use minimal schema with parallel links and workflow flowR
 
   assert.deepEqual(JSON.parse(workflow.links), ['1','2']);
   assert.deepEqual(JSON.parse(workflow.relationships), ['contains','contains']);
-  assert.deepEqual(JSON.parse(workflow.details).flowRows, [1,2]);
+  assert.equal('flowRows' in JSON.parse(workflow.details), false);
 
   const expectedColumns = ['row','file','line_range','type','name','links','relationships','details'];
   for (const row of rows) {
