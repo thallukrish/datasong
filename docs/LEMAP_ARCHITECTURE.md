@@ -149,6 +149,35 @@ Future adapters can add support for other frameworks without changing the higher
 
 ## 5. Deterministic topology
 
+For code repositories, deterministic structural construction follows one ordered pipeline:
+
+```text
+1. Function call graph
+   source / AST
+   → function and region nodes
+   → calls / contains relationships
+   → persist in unified structural CSV
+   → index with PAL
+
+2. Flow graph
+   persisted function call graph
+   → compact execution-flow segments
+   → workflow contains function relationships
+   → append to the same structural CSV
+   → rebuild / update PAL indexes
+
+3. Entity graph
+   function graph + flow graph + raw dataflow evidence
+   → qualify project/local class entities
+   → trace non-class structured values across functions
+   → reject scalar-only handoffs
+   → create/read/update/delete relationships back to functions or regions
+   → append qualified entities to the same structural CSV
+   → rebuild / update PAL indexes
+```
+
+The CSV is therefore the common structural representation rather than three independent graph stores. Flow and entity graphs meet through the canonical function/region rows.
+
 The topology layer answers:
 
 > **What is structurally reachable from the current evidence?**
@@ -392,6 +421,8 @@ Flow and entity graphs meet at functions and regions.
 
 ```text
 Flow ─contains→ Function/Region ←read/update/create/delete─ Entity
+
+Function ─calls→ Function
 ```
 
 LeMap therefore does not need persisted Entity-to-Flow edges.
