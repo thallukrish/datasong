@@ -447,6 +447,23 @@ const occurrenceFingerprints=structuredChains
   .filter(Boolean);
 
 const fingerprintIntersections=[];
+
+const summarizeSignatures=(signatures)=>{
+  const keys=[...new Set(signatures
+    .filter(signature=>signature?.access==='key'&&signature?.name)
+    .map(signature=>String(signature.name)))].sort();
+  const members=[...new Set(signatures
+    .filter(signature=>signature?.access==='member'&&signature?.name)
+    .map(signature=>String(signature.name)))].sort();
+  const writeValueKinds=[...new Set(signatures
+    .filter(signature=>['update','create'].includes(String(signature?.relationship||''))&&signature?.valueKind)
+    .map(signature=>String(signature.valueKind)))].sort();
+  const afterRead=[...new Set(signatures
+    .filter(signature=>signature?.relationship==='read'&&signature?.afterRead)
+    .map(signature=>String(signature.afterRead)))].sort();
+  return {keys,members,writeValueKinds,afterRead};
+};
+
 for(let i=0;i<occurrenceFingerprints.length;i+=1){
   for(let j=i+1;j<occurrenceFingerprints.length;j+=1){
     const left=occurrenceFingerprints[i];
@@ -455,10 +472,34 @@ for(let i=0;i<occurrenceFingerprints.length;i+=1){
     if(left.entityRow===right.entityRow)continue;
     if(left.kind&&right.kind&&left.kind!==right.kind)continue;
 
-    const commonKeys=setIntersection(left.keys,right.keys);
-    const commonMembers=setIntersection(left.members,right.members);
-    const commonWriteValueKinds=setIntersection(left.writeValueKinds,right.writeValueKinds);
-    const commonAfterRead=setIntersection(left.afterRead,right.afterRead);
+    const leftEntity=allEntities.find(item=>item.row===left.entityRow);
+    const rightEntity=allEntities.find(item=>item.row===right.entityRow);
+    const leftFlow=topFlows.find(item=>item.row===left.flowRow);
+    const rightFlow=topFlows.find(item=>item.row===right.flowRow);
+    if(!leftEntity||!rightEntity||!leftFlow||!rightFlow)continue;
+
+    const leftFunctionRows=new Set(leftFlow.functions.map(fn=>Number(fn.row)));
+    const rightFunctionRows=new Set(rightFlow.functions.map(fn=>Number(fn.row)));
+    const sharedFunctionRows=[...leftFunctionRows]
+      .filter(row=>rightFunctionRows.has(row))
+      .sort((a,b)=>a-b);
+
+    const leftExclusiveSignatures=leftEntity.accessSignatures.filter(signature=>{
+      const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
+      return functionRow&&leftFunctionRows.has(functionRow)&&!rightFunctionRows.has(functionRow);
+    });
+    const rightExclusiveSignatures=rightEntity.accessSignatures.filter(signature=>{
+      const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
+      return functionRow&&rightFunctionRows.has(functionRow)&&!leftFunctionRows.has(functionRow);
+    });
+
+    const leftExclusive=summarizeSignatures(leftExclusiveSignatures);
+    const rightExclusive=summarizeSignatures(rightExclusiveSignatures);
+
+    const commonKeys=setIntersection(leftExclusive.keys,rightExclusive.keys);
+    const commonMembers=setIntersection(leftExclusive.members,rightExclusive.members);
+    const commonWriteValueKinds=setIntersection(leftExclusive.writeValueKinds,rightExclusive.writeValueKinds);
+    const commonAfterRead=setIntersection(leftExclusive.afterRead,rightExclusive.afterRead);
 
     const score=
       commonKeys.length*4+
@@ -467,27 +508,25 @@ for(let i=0;i<occurrenceFingerprints.length;i+=1){
       commonAfterRead.length*2;
 
     if(score<=0)continue;
-    const sharedFunctionRows=setIntersection(
-      left.signatureFunctionRows.map(String),
-      right.signatureFunctionRows.map(String)
-    ).map(Number);
 
     fingerprintIntersections.push({
       score,
       kind:left.kind||right.kind,
-      independentFunctionEvidence:sharedFunctionRows.length===0,
       sharedFunctionRows,
+      independentFunctionEvidence:true,
       left:{
         flowRow:left.flowRow,
         flowName:left.flowName,
         entityRow:left.entityRow,
-        entityName:left.entityName
+        entityName:left.entityName,
+        exclusiveFunctionCount:[...leftFunctionRows].filter(row=>!rightFunctionRows.has(row)).length
       },
       right:{
         flowRow:right.flowRow,
         flowName:right.flowName,
         entityRow:right.entityRow,
-        entityName:right.entityName
+        entityName:right.entityName,
+        exclusiveFunctionCount:[...rightFunctionRows].filter(row=>!leftFunctionRows.has(row)).length
       },
       common:{
         keys:commonKeys,
