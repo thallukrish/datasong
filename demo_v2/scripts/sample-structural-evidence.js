@@ -86,7 +86,7 @@ for(const row of rows){
   }
 }
 
-const workflows=rows
+const allWorkflows=rows
   .filter(row=>row.type==='workflow')
   .map(row=>{
     const d=details(row.details);
@@ -107,10 +107,11 @@ const workflows=rows
       functions
     };
   })
-  .sort((a,b)=>b.functionCount-a.functionCount||a.row-b.row)
-  .slice(0,sampleCount);
+  .sort((a,b)=>b.functionCount-a.functionCount||a.row-b.row);
 
-const entities=rows
+const workflows=allWorkflows.slice(0,sampleCount);
+
+const allEntities=rows
   .filter(row=>row.type==='entity')
   .map(row=>{
     const d=details(row.details);
@@ -137,15 +138,117 @@ const entities=rows
       classScope:d.classScope||'',
       functionCount:Number(d.functionCount||0),
       coreScore:Number(d.coreScore||0),
-      keys:Array.isArray(d.keys)?d.keys.slice(0,12):[],
-      members:Array.isArray(d.members)?d.members.slice(0,12):[],
-      methods:Array.isArray(d.methods)?d.methods.slice(0,12):[],
+      keys:Array.isArray(d.keys)?d.keys:[],
+      members:Array.isArray(d.members)?d.members:[],
+      methods:Array.isArray(d.methods)?d.methods:[],
       operationCount:uses.length,
-      uses:uses.slice(0,12)
+      uses
     };
   })
-  .sort((a,b)=>b.operationCount-a.operationCount||a.row-b.row)
-  .slice(0,sampleCount);
+  .sort((a,b)=>b.operationCount-a.operationCount||a.row-b.row);
+
+const entities=allEntities.slice(0,sampleCount).map(entity=>({
+  ...entity,
+  keys:entity.keys.slice(0,12),
+  members:entity.members.slice(0,12),
+  methods:entity.methods.slice(0,12),
+  uses:entity.uses.slice(0,12)
+}));
+
+const functionRowForSource=(sourceRow)=>{
+  const source=byRow.get(String(sourceRow));
+  if(!source)return 0;
+  if(source.type==='function')return source.row;
+  if(source.type==='function-region'){
+    const parent=edgesFrom(source).find(edge=>edge.relationship==='contained-by'&&edge.targetType==='function');
+    return Number(parent?.targetRow||0);
+  }
+  return 0;
+};
+
+const isStructuredContinuousEntity=(entity)=>{
+  if(entity.identityKind!=='continuous'||entity.classId||entity.classScope)return false;
+  if(entity.kind==='primitive')return false;
+  if(['mapping','array-like','sequence','set'].includes(entity.kind))return true;
+  return entity.keys.length>0||entity.members.length>0||entity.methods.length>0;
+};
+
+const topFlows=allWorkflows.slice(0,20);
+
+const structuredChains=[];
+for(const flow of topFlows){
+  const positionByFunctionRow=new Map(flow.functions.map(fn=>[Number(fn.row),Number(fn.position)]));
+  for(const entity of allEntities.filter(isStructuredContinuousEntity)){
+    const touches=entity.uses
+      .map(use=>{
+        const functionRow=functionRowForSource(use.sourceRow);
+        const position=positionByFunctionRow.get(functionRow);
+        if(!position)return null;
+        const fn=flow.functions[position-1];
+        return {
+          position,
+          functionRow,
+          functionName:fn?.name||'',
+          operation:use.operation,
+          sourceType:use.sourceType,
+          sourceName:use.sourceName,
+          file:use.file,
+          line_range:use.line_range
+        };
+      })
+      .filter(Boolean);
+
+    if(!touches.length)continue;
+
+    const positions=[...new Set(touches.map(touch=>touch.position))].sort((a,b)=>a-b);
+    if(positions.length<2)continue;
+
+    const firstPosition=positions[0];
+    const lastPosition=positions.at(-1);
+    const spanLength=lastPosition-firstPosition+1;
+    const operations={create:0,read:0,update:0,delete:0};
+    touches.forEach(touch=>{
+      if(Object.hasOwn(operations,touch.operation))operations[touch.operation]+=1;
+    });
+
+    structuredChains.push({
+      flowRow:flow.row,
+      flowName:flow.name,
+      flowFunctionCount:flow.functionCount,
+      entityRow:entity.row,
+      entityName:entity.name,
+      kind:entity.kind,
+      spanLength,
+      touchedFunctionCount:positions.length,
+      firstPosition,
+      lastPosition,
+      positions,
+      operations,
+      keys:entity.keys.slice(0,12),
+      members:entity.members.slice(0,12),
+      methods:entity.methods.slice(0,12),
+      touches
+    });
+  }
+}
+
+structuredChains.sort((a,b)=>
+  b.spanLength-a.spanLength||
+  b.touchedFunctionCount-a.touchedFunctionCount||
+  (b.operations.update+b.operations.read)-(a.operations.update+a.operations.read)||
+  b.flowFunctionCount-a.flowFunctionCount||
+  a.entityRow-b.entityRow
+);
+
+const coreStructureReport={
+  longestFlows:topFlows.map(flow=>({
+    row:flow.row,
+    name:flow.name,
+    functionCount:flow.functionCount,
+    functions:flow.functions
+  })),
+  rankedStructuredChains:structuredChains.slice(0,20)
+};
 
 const workflowMembership=new Map();
 for(const workflow of rows.filter(row=>row.type==='workflow')){
@@ -230,6 +333,7 @@ console.log(JSON.stringify({
   rowCount:rows.length,
   counts,
   entityDistribution,
+  coreStructureReport,
   samples:{
     workflows,
     entities,
