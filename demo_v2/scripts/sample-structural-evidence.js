@@ -187,6 +187,39 @@ const mixed=rows
   .sort((a,b)=>(b.entityOps.length+b.flows.length)-(a.entityOps.length+a.flows.length)||a.row-b.row)
   .slice(0,sampleCount);
 
+const entityRows=rows
+  .filter(row=>row.type==='entity')
+  .map(row=>({row,details:details(row.details)}));
+
+const entityDistribution={
+  total:entityRows.length,
+  byFunctionCount:{
+    two:0,
+    three:0,
+    fourPlus:0
+  },
+  byIdentityKind:{},
+  byClassScope:{},
+  byKind:{}
+};
+
+for(const item of entityRows){
+  const d=item.details;
+  const functionCount=Number(d.functionCount||0);
+  if(functionCount===2)entityDistribution.byFunctionCount.two+=1;
+  else if(functionCount===3)entityDistribution.byFunctionCount.three+=1;
+  else if(functionCount>=4)entityDistribution.byFunctionCount.fourPlus+=1;
+
+  const identityKind=String(d.identityKind||'unknown');
+  entityDistribution.byIdentityKind[identityKind]=(entityDistribution.byIdentityKind[identityKind]||0)+1;
+
+  const classScope=String(d.classScope||'none');
+  entityDistribution.byClassScope[classScope]=(entityDistribution.byClassScope[classScope]||0)+1;
+
+  const kind=String(d.kind||'unknown');
+  entityDistribution.byKind[kind]=(entityDistribution.byKind[kind]||0)+1;
+}
+
 const counts=rows.reduce((acc,row)=>{
   acc[row.type]=(acc[row.type]||0)+1;
   return acc;
@@ -196,6 +229,7 @@ console.log(JSON.stringify({
   csvPath,
   rowCount:rows.length,
   counts,
+  entityDistribution,
   samples:{
     workflows,
     entities,
