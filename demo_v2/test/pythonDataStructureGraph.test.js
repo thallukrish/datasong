@@ -351,3 +351,29 @@ def start():
     String(item.afterRead || '').length > 0
   ));
 });
+
+
+test('structured collections retain element shape for entity discovery', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-element-shape-', `
+def finish(items):
+    return items[0]["name"]
+
+def start():
+    records = [
+        {"name": "a", "value": 1},
+        {"name": "b", "value": 2}
+    ]
+    return finish(records)
+`);
+
+  const entity = (result.dataGraphNodes || []).find((node) =>
+    node.details?.identityKind === 'continuous' &&
+    node.details?.aliases?.includes('records') &&
+    node.details?.aliases?.includes('items')
+  );
+
+  assert.ok(entity, 'Expected continuously traced collection entity');
+  assert.ok(entity.details?.elementKinds?.includes('mapping'));
+  assert.ok(entity.details?.elementKeys?.includes("'name'"));
+  assert.ok(entity.details?.elementKeys?.includes("'value'"));
+});
