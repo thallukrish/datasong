@@ -116,16 +116,50 @@ def processing_shape(parent):
         return f"member:{parent.attr}"
     return type(parent).__name__.lower()
 
+def collection_element_shape(elements):
+    kinds = set()
+    keys = set()
+    constructors = set()
+    for item in elements:
+        if isinstance(item, ast.Dict):
+            kinds.add("mapping")
+            for key in item.keys:
+                value = constant_key(key)
+                if value:
+                    keys.add(value)
+        elif isinstance(item, ast.Call):
+            name = call_name(item)
+            leaf = name.split(".")[-1] if name else ""
+            if leaf[:1].isupper():
+                kinds.add("object")
+                if name:
+                    constructors.add(name)
+            else:
+                kinds.add("value")
+        elif isinstance(item, (ast.List, ast.Tuple, ast.Set)):
+            kinds.add("collection")
+        elif isinstance(item, ast.Constant):
+            kinds.add("primitive")
+        elif isinstance(item, (ast.Name, ast.Attribute, ast.Subscript)):
+            kinds.add("unknown")
+        else:
+            kinds.add("value")
+    return {
+        "elementKinds": sorted(kinds),
+        "elementKeys": sorted(keys),
+        "elementConstructors": sorted(constructors)
+    }
+
 def value_origin(node):
     if isinstance(node, ast.Dict):
         keys = [constant_key(k) for k in node.keys]
         return {"kind": "mapping", "name": "dict", "keys": [k for k in keys if k]}
     if isinstance(node, ast.List):
-        return {"kind": "sequence", "name": "list"}
+        return {"kind": "sequence", "name": "list", **collection_element_shape(node.elts)}
     if isinstance(node, ast.Set):
-        return {"kind": "set", "name": "set"}
+        return {"kind": "set", "name": "set", **collection_element_shape(node.elts)}
     if isinstance(node, ast.Tuple):
-        return {"kind": "sequence", "name": "tuple"}
+        return {"kind": "sequence", "name": "tuple", **collection_element_shape(node.elts)}
     if isinstance(node, ast.Call):
         name = call_name(node)
         leaf = name.split(".")[-1] if name else ""
