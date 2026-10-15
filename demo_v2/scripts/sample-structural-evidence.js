@@ -358,7 +358,7 @@ const topFlows=scopedCallChains.slice(0,20);
 const structuredChains=[];
 for(const flow of topFlows){
   const positionByFunctionRow=new Map(flow.functions.map(fn=>[Number(fn.row),Number(fn.position)]));
-  for(const entity of allEntities.filter(isShapeEntity)){
+  for(const entity of allEntities.filter(isStructuredContinuousEntity)){
     const touches=entity.uses
       .map(use=>{
         const functionRow=functionRowForSource(use.sourceRow);
@@ -578,7 +578,7 @@ const topFunctionRows=new Set(
 );
 
 const entityFingerprintByRow=new Map();
-for(const entity of allEntities.filter(isStructuredContinuousEntity)){
+for(const entity of allEntities.filter(isShapeEntity)){
   const signatures=entity.accessSignatures.filter(signature=>{
     const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
     return functionRow&&topFunctionRows.has(functionRow);
