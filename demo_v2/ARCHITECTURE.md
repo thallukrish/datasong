@@ -390,6 +390,85 @@ The current implementation includes entity reconciliation, schema catalog materi
 
 ---
 
+# Code entity discovery and semantic continuity
+
+For code repositories, LeMap keeps control flow and data flow separate but presents both to Semantic Learn.
+
+The structural pipeline is:
+
+```text
+function call graph
+        ↓
+compact flow evidence
+        ↓
+entity/data-flow evidence
+        ↓
+semantic expansion sees control + data continuity together
+```
+
+The model should be able to describe a flow coherently around the data being transformed, rather than independently summarize each function.
+
+Entity discovery uses different identity evidence for different kinds of data.
+
+## Structured entities
+
+Mappings, objects, and collections whose elements are mappings/objects are identified primarily by semantic shape:
+
+```text
+common keys / members
++ compatible value kinds written
++ characteristic processing after reads
++ evidence across distinct functions / important flows
+```
+
+A collection of structured elements is treated as a container around the element entity. Literal collection analysis therefore retains element kinds, element keys and element constructors.
+
+Generic properties such as `dtype`, `shape`, `ndim` and `size` are not sufficient by themselves to establish a shared conceptual entity.
+
+## Primitive value collections
+
+Arrays, lists, tuples or sets that mainly carry primitive values use longitudinal identity instead:
+
+```text
+continuous value lineage
+through a call chain
++ reads / updates / transformations
+```
+
+They are not globally merged merely because they share generic array properties. Their importance comes from persisting through meaningful control-flow steps while being transformed.
+
+Primitive scalar values remain data-flow evidence but are not materialized as entities.
+
+## Core-entity diagnostic
+
+The current diagnostic samples the longest call chains and reports two separate candidate classes:
+
+```text
+shapeFamilies
+  structured maps / objects / structured collections
+  consolidated by semantic shape across functions and flows
+
+arrayLineages
+  primitive value collections
+  ranked by continuous read/update lineage across a call chain
+```
+
+`coreEntityCandidates` combines the strongest candidates from both classes for inspection. This is diagnostic evidence only; it does not yet rewrite persisted entity identity.
+
+The intended Semantic Learn use is:
+
+```text
+control-flow continuation
++
+relevant entity lineage and operations
+        ↓
+model judges the coherent meaning of the evolving flow
+```
+
+The structural layer proves continuity and provenance. The model decides whether that data movement is semantically important to the flow or query.
+
+---
+
 # Persistence and resume
 
 The output of learning is a persistent semantic map, not merely a transient exploration result.
