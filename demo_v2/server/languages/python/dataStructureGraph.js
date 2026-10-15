@@ -425,6 +425,15 @@ function materializeEntity({
   const keys=uniq(observations.flatMap(obs=>arr(obs?.keys)));
   const origins=uniq(observations.flatMap(originNames));
   const {annotations,constructors}=canonicalTypeEvidence(observations);
+  const elementKinds=uniq(observations.flatMap(obs=>
+    arr(obs?.origins).flatMap(origin=>arr(origin?.elementKinds))
+  ));
+  const elementKeys=uniq(observations.flatMap(obs=>
+    arr(obs?.origins).flatMap(origin=>arr(origin?.elementKeys))
+  ));
+  const elementConstructors=uniq(observations.flatMap(obs=>
+    arr(obs?.origins).flatMap(origin=>arr(origin?.elementConstructors))
+  ));
   const accessSignatures=[];
   const seenAccessSignatures=new Set();
 
@@ -496,6 +505,9 @@ function materializeEntity({
       members,
       methods,
       keys,
+      elementKinds,
+      elementKeys,
+      elementConstructors,
       accessSignatures,
       functionCount,
       operationCount,
