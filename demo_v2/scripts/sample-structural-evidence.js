@@ -147,6 +147,9 @@ const allEntities=rows
       keys:Array.isArray(d.keys)?d.keys:[],
       members:Array.isArray(d.members)?d.members:[],
       methods:Array.isArray(d.methods)?d.methods:[],
+      elementKinds:Array.isArray(d.elementKinds)?d.elementKinds:[],
+      elementKeys:Array.isArray(d.elementKeys)?d.elementKeys:[],
+      elementConstructors:Array.isArray(d.elementConstructors)?d.elementConstructors:[],
       accessSignatures:Array.isArray(d.accessSignatures)?d.accessSignatures:[],
       operationCount:uses.length,
       uses
@@ -206,6 +209,27 @@ const isStructuredContinuousEntity=(entity)=>{
   if(entity.kind==='primitive')return false;
   if(['mapping','array-like','sequence','set'].includes(entity.kind))return true;
   return entity.keys.length>0||entity.members.length>0||entity.methods.length>0;
+};
+
+const GENERIC_ARRAY_MEMBERS=new Set(['dtype','shape','ndim','size','itemsize','nbytes','T']);
+const meaningfulMembers=(entity)=>entity.members.filter(member=>!GENERIC_ARRAY_MEMBERS.has(String(member)));
+
+const isStructuredElementCollection=(entity)=>
+  entity.elementKeys.length>0||
+  entity.elementConstructors.length>0||
+  entity.elementKinds.some(kind=>['mapping','object'].includes(String(kind)));
+
+const isShapeEntity=(entity)=>{
+  if(!isStructuredContinuousEntity(entity))return false;
+  if(entity.kind==='mapping')return true;
+  if(isStructuredElementCollection(entity))return true;
+  if(entity.kind==='object')return entity.keys.length>0||meaningfulMembers(entity).length>0;
+  return false;
+};
+
+const isValueCollectionEntity=(entity)=>{
+  if(!isStructuredContinuousEntity(entity)||isShapeEntity(entity))return false;
+  return ['array-like','sequence','set'].includes(entity.kind);
 };
 
 const functionRows=rows.filter(row=>row.type==='function');
@@ -334,7 +358,7 @@ const topFlows=scopedCallChains.slice(0,20);
 const structuredChains=[];
 for(const flow of topFlows){
   const positionByFunctionRow=new Map(flow.functions.map(fn=>[Number(fn.row),Number(fn.position)]));
-  for(const entity of allEntities.filter(isStructuredContinuousEntity)){
+  for(const entity of allEntities.filter(isShapeEntity)){
     const touches=entity.uses
       .map(use=>{
         const functionRow=functionRowForSource(use.sourceRow);
@@ -574,6 +598,9 @@ for(const entity of allEntities.filter(isStructuredContinuousEntity)){
     entityName:entity.name,
     kind:entity.kind,
     ...summary,
+    elementKinds:entity.elementKinds,
+    elementKeys:entity.elementKeys,
+    elementConstructors:entity.elementConstructors,
     functionRows,
     chainRows:[...new Set(chainRows)].sort((a,b)=>a-b)
   });
@@ -600,19 +627,30 @@ for(let i=0;i<fingerprintRows.length;i+=1){
     if(left.kind&&right.kind&&left.kind!==right.kind)continue;
 
     const commonKeys=setIntersection(left.keys,right.keys);
-    const commonMembers=setIntersection(left.members,right.members);
+    const commonMembers=setIntersection(
+      left.members.filter(member=>!GENERIC_ARRAY_MEMBERS.has(String(member))),
+      right.members.filter(member=>!GENERIC_ARRAY_MEMBERS.has(String(member)))
+    );
     const commonWriteValueKinds=setIntersection(left.writeValueKinds,right.writeValueKinds);
     const commonAfterRead=setIntersection(left.afterRead,right.afterRead);
+    const commonElementKinds=setIntersection(left.elementKinds,right.elementKinds);
+    const commonElementKeys=setIntersection(left.elementKeys,right.elementKeys);
+    const commonElementConstructors=setIntersection(left.elementConstructors,right.elementConstructors);
 
-    const score=
-      commonKeys.length*4+
-      commonMembers.length*4+
-      commonWriteValueKinds.length*3+
-      commonAfterRead.length*2;
+    const keyIdentity=
+      commonKeys.length>=2||
+      (commonKeys.length>=1&&commonWriteValueKinds.length>=1);
+    const memberIdentity=
+      commonMembers.length>=2||
+      (commonMembers.length>=1&&(commonAfterRead.length>=1||commonWriteValueKinds.length>=1));
+    const structuredElementIdentity=
+      commonElementKeys.length>=2||
+      (commonElementKeys.length>=1&&commonElementKinds.some(kind=>['mapping','object'].includes(kind)))||
+      commonElementConstructors.length>=1;
 
-    // Require more than a weak one-feature resemblance. Score 7 means, for
-    // example, one common key/member plus one common write-value shape.
-    if(score>=7)familyUnion(left.entityRow,right.entityRow);
+    if(keyIdentity||memberIdentity||structuredElementIdentity){
+      familyUnion(left.entityRow,right.entityRow);
+    }
   }
 }
 
@@ -642,13 +680,19 @@ const shapeFamilies=[...familyMembers.values()]
       keys:intersectAll(members,'keys'),
       members:intersectAll(members,'members'),
       writeValueKinds:intersectAll(members,'writeValueKinds'),
-      afterRead:intersectAll(members,'afterRead')
+      afterRead:intersectAll(members,'afterRead'),
+      elementKinds:intersectAll(members,'elementKinds'),
+      elementKeys:intersectAll(members,'elementKeys'),
+      elementConstructors:intersectAll(members,'elementConstructors')
     };
     const commonScore=
       common.keys.length*4+
       common.members.length*4+
       common.writeValueKinds.length*3+
-      common.afterRead.length*2;
+      common.afterRead.length*2+
+      common.elementKeys.length*4+
+      common.elementConstructors.length*4+
+      common.elementKinds.length*2;
 
     return {
       kind:members[0]?.kind||'',
@@ -671,6 +715,92 @@ const shapeFamilies=[...familyMembers.values()]
     a.entityRows[0]-b.entityRows[0]
   );
 
+const qualifiedShapeFamilies=shapeFamilies
+  .filter(family=>family.functionCount>=2);
+
+const valueCollectionOccurrences=structuredChains
+  .filter(item=>{
+    const entity=allEntities.find(candidate=>candidate.row===item.entityRow);
+    return entity&&isValueCollectionEntity(entity)&&item.touchedFunctionCount>=2;
+  });
+
+const valueCollectionByEntity=new Map();
+for(const occurrence of valueCollectionOccurrences){
+  if(!valueCollectionByEntity.has(occurrence.entityRow)){
+    valueCollectionByEntity.set(occurrence.entityRow,[]);
+  }
+  valueCollectionByEntity.get(occurrence.entityRow).push(occurrence);
+}
+
+const arrayLineages=[...valueCollectionByEntity.entries()]
+  .map(([entityRow,occurrences])=>{
+    const entity=allEntities.find(item=>item.row===entityRow);
+    const ranked=[...occurrences].sort((a,b)=>
+      b.touchedFunctionCount-a.touchedFunctionCount||
+      b.spanLength-a.spanLength||
+      (b.operations.update+b.operations.read)-(a.operations.update+a.operations.read)
+    );
+    const representative=ranked[0];
+    const functionRows=[...new Set(occurrences.flatMap(item=>item.touches.map(touch=>touch.functionRow)))].sort((a,b)=>a-b);
+    return {
+      entityRow,
+      entityName:entity?.name||representative.entityName,
+      kind:entity?.kind||representative.kind,
+      chainCount:new Set(occurrences.map(item=>item.flowRow)).size,
+      distinctFunctionCount:functionRows.length,
+      maxTouchedFunctionCount:Math.max(...occurrences.map(item=>item.touchedFunctionCount)),
+      maxSpanLength:Math.max(...occurrences.map(item=>item.spanLength)),
+      operations:occurrences.reduce((sum,item)=>({
+        create:sum.create+item.operations.create,
+        read:sum.read+item.operations.read,
+        update:sum.update+item.operations.update,
+        delete:sum.delete+item.operations.delete
+      }),{create:0,read:0,update:0,delete:0}),
+      genericMembers:entity?.members?.filter(member=>GENERIC_ARRAY_MEMBERS.has(String(member)))||[],
+      representativeFlow:{
+        flowRow:representative.flowRow,
+        flowName:representative.flowName,
+        functionCount:representative.flowFunctionCount,
+        positions:representative.positions,
+        touches:representative.touches
+      }
+    };
+  })
+  .sort((a,b)=>
+    b.maxTouchedFunctionCount-a.maxTouchedFunctionCount||
+    b.maxSpanLength-a.maxSpanLength||
+    (b.operations.update+b.operations.read)-(a.operations.update+a.operations.read)||
+    b.chainCount-a.chainCount||
+    a.entityRow-b.entityRow
+  );
+
+const coreEntityCandidates=[
+  ...qualifiedShapeFamilies.map(family=>({
+    category:'structured-shape',
+    rankEvidence:{
+      chainCount:family.chainCount,
+      functionCount:family.functionCount,
+      entityCount:family.entityCount,
+      commonScore:family.commonScore
+    },
+    candidate:family
+  })),
+  ...arrayLineages.map(lineage=>({
+    category:'value-collection-lineage',
+    rankEvidence:{
+      chainCount:lineage.chainCount,
+      functionCount:lineage.distinctFunctionCount,
+      touchedFunctionCount:lineage.maxTouchedFunctionCount,
+      spanLength:lineage.maxSpanLength
+    },
+    candidate:lineage
+  }))
+].sort((a,b)=>
+  Number(b.rankEvidence.functionCount||0)-Number(a.rankEvidence.functionCount||0)||
+  Number(b.rankEvidence.chainCount||0)-Number(a.rankEvidence.chainCount||0)||
+  Number(b.rankEvidence.touchedFunctionCount||0)-Number(a.rankEvidence.touchedFunctionCount||0)
+);
+
 const coreStructureReport={
   chainScope,
   candidateCallChainCount:scopedCallChains.length,
@@ -682,7 +812,9 @@ const coreStructureReport={
   })),
   rankedStructuredChains:structuredChains.slice(0,20),
   fingerprintIntersections:fingerprintIntersections.slice(0,20),
-  shapeFamilies:shapeFamilies.slice(0,20)
+  shapeFamilies:qualifiedShapeFamilies.slice(0,20),
+  arrayLineages:arrayLineages.slice(0,20),
+  coreEntityCandidates:coreEntityCandidates.slice(0,20)
 };
 
 const workflowMembership=new Map();
