@@ -35,9 +35,9 @@ def call_name(node):
         return ""
     return safe_unparse(node.func)
 
-def constant_key(node):
-    if isinstance(node, ast.Constant) and isinstance(node.value, (str, int, float, bool)):
-        return repr(node.value)
+def literal_string_key(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
     return ""
 
 def target_names(node):
@@ -86,8 +86,8 @@ def value_shape(node):
 
 def access_shape(node):
     if isinstance(node, ast.Subscript):
-        key = constant_key(node.slice)
-        return {"access": "key", "name": key or safe_unparse(node.slice)}
+        key = literal_string_key(node.slice)
+        return {"access": "key", "name": key, "literalStringKey": bool(key)}
     if isinstance(node, ast.Attribute):
         return {"access": "member", "name": node.attr}
     return {"access": "", "name": ""}
@@ -124,7 +124,7 @@ def collection_element_shape(elements):
         if isinstance(item, ast.Dict):
             kinds.add("mapping")
             for key in item.keys:
-                value = constant_key(key)
+                value = literal_string_key(key)
                 if value:
                     keys.add(value)
         elif isinstance(item, ast.Call):
@@ -152,7 +152,7 @@ def collection_element_shape(elements):
 
 def value_origin(node):
     if isinstance(node, ast.Dict):
-        keys = [constant_key(k) for k in node.keys]
+        keys = [literal_string_key(k) for k in node.keys]
         return {"kind": "mapping", "name": "dict", "keys": [k for k in keys if k]}
     if isinstance(node, ast.List):
         return {"kind": "sequence", "name": "list", **collection_element_shape(node.elts)}
@@ -356,14 +356,16 @@ class ObservationVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node):
         base = root_name(node)
         if base:
-            operation = "read" if isinstance(node.ctx, ast.Load) else "mutate"
-            detail = access_shape(node)
-            if operation == "read":
-                parent = self.parents[-2] if len(self.parents) >= 2 else None
-                detail["afterRead"] = processing_shape(parent)
-            rec = self.touch(base, node, operation, detail)
-            if rec:
-                rec["members"].add(node.attr)
+            parent = self.parents[-2] if len(self.parents) >= 2 else None
+            is_method_reference = isinstance(parent, ast.Call) and parent.func is node
+            if not is_method_reference:
+                operation = "read" if isinstance(node.ctx, ast.Load) else "mutate"
+                detail = access_shape(node)
+                if operation == "read":
+                    detail["afterRead"] = processing_shape(parent)
+                rec = self.touch(base, node, operation, detail)
+                if rec:
+                    rec["members"].add(node.attr)
         self.generic_visit(node)
 
     def visit_Subscript(self, node):
@@ -377,7 +379,7 @@ class ObservationVisitor(ast.NodeVisitor):
             rec = self.touch(base, node, operation, detail)
             if rec:
                 rec["operations"].add("index")
-                key = constant_key(node.slice)
+                key = literal_string_key(node.slice)
                 if key:
                     rec["keys"].add(key)
         self.generic_visit(node)
