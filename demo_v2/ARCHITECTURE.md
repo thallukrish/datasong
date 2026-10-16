@@ -412,18 +412,26 @@ Entity discovery uses different identity evidence for different kinds of data.
 
 ## Structured entities
 
-Mappings, objects, and collections whose elements are mappings/objects are identified primarily by semantic shape:
+Mappings, objects, and collections whose elements are mappings/objects are identified by structural fields, not by operations performed on them.
 
 ```text
-common keys / members
-+ compatible value kinds written
-+ characteristic processing after reads
-+ evidence across distinct functions / important flows
+mapping
+  literal string keys only
+
+object
+  attribute names only
+
+structured collection
+  literal string keys / attributes of its element shape
 ```
 
-A collection of structured elements is treated as a container around the element entity. Literal collection analysis therefore retains element kinds, element keys and element constructors.
+For mappings, only quoted literal string keys such as `record["new_id"]` or `record['coords']` contribute to cross-flow shape identity. Dynamic keys and positional/slice access such as `record[k]`, `x[0]`, `x[-1]` and `x[1:]` remain ordinary data-flow evidence but never establish mapping identity.
 
-Generic properties such as `dtype`, `shape`, `ndim`, `size`, `values` and `variables` are not sufficient by themselves to establish a shared conceptual entity. Generic syntax-level post-read actions such as assignment, comparison or return also do not qualify a family. A structured family must instead retain evidence such as multiple meaningful keys/members, a meaningful key plus a characteristic write, a meaningful member plus characteristic call/member processing, or structured element keys/constructors.
+For objects, attribute access such as `obj.encoding` or `obj.variables` contributes structural identity. Method invocation such as `obj.close()`, `obj.items()` or `obj.equals()` is behavioral evidence only and never establishes identity. Method calls may still be retained for later semantic interpretation after the entity has been identified.
+
+A collection of structured elements is treated as a container around the element entity. Literal collection analysis therefore retains element kinds, literal string element keys and element constructors.
+
+Generic array properties such as `dtype`, `shape`, `ndim`, `size`, `values` and `variables` are not sufficient by themselves to establish a shared conceptual entity.
 
 ## Primitive value collections
 
