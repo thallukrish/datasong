@@ -441,19 +441,44 @@ Primitive scalar values remain data-flow evidence but are not materialized as en
 
 ## Core-entity diagnostic
 
-The current diagnostic samples the longest call chains and reports two separate candidate classes:
+The current diagnostic screens every persisted flow with the same entity rules used for candidate discovery.
 
 ```text
+all persisted flows
+        ↓
+entity continuity screen
+        ↓
+drop flows with no qualifying cross-function entity evidence
+        ↓
+retain all qualifying flows
+        ↓
+consolidate entity evidence globally
+```
+
+There is no separate flow classifier and no special-case filtering for tests, logging, exceptions or other code categories. A flow survives only because it contains qualifying entity continuity.
+
+The report exposes:
+
+```text
+flowScreening
+  totalFlows
+  qualifiedFlows
+  droppedFlows
+  retainedPercent
+
 shapeFamilies
   structured maps / objects / structured collections
-  consolidated by semantic shape across functions and flows
+  consolidated by semantic shape across all surviving flows
 
 arrayLineages
   primitive value collections
-  ranked by continuous read/update lineage across a call chain
+  ranked by continuous read/update lineage across surviving flows
+
+coreEntityCandidates
+  combined ranked view of both candidate classes
 ```
 
-`coreEntityCandidates` combines the strongest candidates from both classes for inspection. This is diagnostic evidence only; it does not yet rewrite persisted entity identity.
+This is diagnostic evidence only; it does not yet rewrite persisted entity identity.
 
 The intended Semantic Learn use is:
 
