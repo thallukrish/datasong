@@ -46,16 +46,10 @@ function details(value){
 }
 
 const csvPath=process.argv[2];
-const sampleCount=Math.max(1,Number(process.argv[3]||5));
-const chainScope=String(process.argv[4]||'all').trim().toLowerCase();
-const validChainScopes=new Set(['all','production','tests']);
+const sampleCount=Math.max(1,Number(process.argv[3]||20));
 
 if(!csvPath){
-  console.error('Usage: node scripts/sample-structural-evidence.js <python.csv> [count] [all|production|tests]');
-  process.exit(1);
-}
-if(!validChainScopes.has(chainScope)){
-  console.error(`Invalid chain scope "${chainScope}". Use all, production, or tests.`);
+  console.error('Usage: node scripts/sample-structural-evidence.js <python.csv> [sample-count]');
   process.exit(1);
 }
 
@@ -92,79 +86,6 @@ for(const row of rows){
   }
 }
 
-const allWorkflows=rows
-  .filter(row=>row.type==='workflow')
-  .map(row=>{
-    const d=details(row.details);
-    const functions=edgesFrom(row)
-      .filter(edge=>edge.relationship==='contains'&&edge.targetType==='function')
-      .map((edge,index)=>({
-        position:index+1,
-        row:edge.targetRow,
-        name:edge.targetName,
-        file:byRow.get(String(edge.targetRow))?.file||'',
-        line_range:byRow.get(String(edge.targetRow))?.line_range||''
-      }));
-    return {
-      row:row.row,
-      name:row.name,
-      structuralId:d.structuralId||'',
-      functionCount:Number(d.functionCount||functions.length||0),
-      functions
-    };
-  })
-  .sort((a,b)=>b.functionCount-a.functionCount||a.row-b.row);
-
-const workflows=allWorkflows.slice(0,sampleCount);
-
-const allEntities=rows
-  .filter(row=>row.type==='entity')
-  .map(row=>{
-    const d=details(row.details);
-    const uses=(incoming.get(String(row.row))||[])
-      .filter(edge=>['create','read','update','delete'].includes(edge.relationship))
-      .map(edge=>{
-        const source=byRow.get(String(edge.sourceRow));
-        return {
-          operation:edge.relationship,
-          sourceRow:edge.sourceRow,
-          sourceType:edge.sourceType,
-          sourceName:edge.sourceName,
-          file:source?.file||'',
-          line_range:source?.line_range||''
-        };
-      });
-    return {
-      row:row.row,
-      name:row.name,
-      structuralId:d.structuralId||'',
-      kind:d.kind||'',
-      identityKind:d.identityKind||'',
-      classId:d.classId||'',
-      classScope:d.classScope||'',
-      functionCount:Number(d.functionCount||0),
-      coreScore:Number(d.coreScore||0),
-      keys:Array.isArray(d.keys)?d.keys:[],
-      members:Array.isArray(d.members)?d.members:[],
-      methods:Array.isArray(d.methods)?d.methods:[],
-      elementKinds:Array.isArray(d.elementKinds)?d.elementKinds:[],
-      elementKeys:Array.isArray(d.elementKeys)?d.elementKeys:[],
-      elementConstructors:Array.isArray(d.elementConstructors)?d.elementConstructors:[],
-      accessSignatures:Array.isArray(d.accessSignatures)?d.accessSignatures:[],
-      operationCount:uses.length,
-      uses
-    };
-  })
-  .sort((a,b)=>b.operationCount-a.operationCount||a.row-b.row);
-
-const entities=allEntities.slice(0,sampleCount).map(entity=>({
-  ...entity,
-  keys:entity.keys.slice(0,12),
-  members:entity.members.slice(0,12),
-  methods:entity.methods.slice(0,12),
-  uses:entity.uses.slice(0,12)
-}));
-
 const functionRowsByFile=new Map();
 for(const row of rows.filter(row=>row.type==='function')){
   if(!functionRowsByFile.has(row.file))functionRowsByFile.set(row.file,[]);
@@ -198,40 +119,84 @@ const functionRowForSource=(sourceRow)=>{
   if(parent?.targetRow)return Number(parent.targetRow);
 
   const [startText]=String(source.line_range||'').split('-');
-  const line=Number(startText||0);
-  if(!line)return 0;
-
-  return functionRowForLocation(source.file,line);
+  return functionRowForLocation(source.file,Number(startText||0));
 };
 
-const isStructuredContinuousEntity=(entity)=>{
-  if(entity.identityKind!=='continuous'||entity.classId||entity.classScope)return false;
-  if(entity.kind==='primitive')return false;
-  if(['mapping','array-like','sequence','set'].includes(entity.kind))return true;
-  return entity.keys.length>0||entity.members.length>0||entity.methods.length>0;
-};
+const workflows=rows
+  .filter(row=>row.type==='workflow')
+  .map(row=>{
+    const d=details(row.details);
+    const functions=edgesFrom(row)
+      .filter(edge=>edge.relationship==='contains'&&edge.targetType==='function')
+      .map((edge,index)=>({
+        position:index+1,
+        row:edge.targetRow,
+        name:edge.targetName,
+        file:byRow.get(String(edge.targetRow))?.file||'',
+        line_range:byRow.get(String(edge.targetRow))?.line_range||''
+      }));
+    return {
+      row:row.row,
+      name:row.name,
+      structuralId:d.structuralId||'',
+      functionCount:functions.length,
+      functions
+    };
+  });
+
+const entities=rows
+  .filter(row=>row.type==='entity')
+  .map(row=>{
+    const d=details(row.details);
+    const uses=(incoming.get(String(row.row))||[])
+      .filter(edge=>['create','read','update','delete'].includes(edge.relationship))
+      .map(edge=>{
+        const source=byRow.get(String(edge.sourceRow));
+        return {
+          operation:edge.relationship,
+          sourceRow:edge.sourceRow,
+          sourceType:edge.sourceType,
+          sourceName:edge.sourceName,
+          functionRow:functionRowForSource(edge.sourceRow),
+          file:source?.file||'',
+          line_range:source?.line_range||''
+        };
+      })
+      .filter(use=>use.functionRow);
+
+    return {
+      row:row.row,
+      name:row.name,
+      structuralId:d.structuralId||'',
+      kind:d.kind||'',
+      identityKind:d.identityKind||'',
+      classId:d.classId||'',
+      classScope:d.classScope||'',
+      functionCount:Number(d.functionCount||0),
+      keys:Array.isArray(d.keys)?d.keys:[],
+      members:Array.isArray(d.members)?d.members:[],
+      methods:Array.isArray(d.methods)?d.methods:[],
+      elementKinds:Array.isArray(d.elementKinds)?d.elementKinds:[],
+      elementKeys:Array.isArray(d.elementKeys)?d.elementKeys:[],
+      elementConstructors:Array.isArray(d.elementConstructors)?d.elementConstructors:[],
+      accessSignatures:Array.isArray(d.accessSignatures)?d.accessSignatures:[],
+      uses
+    };
+  });
+
+const entityByRow=new Map(entities.map(entity=>[entity.row,entity]));
+const entityRowsByFunction=new Map();
+for(const entity of entities){
+  for(const use of entity.uses){
+    if(!entityRowsByFunction.has(use.functionRow))entityRowsByFunction.set(use.functionRow,new Set());
+    entityRowsByFunction.get(use.functionRow).add(entity.row);
+  }
+}
 
 const GENERIC_ARRAY_MEMBERS=new Set(['dtype','shape','ndim','size','itemsize','nbytes','T']);
-const GENERIC_SHAPE_MEMBERS=new Set([
-  ...GENERIC_ARRAY_MEMBERS,
-  'values',
-  'variables'
-]);
-const GENERIC_AFTER_READ=new Set([
-  'assign',
-  'compare',
-  'return',
-  'subscript',
-  'expr',
-  'if',
-  'for',
-  'while'
-]);
-const GENERIC_WRITE_VALUE_KINDS=new Set([
-  'alias',
-  'member',
-  'subscript'
-]);
+const GENERIC_SHAPE_MEMBERS=new Set([...GENERIC_ARRAY_MEMBERS,'values','variables']);
+const GENERIC_AFTER_READ=new Set(['assign','compare','return','subscript','expr','if','for','while']);
+const GENERIC_WRITE_VALUE_KINDS=new Set(['alias','member','subscript']);
 
 const meaningfulMembers=(entity)=>entity.members.filter(
   member=>!GENERIC_SHAPE_MEMBERS.has(String(member))
@@ -252,13 +217,16 @@ const meaningfulWriteKinds=(values)=>values.filter(value=>{
     text.startsWith('augassign:');
 });
 
+const isContinuousEntity=(entity)=>
+  entity.identityKind==='continuous'&&!entity.classId&&!entity.classScope&&entity.kind!=='primitive';
+
 const isStructuredElementCollection=(entity)=>
   entity.elementKeys.length>0||
   entity.elementConstructors.length>0||
   entity.elementKinds.some(kind=>['mapping','object'].includes(String(kind)));
 
 const isShapeEntity=(entity)=>{
-  if(!isStructuredContinuousEntity(entity))return false;
+  if(!isContinuousEntity(entity))return false;
   if(entity.kind==='mapping')return true;
   if(isStructuredElementCollection(entity))return true;
   if(entity.kind==='object')return entity.keys.length>0||meaningfulMembers(entity).length>0;
@@ -266,249 +234,9 @@ const isShapeEntity=(entity)=>{
 };
 
 const isValueCollectionEntity=(entity)=>{
-  if(!isStructuredContinuousEntity(entity)||isShapeEntity(entity))return false;
+  if(!isContinuousEntity(entity)||isShapeEntity(entity))return false;
   return ['array-like','sequence','set'].includes(entity.kind);
 };
-
-const functionRows=rows.filter(row=>row.type==='function');
-const functionGraph=new Map(functionRows.map(row=>[
-  Number(row.row),
-  edgesFrom(row)
-    .filter(edge=>edge.relationship==='calls'&&edge.targetType==='function')
-    .map(edge=>Number(edge.targetRow))
-    .filter(Boolean)
-]));
-
-// Collapse recursive cycles before ranking. This keeps the ranking finite while
-// preserving every function that participates in a recursive component.
-let tarjanIndex=0;
-const stack=[];
-const onStack=new Set();
-const indexByRow=new Map();
-const lowByRow=new Map();
-const components=[];
-
-function strongConnect(row){
-  indexByRow.set(row,tarjanIndex);
-  lowByRow.set(row,tarjanIndex);
-  tarjanIndex+=1;
-  stack.push(row);
-  onStack.add(row);
-
-  for(const target of functionGraph.get(row)||[]){
-    if(!indexByRow.has(target)){
-      strongConnect(target);
-      lowByRow.set(row,Math.min(lowByRow.get(row),lowByRow.get(target)));
-    }else if(onStack.has(target)){
-      lowByRow.set(row,Math.min(lowByRow.get(row),indexByRow.get(target)));
-    }
-  }
-
-  if(lowByRow.get(row)!==indexByRow.get(row))return;
-  const members=[];
-  while(stack.length){
-    const member=stack.pop();
-    onStack.delete(member);
-    members.push(member);
-    if(member===row)break;
-  }
-  components.push(members.sort((a,b)=>a-b));
-}
-
-for(const row of functionGraph.keys()){
-  if(!indexByRow.has(row))strongConnect(row);
-}
-
-const componentByRow=new Map();
-components.forEach((members,index)=>members.forEach(row=>componentByRow.set(row,index)));
-
-const componentGraph=new Map(components.map((_,index)=>[index,new Set()]));
-const componentIncoming=new Map(components.map((_,index)=>[index,0]));
-for(const [source,targets] of functionGraph.entries()){
-  const sourceComponent=componentByRow.get(source);
-  for(const target of targets){
-    const targetComponent=componentByRow.get(target);
-    if(sourceComponent===targetComponent)continue;
-    const outgoing=componentGraph.get(sourceComponent);
-    if(!outgoing.has(targetComponent)){
-      outgoing.add(targetComponent);
-      componentIncoming.set(targetComponent,(componentIncoming.get(targetComponent)||0)+1);
-    }
-  }
-}
-
-const longestFromMemo=new Map();
-function longestFrom(component){
-  if(longestFromMemo.has(component))return longestFromMemo.get(component);
-  let best=[component];
-  for(const target of componentGraph.get(component)||[]){
-    const candidate=[component,...longestFrom(target)];
-    const candidateLength=candidate.reduce((sum,id)=>sum+components[id].length,0);
-    const bestLength=best.reduce((sum,id)=>sum+components[id].length,0);
-    if(candidateLength>bestLength)best=candidate;
-  }
-  longestFromMemo.set(component,best);
-  return best;
-}
-
-const roots=[...componentGraph.keys()]
-  .filter(component=>(componentIncoming.get(component)||0)===0);
-const starts=roots.length?roots:[...componentGraph.keys()];
-
-const callChains=starts
-  .map(component=>longestFrom(component))
-  .map((componentPath,index)=>{
-    const chainRows=componentPath.flatMap(component=>components[component]);
-    const functions=chainRows.map((row,index)=>({
-      position:index+1,
-      row,
-      name:byRow.get(String(row))?.name||'',
-      file:byRow.get(String(row))?.file||'',
-      line_range:byRow.get(String(row))?.line_range||''
-    }));
-    return {
-      row:index+1,
-      name:`callchain:${functions.map(fn=>fn.name).slice(0,3).join('→')}`,
-      functionCount:functions.length,
-      functions,
-      recursiveComponentCount:componentPath.filter(component=>components[component].length>1).length
-    };
-  })
-  .sort((a,b)=>b.functionCount-a.functionCount||a.name.localeCompare(b.name));
-
-const isTestFunction=(fn)=>{
-  const file=String(fn?.file||'').replaceAll('\\','/').toLowerCase();
-  return file.includes('/tests/')||file.startsWith('tests/')||
-    file.includes('/test/')||file.startsWith('test/')||
-    file.startsWith('asv_bench/')||file.includes('/asv_bench/');
-};
-
-const chainMatchesScope=(chain)=>{
-  if(chainScope==='all')return true;
-  const testFlags=chain.functions.map(isTestFunction);
-  if(chainScope==='tests')return testFlags.some(Boolean);
-  return testFlags.every(flag=>!flag);
-};
-
-const scopedCallChains=callChains.filter(chainMatchesScope);
-const topFlows=scopedCallChains.slice(0,20);
-
-const structuredChains=[];
-for(const flow of topFlows){
-  const positionByFunctionRow=new Map(flow.functions.map(fn=>[Number(fn.row),Number(fn.position)]));
-  for(const entity of allEntities.filter(isStructuredContinuousEntity)){
-    const touches=entity.uses
-      .map(use=>{
-        const functionRow=functionRowForSource(use.sourceRow);
-        const position=positionByFunctionRow.get(functionRow);
-        if(!position)return null;
-        const fn=flow.functions[position-1];
-        return {
-          position,
-          functionRow,
-          functionName:fn?.name||'',
-          operation:use.operation,
-          sourceType:use.sourceType,
-          sourceName:use.sourceName,
-          file:use.file,
-          line_range:use.line_range
-        };
-      })
-      .filter(Boolean);
-
-    if(!touches.length)continue;
-
-    const positions=[...new Set(touches.map(touch=>touch.position))].sort((a,b)=>a-b);
-    if(positions.length<2)continue;
-
-    const firstPosition=positions[0];
-    const lastPosition=positions.at(-1);
-    const spanLength=lastPosition-firstPosition+1;
-    const operations={create:0,read:0,update:0,delete:0};
-    touches.forEach(touch=>{
-      if(Object.hasOwn(operations,touch.operation))operations[touch.operation]+=1;
-    });
-
-    structuredChains.push({
-      flowRow:flow.row,
-      flowName:flow.name,
-      flowFunctionCount:flow.functionCount,
-      entityRow:entity.row,
-      entityName:entity.name,
-      kind:entity.kind,
-      spanLength,
-      touchedFunctionCount:positions.length,
-      firstPosition,
-      lastPosition,
-      positions,
-      operations,
-      keys:entity.keys.slice(0,12),
-      members:entity.members.slice(0,12),
-      methods:entity.methods.slice(0,12),
-      touches
-    });
-  }
-}
-
-structuredChains.sort((a,b)=>
-  b.spanLength-a.spanLength||
-  b.touchedFunctionCount-a.touchedFunctionCount||
-  (b.operations.update+b.operations.read)-(a.operations.update+a.operations.read)||
-  b.flowFunctionCount-a.flowFunctionCount||
-  a.entityRow-b.entityRow
-);
-
-const setIntersection=(left,right)=>{
-  const b=new Set(right);
-  return [...new Set(left)].filter(value=>b.has(value)).sort();
-};
-
-const fingerprintForOccurrence=(occurrence)=>{
-  const entity=allEntities.find(item=>item.row===occurrence.entityRow);
-  const flow=topFlows.find(item=>item.row===occurrence.flowRow);
-  if(!entity||!flow)return null;
-
-  const allowedFunctions=new Set(flow.functions.map(fn=>Number(fn.row)));
-  const signatures=entity.accessSignatures.filter(signature=>{
-    const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
-    return functionRow&&allowedFunctions.has(functionRow);
-  });
-
-  const keys=[...new Set(signatures
-    .filter(signature=>signature?.access==='key'&&signature?.name)
-    .map(signature=>String(signature.name)))].sort();
-  const members=[...new Set(signatures
-    .filter(signature=>signature?.access==='member'&&signature?.name)
-    .map(signature=>String(signature.name)))].sort();
-  const writeValueKinds=[...new Set(signatures
-    .filter(signature=>['update','create'].includes(String(signature?.relationship||''))&&signature?.valueKind)
-    .map(signature=>String(signature.valueKind)))].sort();
-  const afterRead=[...new Set(signatures
-    .filter(signature=>signature?.relationship==='read'&&signature?.afterRead)
-    .map(signature=>String(signature.afterRead)))].sort();
-  const signatureFunctionRows=[...new Set(signatures
-    .map(signature=>functionRowForLocation(signature?.sourcePath,signature?.line))
-    .filter(Boolean))].sort((a,b)=>a-b);
-
-  return {
-    flowRow:occurrence.flowRow,
-    flowName:occurrence.flowName,
-    entityRow:occurrence.entityRow,
-    entityName:occurrence.entityName,
-    kind:occurrence.kind,
-    keys,
-    members,
-    writeValueKinds,
-    afterRead,
-    signatureFunctionRows
-  };
-};
-
-const occurrenceFingerprints=structuredChains
-  .map(fingerprintForOccurrence)
-  .filter(Boolean);
-
-const fingerprintIntersections=[];
 
 const summarizeSignatures=(signatures)=>{
   const keys=[...new Set(signatures
@@ -526,110 +254,108 @@ const summarizeSignatures=(signatures)=>{
   return {keys,members,writeValueKinds,afterRead};
 };
 
-for(let i=0;i<occurrenceFingerprints.length;i+=1){
-  for(let j=i+1;j<occurrenceFingerprints.length;j+=1){
-    const left=occurrenceFingerprints[i];
-    const right=occurrenceFingerprints[j];
-    if(left.flowRow===right.flowRow)continue;
-    if(left.entityRow===right.entityRow)continue;
-    if(left.kind&&right.kind&&left.kind!==right.kind)continue;
+const setIntersection=(left,right)=>{
+  const rightSet=new Set(right);
+  return [...new Set(left)].filter(value=>rightSet.has(value)).sort();
+};
 
-    const leftEntity=allEntities.find(item=>item.row===left.entityRow);
-    const rightEntity=allEntities.find(item=>item.row===right.entityRow);
-    const leftFlow=topFlows.find(item=>item.row===left.flowRow);
-    const rightFlow=topFlows.find(item=>item.row===right.flowRow);
-    if(!leftEntity||!rightEntity||!leftFlow||!rightFlow)continue;
+const flowOccurrences=[];
+const qualifiedFlows=[];
 
-    const leftFunctionRows=new Set(leftFlow.functions.map(fn=>Number(fn.row)));
-    const rightFunctionRows=new Set(rightFlow.functions.map(fn=>Number(fn.row)));
-    const sharedFunctionRows=[...leftFunctionRows]
-      .filter(row=>rightFunctionRows.has(row))
-      .sort((a,b)=>a-b);
+for(const flow of workflows){
+  const positionByFunctionRow=new Map(
+    flow.functions.map(fn=>[Number(fn.row),Number(fn.position)])
+  );
+  const candidateEntityRows=new Set(
+    flow.functions.flatMap(fn=>[...(entityRowsByFunction.get(Number(fn.row))||[])])
+  );
 
-    const leftExclusiveSignatures=leftEntity.accessSignatures.filter(signature=>{
-      const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
-      return functionRow&&leftFunctionRows.has(functionRow)&&!rightFunctionRows.has(functionRow);
+  const qualifying=[];
+  for(const entityRow of candidateEntityRows){
+    const entity=entityByRow.get(entityRow);
+    if(!entity||(!isShapeEntity(entity)&&!isValueCollectionEntity(entity)))continue;
+
+    const touches=entity.uses
+      .map(use=>{
+        const position=positionByFunctionRow.get(use.functionRow);
+        if(!position)return null;
+        const fn=flow.functions[position-1];
+        return {
+          position,
+          functionRow:use.functionRow,
+          functionName:fn?.name||'',
+          operation:use.operation,
+          sourceType:use.sourceType,
+          sourceName:use.sourceName,
+          file:use.file,
+          line_range:use.line_range
+        };
+      })
+      .filter(Boolean);
+
+    const positions=[...new Set(touches.map(touch=>touch.position))].sort((a,b)=>a-b);
+    if(positions.length<2)continue;
+
+    const operations={create:0,read:0,update:0,delete:0};
+    touches.forEach(touch=>{
+      if(Object.hasOwn(operations,touch.operation))operations[touch.operation]+=1;
     });
-    const rightExclusiveSignatures=rightEntity.accessSignatures.filter(signature=>{
-      const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
-      return functionRow&&rightFunctionRows.has(functionRow)&&!leftFunctionRows.has(functionRow);
-    });
 
-    const leftExclusive=summarizeSignatures(leftExclusiveSignatures);
-    const rightExclusive=summarizeSignatures(rightExclusiveSignatures);
+    const occurrence={
+      flowRow:flow.row,
+      flowName:flow.name,
+      flowFunctionCount:flow.functionCount,
+      entityRow:entity.row,
+      entityName:entity.name,
+      kind:entity.kind,
+      category:isShapeEntity(entity)?'structured-shape':'value-collection-lineage',
+      spanLength:positions.at(-1)-positions[0]+1,
+      touchedFunctionCount:positions.length,
+      positions,
+      operations,
+      touches
+    };
+    qualifying.push(occurrence);
+    flowOccurrences.push(occurrence);
+  }
 
-    const commonKeys=setIntersection(leftExclusive.keys,rightExclusive.keys);
-    const commonMembers=setIntersection(leftExclusive.members,rightExclusive.members);
-    const commonWriteValueKinds=setIntersection(leftExclusive.writeValueKinds,rightExclusive.writeValueKinds);
-    const commonAfterRead=setIntersection(leftExclusive.afterRead,rightExclusive.afterRead);
-
-    const score=
-      commonKeys.length*4+
-      commonMembers.length*4+
-      commonWriteValueKinds.length*3+
-      commonAfterRead.length*2;
-
-    if(score<=0)continue;
-
-    fingerprintIntersections.push({
-      score,
-      kind:left.kind||right.kind,
-      sharedFunctionRows,
-      independentFunctionEvidence:true,
-      left:{
-        flowRow:left.flowRow,
-        flowName:left.flowName,
-        entityRow:left.entityRow,
-        entityName:left.entityName,
-        exclusiveFunctionCount:[...leftFunctionRows].filter(row=>!rightFunctionRows.has(row)).length
-      },
-      right:{
-        flowRow:right.flowRow,
-        flowName:right.flowName,
-        entityRow:right.entityRow,
-        entityName:right.entityName,
-        exclusiveFunctionCount:[...rightFunctionRows].filter(row=>!leftFunctionRows.has(row)).length
-      },
-      common:{
-        keys:commonKeys,
-        members:commonMembers,
-        writeValueKinds:commonWriteValueKinds,
-        afterRead:commonAfterRead
-      }
+  if(qualifying.length){
+    qualifiedFlows.push({
+      row:flow.row,
+      name:flow.name,
+      functionCount:flow.functionCount,
+      qualifyingEntityCount:new Set(qualifying.map(item=>item.entityRow)).size,
+      structuredShapeCount:new Set(
+        qualifying.filter(item=>item.category==='structured-shape').map(item=>item.entityRow)
+      ).size,
+      valueCollectionCount:new Set(
+        qualifying.filter(item=>item.category==='value-collection-lineage').map(item=>item.entityRow)
+      ).size,
+      functions:flow.functions
     });
   }
 }
 
-fingerprintIntersections.sort((a,b)=>
-  b.score-a.score||
-  Number(b.independentFunctionEvidence)-Number(a.independentFunctionEvidence)||
-  a.left.entityRow-b.left.entityRow||
-  a.right.entityRow-b.right.entityRow
-);
-
-// Consolidate distinct continuous entity rows into diagnostic shape families.
-// This does not rewrite entity identity. It only shows which candidates across
-// the top call chains have enough shared structural behaviour to plausibly
-// represent one conceptual data structure.
-const topFunctionRows=new Set(
-  topFlows.flatMap(flow=>flow.functions.map(fn=>Number(fn.row)))
+const survivingFlowRows=new Set(qualifiedFlows.map(flow=>flow.row));
+const survivingFunctionRows=new Set(
+  qualifiedFlows.flatMap(flow=>flow.functions.map(fn=>Number(fn.row)))
 );
 
 const entityFingerprintByRow=new Map();
-for(const entity of allEntities.filter(isShapeEntity)){
+for(const entity of entities.filter(isShapeEntity)){
+  const occurrences=flowOccurrences.filter(item=>
+    item.entityRow===entity.row&&item.category==='structured-shape'
+  );
+  if(!occurrences.length)continue;
+
+  const relevantFunctionRows=new Set(
+    occurrences.flatMap(item=>item.touches.map(touch=>touch.functionRow))
+  );
   const signatures=entity.accessSignatures.filter(signature=>{
     const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
-    return functionRow&&topFunctionRows.has(functionRow);
+    return functionRow&&relevantFunctionRows.has(functionRow);
   });
-  if(!signatures.length)continue;
-
   const summary=summarizeSignatures(signatures);
-  const functionRows=[...new Set(signatures
-    .map(signature=>functionRowForLocation(signature?.sourcePath,signature?.line))
-    .filter(Boolean))].sort((a,b)=>a-b);
-  const chainRows=topFlows
-    .filter(flow=>flow.functions.some(fn=>functionRows.includes(Number(fn.row))))
-    .map(flow=>flow.row);
 
   entityFingerprintByRow.set(entity.row,{
     entityRow:entity.row,
@@ -639,8 +365,8 @@ for(const entity of allEntities.filter(isShapeEntity)){
     elementKinds:entity.elementKinds,
     elementKeys:entity.elementKeys,
     elementConstructors:entity.elementConstructors,
-    functionRows,
-    chainRows:[...new Set(chainRows)].sort((a,b)=>a-b)
+    functionRows:[...relevantFunctionRows].sort((a,b)=>a-b),
+    flowRows:[...new Set(occurrences.map(item=>item.flowRow))].sort((a,b)=>a-b)
   });
 }
 
@@ -653,7 +379,7 @@ const familyFind=(row)=>{
   return root;
 };
 const familyUnion=(a,b)=>{
-  const ra=familyFind(a), rb=familyFind(b);
+  const ra=familyFind(a),rb=familyFind(b);
   if(ra===rb)return;
   familyParent.set(Math.max(ra,rb),Math.min(ra,rb));
 };
@@ -661,7 +387,7 @@ const familyUnion=(a,b)=>{
 const fingerprintRows=[...entityFingerprintByRow.values()];
 for(let i=0;i<fingerprintRows.length;i+=1){
   for(let j=i+1;j<fingerprintRows.length;j+=1){
-    const left=fingerprintRows[i], right=fingerprintRows[j];
+    const left=fingerprintRows[i],right=fingerprintRows[j];
     if(left.kind&&right.kind&&left.kind!==right.kind)continue;
 
     const commonKeys=setIntersection(left.keys,right.keys);
@@ -677,7 +403,9 @@ for(let i=0;i<fingerprintRows.length;i+=1){
     );
     const commonElementKinds=setIntersection(left.elementKinds,right.elementKinds);
     const commonElementKeys=setIntersection(left.elementKeys,right.elementKeys);
-    const commonElementConstructors=setIntersection(left.elementConstructors,right.elementConstructors);
+    const commonElementConstructors=setIntersection(
+      left.elementConstructors,right.elementConstructors
+    );
 
     const keyIdentity=
       commonKeys.length>=2||
@@ -687,7 +415,9 @@ for(let i=0;i<fingerprintRows.length;i+=1){
       (commonMembers.length>=1&&commonAfterRead.length>=1);
     const structuredElementIdentity=
       commonElementKeys.length>=2||
-      (commonElementKeys.length>=1&&commonElementKinds.some(kind=>['mapping','object'].includes(kind)))||
+      (commonElementKeys.length>=1&&commonElementKinds.some(kind=>
+        ['mapping','object'].includes(kind)
+      ))||
       commonElementConstructors.length>=1;
 
     if(keyIdentity||memberIdentity||structuredElementIdentity){
@@ -714,106 +444,83 @@ const intersectAll=(items,key)=>{
 const shapeFamilies=[...familyMembers.values()]
   .filter(members=>members.length>=2)
   .map(members=>{
-    const entityRows=members.map(item=>item.entityRow).sort((a,b)=>a-b);
-    const entityNames=[...new Set(members.map(item=>item.entityName).filter(Boolean))].sort();
-    const functionRows=[...new Set(members.flatMap(item=>item.functionRows))].sort((a,b)=>a-b);
-    const chainRows=[...new Set(members.flatMap(item=>item.chainRows))].sort((a,b)=>a-b);
     const common={
       keys:intersectAll(members,'keys'),
-      members:intersectAll(members,'members'),
-      writeValueKinds:intersectAll(members,'writeValueKinds'),
-      afterRead:intersectAll(members,'afterRead'),
+      members:intersectAll(members,'members')
+        .filter(member=>!GENERIC_SHAPE_MEMBERS.has(String(member))),
+      writeValueKinds:meaningfulWriteKinds(intersectAll(members,'writeValueKinds')),
+      afterRead:meaningfulAfterReadValues(intersectAll(members,'afterRead')),
       elementKinds:intersectAll(members,'elementKinds'),
       elementKeys:intersectAll(members,'elementKeys'),
       elementConstructors:intersectAll(members,'elementConstructors')
     };
-    const commonScore=
-      common.keys.length*4+
-      common.members.length*4+
-      common.writeValueKinds.length*3+
-      common.afterRead.length*2+
-      common.elementKeys.length*4+
-      common.elementConstructors.length*4+
-      common.elementKinds.length*2;
+    const entityRows=members.map(item=>item.entityRow).sort((a,b)=>a-b);
+    const functionRows=[...new Set(members.flatMap(item=>item.functionRows))].sort((a,b)=>a-b);
+    const flowRows=[...new Set(members.flatMap(item=>item.flowRows))].sort((a,b)=>a-b);
+
+    const keyIdentity=
+      common.keys.length>=2||
+      (common.keys.length>=1&&common.writeValueKinds.length>=1);
+    const memberIdentity=
+      common.members.length>=2||
+      (common.members.length>=1&&common.afterRead.length>=1);
+    const structuredElementIdentity=
+      common.elementKeys.length>=2||
+      (common.elementKeys.length>=1&&common.elementKinds.some(kind=>
+        ['mapping','object'].includes(kind)
+      ))||
+      common.elementConstructors.length>=1;
 
     return {
       kind:members[0]?.kind||'',
       entityCount:entityRows.length,
-      chainCount:chainRows.length,
+      flowCount:flowRows.length,
       functionCount:functionRows.length,
-      commonScore,
       entityRows,
-      entityNames,
-      chainRows,
+      entityNames:[...new Set(members.map(item=>item.entityName).filter(Boolean))].sort(),
+      flowRows,
       functionRows,
-      common
+      common,
+      qualifies:functionRows.length>=2&&(keyIdentity||memberIdentity||structuredElementIdentity)
     };
   })
+  .filter(family=>family.qualifies)
+  .map(({qualifies,...family})=>family)
   .sort((a,b)=>
-    b.chainCount-a.chainCount||
-    b.entityCount-a.entityCount||
     b.functionCount-a.functionCount||
-    b.commonScore-a.commonScore||
+    b.flowCount-a.flowCount||
+    b.entityCount-a.entityCount||
     a.entityRows[0]-b.entityRows[0]
   );
 
-const qualifiedShapeFamilies=shapeFamilies
-  .filter(family=>{
-    if(family.functionCount<2)return false;
-
-    const commonKeys=family.common.keys||[];
-    const commonMembers=(family.common.members||[])
-      .filter(member=>!GENERIC_SHAPE_MEMBERS.has(String(member)));
-    const commonWriteValueKinds=meaningfulWriteKinds(family.common.writeValueKinds||[]);
-    const commonAfterRead=meaningfulAfterReadValues(family.common.afterRead||[]);
-    const commonElementKinds=family.common.elementKinds||[];
-    const commonElementKeys=family.common.elementKeys||[];
-    const commonElementConstructors=family.common.elementConstructors||[];
-
-    const keyIdentity=
-      commonKeys.length>=2||
-      (commonKeys.length>=1&&commonWriteValueKinds.length>=1);
-    const memberIdentity=
-      commonMembers.length>=2||
-      (commonMembers.length>=1&&commonAfterRead.length>=1);
-    const structuredElementIdentity=
-      commonElementKeys.length>=2||
-      (commonElementKeys.length>=1&&commonElementKinds.some(kind=>['mapping','object'].includes(kind)))||
-      commonElementConstructors.length>=1;
-
-    return keyIdentity||memberIdentity||structuredElementIdentity;
-  });
-
-const valueCollectionOccurrences=structuredChains
-  .filter(item=>{
-    const entity=allEntities.find(candidate=>candidate.row===item.entityRow);
-    return entity&&isValueCollectionEntity(entity)&&item.touchedFunctionCount>=2;
-  });
-
-const valueCollectionByEntity=new Map();
-for(const occurrence of valueCollectionOccurrences){
-  if(!valueCollectionByEntity.has(occurrence.entityRow)){
-    valueCollectionByEntity.set(occurrence.entityRow,[]);
-  }
-  valueCollectionByEntity.get(occurrence.entityRow).push(occurrence);
+const valueOccurrences=flowOccurrences.filter(item=>
+  item.category==='value-collection-lineage'&&survivingFlowRows.has(item.flowRow)
+);
+const valueByEntity=new Map();
+for(const occurrence of valueOccurrences){
+  if(!valueByEntity.has(occurrence.entityRow))valueByEntity.set(occurrence.entityRow,[]);
+  valueByEntity.get(occurrence.entityRow).push(occurrence);
 }
 
-const arrayLineages=[...valueCollectionByEntity.entries()]
+const arrayLineages=[...valueByEntity.entries()]
   .map(([entityRow,occurrences])=>{
-    const entity=allEntities.find(item=>item.row===entityRow);
+    const entity=entityByRow.get(entityRow);
+    const functionRows=[...new Set(
+      occurrences.flatMap(item=>item.touches.map(touch=>touch.functionRow))
+    )].sort((a,b)=>a-b);
     const ranked=[...occurrences].sort((a,b)=>
       b.touchedFunctionCount-a.touchedFunctionCount||
       b.spanLength-a.spanLength||
       (b.operations.update+b.operations.read)-(a.operations.update+a.operations.read)
     );
     const representative=ranked[0];
-    const functionRows=[...new Set(occurrences.flatMap(item=>item.touches.map(touch=>touch.functionRow)))].sort((a,b)=>a-b);
+
     return {
       entityRow,
       entityName:entity?.name||representative.entityName,
       kind:entity?.kind||representative.kind,
-      chainCount:new Set(occurrences.map(item=>item.flowRow)).size,
-      distinctFunctionCount:functionRows.length,
+      flowCount:new Set(occurrences.map(item=>item.flowRow)).size,
+      functionCount:functionRows.length,
       maxTouchedFunctionCount:Math.max(...occurrences.map(item=>item.touchedFunctionCount)),
       maxSpanLength:Math.max(...occurrences.map(item=>item.spanLength)),
       operations:occurrences.reduce((sum,item)=>({
@@ -833,29 +540,28 @@ const arrayLineages=[...valueCollectionByEntity.entries()]
     };
   })
   .sort((a,b)=>
+    b.functionCount-a.functionCount||
+    b.flowCount-a.flowCount||
     b.maxTouchedFunctionCount-a.maxTouchedFunctionCount||
     b.maxSpanLength-a.maxSpanLength||
-    (b.operations.update+b.operations.read)-(a.operations.update+a.operations.read)||
-    b.chainCount-a.chainCount||
     a.entityRow-b.entityRow
   );
 
 const coreEntityCandidates=[
-  ...qualifiedShapeFamilies.map(family=>({
+  ...shapeFamilies.map(family=>({
     category:'structured-shape',
     rankEvidence:{
-      chainCount:family.chainCount,
       functionCount:family.functionCount,
-      entityCount:family.entityCount,
-      commonScore:family.commonScore
+      flowCount:family.flowCount,
+      entityCount:family.entityCount
     },
     candidate:family
   })),
   ...arrayLineages.map(lineage=>({
     category:'value-collection-lineage',
     rankEvidence:{
-      chainCount:lineage.chainCount,
-      functionCount:lineage.distinctFunctionCount,
+      functionCount:lineage.functionCount,
+      flowCount:lineage.flowCount,
       touchedFunctionCount:lineage.maxTouchedFunctionCount,
       spanLength:lineage.maxSpanLength
     },
@@ -863,98 +569,15 @@ const coreEntityCandidates=[
   }))
 ].sort((a,b)=>
   Number(b.rankEvidence.functionCount||0)-Number(a.rankEvidence.functionCount||0)||
-  Number(b.rankEvidence.chainCount||0)-Number(a.rankEvidence.chainCount||0)||
+  Number(b.rankEvidence.flowCount||0)-Number(a.rankEvidence.flowCount||0)||
   Number(b.rankEvidence.touchedFunctionCount||0)-Number(a.rankEvidence.touchedFunctionCount||0)
 );
 
-const coreStructureReport={
-  chainScope,
-  candidateCallChainCount:scopedCallChains.length,
-  longestFlows:topFlows.map(flow=>({
-    row:flow.row,
-    name:flow.name,
-    functionCount:flow.functionCount,
-    functions:flow.functions
-  })),
-  rankedStructuredChains:structuredChains.slice(0,20),
-  fingerprintIntersections:fingerprintIntersections.slice(0,20),
-  shapeFamilies:qualifiedShapeFamilies.slice(0,20),
-  arrayLineages:arrayLineages.slice(0,20),
-  coreEntityCandidates:coreEntityCandidates.slice(0,20)
-};
-
-const workflowMembership=new Map();
-for(const workflow of rows.filter(row=>row.type==='workflow')){
-  const d=details(workflow.details);
-  const members=edgesFrom(workflow).filter(edge=>edge.relationship==='contains'&&edge.targetType==='function');
-  members.forEach((edge,index)=>{
-    const key=String(edge.targetRow);
-    if(!workflowMembership.has(key))workflowMembership.set(key,[]);
-    workflowMembership.get(key).push({
-      workflowRow:workflow.row,
-      workflowName:workflow.name||d.callPathId||'',
-      position:index+1,
-      functionCount:Number(d.functionCount||members.length||0)
-    });
-  });
-}
-
-const mixed=rows
-  .filter(row=>row.type==='function')
-  .map(row=>{
-    const entityOps=edgesFrom(row)
-      .filter(edge=>['create','read','update','delete'].includes(edge.relationship)&&edge.targetType==='entity')
-      .map(edge=>({
-        operation:edge.relationship,
-        entityRow:edge.targetRow,
-        entityName:edge.targetName
-      }));
-    const flows=workflowMembership.get(String(row.row))||[];
-    return {
-      row:row.row,
-      name:row.name,
-      file:row.file,
-      line_range:row.line_range,
-      entityOps,
-      flows
-    };
-  })
-  .filter(item=>item.entityOps.length&&item.flows.length)
-  .sort((a,b)=>(b.entityOps.length+b.flows.length)-(a.entityOps.length+a.flows.length)||a.row-b.row)
-  .slice(0,sampleCount);
-
-const entityRows=rows
-  .filter(row=>row.type==='entity')
-  .map(row=>({row,details:details(row.details)}));
-
-const entityDistribution={
-  total:entityRows.length,
-  byFunctionCount:{
-    two:0,
-    three:0,
-    fourPlus:0
-  },
-  byIdentityKind:{},
-  byClassScope:{},
-  byKind:{}
-};
-
-for(const item of entityRows){
-  const d=item.details;
-  const functionCount=Number(d.functionCount||0);
-  if(functionCount===2)entityDistribution.byFunctionCount.two+=1;
-  else if(functionCount===3)entityDistribution.byFunctionCount.three+=1;
-  else if(functionCount>=4)entityDistribution.byFunctionCount.fourPlus+=1;
-
-  const identityKind=String(d.identityKind||'unknown');
-  entityDistribution.byIdentityKind[identityKind]=(entityDistribution.byIdentityKind[identityKind]||0)+1;
-
-  const classScope=String(d.classScope||'none');
-  entityDistribution.byClassScope[classScope]=(entityDistribution.byClassScope[classScope]||0)+1;
-
-  const kind=String(d.kind||'unknown');
-  entityDistribution.byKind[kind]=(entityDistribution.byKind[kind]||0)+1;
-}
+qualifiedFlows.sort((a,b)=>
+  b.qualifyingEntityCount-a.qualifyingEntityCount||
+  b.functionCount-a.functionCount||
+  a.row-b.row
+);
 
 const counts=rows.reduce((acc,row)=>{
   acc[row.type]=(acc[row.type]||0)+1;
@@ -963,14 +586,21 @@ const counts=rows.reduce((acc,row)=>{
 
 console.log(JSON.stringify({
   csvPath,
-  chainScope,
   rowCount:rows.length,
   counts,
-  entityDistribution,
-  coreStructureReport,
-  samples:{
-    workflows,
-    entities,
-    mixedFunctions:mixed
+  flowScreening:{
+    totalFlows:workflows.length,
+    qualifiedFlows:qualifiedFlows.length,
+    droppedFlows:workflows.length-qualifiedFlows.length,
+    retainedPercent:workflows.length
+      ?Number((qualifiedFlows.length*100/workflows.length).toFixed(2))
+      :0,
+    distinctFunctionsInQualifiedFlows:survivingFunctionRows.size
+  },
+  coreStructureReport:{
+    shapeFamilies:shapeFamilies.slice(0,sampleCount),
+    arrayLineages:arrayLineages.slice(0,sampleCount),
+    coreEntityCandidates:coreEntityCandidates.slice(0,sampleCount),
+    qualifiedFlowSample:qualifiedFlows.slice(0,sampleCount)
   }
 },null,2));
