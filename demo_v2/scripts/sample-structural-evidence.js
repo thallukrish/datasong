@@ -212,7 +212,45 @@ const isStructuredContinuousEntity=(entity)=>{
 };
 
 const GENERIC_ARRAY_MEMBERS=new Set(['dtype','shape','ndim','size','itemsize','nbytes','T']);
-const meaningfulMembers=(entity)=>entity.members.filter(member=>!GENERIC_ARRAY_MEMBERS.has(String(member)));
+const GENERIC_SHAPE_MEMBERS=new Set([
+  ...GENERIC_ARRAY_MEMBERS,
+  'values',
+  'variables'
+]);
+const GENERIC_AFTER_READ=new Set([
+  'assign',
+  'compare',
+  'return',
+  'subscript',
+  'expr',
+  'if',
+  'for',
+  'while'
+]);
+const GENERIC_WRITE_VALUE_KINDS=new Set([
+  'alias',
+  'member',
+  'subscript'
+]);
+
+const meaningfulMembers=(entity)=>entity.members.filter(
+  member=>!GENERIC_SHAPE_MEMBERS.has(String(member))
+);
+const meaningfulAfterReadValues=(values)=>values.filter(value=>{
+  const text=String(value||'');
+  if(!text||GENERIC_AFTER_READ.has(text))return false;
+  return text.startsWith('call:')||text.startsWith('member:');
+});
+const meaningfulWriteKinds=(values)=>values.filter(value=>{
+  const text=String(value||'');
+  if(!text||GENERIC_WRITE_VALUE_KINDS.has(text))return false;
+  return text.startsWith('call:')||
+    text==='mapping'||
+    text.startsWith('sequence:')||
+    text==='set'||
+    text.startsWith('binop:')||
+    text.startsWith('augassign:');
+});
 
 const isStructuredElementCollection=(entity)=>
   entity.elementKeys.length>0||
@@ -628,11 +666,15 @@ for(let i=0;i<fingerprintRows.length;i+=1){
 
     const commonKeys=setIntersection(left.keys,right.keys);
     const commonMembers=setIntersection(
-      left.members.filter(member=>!GENERIC_ARRAY_MEMBERS.has(String(member))),
-      right.members.filter(member=>!GENERIC_ARRAY_MEMBERS.has(String(member)))
+      left.members.filter(member=>!GENERIC_SHAPE_MEMBERS.has(String(member))),
+      right.members.filter(member=>!GENERIC_SHAPE_MEMBERS.has(String(member)))
     );
-    const commonWriteValueKinds=setIntersection(left.writeValueKinds,right.writeValueKinds);
-    const commonAfterRead=setIntersection(left.afterRead,right.afterRead);
+    const commonWriteValueKinds=meaningfulWriteKinds(
+      setIntersection(left.writeValueKinds,right.writeValueKinds)
+    );
+    const commonAfterRead=meaningfulAfterReadValues(
+      setIntersection(left.afterRead,right.afterRead)
+    );
     const commonElementKinds=setIntersection(left.elementKinds,right.elementKinds);
     const commonElementKeys=setIntersection(left.elementKeys,right.elementKeys);
     const commonElementConstructors=setIntersection(left.elementConstructors,right.elementConstructors);
@@ -642,7 +684,7 @@ for(let i=0;i<fingerprintRows.length;i+=1){
       (commonKeys.length>=1&&commonWriteValueKinds.length>=1);
     const memberIdentity=
       commonMembers.length>=2||
-      (commonMembers.length>=1&&(commonAfterRead.length>=1||commonWriteValueKinds.length>=1));
+      (commonMembers.length>=1&&commonAfterRead.length>=1);
     const structuredElementIdentity=
       commonElementKeys.length>=2||
       (commonElementKeys.length>=1&&commonElementKinds.some(kind=>['mapping','object'].includes(kind)))||
@@ -716,7 +758,31 @@ const shapeFamilies=[...familyMembers.values()]
   );
 
 const qualifiedShapeFamilies=shapeFamilies
-  .filter(family=>family.functionCount>=2);
+  .filter(family=>{
+    if(family.functionCount<2)return false;
+
+    const commonKeys=family.common.keys||[];
+    const commonMembers=(family.common.members||[])
+      .filter(member=>!GENERIC_SHAPE_MEMBERS.has(String(member)));
+    const commonWriteValueKinds=meaningfulWriteKinds(family.common.writeValueKinds||[]);
+    const commonAfterRead=meaningfulAfterReadValues(family.common.afterRead||[]);
+    const commonElementKinds=family.common.elementKinds||[];
+    const commonElementKeys=family.common.elementKeys||[];
+    const commonElementConstructors=family.common.elementConstructors||[];
+
+    const keyIdentity=
+      commonKeys.length>=2||
+      (commonKeys.length>=1&&commonWriteValueKinds.length>=1);
+    const memberIdentity=
+      commonMembers.length>=2||
+      (commonMembers.length>=1&&commonAfterRead.length>=1);
+    const structuredElementIdentity=
+      commonElementKeys.length>=2||
+      (commonElementKeys.length>=1&&commonElementKinds.some(kind=>['mapping','object'].includes(kind)))||
+      commonElementConstructors.length>=1;
+
+    return keyIdentity||memberIdentity||structuredElementIdentity;
+  });
 
 const valueCollectionOccurrences=structuredChains
   .filter(item=>{
