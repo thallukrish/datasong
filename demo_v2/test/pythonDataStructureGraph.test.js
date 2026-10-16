@@ -48,8 +48,8 @@ def load():
   const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
   const record = entities.find((node) =>
     node.details?.identityKind === 'continuous' &&
-    node.details?.keys?.includes("'name'") &&
-    node.details?.keys?.includes("'value'")
+    node.details?.keys?.includes('name') &&
+    node.details?.keys?.includes('value')
   );
 
   assert.ok(record, 'Expected continuous mapping entity');
@@ -78,8 +78,8 @@ def first():
 
   const entities = (result.dataGraphNodes || []).filter((node) => node.type === 'entity');
   assert.ok(!entities.some((node) =>
-    node.details?.keys?.includes("'name'") &&
-    node.details?.keys?.includes("'value'")
+    node.details?.keys?.includes('name') &&
+    node.details?.keys?.includes('value')
   ));
 });
 
@@ -200,7 +200,7 @@ def start():
 
   const traced = entities.find((node) =>
     node.details?.identityKind === 'continuous' &&
-    node.details?.keys?.includes("'value'")
+    node.details?.keys?.includes('value')
   );
   assert.ok(traced, 'Expected continuously traced mapping entity');
   assert.equal(traced.details.classId, '');
@@ -249,7 +249,7 @@ def start():
 
   const traced = entities.find((node) =>
     node.details?.identityKind === 'continuous' &&
-    node.details?.keys?.includes("'value'")
+    node.details?.keys?.includes('value')
   );
   assert.ok(traced, 'Expected continuously traced mapping entity');
 });
@@ -333,7 +333,7 @@ def start():
 
   const entity = (result.dataGraphNodes || []).find((node) =>
     node.details?.identityKind === 'continuous' &&
-    node.details?.keys?.includes("'value'")
+    node.details?.keys?.includes('value')
   );
 
   assert.ok(entity, 'Expected continuously traced mapping entity');
@@ -341,13 +341,13 @@ def start():
   assert.ok(signatures.some((item) =>
     item.relationship === 'update' &&
     item.access === 'key' &&
-    item.name === "'value'" &&
+    item.name === 'value' &&
     String(item.valueKind || '').startsWith('binop:')
   ));
   assert.ok(signatures.some((item) =>
     item.relationship === 'read' &&
     item.access === 'key' &&
-    item.name === "'value'" &&
+    item.name === 'value' &&
     String(item.afterRead || '').length > 0
   ));
 });
@@ -374,6 +374,58 @@ def start():
 
   assert.ok(entity, 'Expected continuously traced collection entity');
   assert.ok(entity.details?.elementKinds?.includes('mapping'));
-  assert.ok(entity.details?.elementKeys?.includes("'name'"));
-  assert.ok(entity.details?.elementKeys?.includes("'value'"));
+  assert.ok(entity.details?.elementKeys?.includes('name'));
+  assert.ok(entity.details?.elementKeys?.includes('value'));
+});
+
+
+test('only literal string map keys contribute to structural shape identity', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-literal-map-keys-', `
+def finish(record, key):
+    a = record["name"]
+    b = record[key]
+    c = record[0]
+    d = record[-1]
+    e = record[1:]
+    return a
+
+def start():
+    record = {"name": "a", "value": 1}
+    return finish(record, "value")
+`);
+
+  const entity = (result.dataGraphNodes || []).find((node) =>
+    node.details?.identityKind === 'continuous' &&
+    node.details?.aliases?.includes('record')
+  );
+
+  assert.ok(entity, 'Expected continuously traced mapping entity');
+  assert.ok(entity.details?.keys?.includes('name'));
+  assert.ok(entity.details?.keys?.includes('value'));
+  assert.ok(!entity.details?.keys?.includes('key'));
+  assert.ok(!entity.details?.keys?.includes('0'));
+  assert.ok(!entity.details?.keys?.includes('-1'));
+  assert.ok(!entity.details?.keys?.includes('1:'));
+});
+
+test('method invocation does not become object attribute identity evidence', async (t) => {
+  const result = await tempRepo(t, 'lemap-entity-method-vs-attribute-', `
+def finish(obj):
+    obj.close()
+    return obj.encoding
+
+def start(obj):
+    obj.load()
+    return finish(obj)
+`);
+
+  const observation = (result.dataObservations || []).find((item) =>
+    item.variable === 'obj' &&
+    item.functionName?.endsWith('finish')
+  );
+
+  assert.ok(observation, 'Expected object observation');
+  assert.ok(observation.members?.includes('encoding'));
+  assert.ok(!observation.members?.includes('close'));
+  assert.ok(observation.methods?.includes('close'));
 });
