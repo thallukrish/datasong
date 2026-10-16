@@ -195,17 +195,11 @@ for(const entity of entities){
 
 const GENERIC_ARRAY_MEMBERS=new Set(['dtype','shape','ndim','size','itemsize','nbytes','T']);
 const GENERIC_SHAPE_MEMBERS=new Set([...GENERIC_ARRAY_MEMBERS,'values','variables']);
-const GENERIC_AFTER_READ=new Set(['assign','compare','return','subscript','expr','if','for','while']);
 const GENERIC_WRITE_VALUE_KINDS=new Set(['alias','member','subscript']);
 
 const meaningfulMembers=(entity)=>entity.members.filter(
   member=>!GENERIC_SHAPE_MEMBERS.has(String(member))
 );
-const meaningfulAfterReadValues=(values)=>values.filter(value=>{
-  const text=String(value||'');
-  if(!text||GENERIC_AFTER_READ.has(text))return false;
-  return text.startsWith('call:')||text.startsWith('member:');
-});
 const meaningfulWriteKinds=(values)=>values.filter(value=>{
   const text=String(value||'');
   if(!text||GENERIC_WRITE_VALUE_KINDS.has(text))return false;
@@ -398,9 +392,6 @@ for(let i=0;i<fingerprintRows.length;i+=1){
     const commonWriteValueKinds=meaningfulWriteKinds(
       setIntersection(left.writeValueKinds,right.writeValueKinds)
     );
-    const commonAfterRead=meaningfulAfterReadValues(
-      setIntersection(left.afterRead,right.afterRead)
-    );
     const commonElementKinds=setIntersection(left.elementKinds,right.elementKinds);
     const commonElementKeys=setIntersection(left.elementKeys,right.elementKeys);
     const commonElementConstructors=setIntersection(
@@ -410,9 +401,7 @@ for(let i=0;i<fingerprintRows.length;i+=1){
     const keyIdentity=
       commonKeys.length>=2||
       (commonKeys.length>=1&&commonWriteValueKinds.length>=1);
-    const memberIdentity=
-      commonMembers.length>=2||
-      (commonMembers.length>=1&&commonAfterRead.length>=1);
+    const memberIdentity=commonMembers.length>=2;
     const structuredElementIdentity=
       commonElementKeys.length>=2||
       (commonElementKeys.length>=1&&commonElementKinds.some(kind=>
@@ -449,7 +438,7 @@ const shapeFamilies=[...familyMembers.values()]
       members:intersectAll(members,'members')
         .filter(member=>!GENERIC_SHAPE_MEMBERS.has(String(member))),
       writeValueKinds:meaningfulWriteKinds(intersectAll(members,'writeValueKinds')),
-      afterRead:meaningfulAfterReadValues(intersectAll(members,'afterRead')),
+      afterRead:intersectAll(members,'afterRead'),
       elementKinds:intersectAll(members,'elementKinds'),
       elementKeys:intersectAll(members,'elementKeys'),
       elementConstructors:intersectAll(members,'elementConstructors')
@@ -461,9 +450,7 @@ const shapeFamilies=[...familyMembers.values()]
     const keyIdentity=
       common.keys.length>=2||
       (common.keys.length>=1&&common.writeValueKinds.length>=1);
-    const memberIdentity=
-      common.members.length>=2||
-      (common.members.length>=1&&common.afterRead.length>=1);
+    const memberIdentity=common.members.length>=2;
     const structuredElementIdentity=
       common.elementKeys.length>=2||
       (common.elementKeys.length>=1&&common.elementKinds.some(kind=>
