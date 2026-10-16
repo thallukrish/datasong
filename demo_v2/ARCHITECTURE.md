@@ -423,7 +423,7 @@ common keys / members
 
 A collection of structured elements is treated as a container around the element entity. Literal collection analysis therefore retains element kinds, element keys and element constructors.
 
-Generic properties such as `dtype`, `shape`, `ndim` and `size` are not sufficient by themselves to establish a shared conceptual entity.
+Generic properties such as `dtype`, `shape`, `ndim`, `size`, `values` and `variables` are not sufficient by themselves to establish a shared conceptual entity. Generic syntax-level post-read actions such as assignment, comparison or return also do not qualify a family. A structured family must instead retain evidence such as multiple meaningful keys/members, a meaningful key plus a characteristic write, a meaningful member plus characteristic call/member processing, or structured element keys/constructors.
 
 ## Primitive value collections
 
