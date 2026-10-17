@@ -197,8 +197,8 @@ def run():
 
   const recordEntity = entityNodesOnly.find((node) =>
     node.details?.kind === 'mapping' &&
-    (node.details?.keys || []).includes("'name'") &&
-    (node.details?.keys || []).includes("'value'")
+    (node.details?.keys || []).includes('name') &&
+    (node.details?.keys || []).includes('value')
   );
   assert.ok(recordEntity, 'Expected mapping entity graph node');
   assert.ok(entityLinks.some((link) =>
