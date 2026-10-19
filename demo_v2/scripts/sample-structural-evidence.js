@@ -219,16 +219,15 @@ const isStructuredElementCollection=(entity)=>
   entity.elementConstructors.length>0||
   entity.elementKinds.some(kind=>['mapping','object'].includes(String(kind)));
 
-const isShapeEntity=(entity)=>{
+const isStructuredCandidate=(entity)=>{
   if(!isContinuousEntity(entity))return false;
   if(entity.kind==='mapping')return true;
-  if(isStructuredElementCollection(entity))return true;
-  if(entity.kind==='object')return entity.keys.length>0||meaningfulMembers(entity).length>0;
-  return false;
+  if(entity.kind==='object')return meaningfulMembers(entity).length>0;
+  return isStructuredElementCollection(entity);
 };
 
 const isValueCollectionEntity=(entity)=>{
-  if(!isContinuousEntity(entity)||isShapeEntity(entity))return false;
+  if(!isContinuousEntity(entity)||isStructuredCandidate(entity))return false;
   return ['array-like','sequence','set'].includes(entity.kind);
 };
 
@@ -253,6 +252,41 @@ const setIntersection=(left,right)=>{
   return [...new Set(left)].filter(value=>rightSet.has(value)).sort();
 };
 
+const structuredIdentityEvidence=(fingerprint)=>{
+  const keys=[...new Set(fingerprint.keys||[])];
+  const members=[...new Set(fingerprint.members||[])]
+    .filter(member=>!GENERIC_SHAPE_MEMBERS.has(String(member)));
+  const writeValueKinds=meaningfulWriteKinds(fingerprint.writeValueKinds||[]);
+  const elementKinds=[...new Set(fingerprint.elementKinds||[])];
+  const elementKeys=[...new Set(fingerprint.elementKeys||[])];
+  const elementConstructors=[...new Set(fingerprint.elementConstructors||[])];
+
+  const keyIdentity=
+    keys.length>=2||
+    (keys.length>=1&&writeValueKinds.length>=1);
+  const memberIdentity=members.length>=2;
+  const structuredElementIdentity=
+    elementKeys.length>=2||
+    (elementKeys.length>=1&&elementKinds.some(kind=>
+      ['mapping','object'].includes(String(kind))
+    ))||
+    elementConstructors.length>=1;
+
+  let qualifies=false;
+  if(fingerprint.kind==='mapping')qualifies=keyIdentity;
+  else if(fingerprint.kind==='object')qualifies=memberIdentity;
+  else if(['array-like','sequence','set'].includes(fingerprint.kind)){
+    qualifies=structuredElementIdentity;
+  }
+
+  return {
+    qualifies,
+    keyIdentity,
+    memberIdentity,
+    structuredElementIdentity
+  };
+};
+
 const flowOccurrences=[];
 const qualifiedFlows=[];
 
@@ -267,7 +301,7 @@ for(const flow of workflows){
   const qualifying=[];
   for(const entityRow of candidateEntityRows){
     const entity=entityByRow.get(entityRow);
-    if(!entity||(!isShapeEntity(entity)&&!isValueCollectionEntity(entity)))continue;
+    if(!entity||(!isStructuredCandidate(entity)&&!isValueCollectionEntity(entity)))continue;
 
     const touches=entity.uses
       .map(use=>{
@@ -295,6 +329,24 @@ for(const flow of workflows){
       if(Object.hasOwn(operations,touch.operation))operations[touch.operation]+=1;
     });
 
+    let category='value-collection-lineage';
+    if(isStructuredCandidate(entity)){
+      const relevantFunctionRows=new Set(touches.map(touch=>touch.functionRow));
+      const signatures=entity.accessSignatures.filter(signature=>{
+        const functionRow=functionRowForLocation(signature?.sourcePath,signature?.line);
+        return functionRow&&relevantFunctionRows.has(functionRow);
+      });
+      const fingerprint={
+        kind:entity.kind,
+        ...summarizeSignatures(signatures),
+        elementKinds:entity.elementKinds,
+        elementKeys:entity.elementKeys,
+        elementConstructors:entity.elementConstructors
+      };
+      if(!structuredIdentityEvidence(fingerprint).qualifies)continue;
+      category='structured-shape';
+    }
+
     const occurrence={
       flowRow:flow.row,
       flowName:flow.name,
@@ -302,7 +354,7 @@ for(const flow of workflows){
       entityRow:entity.row,
       entityName:entity.name,
       kind:entity.kind,
-      category:isShapeEntity(entity)?'structured-shape':'value-collection-lineage',
+      category,
       spanLength:positions.at(-1)-positions[0]+1,
       touchedFunctionCount:positions.length,
       positions,
@@ -336,7 +388,7 @@ const survivingFunctionRows=new Set(
 );
 
 const entityFingerprintByRow=new Map();
-for(const entity of entities.filter(isShapeEntity)){
+for(const entity of entities.filter(isStructuredCandidate)){
   const occurrences=flowOccurrences.filter(item=>
     item.entityRow===entity.row&&item.category==='structured-shape'
   );
@@ -398,18 +450,17 @@ for(let i=0;i<fingerprintRows.length;i+=1){
       left.elementConstructors,right.elementConstructors
     );
 
-    const keyIdentity=
-      commonKeys.length>=2||
-      (commonKeys.length>=1&&commonWriteValueKinds.length>=1);
-    const memberIdentity=commonMembers.length>=2;
-    const structuredElementIdentity=
-      commonElementKeys.length>=2||
-      (commonElementKeys.length>=1&&commonElementKinds.some(kind=>
-        ['mapping','object'].includes(kind)
-      ))||
-      commonElementConstructors.length>=1;
+    const identity=structuredIdentityEvidence({
+      kind:left.kind,
+      keys:commonKeys,
+      members:commonMembers,
+      writeValueKinds:commonWriteValueKinds,
+      elementKinds:commonElementKinds,
+      elementKeys:commonElementKeys,
+      elementConstructors:commonElementConstructors
+    });
 
-    if(keyIdentity||memberIdentity||structuredElementIdentity){
+    if(identity.qualifies){
       familyUnion(left.entityRow,right.entityRow);
     }
   }
@@ -447,19 +498,11 @@ const shapeFamilies=[...familyMembers.values()]
     const functionRows=[...new Set(members.flatMap(item=>item.functionRows))].sort((a,b)=>a-b);
     const flowRows=[...new Set(members.flatMap(item=>item.flowRows))].sort((a,b)=>a-b);
 
-    const keyIdentity=
-      common.keys.length>=2||
-      (common.keys.length>=1&&common.writeValueKinds.length>=1);
-    const memberIdentity=common.members.length>=2;
-    const structuredElementIdentity=
-      common.elementKeys.length>=2||
-      (common.elementKeys.length>=1&&common.elementKinds.some(kind=>
-        ['mapping','object'].includes(kind)
-      ))||
-      common.elementConstructors.length>=1;
+    const kind=members[0]?.kind||'';
+    const identity=structuredIdentityEvidence({kind,...common});
 
     return {
-      kind:members[0]?.kind||'',
+      kind,
       entityCount:entityRows.length,
       flowCount:flowRows.length,
       functionCount:functionRows.length,
@@ -468,7 +511,7 @@ const shapeFamilies=[...familyMembers.values()]
       flowRows,
       functionRows,
       common,
-      qualifies:functionRows.length>=2&&(keyIdentity||memberIdentity||structuredElementIdentity)
+      qualifies:functionRows.length>=2&&identity.qualifies
     };
   })
   .filter(family=>family.qualifies)
