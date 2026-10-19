@@ -449,18 +449,23 @@ Primitive scalar values remain data-flow evidence but are not materialized as en
 
 ## Core-entity diagnostic
 
-The current diagnostic screens every persisted flow with the same entity rules used for candidate discovery.
+The current diagnostic screens every persisted flow with the same strict identity rules used for final entity-family qualification.
 
 ```text
 all persisted flows
         ↓
-entity continuity screen
+strict entity continuity screen
+        ↓
+mapping qualifies only from literal string field shape
+object qualifies only from attribute shape
+structured collection qualifies only from element structure
+primitive collection qualifies only from cross-function lineage
         ↓
 drop flows with no qualifying cross-function entity evidence
         ↓
 retain all qualifying flows
         ↓
-consolidate entity evidence globally
+consolidate entity evidence globally with the same identity rules
 ```
 
 There is no separate flow classifier and no special-case filtering for tests, logging, exceptions or other code categories. A flow survives only because it contains qualifying entity continuity.
